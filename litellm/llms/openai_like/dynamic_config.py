@@ -7,6 +7,7 @@ from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overlo
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
+    normalize_image_data_url_mime_types_in_messages,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -44,6 +45,9 @@ def create_config_class(provider: SimpleProviderConfig):
             # Handle content list to string conversion if configured
             if provider.special_handling.get("convert_content_list_to_string"):
                 messages = handle_messages_with_content_list_to_str_conversion(messages)
+
+            if provider.special_handling.get("normalize_image_mime_type"):
+                messages = normalize_image_data_url_mime_types_in_messages(messages)
 
             if is_async:
                 return super()._transform_messages(messages=messages, model=model, is_async=True)

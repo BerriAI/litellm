@@ -2,6 +2,7 @@
 Common utility functions used for translating messages across providers
 """
 
+import base64
 import io
 import json
 import mimetypes
@@ -31,6 +32,7 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
+    OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
     Choices,
@@ -1202,6 +1204,86 @@ def infer_content_type_from_url_and_content(
 
     # If all fallbacks failed, raise error
     raise ValueError(f"Unable to determine content type from URL: {url}. Response content-type: {current_content_type}")
+
+
+_GENERIC_DATA_URL_MIME_TYPES = frozenset({"", "binary/octet-stream", "application/octet-stream"})
+
+_SNIFFED_IMAGE_TYPE_TO_MIME_TYPE: Mapping[str, str] = {
+    "png": "image/png",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "heic": "image/heic",
+}
+
+
+def _sniff_base64_image_mime_type(base64_payload: str) -> str | None:
+    from litellm.litellm_core_utils.token_counter import get_image_type
+
+    prefix = base64_payload[:64]
+    aligned_prefix = prefix[: len(prefix) - len(prefix) % 4]
+    if not aligned_prefix:
+        return None
+    try:
+        decoded_prefix = base64.b64decode(aligned_prefix)
+    except ValueError:
+        return None
+    sniffed_image_type = get_image_type(decoded_prefix)
+    if sniffed_image_type is None:
+        return None
+    return _SNIFFED_IMAGE_TYPE_TO_MIME_TYPE.get(sniffed_image_type)
+
+
+def normalize_image_data_url_mime_type(url: str) -> str:
+    if not url.startswith("data:") or ";base64," not in url:
+        return url
+    header, payload = url.split(";base64,", 1)
+    declared_mime_type = header[len("data:") :]
+    if declared_mime_type.lower() not in _GENERIC_DATA_URL_MIME_TYPES:
+        return url
+    sniffed_mime_type = _sniff_base64_image_mime_type(payload)
+    if sniffed_mime_type is None:
+        return url
+    return f"data:{sniffed_mime_type};base64,{payload}"
+
+
+def _normalize_image_mime_type_in_content_item(
+    content_item: OpenAIMessageContentListBlock,
+) -> OpenAIMessageContentListBlock:
+    if content_item["type"] != "image_url":
+        return content_item
+    image_url = content_item.get("image_url")
+    if isinstance(image_url, str):
+        normalized_item = content_item.copy()
+        normalized_item["image_url"] = normalize_image_data_url_mime_type(image_url)
+        return normalized_item
+    if not isinstance(image_url, dict) or "url" not in image_url:
+        return content_item
+    url = image_url["url"]
+    if not isinstance(url, str):
+        return content_item
+    normalized_image_url = image_url.copy()
+    normalized_image_url["url"] = normalize_image_data_url_mime_type(url)
+    normalized_item = content_item.copy()
+    normalized_item["image_url"] = normalized_image_url
+    return normalized_item
+
+
+def _normalize_image_mime_types_in_message(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "user":
+        return message
+    content = message.get("content")
+    if not isinstance(content, list):
+        return message
+    normalized_message = message.copy()
+    normalized_message["content"] = [_normalize_image_mime_type_in_content_item(item) for item in content]
+    return normalized_message
+
+
+def normalize_image_data_url_mime_types_in_messages(
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
+    return [_normalize_image_mime_types_in_message(message) for message in messages]
 
 
 def get_tool_call_names(tools: List[ChatCompletionToolParam]) -> List[str]:

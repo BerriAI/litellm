@@ -2,6 +2,9 @@
 Tests for the Meta Model API (Muse Spark) provider configuration and integration.
 """
 
+import asyncio
+import base64
+
 import litellm
 
 
@@ -190,6 +193,101 @@ class TestMetaAnthropicMessages:
         )
         assert headers["authorization"] == "Bearer sk-env-key"
         assert headers["anthropic-version"] == "2023-06-01"
+
+
+PNG_BASE64 = base64.b64encode(b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a" + b"\x00" * 32).decode()
+JPEG_BASE64 = base64.b64encode(b"\xff\xd8\xff\xe0" + b"\x00" * 32).decode()
+
+
+def _transform_image_url_through_provider(url: str, provider: litellm.LlmProviders) -> str:
+    cfg = litellm.ProviderConfigManager.get_provider_chat_config(model="muse-spark-1.1", provider=provider)
+    assert cfg is not None
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image_url", "image_url": {"url": url}},
+            ],
+        }
+    ]
+    out = cfg.transform_request(
+        model="muse-spark-1.1",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    return out["messages"][0]["content"][1]["image_url"]["url"]
+
+
+class TestMetaImageMimeNormalization:
+    def test_meta_config_has_normalize_flag(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        meta = JSONProviderRegistry.get("meta")
+        assert meta is not None
+        assert meta.special_handling.get("normalize_image_mime_type") is True
+
+    def test_octet_stream_png_rewritten(self):
+        url = _transform_image_url_through_provider(
+            f"data:binary/octet-stream;base64,{PNG_BASE64}", litellm.LlmProviders.META
+        )
+        assert url == f"data:image/png;base64,{PNG_BASE64}"
+
+    def test_application_octet_stream_jpeg_rewritten(self):
+        url = _transform_image_url_through_provider(
+            f"data:application/octet-stream;base64,{JPEG_BASE64}", litellm.LlmProviders.META
+        )
+        assert url == f"data:image/jpeg;base64,{JPEG_BASE64}"
+
+    def test_valid_mime_untouched(self):
+        original = f"data:image/jpeg;base64,{JPEG_BASE64}"
+        assert _transform_image_url_through_provider(original, litellm.LlmProviders.META) == original
+
+    def test_mismatched_but_valid_mime_untouched(self):
+        original = f"data:image/jpeg;base64,{PNG_BASE64}"
+        assert _transform_image_url_through_provider(original, litellm.LlmProviders.META) == original
+
+    def test_undecodable_payload_untouched(self):
+        original = "data:binary/octet-stream;base64,!!!not-base64!!!"
+        assert _transform_image_url_through_provider(original, litellm.LlmProviders.META) == original
+
+    def test_http_url_untouched(self):
+        original = "https://example.com/image.png"
+        assert _transform_image_url_through_provider(original, litellm.LlmProviders.META) == original
+
+    def test_provider_without_flag_untouched(self):
+        original = f"data:binary/octet-stream;base64,{PNG_BASE64}"
+        assert _transform_image_url_through_provider(original, litellm.LlmProviders.TENSORMESH) == original
+
+    def test_async_transform_rewrites_octet_stream_png(self):
+        cfg = litellm.ProviderConfigManager.get_provider_chat_config(
+            model="muse-spark-1.1", provider=litellm.LlmProviders.META
+        )
+        assert cfg is not None
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": f"data:binary/octet-stream;base64,{PNG_BASE64}"}}],
+            }
+        ]
+        out = asyncio.run(cfg._transform_messages(messages=messages, model="muse-spark-1.1", is_async=True))
+        assert out[0]["content"][0]["image_url"]["url"] == f"data:image/png;base64,{PNG_BASE64}"
+
+    def test_string_content_passthrough(self):
+        cfg = litellm.ProviderConfigManager.get_provider_chat_config(
+            model="muse-spark-1.1", provider=litellm.LlmProviders.META
+        )
+        assert cfg is not None
+        out = cfg.transform_request(
+            model="muse-spark-1.1",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert out["messages"][0]["content"] == "hello"
 
 
 class TestMuseSparkModelInfo:
