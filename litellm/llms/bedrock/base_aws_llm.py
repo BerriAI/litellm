@@ -286,9 +286,12 @@ class BaseAWSLLM:
         elif self._is_auth_with_aws_role(aws_role_name):
             # Same role (IRSA/ECS/EC2): ambient creds via _get_or_set_cached_credentials like the
             # default env branch; never pre-read cache (must run _is_already_running_as_role first).
-            if self._is_already_running_as_role(cast(str, aws_role_name), ssl_verify=ssl_verify):
+            if aws_session_name is None and self._is_already_running_as_role(
+                cast(str, aws_role_name), ssl_verify=ssl_verify
+            ):
                 verbose_logger.debug(
-                    "Already running as target role %s, using ambient credentials",
+                    "Already running as target role %s and no explicit session name requested; "
+                    "using ambient credentials",
                     aws_role_name,
                 )
                 return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
