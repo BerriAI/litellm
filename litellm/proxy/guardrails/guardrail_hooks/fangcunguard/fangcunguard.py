@@ -7,7 +7,7 @@
 
 import asyncio
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -67,14 +67,14 @@ class FangcunGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
 
-    def _extract_texts(self, data: dict, call_type: Optional[str] = None) -> List[str]:
+    def _extract_texts(self, data: dict, call_type: Optional[str] = None) -> list[str]:
         """Extract all user/assistant text from a request across supported shapes.
 
         Uses the shared ``get_guardrails_messages_for_call_type`` helper (handles
@@ -82,13 +82,13 @@ class FangcunGuardrail(CustomGuardrail):
         ``prompt`` (text completions) and ``input`` fields so alternate request
         shapes cannot bypass scanning.
         """
-        texts: List[str] = []
+        texts: list[str] = []
 
         messages: Optional[list] = None
         if call_type is not None:
             try:
                 messages = self.get_guardrails_messages_for_call_type(call_type=call_type, data=data)
-            except Exception:
+            except Exception:  # noqa: BLE001 - fall back to raw messages on any extraction error
                 messages = None
         if messages is None:
             messages = data.get("messages")
@@ -134,7 +134,7 @@ class FangcunGuardrail(CustomGuardrail):
                 json=body,
                 headers=headers,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any error means no verdict; fail closed
             self._handle_unavailable(f"request error: {e}")
             return
 
@@ -168,7 +168,7 @@ class FangcunGuardrail(CustomGuardrail):
             },
         )
 
-    async def _scan_texts(self, texts: List[str], request_data: dict) -> None:
+    async def _scan_texts(self, texts: list[str], request_data: dict) -> None:
         await asyncio.gather(*[self._check_text(text, request_data) for text in texts])
 
     @log_guardrail_information
@@ -251,7 +251,7 @@ class FangcunGuardrail(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.fangcunguard import (
             FangcunGuardrailConfigModel,
         )
