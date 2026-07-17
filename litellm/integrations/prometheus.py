@@ -3953,8 +3953,46 @@ class PrometheusLogger(CustomLogger):
         else:
             metrics_app = make_asgi_app()
 
-        # Mount the metrics app to the app
-        app.mount("/metrics", metrics_app)
+        # Mount the metrics app to the app.
+        # Use "/metrics/" (trailing slash) as the mount point — Starlette serves mounted
+        # ASGI apps under the slash-terminated prefix. Without an explicit "/metrics" route,
+        # a request to GET /metrics gets a 307 redirect to /metrics/ before being served.
+        # Adding a view route for "/metrics" serves the no-slash path directly so
+        # Prometheus (and any HTTP client) gets a 200 on the first request, no redirect.
+        # Note: app.add_route wraps the callable as a view (passes a Request object),
+        # so we use a lambda that calls the ASGI app via its __call__ interface.
+        from starlette.requests import Request
+        from starlette.responses import Response
+
+        async def _metrics_no_slash_view(request: Request) -> Response:
+            # Delegate to the real metrics ASGI app and collect its response.
+            status_code = 200
+            headers: list = []
+            body = b""
+
+            async def receive():  # noqa: RUF029  # fake receive — metrics app never reads body
+                return {"type": "http.disconnect"}
+
+            async def send(message) -> None:
+                nonlocal status_code, body
+                if message["type"] == "http.response.start":
+                    status_code = message["status"]
+                    headers.extend(message.get("headers", []))
+                elif message["type"] == "http.response.body":
+                    body += message.get("body", b"")
+
+            await metrics_app(request.scope, receive, send)
+            return Response(
+                content=body,
+                status_code=status_code,
+                headers=dict(
+                    (k.decode(), v.decode()) for k, v in headers
+                    if k.lower() != b"content-length"  # Response recomputes this
+                ),
+            )
+
+        app.mount("/metrics/", metrics_app)
+        app.add_route("/metrics", _metrics_no_slash_view)  # serve /metrics without 307 redirect
         verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
 
 
