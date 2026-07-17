@@ -10,6 +10,7 @@ tool through a ``tool_use`` content block, and results are fed back as
 from typing import Any, AsyncIterator, Mapping, Sequence, Union
 
 from litellm._logging import verbose_logger
+from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
     AnthropicMessagesToolResultParam,
@@ -54,19 +55,6 @@ def _build_tool_result_message(tool_results: Sequence[Mapping[str, Any]]) -> Ant
     )
 
 
-def _resolve_user_api_key_auth(
-    kwargs: Mapping[str, Any],
-) -> Any:  # any-ok: UserAPIKeyAuth is proxy-only, importing it here would create a cycle
-    """`/v1/messages` is a LITELLM_METADATA_ROUTE, so the auth object rides in litellm_metadata."""
-    litellm_metadata = kwargs.get("litellm_metadata") or {}
-    metadata = kwargs.get("metadata") or {}
-    return (
-        kwargs.get("user_api_key_auth")
-        or litellm_metadata.get("user_api_key_auth")
-        or metadata.get("user_api_key_auth")
-    )
-
-
 async def anthropic_messages_with_mcp(
     max_tokens: int,
     messages: Sequence[Mapping[str, Any]],
@@ -101,15 +89,18 @@ async def anthropic_messages_with_mcp(
             **kwargs,
         )
 
-    user_api_key_auth = _resolve_user_api_key_auth(kwargs)
+    context = MCPRequestContext.resolve(kwargs=dict(kwargs), tools=tools)
 
     (
         deduplicated_mcp_tools,
         tool_server_map,
     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-        user_api_key_auth,
+        context.user_api_key_auth,
         mcp_references,
-        litellm_trace_id=kwargs.get("litellm_trace_id"),
+        litellm_trace_id=context.litellm_trace_id,
+        mcp_auth_header=context.mcp_auth_header,
+        mcp_server_auth_headers=context.mcp_server_auth_headers,
+        request_tags=list(context.request_tags) if context.request_tags else None,
     )
 
     anthropic_tools: Sequence[AnthropicMessagesTool] = tuple(
@@ -149,9 +140,20 @@ async def anthropic_messages_with_mcp(
         tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
             tool_server_map=tool_server_map,
             tool_calls=list(tool_use_blocks),
-            user_api_key_auth=user_api_key_auth,
-            litellm_trace_id=kwargs.get("litellm_trace_id"),
+            user_api_key_auth=context.user_api_key_auth,
+            mcp_auth_header=context.mcp_auth_header,
+            mcp_server_auth_headers=context.mcp_server_auth_headers,
+            oauth2_headers=context.oauth2_headers,
+            raw_headers=context.raw_headers,
+            litellm_call_id=context.litellm_call_id,
+            litellm_trace_id=context.litellm_trace_id,
+            request_tags=list(context.request_tags) if context.request_tags else None,
         )
+
+        # Every tool call was skipped, so there is nothing to feed back; a
+        # tool_result message with empty content is rejected by Anthropic.
+        if not tool_results:
+            break
 
         working_messages = (
             *working_messages,
