@@ -116,6 +116,7 @@ class SingulrGuardrail(CustomGuardrail):
                 litellm_metadata=request_data.get("litellm_metadata"),
             )
             payload = SingulrGuardrailPayload(
+                litellm_call_id=request_data.get("litellm_call_id"),
                 request_data=singulr_req_object,
                 input_type=input_type,
             )

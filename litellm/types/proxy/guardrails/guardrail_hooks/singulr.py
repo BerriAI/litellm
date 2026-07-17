@@ -14,6 +14,7 @@ class SingulrGuardrailRequest(BaseModel):
 
 
 class SingulrGuardrailPayload(BaseModel):
+    litellm_call_id: Optional[str] = None
     request_data: Optional[SingulrGuardrailRequest] = None
     input_type: str
     is_playground_request: Optional[bool] = None
