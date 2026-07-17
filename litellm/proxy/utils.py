@@ -6124,7 +6124,7 @@ def create_model_info_response(
     # to the base response rather than 500-ing the whole listing.
     if llm_router is not None:
         try:
-            model_group_info = llm_router.get_model_group_info(model_id)
+            model_group_info = llm_router._cached_get_model_group_info(model_id)
         except Exception as e:
             verbose_proxy_logger.debug(
                 "create_model_info_response: get_model_group_info failed for %s: %s",

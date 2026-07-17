@@ -82,6 +82,42 @@ def test_router_with_model_info_and_model_group():
     )
 
 
+def test_set_model_group_info_wildcard_avoids_per_deployment_deepcopy():
+    """
+    Regression for #33636: _set_model_group_info must not call pattern_router.route
+    (which deep-copies every matched deployment) once per deployment in the group
+    loop. That made GET /v1/models O(n^2) in deepcopies and pegged CPU for minutes
+    on wildcard routes. The loop now uses the deepcopy-free is_match check instead.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-xxx"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-yyy"},
+            },
+        ],
+    )
+
+    with patch.object(
+        router.pattern_router,
+        "route",
+        wraps=router.pattern_router.route,
+    ) as spy_route, patch.object(
+        router.pattern_router,
+        "is_match",
+        wraps=router.pattern_router.is_match,
+    ) as spy_is_match:
+        info = router.get_model_group_info("openai/gpt-4o-mini")
+
+    assert info is not None
+    assert spy_route.call_count <= 1
+    assert spy_is_match.call_count >= 1
+
+
 def test_router_model_group_encrypted_content_affinity_callback_registration():
     from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
         DeploymentAffinityCheck,

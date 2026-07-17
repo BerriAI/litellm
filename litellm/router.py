@@ -8745,11 +8745,12 @@ class Router:
         model_list = self.get_model_list(model_name=model_group)
         if model_list is None:
             return None
+        is_wildcard_group = self.pattern_router.is_match(model_group)
         for model in model_list:
             is_match = False
             if "model_name" in model and model["model_name"] == model_group:  # exact match
                 is_match = True
-            elif "model_name" in model and self.pattern_router.route(model_group) is not None:  # wildcard model
+            elif "model_name" in model and is_wildcard_group:  # wildcard model
                 is_match = True
 
             if not is_match:
