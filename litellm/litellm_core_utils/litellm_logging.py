@@ -1453,6 +1453,9 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(**response_cost_calculator_kwargs)
 
             verbose_logger.debug(f"response_cost: {response_cost}")
+            additional_response_cost: object = self.model_call_details.get("additional_response_cost")
+            if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0:
+                return (response_cost or 0.0) + additional_response_cost
             return response_cost
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
