@@ -56,11 +56,13 @@ class TierClassification(BaseModel):
 
 _CLASSIFICATION_PROMPT_TEMPLATE = """Classify the complexity of the following user request into exactly one tier.
 
+Judge the intellectual difficulty of answering correctly, not how short the request is.
+
 Tiers:
-- SIMPLE: factual lookups, greetings, short direct questions with no reasoning or code involved.
-- MEDIUM: everyday requests needing some explanation or minor code/technical content.
-- COMPLEX: requests involving non-trivial code, architecture, or multi-step technical work.
-- REASONING: requests explicitly requiring step-by-step reasoning, analysis, or weighing tradeoffs.
+- SIMPLE: greetings, chitchat, or factual lookups with a short known answer. Do not use SIMPLE for unsolved problems, proofs, deep theory, multi-step analysis, or non-trivial code, even if the request is only one sentence.
+- MEDIUM: everyday requests that need some explanation, light reasoning, or minor code/technical content.
+- COMPLEX: non-trivial code, architecture, multi-step technical work, or specialized domain depth.
+- REASONING: open-ended analysis, proofs, famous hard problems, step-by-step reasoning, tradeoffs, or anything where a correct answer requires careful thought rather than a quick lookup.
 
 {system_context}Request:
 {prompt}"""
@@ -98,9 +100,9 @@ def _sanitize_user_api_key_auth(auth: Any) -> Any:
     return auth
 
 
-def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     if not metadata:
-        return metadata
+        return {}
     return {
         k: _sanitize_user_api_key_auth(v) if k == "user_api_key_auth" else v
         for k, v in metadata.items()
@@ -763,8 +765,8 @@ class ComplexityRouter(CustomLogger):
         # embedding call. Forwarding it would let the embedding's cost callback finalize the
         # reservation, so the routed completion's own callback then skips incrementing the
         # key/team budget. Key/team attribution fields are preserved for spend logging.
-        metadata = _classifier_call_metadata(request_kwargs.get("metadata")) or {}
-        litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata")) or {}
+        metadata = _classifier_call_metadata(request_kwargs.get("metadata"))
+        litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata"))
         query_vector = (
             await encoder.aencode_queries([user_message], metadata=metadata, litellm_metadata=litellm_metadata)
         )[0]
