@@ -30,6 +30,11 @@ from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfig,
     ComplexityTier,
 )
+from litellm.types.router import (
+    Deployment,
+    LiteLLM_Params,
+    TaggedPreRoutingStrategy,
+)
 
 
 @pytest.fixture
@@ -953,13 +958,145 @@ class TestRouterComplexityDeploymentMethods:
             ]
         )
 
-        adaptive = router.adaptive_routers["hybrid"]
+        adaptive = router.adaptive_routers["hybrid"][0].strategy
         assert adaptive.model_to_cost == {
             "cheap": pytest.approx(0.00000015),
             "premium": pytest.approx(0.000005),
         }
         assert adaptive.model_to_prefs["cheap"].quality_tier == 1
         assert adaptive.model_to_prefs["premium"].quality_tier == 3
+
+
+class TestComplexityRouterTagBasedRouting:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/33655.
+
+    Two complexity-router deployments can share a public model_name while
+    carrying different tags. Both must register, and the request's tags must
+    pick the matching config before classification (previously the second
+    deployment was rejected and every request used the first config)."""
+
+    @staticmethod
+    def _tagged_config(routed_model: str, tags: list) -> dict:
+        return {
+            "model_name": "smart",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": routed_model,
+                "complexity_router_config": {
+                    "tiers": {
+                        "SIMPLE": [routed_model],
+                        "MEDIUM": [routed_model],
+                        "COMPLEX": [routed_model],
+                        "REASONING": [routed_model],
+                    }
+                },
+                "tags": tags,
+            },
+        }
+
+    def _router(self) -> Router:
+        return Router(
+            model_list=[
+                self._tagged_config("gpt-cn", ["cn"]),
+                self._tagged_config("gpt-us", ["us"]),
+            ]
+        )
+
+    def test_both_tagged_configs_register_under_same_model_name(self):
+        router = self._router()
+        registered = router.complexity_routers["smart"]
+        assert len(registered) == 2
+        assert {entry.tags for entry in registered} == {("cn",), ("us",)}
+
+    def test_duplicate_model_name_with_same_tags_still_rejected(self):
+        with pytest.raises(ValueError, match="already exists"):
+            Router(
+                model_list=[
+                    self._tagged_config("gpt-cn", ["cn"]),
+                    self._tagged_config("gpt-cn-2", ["cn"]),
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_request_tags_select_matching_complexity_config(self):
+        router = self._router()
+        cn = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs={"metadata": {"tags": ["cn"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        us = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs={"metadata": {"tags": ["us"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert cn is not None and cn.model == "gpt-cn"
+        assert us is not None and us.model == "gpt-us"
+
+
+class TestPreRoutingStrategyRegistry:
+    """Directly exercise the tag-scoped registry/selection helpers behind #33655."""
+
+    def _router(self) -> Router:
+        return Router(model_list=[{"model_name": "x", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+    @staticmethod
+    def _deployment(tags: list) -> Deployment:
+        return Deployment(
+            model_name="smart",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", tags=tags),
+        )
+
+    def test_deployment_tags_normalizes_to_tuple(self):
+        router = self._router()
+        assert router._deployment_tags(self._deployment(["cn", "row"])) == ("cn", "row")
+        untagged = Deployment(model_name="smart", litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini"))
+        assert router._deployment_tags(untagged) == ()
+
+    def test_register_scopes_by_tags_and_rejects_exact_duplicate(self):
+        router = self._router()
+        registry: dict = {}
+        router._register_pre_routing_strategy(
+            registry=registry, deployment=self._deployment(["cn"]), strategy="CN", strategy_label="Test"
+        )
+        router._register_pre_routing_strategy(
+            registry=registry, deployment=self._deployment(["us"]), strategy="US", strategy_label="Test"
+        )
+        assert [entry.tags for entry in registry["smart"]] == [("cn",), ("us",)]
+        assert router._has_registered_strategy(registry, "smart", ("cn",)) is True
+        assert router._has_registered_strategy(registry, "smart", ("row",)) is False
+        with pytest.raises(ValueError, match="already exists"):
+            router._register_pre_routing_strategy(
+                registry=registry, deployment=self._deployment(["cn"]), strategy="CN2", strategy_label="Test"
+            )
+
+    def test_select_prefers_request_tag_then_default_then_first(self):
+        router = self._router()
+        cn, us, fallback = object(), object(), object()
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("us",), strategy=us),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}) is us
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}) is cn
+        assert router._select_pre_routing_strategy("missing", {"metadata": {"tags": ["cn"]}}) is None
+
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("default",), strategy=fallback),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {}) is fallback
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("us",), strategy=us),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {}) is cn
 
 
 class TestAsyncPreRoutingHookMultiFormat:
@@ -2387,6 +2524,16 @@ class TestSubCallMetadataSanitization:
             assert sanitized["user_api_key_auth"] is not None
             assert _get_budget_reservation_from_metadata(sanitized) is None
 
+    def test_returns_empty_dict_for_missing_metadata(self):
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _classifier_call_metadata,
+        )
+
+        for absent in (None, {}):
+            result = _classifier_call_metadata(absent)
+            assert result == {}
+            assert isinstance(result, dict)
+
     def test_sanitized_auth_keeps_access_group_fields_and_leaves_original_untouched(self):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.router_strategy.complexity_router.complexity_router import (
@@ -2489,7 +2636,7 @@ class TestRoutingDecisionCauseLogging:
 
 
 class TestSessionAffinity:
-    """Test the opt-in session_affinity sticky-routing behavior."""
+    """Test the session_affinity sticky-routing behavior (on by default)."""
 
     REASONING_MESSAGE = [
         {
@@ -2503,19 +2650,46 @@ class TestSessionAffinity:
     def session_affinity_config(self, basic_config) -> Dict:
         return {**basic_config, "session_affinity": True}
 
+    @pytest.fixture
+    def session_affinity_disabled_config(self, basic_config) -> Dict:
+        return {**basic_config, "session_affinity": False}
+
     @staticmethod
     def _request_kwargs(session_id: str) -> Dict:
         return {"metadata": {"session_id": session_id}}
 
     @pytest.mark.asyncio
-    async def test_disabled_by_default_reclassifies_every_turn(self, mock_router_instance, basic_config):
-        """Regression: session_affinity defaults to False, so a shared session_id must
-        not pin the model -- each turn is still classified independently."""
+    async def test_enabled_by_default_pins_model(self, mock_router_instance, basic_config):
+        """Regression: session_affinity defaults to True, so a shared session_id pins the
+        first turn's model and later turns reuse it instead of reclassifying."""
+        assert "session_affinity" not in basic_config
         mock_router_instance.cache = DualCache()
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config=basic_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_can_be_disabled_reclassifies_every_turn(
+        self, mock_router_instance, session_affinity_disabled_config
+    ):
+        """Regression: session_affinity=False must still reclassify every turn even when a
+        shared session_id is present, so the opt-out keeps working."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_disabled_config,
         )
         request_kwargs = self._request_kwargs("session-1")
         first = await router.async_pre_routing_hook(
@@ -2868,9 +3042,7 @@ class TestRoutingPlugins:
         assert result.model == "gpt-4o-nano"
 
     @pytest.mark.asyncio
-    async def test_no_user_message_prefers_default_model_over_medium_tier_without_plugins(
-        self, mock_router_instance
-    ):
+    async def test_no_user_message_prefers_default_model_over_medium_tier_without_plugins(self, mock_router_instance):
         """Regression: without plugins configured, the no-user-message path must keep its
         pre-existing default_model-first priority over the MEDIUM tier exactly as before --
         closing the plugin-bypass gap must not silently flip model selection for the (much

@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from redis.exceptions import DataError
 
+import litellm
+from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
 
@@ -1418,7 +1421,6 @@ async def test_batch_database_updates_isolation_on_failure():
         org_id="org1",
         end_user_id="eu1",
         prisma_client=MagicMock(),
-        user_api_key_cache=MagicMock(),
         litellm_proxy_budget_name="budget",
         payload={"key": "value"},
     )
@@ -1818,3 +1820,85 @@ async def test_update_database_does_not_deepcopy_on_request_path():
     fake_payload["nested"]["a"] = 999
     assert batch_payload["model"] == "gpt-4"
     assert batch_payload["nested"]["a"] == 1
+
+
+@pytest.mark.asyncio
+async def test_spend_update_path_never_queries_user_cache_with_none_user_id():
+    """
+    When user_id is None, the spend-update path must not perform a user-cache
+    lookup at all. With a Redis-backed auth cache (enable_redis_auth_cache),
+    a lookup with key=None raises redis.exceptions.DataError, which aborted
+    _update_user_db before any spend updates were enqueued.
+
+    This test fails on the old code twice over: the cache mock records the
+    forbidden lookup, and the DataError it raises kills the end-user spend
+    update that must survive.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    strict_redis_backed_cache = MagicMock()
+    strict_redis_backed_cache.async_get_cache = AsyncMock(
+        side_effect=DataError("Invalid input of type: 'NoneType'")
+    )
+
+    with (
+        patch.object(litellm, "max_budget", 0),
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", strict_redis_backed_cache),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "litellm-proxy-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value={
+                "startTime": "2024-01-01T00:00:00",
+                "endTime": "2024-01-01T00:01:00",
+                "model": "gpt-4",
+                "custom_llm_provider": "openai",
+                "spend": 0.0,
+            },
+        ),
+    ):
+        await db_writer.update_database(
+            token=None,
+            user_id=None,
+            end_user_id="end-user-1",
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "gpt-4", "custom_llm_provider": "openai"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.1,
+        )
+        await asyncio.sleep(0)
+
+    strict_redis_backed_cache.async_get_cache.assert_not_called()
+
+    queued = await db_writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
+    end_user_updates = [u for u in queued if u["entity_type"] == Litellm_EntityType.END_USER]
+    assert len(end_user_updates) == 1
+    assert end_user_updates[0]["entity_id"] == "end-user-1"
+    assert all(u["entity_type"] != Litellm_EntityType.USER for u in queued)
+
+
+@pytest.mark.asyncio
+async def test_update_user_db_enqueues_user_spend_without_cache_dependency():
+    """
+    _update_user_db needs no cache handle: it enqueues the user spend update
+    (and the end-user one) purely from the ids it is given.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    with patch.object(litellm, "max_budget", 0):
+        await db_writer._update_user_db(
+            response_cost=0.25,
+            user_id="user-123",
+            prisma_client=MagicMock(),
+            litellm_proxy_budget_name="litellm-proxy-budget",
+            end_user_id="end-user-9",
+        )
+
+    queued = await db_writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
+    by_type = {u["entity_type"]: u["entity_id"] for u in queued}
+    assert by_type[Litellm_EntityType.USER] == "user-123"
+    assert by_type[Litellm_EntityType.END_USER] == "end-user-9"
