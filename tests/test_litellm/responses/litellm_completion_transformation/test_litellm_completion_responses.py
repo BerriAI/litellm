@@ -974,6 +974,95 @@ class TestToolChoiceTransformation:
         assert result == "required"
 
 
+class TestToolChoiceForResponseTransformation:
+    """Regression tests for issue #33689: forcing a named tool call on the
+    litellm_completion bridge with stream=true crashed with a
+    ResponsesAPIResponse ValidationError because the response event echoed the
+    nested Chat Completions tool_choice shape instead of the flat Responses API one"""
+
+    @pytest.mark.parametrize(
+        "tool_choice, expected",
+        [
+            ("auto", "auto"),
+            ("none", "none"),
+            ("required", "required"),
+            (None, "auto"),
+            ({"type": "function", "name": "get_weather"}, {"type": "function", "name": "get_weather"}),
+            (
+                {"type": "function", "function": {"name": "get_weather"}},
+                {"type": "function", "name": "get_weather"},
+            ),
+            ({"type": "function"}, "required"),
+            ({"type": "function", "name": ""}, "required"),
+            ({"type": "auto"}, "auto"),
+            ({"type": "none"}, "none"),
+            ({"type": "tool"}, "required"),
+            ({"type": "any"}, "required"),
+        ],
+    )
+    def test_transform_tool_choice_for_response_shapes(self, tool_choice, expected):
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_response(
+            tool_choice
+        )
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            "auto",
+            "none",
+            "required",
+            None,
+            {"type": "function", "name": "get_weather"},
+            {"type": "function", "function": {"name": "get_weather"}},
+            {"type": "function"},
+            {"type": "auto"},
+            {"type": "tool"},
+        ],
+    )
+    def test_transform_tool_choice_for_response_is_valid_on_response_object(
+        self, tool_choice
+    ):
+        """Every normalized value must construct a ResponsesAPIResponse without raising"""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_response(
+            tool_choice
+        )
+        ResponsesAPIResponse(id="resp_1", created_at=1, output=[], tool_choice=result)
+
+    def test_forced_named_tool_response_created_event_does_not_raise(self):
+        """End-to-end guard: building the response.created event for a forced named
+        tool call must produce a ResponsesAPIResponse with the flat function shape"""
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        iterator = LiteLLMCompletionStreamingIterator.__new__(
+            LiteLLMCompletionStreamingIterator
+        )
+        iterator.model = "claude-3-5-sonnet-latest"
+        iterator._sequence_number = 0
+        iterator._cached_response_id = None
+        iterator.responses_api_request = {
+            "tool_choice": {"type": "function", "name": "get_weather"},
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+
+        event = iterator.create_response_created_event()
+
+        assert event.response.tool_choice == {
+            "type": "function",
+            "name": "get_weather",
+        }
+
+
 class TestContentTypeTransformation:
     """Test content type transformation from Responses API to Chat Completion format"""
 
