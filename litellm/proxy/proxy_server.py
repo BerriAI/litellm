@@ -1392,19 +1392,25 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
     if open_telemetry_logger is None:
         return
     # Under OTel V2 the FastAPI instrumentor owns the server span (parent_otel_span
-    # is that same span), and it records the error + ends it itself. Ending it here
-    # would end it early — losing the http.* attributes the instrumentor stamps on
-    # completion — and double-end it. Leave it to the instrumentor.
+    # is that same span) and ends it itself with the http.* attributes stamped on
+    # completion. The instrumentor only records an error when the exception reaches
+    # it uncaught, but these handlers swallow it into a JSONResponse, so it never
+    # does; stamp the error.* attributes here (without ending or re-statusing the
+    # span, which the instrumentor still owns) so pre-call failures carry the error
+    # like v1 did. Otherwise close and annotate the dangling span ourselves.
     try:
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
-        if is_otel_v2_enabled():
-            return
+        v2_enabled = is_otel_v2_enabled()
     except Exception:
-        pass
+        v2_enabled = False
     try:
         from opentelemetry.trace import Status, StatusCode
 
+        if v2_enabled:
+            if status_code >= 400:
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
+            return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
         if status_code >= 400:
             open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
@@ -1413,7 +1419,8 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
     finally:
-        request.state.parent_otel_span = None
+        if not v2_enabled:
+            request.state.parent_otel_span = None
 
 
 @app.exception_handler(RequestValidationError)
