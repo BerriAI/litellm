@@ -361,7 +361,11 @@ def _global_proxy_budget_check(global_proxy_spend: Optional[float], skip_budget_
         and route != "/models"
     ):
         if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
-            raise litellm.BudgetExceededError(current_cost=global_proxy_spend, max_budget=litellm.max_budget)
+            raise litellm.BudgetExceededError(
+                current_cost=global_proxy_spend,
+                max_budget=litellm.max_budget,
+                entity_type=Litellm_EntityType.PROXY.value,
+            )
 
 
 _GUARDRAIL_MODIFICATION_KEYS: tuple = (
@@ -648,6 +652,8 @@ async def common_checks(
                     current_cost=user_spend,
                     max_budget=user_budget,
                     message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
+                    entity_type=Litellm_EntityType.USER.value,
+                    entity_id=user_object.user_id,
                 )
 
         # Each scope reads a distinct counter key with no cross-scope ordering
@@ -1093,6 +1099,8 @@ async def _check_end_user_budget(
             current_cost=end_user_spend,
             max_budget=end_user_budget,
             message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_spend}, Budget={end_user_budget}",
+            entity_type=Litellm_EntityType.END_USER.value,
+            entity_id=end_user_obj.user_id,
         )
 
 
@@ -3552,6 +3560,8 @@ async def _virtual_key_max_budget_check(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
                 message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
+                entity_type=Litellm_EntityType.KEY.value,
+                entity_id=valid_token.token,
             )
 
 
@@ -3593,6 +3603,8 @@ async def _virtual_key_multi_budget_check(
                     f"ExceededBudget: Key over {w['budget_duration']} budget. "
                     f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
                 ),
+                entity_type=Litellm_EntityType.KEY.value,
+                entity_id=valid_token.token,
             )
 
 
@@ -3824,6 +3836,8 @@ async def _check_team_member_budget(
                     current_cost=team_member_spend,
                     max_budget=team_member_budget,
                     message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
+                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
+                    entity_id=f"{valid_token.user_id}:{team_object.team_id}",
                 )
 
 
@@ -3923,6 +3937,8 @@ async def _team_max_budget_check(
                 current_cost=spend,
                 max_budget=team_object.max_budget,
                 message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
+                entity_type=Litellm_EntityType.TEAM.value,
+                entity_id=team_object.team_id,
             )
 
 
@@ -3960,6 +3976,8 @@ async def _team_multi_budget_check(
                     f"ExceededBudget: Team={team_object.team_id} over {w['budget_duration']} budget. "
                     f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
                 ),
+                entity_type=Litellm_EntityType.TEAM.value,
+                entity_id=team_object.team_id,
             )
 
 
@@ -4081,6 +4099,8 @@ async def _project_max_budget_check(
             current_cost=project_object.spend,
             max_budget=max_budget,
             message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_object.spend}, Max budget: {max_budget}",
+            entity_type=Litellm_EntityType.PROJECT.value,
+            entity_id=project_object.project_id,
         )
 
 
@@ -4269,6 +4289,8 @@ async def _organization_max_budget_check(
             current_cost=org_spend,
             max_budget=org_max_budget,
             message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, Max budget: {org_max_budget}",
+            entity_type=Litellm_EntityType.ORGANIZATION.value,
+            entity_id=org_id,
         )
 
 
@@ -4326,6 +4348,8 @@ async def _tag_max_budget_check(
                 current_cost=tag_spend,
                 max_budget=tag_object.litellm_budget_table.max_budget,
                 message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
+                entity_type=Litellm_EntityType.TAG.value,
+                entity_id=tag_name,
             )
 
 

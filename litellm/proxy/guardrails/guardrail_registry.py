@@ -494,6 +494,7 @@ class InMemoryGuardrailHandler:
             guardrail_id=guardrail.get("guardrail_id"),
             guardrail_name=guardrail["guardrail_name"],
             litellm_params=litellm_params,
+            guardrail_info=guardrail.get("guardrail_info"),
         )
 
         # store references to the guardrail in memory
@@ -611,6 +612,27 @@ class InMemoryGuardrailHandler:
         Return the provenance of an in-memory guardrail.
         """
         return self._sources.get(guardrail_id)
+
+    def list_config_guardrails(self) -> List[Guardrail]:
+        """
+        List in-memory guardrails owned by config.yaml.
+
+        DB-sourced entries are excluded: a read surface that also queries the DB
+        would double-count live ones, and a DB-sourced entry that's missing from
+        the DB is stale (deleted on another pod, awaiting reconciliation here).
+        """
+        return [g for gid, g in self.IN_MEMORY_GUARDRAILS.items() if self._sources.get(gid) == "config"]
+
+    def get_config_guardrail_by_id(self, guardrail_id: str) -> Optional[Guardrail]:
+        """
+        Get a config-owned in-memory guardrail by its ID, or None.
+
+        Mirrors the fallback in get_guardrail_info: a DB-sourced in-memory entry
+        that missed the DB lookup is stale and must not be surfaced.
+        """
+        if self._sources.get(guardrail_id) != "config":
+            return None
+        return self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
 
     def reconcile_db_guardrails(self, db_guardrail_ids: Set[str]) -> List[str]:
         """

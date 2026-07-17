@@ -180,3 +180,43 @@ def matches_id_shape(shape: IdShape, id_str: str) -> bool:
     if shape == "model_encoded":
         return is_model_encoded_id(id_str)
     return not is_managed_id(id_str) and not is_model_encoded_id(id_str)
+
+
+def coverage_cells_for_lifecycle(cap: Capability) -> tuple[str, ...]:
+    """Registry cell ids that the parametrized lifecycle test covers for one capability.
+
+    OpenAI has per-scenario cells plus granular create/retrieve/cancel/list/file
+    cells. Other providers have one basic cell each. File-upload cells for the
+    batch-backing path are included when the lifecycle uploads for that provider.
+    """
+    match cap.provider:
+        case "openai":
+            cells = (
+                f"llm.batches.openai_{cap.scenario}.basic.nonstream.works",
+                "llm.batches.openai.create.nonstream.works",
+                "llm.batches.openai.retrieve.nonstream.works",
+                "llm.batches.openai.file_lifecycle.nonstream.works",
+                "llm.files.openai.upload.nonstream.works",
+            )
+            if cap.can_cancel:
+                cells = (*cells, "llm.batches.openai.cancel.nonstream.works")
+            if cap.can_list:
+                cells = (*cells, "llm.batches.openai.list.nonstream.works")
+            return cells
+        case "azure":
+            return (
+                "llm.batches.azure_openai.basic.nonstream.works",
+                "llm.files.azure_openai.upload.nonstream.works",
+            )
+        case "vertex_ai":
+            return (
+                "llm.batches.vertex.basic.nonstream.works",
+                "llm.files.vertex.upload.nonstream.works",
+            )
+        case "bedrock":
+            return (
+                "llm.batches.bedrock.basic.nonstream.works",
+                "llm.files.bedrock.upload.nonstream.works",
+            )
+        case _:
+            return ()
