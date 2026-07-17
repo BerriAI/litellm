@@ -9,6 +9,8 @@ use litellm_core::CoreResult;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
+use crate::errors::map_reqwest_error;
+
 use litellm_core::providers::azure_ai::ocr::transformation::{
     AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
 };
@@ -27,14 +29,6 @@ const ERROR_BODY_MAX_CHARS: usize = 256;
 const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
-
-pub(super) fn classify_reqwest_error(err: reqwest::Error) -> CoreError {
-    if err.is_timeout() {
-        CoreError::Timeout
-    } else {
-        CoreError::Network(err.to_string())
-    }
-}
 
 pub(super) fn truncate_error_body(body: &str) -> String {
     if body.chars().count() <= ERROR_BODY_MAX_CHARS {
@@ -225,7 +219,7 @@ async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(map_reqwest_error)?;
     let mut current_url = Url::parse(url)
         .map_err(|err| CoreError::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
 
@@ -235,7 +229,7 @@ async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)
             .get(current_url.clone())
             .send()
             .await
-            .map_err(classify_reqwest_error)?;
+            .map_err(map_reqwest_error)?;
         if !response.status().is_redirection() {
             return Ok((current_url, response));
         }
@@ -276,7 +270,7 @@ async fn read_response_with_limit(
 
     let mut bytes = Vec::new();
     let mut bytes_downloaded: u64 = 0;
-    while let Some(chunk) = response.chunk().await.map_err(classify_reqwest_error)? {
+    while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
         bytes_downloaded += chunk.len() as u64;
         enforce_download_size(bytes_downloaded, max_bytes, url)?;
         bytes.extend_from_slice(&chunk);
@@ -389,12 +383,9 @@ async fn upload_reducto_bytes(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
-        .await
-        .map_err(classify_reqwest_error)?;
+    let response = request_builder.send().await.map_err(map_reqwest_error)?;
     let status = response.status();
-    let text = response.text().await.map_err(classify_reqwest_error)?;
+    let text = response.text().await.map_err(map_reqwest_error)?;
     if !status.is_success() {
         return Err(CoreError::Http {
             status: status.as_u16(),
@@ -525,13 +516,10 @@ pub(super) async fn poll_document_intelligence(
                 request_builder = request_builder.header(key, value);
             }
         }
-        let response = request_builder
-            .send()
-            .await
-            .map_err(classify_reqwest_error)?;
+        let response = request_builder.send().await.map_err(map_reqwest_error)?;
         let retry_after = retry_after_secs(&response);
         let status = response.status();
-        let text = response.text().await.map_err(classify_reqwest_error)?;
+        let text = response.text().await.map_err(map_reqwest_error)?;
         if !status.is_success() {
             return Err(CoreError::Http {
                 status: status.as_u16(),

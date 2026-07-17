@@ -16,9 +16,10 @@ use serde_json::{Map, Value};
 
 mod common_utils;
 
+use crate::errors::map_reqwest_error;
 use common_utils::{
-    classify_reqwest_error, convert_document_url_to_data_uri, has_header, ocr_provider_config,
-    poll_document_intelligence, string_headers, truncate_error_body, upload_reducto_document,
+    convert_document_url_to_data_uri, has_header, ocr_provider_config, poll_document_intelligence,
+    string_headers, truncate_error_body, upload_reducto_document,
 };
 
 /// OCR over large documents can take a while; bound it generously rather than
@@ -117,10 +118,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
-        .await
-        .map_err(classify_reqwest_error)?;
+    let response = request_builder.send().await.map_err(map_reqwest_error)?;
 
     let status = response.status();
     if config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
@@ -145,7 +143,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
             .into_json());
     }
 
-    let text = response.text().await.map_err(classify_reqwest_error)?;
+    let text = response.text().await.map_err(map_reqwest_error)?;
 
     if !status.is_success() {
         return Err(CoreError::Http {

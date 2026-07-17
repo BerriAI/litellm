@@ -13,6 +13,10 @@
 
 pub mod io;
 
+/// Shared reqwest-failure classification into typed [`litellm_core::error::CoreError`]
+/// contracts. Always available — every I/O endpoint maps transport failures here.
+mod errors;
+
 /// GIL-activity tracking. Pure (atomics only); shared by the `server` routes and
 /// the `python-config` reader, so it is available without either feature.
 pub mod gil;
