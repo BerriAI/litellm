@@ -75,6 +75,7 @@ from litellm.proxy._types import (
     ConfigGeneralSettings,
     ConfigList,
     ConfigYAML,
+    CoordinationRedisParams,
     EnterpriseLicenseData,
     FieldDetail,
     InvitationClaim,
@@ -212,6 +213,7 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 
 import litellm
+import litellm._redis
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
@@ -365,6 +367,10 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
+from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
+    get_persisted_coordination_redis_settings,
+    router as coordination_redis_settings_router,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     _user_has_admin_view,
@@ -436,10 +442,30 @@ from litellm.proxy.management_helpers.audit_logs import (
     create_object_audit_log,
 )
 from litellm.proxy.memory.memory_endpoints import router as memory_router
+from litellm.proxy.middleware.billable_request_metrics_middleware import (
+    BillableRequestMetricsMiddleware,
+    BillingRecorder,
+)
 from litellm.proxy.plugin_routes import (
-    router as plugin_router,
     register_plugins_from_config,
 )
+from litellm.proxy.plugin_routes import (
+    router as plugin_router,
+)
+
+try:
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        build_billing_metrics_recorder as _build_billing_metrics_recorder,
+    )
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        shutdown_billing_metrics_recorder as _shutdown_billing_metrics_recorder,
+    )
+
+    build_billing_metrics_recorder: Optional[Callable[..., Optional[BillingRecorder]]] = _build_billing_metrics_recorder
+    shutdown_billing_metrics_recorder: Callable[[], None] | None = _shutdown_billing_metrics_recorder
+except ImportError:
+    build_billing_metrics_recorder = None
+    shutdown_billing_metrics_recorder = None
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -459,12 +485,10 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
+    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
-)
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
@@ -550,21 +574,19 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     DeploymentTypedDict,
-)
-from litellm.types.router import ModelInfo as RouterModelInfo
-from litellm.types.router import (
     RouterGeneralSettings,
+    RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
 )
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.scheduler import DefaultPriorities
 from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
-from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
+from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
@@ -765,6 +787,11 @@ async def proxy_shutdown_event():
     if db_writer_client is not None:
         await db_writer_client.close()  # type: ignore[reportGeneralTypeIssues]
 
+    # final flush of billable-request counts: without it, up to one export
+    # interval of enterprise billing data is dropped on every restart
+    if shutdown_billing_metrics_recorder is not None:
+        shutdown_billing_metrics_recorder()
+
     # flush remaining langfuse logs
     if "langfuse" in litellm.success_callback:
         try:
@@ -929,6 +956,16 @@ async def proxy_startup_event(app: FastAPI):
 
         asyncio.create_task(_run_pw_migration())
 
+    ## A coordination_redis block saved from the admin UI lives in the database,
+    ## which is only reachable once the prisma client exists. Apply it here, before
+    ## the coordination Redis is published to its consumers below.
+    db_coordination_redis_cache = await ProxyStartupEvent._init_coordination_redis_from_db(
+        litellm_settings=proxy_config.get_config_state().get("litellm_settings") or {},
+        llm_router=llm_router,
+    )
+    if db_coordination_redis_cache is not None:
+        _set_redis_usage_cache(db_coordination_redis_cache)
+
     ## use_redis_transaction_buffer: fall back to a standalone Redis (REDIS_* env)
     ## when the proxy cache backend is not Redis ##
     transaction_buffer_redis_cache = redis_usage_cache
@@ -960,11 +997,11 @@ async def proxy_startup_event(app: FastAPI):
         if is_otel_v2_enabled():
             from opentelemetry import trace as _otel_trace
 
-            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
             from litellm.integrations.otel.logger import (
                 OpenTelemetryV2,
                 publish_global_otel_v2_provider,
             )
+            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
 
             registered = open_telemetry_logger if isinstance(open_telemetry_logger, OpenTelemetryV2) else None
             publish_global_otel_v2_provider(
@@ -1043,9 +1080,10 @@ async def proxy_startup_event(app: FastAPI):
     # lazily by the flusher on first tick (see `_state_loaded` flag) so
     # hot-reloaded routers also get their persisted priors.
     if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
-        for _ar in llm_router.adaptive_routers.values():
-            await _ar.load_state_from_db(prisma_client)
-            _ar._state_loaded = True
+        for _tagged_routers in llm_router.adaptive_routers.values():
+            for _tagged in _tagged_routers:
+                await _tagged.strategy.load_state_from_db(prisma_client)
+                _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer
@@ -1768,6 +1806,31 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+# Added before InFlightRequestsMiddleware so it nests *inside* it: Starlette
+# makes the last-added middleware outermost. The billable count is recorded
+# after the inner app returns, so if this sat outside the in-flight tracker a
+# request could be counted as drained while its record() had not yet run, and
+# proxy_shutdown_event could flush and stop the exporter underneath it.
+app.add_middleware(
+    BillableRequestMetricsMiddleware,
+    # Factory, not an instance: the recorder is resolved on the first request so
+    # it sees premium_user and the billing env vars AFTER proxy_startup_event has
+    # loaded the YAML config's environment_variables. Building it here at import
+    # time would permanently capture recorder=None for YAML-configured
+    # deployments. The lambda reads the module globals at call time.
+    recorder_factory=lambda: (
+        build_billing_metrics_recorder(
+            premium=premium_user,
+            # Read from the license check, not the premium_user_data module
+            # global: that global is bound once at import and goes stale when
+            # the license arrives via the YAML config's environment_variables.
+            license_data=_license_check.airgapped_license_data,
+            litellm_version=version,
+        )
+        if build_billing_metrics_recorder is not None
+        else None
+    ),
+)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -2756,21 +2819,6 @@ async def update_cache(
             )
             # set cooldown on alert
 
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_spend", None) is not None:
-            existing_team_spend = existing_spend_obj.team_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_spend = existing_team_spend + response_cost
-
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_member_spend", None) is not None:
-            existing_team_member_spend = existing_spend_obj.team_member_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_member_spend = existing_team_member_spend + response_cost
-
-        # Existing spend_obj is mutated; UserApiKeyCache.async_set_cache_pipeline turns
-        # BaseModel values into dicts for Redis (same Codec path as async_set_cache).
-        existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
-
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
@@ -2974,13 +3022,27 @@ async def update_cache(
     if tags is not None:
         await _update_tag_cache()
 
-    asyncio.create_task(
-        user_api_key_cache.async_set_cache_pipeline(
-            cache_list=values_to_update_in_cache,
-            ttl=get_management_object_ttl(user_api_key_cache),
-            litellm_parent_otel_span=parent_otel_span,
+    global_proxy_spend_key = "{}:spend".format(litellm_proxy_admin_name)
+    local_object_updates = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
+    shared_scalar_updates = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
+
+    if local_object_updates:
+        asyncio.create_task(
+            user_api_key_cache.async_set_cache_pipeline(
+                cache_list=list(local_object_updates),
+                ttl=get_management_object_ttl(user_api_key_cache),
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
         )
-    )
+    if shared_scalar_updates:
+        asyncio.create_task(
+            user_api_key_cache.async_set_cache_pipeline(
+                cache_list=list(shared_scalar_updates),
+                ttl=get_management_object_ttl(user_api_key_cache),
+                litellm_parent_otel_span=parent_otel_span,
+            )
+        )
 
 
 def run_ollama_serve():
@@ -3191,16 +3253,18 @@ async def _adaptive_router_flusher_loop():
             adaptive_routers = getattr(llm_router, "adaptive_routers", None) or {}
             if not adaptive_routers or prisma_client is None:
                 continue
-            for ar in adaptive_routers.values():
-                # Lazy state load: covers adaptive routers registered via
-                # `/config/reload` after proxy boot.
-                if not getattr(ar, "_state_loaded", False):
-                    try:
-                        await ar.load_state_from_db(prisma_client)
-                    finally:
-                        ar._state_loaded = True
-                await ar.queue.flush_state_to_db(prisma_client)
-                await ar.queue.flush_session_to_db(prisma_client)
+            for tagged_routers in adaptive_routers.values():
+                for tagged in tagged_routers:
+                    ar = tagged.strategy
+                    # Lazy state load: covers adaptive routers registered via
+                    # `/config/reload` after proxy boot.
+                    if not getattr(ar, "_state_loaded", False):
+                        try:
+                            await ar.load_state_from_db(prisma_client)
+                        finally:
+                            ar._state_loaded = True
+                    await ar.queue.flush_state_to_db(prisma_client)
+                    await ar.queue.flush_session_to_db(prisma_client)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -3553,6 +3617,140 @@ def _apply_ssrf_general_settings(settings: Mapping[str, object]) -> None:
         )
 
 
+def _set_redis_usage_cache(coordination_redis_cache: RedisCache | None) -> None:
+    """Publish the resolved coordination Redis to the consumers that read it directly."""
+    global redis_usage_cache
+    redis_usage_cache = coordination_redis_cache
+
+
+def _resolve_coordination_redis_env_refs(raw_params: Mapping[str, object]) -> dict[str, object]:
+    """Resolve `os.environ/VAR` references in a coordination_redis block."""
+    return {
+        key: (get_secret(value) if isinstance(value, str) and value.startswith("os.environ/") else value)
+        for key, value in raw_params.items()
+    }
+
+
+def _build_redis_usage_cache(redis_params: Mapping[str, object]) -> RedisCache:
+    """
+    Builds the proxy's coordination Redis client from resolved connection
+    params. Cluster-mode targets (explicit `startup_nodes` or the
+    REDIS_CLUSTER_NODES env var) get a `RedisClusterCache`, so consumers that
+    branch on cluster mode (e.g. the v3 rate limiter) take the cluster path;
+    everything else (host/url/sentinel) gets a plain `RedisCache`.
+    """
+    startup_nodes = redis_params.get("startup_nodes")
+    if startup_nodes is None:
+        env_cluster_nodes = get_secret_str("REDIS_CLUSTER_NODES")
+        if env_cluster_nodes is not None:
+            startup_nodes = json.loads(env_cluster_nodes)
+    non_node_params = {key: value for key, value in redis_params.items() if key != "startup_nodes"}
+    if startup_nodes:
+        return RedisClusterCache(startup_nodes=startup_nodes, **non_node_params)
+    return RedisCache(**non_node_params)
+
+
+def _environment_has_redis_connection_target() -> bool:
+    """
+    Whether the REDIS_* environment variables name a Redis to connect to (host,
+    url, cluster nodes, or sentinel nodes). Read-only: callers that only need to
+    know whether the env fallback would apply use this instead of building a
+    client.
+    """
+    redis_env_kwargs = litellm._redis._redis_kwargs_from_environment()
+    return (
+        "host" in redis_env_kwargs
+        or "url" in redis_env_kwargs
+        or get_secret_str("REDIS_CLUSTER_NODES") is not None
+        or get_secret_str("REDIS_SENTINEL_NODES") is not None
+    )
+
+
+def _build_redis_usage_cache_from_environment() -> RedisCache | None:
+    """
+    Builds a standalone coordination Redis from REDIS_* environment variables.
+
+    Lets the proxy's coordination Redis (cross-pod tpm/rpm rate limits, spend
+    tracking, pod lock manager) run when the response-cache backend is not a
+    plain Redis KV cache (e.g. a semantic cache, disk, or s3).
+
+    Returns None when the environment carries no connection target (host, url,
+    cluster nodes, or sentinel nodes).
+    """
+    if not _environment_has_redis_connection_target():
+        return None
+    return _build_redis_usage_cache(litellm._redis._redis_kwargs_from_environment())
+
+
+def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: bool) -> None:
+    """
+    Wires an established coordination Redis into the proxy-level caches that
+    consume it directly: the spend counter cache, the cluster-wide config
+    cache, and (only when opted in) the virtual-key auth cache.
+    """
+    spend_counter_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=litellm.default_redis_ttl,
+    )
+    if enable_redis_auth_cache is True:
+        user_api_key_cache.attach_redis_cache(
+            redis_cache,
+            default_redis_ttl=litellm.default_redis_ttl,
+        )
+        verbose_proxy_logger.info(
+            "enable_redis_auth_cache=True: attached Redis to "
+            "user_api_key_cache — virtual-key lookups are now "
+            "shared across all proxy workers."
+        )
+    else:
+        verbose_proxy_logger.info(
+            "enable_redis_auth_cache is not set: user_api_key_cache "
+            "remains in-memory only (per-worker). Set "
+            "litellm_settings.enable_redis_auth_cache: true to share "
+            "the auth cache across workers and reduce DB load."
+        )
+    litellm_config_cache.redis_cache = redis_cache
+
+
+def resolve_complexity_router_plugins(
+    model_name: str,
+    complexity_router_config: dict,
+    config_file_path: str | None,
+) -> None:
+    """
+    Resolves `complexity_router_config["plugins"]` dotted-path strings to live
+    instances via `get_instance_fn` (the same convention `litellm_settings.callbacks`
+    uses), in place. Raises at config-load time if a path resolves to something that
+    doesn't implement `RoutingPlugin`, rather than deferring to a confusing
+    `AttributeError` on the first request that reaches the plugin pipeline.
+    """
+    plugin_paths = complexity_router_config.get("plugins")
+    if not isinstance(plugin_paths, list):
+        return
+
+    resolved_plugins = [
+        get_instance_fn(value=plugin_path, config_file_path=config_file_path)
+        if isinstance(plugin_path, str)
+        else plugin_path
+        for plugin_path in plugin_paths
+    ]
+    for plugin_path, resolved_plugin in zip(plugin_paths, resolved_plugins):
+        # `@runtime_checkable` only checks that `run` exists as an attribute, not that
+        # it's a coroutine function -- a synchronous `def run(self, context)` would pass
+        # isinstance() here and only fail at request time with a confusing `TypeError:
+        # object RoutingContext can't be used in 'await' expression`.
+        if not isinstance(resolved_plugin, RoutingPlugin) or not inspect.iscoroutinefunction(
+            getattr(resolved_plugin, "run", None)
+        ):
+            raise ValueError(
+                f"complexity_router_config.plugins entry {plugin_path!r} on model {model_name!r} "
+                f"resolved to {resolved_plugin!r}, which does not implement the RoutingPlugin "
+                "interface (an async `run(context)` method). Fix the referenced module before "
+                "starting the proxy."
+            )
+    complexity_router_config["plugins"] = resolved_plugins
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -3751,12 +3949,52 @@ class ProxyConfig:
         team_config = self._get_team_config(team_id=team_id, all_teams_config=all_teams_config)
         return team_config
 
+    def _init_coordination_redis(self, config: dict) -> RedisCache | None:
+        """
+        Builds the coordination Redis from `general_settings.coordination_redis`
+        when present, attaching it to the proxy-level caches. Runs before cache
+        init, so an explicit block takes precedence over borrowing the
+        response-cache Redis and over the REDIS_* env fallback. Returns the
+        built client (None when the block is absent) for the caller to publish.
+        """
+        settings = config.get("general_settings") or {}
+        litellm_settings = config.get("litellm_settings") or {}
+        raw_params = settings.get("coordination_redis")
+        if raw_params is None:
+            return None
+        if not isinstance(raw_params, dict):
+            raise ValueError("general_settings.coordination_redis must be a mapping of Redis connection params")
+
+        coordination_params = CoordinationRedisParams(**_resolve_coordination_redis_env_refs(raw_params))
+        if not coordination_params.has_connection_target():
+            raise ValueError(
+                "general_settings.coordination_redis needs a connection target: "
+                "set one of host, url, startup_nodes, or sentinel_nodes"
+            )
+
+        coordination_redis_cache = _build_redis_usage_cache(coordination_params.model_dump(exclude_none=True))
+        _attach_redis_usage_cache(
+            coordination_redis_cache,
+            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+        )
+        verbose_proxy_logger.info(
+            "coordination_redis: using a standalone Redis from general_settings "
+            "for usage tracking, rate limiting, and cross-pod coordination."
+        )
+        return coordination_redis_cache
+
     def _init_cache(
         self,
         cache_params: dict,
         enable_redis_auth_cache: bool = False,
-    ):
-        global redis_usage_cache, llm_router, general_settings
+    ) -> RedisCache | None:
+        """
+        Initializes the response cache and resolves the coordination Redis.
+
+        Returns the coordination Redis for the caller to publish: an explicit
+        coordination_redis block already set wins, else a plain-Redis response
+        cache backend is borrowed, else the REDIS_* environment fallback applies.
+        """
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
@@ -3767,37 +4005,29 @@ class ProxyConfig:
 
         litellm.cache = Cache(**cache_params)
 
-        if litellm.cache is not None and isinstance(litellm.cache.cache, (RedisCache, RedisClusterCache)):
-            ## INIT PROXY REDIS USAGE CLIENT ##
-            redis_usage_cache = litellm.cache.cache
-            spend_counter_cache.attach_redis_cache(
-                redis_usage_cache,
-                default_redis_ttl=litellm.default_redis_ttl,
-            )
-            # Note: PKCE verifier storage uses redis_usage_cache directly (not
-            # user_api_key_cache) to avoid routing all API-key lookups through Redis.
-            if enable_redis_auth_cache is True:
-                user_api_key_cache.attach_redis_cache(
-                    redis_usage_cache,
-                    default_redis_ttl=litellm.default_redis_ttl,
-                )
-                verbose_proxy_logger.info(
-                    "enable_redis_auth_cache=True: attached Redis to "
-                    "user_api_key_cache — virtual-key lookups are now "
-                    "shared across all proxy workers."
-                )
+        resolved_usage_cache = redis_usage_cache
+        cache_backend = litellm.cache.cache if litellm.cache is not None else None
+        if resolved_usage_cache is None:
+            if isinstance(cache_backend, (RedisCache, RedisClusterCache)):
+                ## INIT PROXY REDIS USAGE CLIENT ##
+                resolved_usage_cache = cache_backend
             else:
-                verbose_proxy_logger.info(
-                    "enable_redis_auth_cache is not set: user_api_key_cache "
-                    "remains in-memory only (per-worker). Set "
-                    "litellm_settings.enable_redis_auth_cache: true to share "
-                    "the auth cache across workers and reduce DB load."
-                )
-            litellm_config_cache.redis_cache = redis_usage_cache
+                resolved_usage_cache = _build_redis_usage_cache_from_environment()
+                if resolved_usage_cache is not None:
+                    verbose_proxy_logger.info(
+                        "Cache backend %s is not a Redis KV cache; built a standalone "
+                        "Redis from REDIS_* environment variables for usage tracking, "
+                        "rate limiting, and cross-pod coordination.",
+                        type(cache_backend).__name__,
+                    )
+
+        if resolved_usage_cache is not None:
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
+            _attach_redis_usage_cache(resolved_usage_cache, enable_redis_auth_cache)
         elif litellm_config_cache.redis_cache is None:
             verbose_proxy_logger.info("litellm_config_cache: no Redis configured; cluster-wide cache sharing disabled.")
+        return resolved_usage_cache
 
     def switch_on_llm_response_caching(self):
         """
@@ -4042,6 +4272,11 @@ class ProxyConfig:
 
         self._load_environment_variables(config=config)
 
+        ## Coordination Redis (before cache init, so the explicit block wins)
+        coordination_redis_cache = self._init_coordination_redis(config=config)
+        if coordination_redis_cache is not None:
+            _set_redis_usage_cache(coordination_redis_cache)
+
         ## Callback settings
         callback_settings = config.get("callback_settings", {})
         if callback_settings:
@@ -4122,9 +4357,11 @@ class ProxyConfig:
                             cache_params[key] = get_secret(value)
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
-                    self._init_cache(
-                        cache_params=cache_params,
-                        enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+                    _set_redis_usage_cache(
+                        self._init_cache(
+                            cache_params=cache_params,
+                            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+                        )
                     )
                     if litellm.cache is not None:
                         verbose_proxy_logger.debug(f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}")
@@ -4194,6 +4431,15 @@ class ProxyConfig:
                     litellm.default_max_internal_user_budget = float(value)
                     if litellm.max_internal_user_budget is None:
                         litellm.max_internal_user_budget = litellm.default_max_internal_user_budget
+                elif key == "default_internal_user_params" and isinstance(value, dict):
+                    litellm.default_internal_user_params = (
+                        {**value, "max_budget": float(value["max_budget"])}
+                        if value.get("max_budget") is not None
+                        else value
+                    )
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, litellm.default_internal_user_params, is_full_admin=False)}{reset_color_code}"
+                    )
                 elif key == "custom_provider_map":
                     from litellm.utils import custom_llm_setup
 
@@ -4574,6 +4820,13 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
+                complexity_router_config = model["litellm_params"].get("complexity_router_config")
+                if isinstance(complexity_router_config, dict):
+                    resolve_complexity_router_plugins(
+                        model_name=model.get("model_name", ""),
+                        complexity_router_config=complexity_router_config,
+                        config_file_path=config_file_path,
+                    )
                 print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
@@ -5546,6 +5799,13 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
+            value = _general_settings["disable_auto_add_proxy_admin_to_teams"]
+            if isinstance(value, str):
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value.lower() == "true"
+            else:
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -7125,7 +7385,7 @@ async def async_data_generator(
         # disconnect, so it fires reliably regardless of needs_iterator_wrap
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict)
+            proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
             client_disconnected = True
         raise
     except Exception as e:
@@ -7270,6 +7530,46 @@ class ProxyStartupEvent:
             )
 
     @staticmethod
+    async def _init_coordination_redis_from_db(
+        litellm_settings: Mapping[str, object],
+        llm_router: Router | None,
+    ) -> RedisCache | None:
+        """
+        Applies a coordination_redis block saved to the database, which the admin
+        UI writes and the config file therefore never carries.
+
+        Returns None when nothing is persisted or the persisted block names no
+        connection target, leaving the file/env resolution untouched.
+        """
+        try:
+            persisted = await get_persisted_coordination_redis_settings()
+        except Exception as e:  # noqa: BLE001  # a config-row read failure must not block proxy startup
+            verbose_proxy_logger.warning("Could not read coordination_redis from the database: %s", e)
+            return None
+        if persisted is None:
+            return None
+
+        coordination_params = CoordinationRedisParams(**_resolve_coordination_redis_env_refs(persisted))
+        if not coordination_params.has_connection_target():
+            verbose_proxy_logger.warning(
+                "coordination_redis saved in the database names no connection target; ignoring it."
+            )
+            return None
+
+        coordination_redis_cache = _build_redis_usage_cache(coordination_params.model_dump(exclude_none=True))
+        _attach_redis_usage_cache(
+            coordination_redis_cache,
+            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+        )
+        if llm_router is not None and llm_router.cache.redis_cache is None:
+            llm_router._update_redis_cache(cache=coordination_redis_cache)
+        verbose_proxy_logger.info(
+            "coordination_redis: using the standalone Redis saved in the database "
+            "for usage tracking, rate limiting, and cross-pod coordination."
+        )
+        return coordination_redis_cache
+
+    @staticmethod
     def _get_transaction_buffer_redis_cache(
         general_settings: dict,
     ) -> RedisCache | None:
@@ -7281,7 +7581,6 @@ class ProxyStartupEvent:
         Returns None when the buffer is disabled, or when no Redis host or url
         is set in the environment.
         """
-        from litellm._redis import _redis_kwargs_from_environment
         from litellm.secret_managers.main import str_to_bool
 
         _use_redis_transaction_buffer: bool | str | None = general_settings.get("use_redis_transaction_buffer", False)
@@ -7291,11 +7590,7 @@ class ProxyStartupEvent:
         if not _use_redis_transaction_buffer:
             return None
 
-        redis_env_kwargs = _redis_kwargs_from_environment()
-        if "host" not in redis_env_kwargs and "url" not in redis_env_kwargs:
-            return None
-
-        return RedisCache(**redis_env_kwargs)
+        return _build_redis_usage_cache_from_environment()
 
     @classmethod
     async def _initialize_semantic_tool_filter(
@@ -7712,7 +8007,7 @@ class ProxyStartupEvent:
                     proxy_logging_obj=proxy_logging_obj,
                     prisma_client=prisma_client,
                     llm_router=llm_router,
-                    track_unmanaged_vertex_batch_cost=general_settings.get("track_unmanaged_vertex_batch_cost", False),
+                    track_unmanaged_batch_cost=general_settings.get("track_unmanaged_batch_cost", False),
                 )
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
@@ -14635,6 +14930,8 @@ async def get_config_list(
         "forward_client_headers_to_llm_api": {"type": "Boolean"},
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
+        "skip_user_budget_on_team_key": {"type": "Boolean"},
+        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
     }
 
     return_val = []
@@ -15731,7 +16028,11 @@ async def get_adaptive_router_state(
             status_code=404,
             detail={"error": "No adaptive_router is configured on this proxy."},
         )
-    snapshots = [await ar.get_state_snapshot() for ar in llm_router.adaptive_routers.values()]
+    snapshots = [
+        await tagged.strategy.get_state_snapshot()
+        for tagged_routers in llm_router.adaptive_routers.values()
+        for tagged in tagged_routers
+    ]
     return {"routers": snapshots}
 
 
@@ -15826,6 +16127,7 @@ app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)

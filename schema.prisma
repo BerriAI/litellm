@@ -325,6 +325,7 @@ model LiteLLM_MCPServerTable {
   command      String?
   args         String[]       @default([])
   env          Json?          @default("{}")
+  issuer             String?
   authorization_url  String?
   token_url          String?
   registration_url   String?
@@ -339,6 +340,7 @@ model LiteLLM_MCPServerTable {
   available_on_public_internet Boolean @default(true)
   delegate_auth_to_upstream Boolean @default(false)
   oauth_passthrough Boolean @default(false)
+  dcr_bridge Boolean?
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
@@ -421,6 +423,7 @@ model LiteLLM_VerificationToken {
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
+    key_type         String?
     policies         String[] @default([])
     access_group_ids String[] @default([])
     model_spend      Json @default("{}")
@@ -515,6 +518,7 @@ model LiteLLM_DeletedVerificationToken {
     budget_reset_at         DateTime?
     allowed_cache_controls  String[] @default([])
     allowed_routes          String[] @default([])
+    key_type                String?
     policies                String[] @default([])
     access_group_ids String[] @default([])
     model_spend             Json     @default("{}")

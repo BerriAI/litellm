@@ -1006,6 +1006,22 @@ if MCP_AVAILABLE:
                     content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
                     isError=True,
                 )
+            except MCPUpstreamAuthError as e:
+                # The MCP session manager serializes handler exceptions as JSON-RPC errors, so a
+                # mid-session tool call cannot emit a raw 401 + WWW-Authenticate the way the REST
+                # call path and the connect-time preemptive check do. Return an explicit isError
+                # naming the upstream status (at info level, not a traceback) so the client still
+                # learns it must re-authenticate upstream and expected pass-through 401s don't spam.
+                verbose_logger.info(f"Upstream auth failure calling MCP tool: HTTP {e.status_code}")
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            text=f"Error: upstream authentication required (HTTP {e.status_code})",
+                            type="text",
+                        )
+                    ],
+                    isError=True,
+                )
             except Exception as e:
                 verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
                 return CallToolResult(
@@ -2202,43 +2218,6 @@ if MCP_AVAILABLE:
         server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
         return [t for t in tools if strip_known_server_prefix(t.name, server) in allowed_tool_names]
 
-    async def _merge_toolset_permissions(
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-    ) -> Optional[UserAPIKeyAuth]:
-        """
-        Resolve mcp_toolsets on the key's object_permission into tool-level permissions
-        and merge them (union) into object_permission.mcp_tool_permissions.
-
-        Returns the (possibly mutated copy of) user_api_key_auth.
-        """
-        if user_api_key_auth is None:
-            return None
-        op = user_api_key_auth.object_permission
-        if op is None:
-            return user_api_key_auth
-        toolset_ids = getattr(op, "mcp_toolsets", None) or []
-        if not toolset_ids:
-            return user_api_key_auth
-
-        toolset_perms = await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=toolset_ids)
-        if not toolset_perms:
-            return user_api_key_auth
-
-        # Merge toolset_perms into existing mcp_tool_permissions (union)
-        existing = dict(op.mcp_tool_permissions or {})
-        for server_id, tool_names in toolset_perms.items():
-            existing_tools = existing.get(server_id, [])
-            merged = list(set(existing_tools) | set(tool_names))
-            existing[server_id] = merged
-
-        # Build updated object_permission with merged tool permissions and server IDs.
-        # Union the toolset's server IDs into mcp_servers so downstream server-level
-        # filtering doesn't silently drop servers that the toolset references but that
-        # aren't already in the key's explicit mcp_servers list.
-        merged_servers = list(set(op.mcp_servers or []) | set(existing.keys()))
-        updated_op = op.model_copy(update={"mcp_servers": merged_servers, "mcp_tool_permissions": existing})
-        return user_api_key_auth.model_copy(update={"object_permission": updated_op})
-
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
@@ -2265,10 +2244,6 @@ if MCP_AVAILABLE:
         """
         if not MCP_AVAILABLE:
             return []
-
-        # Resolve toolset permissions and merge into the key's object_permission
-        # so that the existing filter_tools_by_key_team_permissions logic picks them up.
-        user_api_key_auth = await _merge_toolset_permissions(user_api_key_auth)
 
         # Get tools from managed MCP servers with error handling
         managed_tools = []
@@ -2943,6 +2918,14 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 **kwargs,
             )
+        except MCPUpstreamAuthError:
+            # A client-forwarded pass-through upstream 401 is an expected caller-must-reauth signal, so
+            # re-raise it without post_call_failure_hook, which fires the proxy's llm_exceptions alert.
+            # mcp_server_tool_call then downgrades it to an informational isError result for the
+            # streamable client. Note: this function is @client-decorated, so the decorator's standard
+            # failure logging still records the event (spend log / OTel); only the extra alert sink is
+            # skipped here.
+            raise
         except Exception as e:
             traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             from litellm.proxy.proxy_server import proxy_logging_obj
@@ -3558,48 +3541,70 @@ if MCP_AVAILABLE:
                 # preemptive challenge and let downstream authorization
                 # return 403.
                 continue
-            if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                # For per-user OAuth servers, only skip the pre-emptive 401 when
-                # a stored token actually exists for this user+server pair.
-                # If no stored token exists, fail fast with 401 so clients can
-                # kick off PKCE/interactive OAuth flow immediately.
-                if server.needs_user_oauth_token:
-                    if getattr(server, "delegate_auth_to_upstream", False) is True:
-                        # Delegate-auth servers run upstream PKCE: challenge with
-                        # the proxied resource_metadata (RFC 9728), not the
-                        # gateway authorization_uri below which would authorize
-                        # against the gateway instead of the upstream IdP.
-                        www_authenticate = _get_passthrough_www_authenticate(
-                            scope=scope,
-                            server_name=server_name,
-                        )
-                        raise HTTPException(
-                            status_code=401,
-                            detail="Unauthorized",
-                            headers={"www-authenticate": www_authenticate},
-                        )
-                    # The v2 resolver owns the existence check, so every authorization_code
-                    # resolution (egress and this discovery challenge) runs through it.
+            if server and server.auth_type == MCPAuth.oauth2:
+                # The challenge decision is per oauth2 sub-mode, not per header:
+                # gateway-managed modes (M2M and interactive authorization_code)
+                # never receive a client-supplied upstream token, so a bearer in
+                # Authorization is a LiteLLM key (surfaced here as oauth2_headers)
+                # and must not suppress the challenge. Only the delegate mode
+                # treats a present bearer as the upstream token. The sub-mode is
+                # resolved the same way egress resolves it, via
+                # effective_oauth2_flow: an unstamped (null oauth2_flow) row with
+                # the M2M shape resolves to client_credentials, so the bare
+                # has_client_credentials column is never trusted here.
+                if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
+                    # M2M: the gateway mints its own token at egress from the
+                    # stored client credentials, so there is nothing to challenge.
+                    continue
+
+                if getattr(server, "delegate_auth_to_upstream", False) is not True:
+                    # Gateway-managed interactive (authorization_code): the only
+                    # thing that authorizes egress is a stored per-user token, so
+                    # challenge whenever one is absent, regardless of any bearer.
+                    # The v2 resolver owns the existence check, so every
+                    # authorization_code resolution (egress and this discovery
+                    # challenge) runs through it.
                     if await global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
                         continue
 
-                request = StarletteRequest(scope)
-                base_url = get_request_base_url(request)
-                _path = scope.get("_original_path") or scope.get("path", "") or ""
+                    request = StarletteRequest(scope)
+                    base_url = get_request_base_url(request)
+                    _path = scope.get("_original_path") or scope.get("path", "") or ""
 
-                # Pick the well-known AS-metadata form that matches the inbound route
-                # so strict RFC 9728 §3.2 clients can resolve it correctly.
-                if _path.startswith(f"/mcp/{server_name}"):
-                    _as_url = f"{base_url}/.well-known/oauth-authorization-server/mcp/{server_name}"
-                else:
-                    _as_url = f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
-                authorization_uri = f'Bearer authorization_uri="{_as_url}"'
+                    # Pick the well-known AS-metadata form that matches the inbound route
+                    # so strict RFC 9728 §3.2 clients can resolve it correctly.
+                    if _path.startswith(f"/mcp/{server_name}"):
+                        _as_url = f"{base_url}/.well-known/oauth-authorization-server/mcp/{server_name}"
+                    else:
+                        _as_url = f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                    authorization_uri = f'Bearer authorization_uri="{_as_url}"'
 
-                raise HTTPException(
-                    status_code=401,
-                    detail="Unauthorized",
-                    headers={"www-authenticate": authorization_uri},
-                )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": authorization_uri},
+                    )
+
+                if not oauth2_headers:
+                    # Delegate-auth servers run upstream PKCE: a present bearer is
+                    # the upstream token, so only challenge when it is absent, with
+                    # the proxied resource_metadata (RFC 9728), not the gateway
+                    # authorization_uri above which would authorize against the
+                    # gateway instead of the upstream IdP.
+                    www_authenticate = _get_passthrough_www_authenticate(
+                        scope=scope,
+                        server_name=server_name,
+                    )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": www_authenticate},
+                    )
+                # Delegate server with a bearer present: it is the upstream token,
+                # so admit the session and move to the next target. Every oauth2
+                # sub-mode is terminal here (continue or raise) so no oauth2 server
+                # reaches the token_exchange / pass-through blocks below.
+                continue
 
             # token_exchange (OBO): the caller supplied no subject token. Challenge at connect
             # (transport level, where WWW-Authenticate survives) with the RFC 9728 resource_metadata
@@ -3676,6 +3681,17 @@ if MCP_AVAILABLE:
                 and not _scope_has_authorization_header(scope)
                 and not _client_has_per_server_auth_header(server, mcp_server_auth_headers)
             ):
+                if server.is_dcr_bridge:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={
+                            "www-authenticate": _get_passthrough_www_authenticate(
+                                scope=scope,
+                                server_name=server_name,
+                            )
+                        },
+                    )
                 upstream_status, upstream_www_authenticate = await _probe_upstream_auth(server.url or "", "")
                 if upstream_status == 401 and upstream_www_authenticate:
                     raise HTTPException(
@@ -3684,8 +3700,15 @@ if MCP_AVAILABLE:
                         headers={"www-authenticate": upstream_www_authenticate},
                     )
 
+    def _get_authorization_header_from_scope(scope: Scope) -> Optional[str]:
+        """First ``Authorization`` header value in the ASGI scope, or None."""
+        for key, value in scope.get("headers", []):
+            if key.lower() == b"authorization":
+                return value.decode("latin-1")
+        return None
+
     def _scope_has_authorization_header(scope: Scope) -> bool:
-        return any(key.lower() == b"authorization" for key, _ in scope.get("headers", []))
+        return _get_authorization_header_from_scope(scope) is not None
 
     def _get_forwarded_auth_from_scope(scope: Scope) -> Optional[str]:
         """Return the upstream-bound ``Authorization`` header value, or None.
@@ -3698,17 +3721,24 @@ if MCP_AVAILABLE:
         ``MCPRequestHandler.process_mcp_request``), and forwarding it upstream
         would leak the proxy key to a third-party MCP server.
         """
-        authorization = None
-        has_litellm_key_header = False
-        for key, value in scope.get("headers", []):
-            key_lower = key.lower()
-            if key_lower == b"authorization":
-                authorization = value.decode("latin-1")
-            elif key_lower == b"x-litellm-api-key":
-                has_litellm_key_header = True
+        has_litellm_key_header = any(key.lower() == b"x-litellm-api-key" for key, _ in scope.get("headers", []))
         if not has_litellm_key_header:
             return None
-        return authorization
+        return _get_authorization_header_from_scope(scope)
+
+    def _is_delegate_upstream_probe_target(server: MCPServer) -> bool:
+        """Whether ``server`` is an interactive delegate-auth server whose client-supplied
+        token should be preflighted upstream.
+
+        Mirrors the anonymous-delegate gate in ``get_allowed_mcp_servers``: the flow is
+        resolved via ``effective_oauth2_flow`` so an unstamped M2M-shape row fails closed
+        (its stored client credentials drive egress; the caller's bearer is irrelevant).
+        """
+        return (
+            server.auth_type == MCPAuth.oauth2
+            and server.delegate_auth_to_upstream is True
+            and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
+        )
 
     async def _probe_upstream_auth(
         url: str,
@@ -3770,7 +3800,7 @@ if MCP_AVAILABLE:
         mcp_servers: Optional[List[str]],
         client_ip: Optional[str],
     ) -> None:
-        """Probe pass-through upstream servers in parallel before the MCP session starts.
+        """Probe pass-through and delegate-auth upstream servers in parallel before the MCP session starts.
 
         Only servers the caller's key is already authorized to reach are probed —
         the list is derived from _get_allowed_mcp_servers so that a user cannot
@@ -3778,11 +3808,42 @@ if MCP_AVAILABLE:
 
         The MCP SDK commits HTTP 200 headers before invoking handlers, so a 401
         can only be returned before that point. This function raises HTTPException(401)
-        with a WWW-Authenticate header if any upstream rejects the client token.
+        with a WWW-Authenticate header if any upstream rejects the client token, or 403
+        if the upstream accepts it but forbids the caller.
         Fails-open: network errors are logged and the request is allowed through.
+
+        Delegate-auth servers (``auth_type=oauth2`` + ``delegate_auth_to_upstream``)
+        are probed with the caller's bare ``Authorization`` bearer. That bearer is only
+        an upstream token (never a LiteLLM key) when admission took the delegate bypass,
+        so the delegate target is resolved through ``get_mcp_server_by_name`` -- the same
+        resolver admission used -- rather than the wider allowed-server prefix/access-group
+        matching. A name that only reaches a delegate server via server_id or an access
+        group would have been admitted as a real LiteLLM key, so probing it would leak that
+        key upstream; requiring the admission-resolver match closes that gap. Without the
+        probe a rejected token is absorbed by the tools/list handler and masked as an empty
+        tool list. Gated to single-server routes so one rejected token cannot 401 a
+        multi-server aggregate connect, matching the OBO preflight gating; the challenge
+        echoes the requested name so aliased routes get the same resource_metadata URL as
+        the tokenless preemptive challenge.
         """
         forwarded_auth = _get_forwarded_auth_from_scope(scope)
-        if not forwarded_auth:
+        requested_single_target = mcp_servers[0] if mcp_servers is not None and len(mcp_servers) == 1 else None
+        # The bare Authorization header (no x-litellm-api-key) is a valid upstream token
+        # only when admission classified it as one, i.e. the single requested name resolves
+        # to a delegate server under admission's own resolver. Resolve it the same way here
+        # so a server_id- or access-group-named delegate (which admission would have treated
+        # as a LiteLLM key) is never probed with that key.
+        delegate_server = (
+            global_mcp_server_manager.get_mcp_server_by_name(requested_single_target, client_ip=client_ip)
+            if requested_single_target
+            else None
+        )
+        delegate_auth = (
+            _get_authorization_header_from_scope(scope)
+            if delegate_server is not None and _is_delegate_upstream_probe_target(delegate_server)
+            else None
+        )
+        if not forwarded_auth and not delegate_auth:
             return
 
         # Use the authorized server set, not the raw user-supplied names, so that
@@ -3792,33 +3853,49 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        passthrough_servers = [
-            srv
-            for srv in allowed_servers
-            # Restrict to genuine OAuth pass-through servers (auth_type none +
-            # Authorization in extra_headers). Gateway-managed OAuth2 servers
-            # must not receive the ``resource_metadata=`` challenge emitted
-            # below — they require ``authorization_uri=`` pointing at the
-            # gateway AS metadata. ``is_oauth_passthrough`` already requires
-            # ``auth_type in (None, MCPAuth.none)``, which is mutually
-            # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
-            # so M2M servers are implicitly excluded here.
-            if srv.is_oauth_passthrough
-        ]
-        if not passthrough_servers:
+        passthrough_targets: Tuple[Tuple[MCPServer, str, str], ...] = (
+            tuple(
+                (srv, forwarded_auth, srv.name)
+                for srv in allowed_servers
+                # Restrict to genuine OAuth pass-through servers (auth_type none +
+                # Authorization in extra_headers). Gateway-managed OAuth2 servers
+                # must not receive the ``resource_metadata=`` challenge emitted
+                # below — they require ``authorization_uri=`` pointing at the
+                # gateway AS metadata. ``is_oauth_passthrough`` already requires
+                # ``auth_type in (None, MCPAuth.none)``, which is mutually
+                # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
+                # so M2M servers are implicitly excluded here.
+                if srv.is_oauth_passthrough
+            )
+            if forwarded_auth
+            else ()
+        )
+        # Probe the admission-resolved delegate server only when the caller is actually
+        # authorized for it (present in the IP-filtered allowed set), keyed by server_id.
+        delegate_targets: Tuple[Tuple[MCPServer, str, str], ...] = (
+            tuple(
+                (srv, delegate_auth, requested_single_target)
+                for srv in allowed_servers
+                if delegate_server is not None and srv.server_id == delegate_server.server_id
+            )
+            if delegate_auth and requested_single_target
+            else ()
+        )
+        probe_targets = passthrough_targets + delegate_targets
+        if not probe_targets:
             return
 
         probe_results = await asyncio.gather(
-            *[_probe_upstream_auth(srv.url or "", forwarded_auth) for srv in passthrough_servers]
+            *[_probe_upstream_auth(srv.url or "", auth_header) for srv, auth_header, _ in probe_targets]
         )
-        for srv, (probe_status, _) in zip(passthrough_servers, probe_results):
+        for (srv, _, challenge_server_name), (probe_status, _) in zip(probe_targets, probe_results):
             if probe_status == 401:
                 # Token is missing or expired: keep pass-through clients on the
                 # protected-resource discovery flow so they re-authorize against
                 # the upstream IdP metadata proxied by LiteLLM.
                 www_authenticate = _get_passthrough_www_authenticate(
                     scope=scope,
-                    server_name=srv.name,
+                    server_name=challenge_server_name,
                     invalid_token=True,
                 )
                 raise HTTPException(

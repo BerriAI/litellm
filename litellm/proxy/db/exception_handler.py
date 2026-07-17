@@ -8,6 +8,10 @@ from litellm.proxy._types import (
 )
 from litellm.secret_managers.main import str_to_bool
 
+# Bounds the __cause__/__context__ walk in is_database_service_unavailable_error_in_chain.
+# Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
+_MAX_EXCEPTION_CHAIN_DEPTH = 20
+
 
 class PrismaDBExceptionHandler:
     """
@@ -217,6 +221,32 @@ class PrismaDBExceptionHandler:
                 asyncpg.exceptions.InterfaceError,
             ),
         )
+
+    @staticmethod
+    def is_database_service_unavailable_error_in_chain(e: BaseException) -> bool:
+        """Like ``is_database_service_unavailable_error`` but also walks the
+        ``__cause__`` / ``__context__`` chain.
+
+        ``is_database_service_unavailable_error`` classifies a single exception
+        by type, which a caller that catches a raw DB failure and re-raises a
+        domain exception of a different type defeats. ``get_user_object`` in
+        ``litellm/proxy/auth/auth_checks.py`` is the concrete case: it wraps
+        every DB error, a genuine outage included, in a bare ``ValueError``
+        whose original error survives only as ``__context__``. A type check on
+        the ``ValueError`` misses the outage, so the caller would mistake an
+        infrastructure fault for an auth failure. Walking the chain recovers the
+        real signal, which is the PEP 3134 way to inspect a wrapped cause.
+
+        The walk is depth-bounded, which also makes it cycle-safe.
+        """
+        current: BaseException | None = e
+        for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
+            if not isinstance(current, Exception):
+                return False
+            if PrismaDBExceptionHandler.is_database_service_unavailable_error(current):
+                return True
+            current = current.__cause__ or current.__context__
+        return False
 
     @staticmethod
     def handle_db_exception(e: Exception):

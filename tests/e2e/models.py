@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel, model_validator
 
 # ---------- keys ----------
 
@@ -23,6 +23,22 @@ class BudgetWindow(BaseModel):
     max_budget: float
 
 
+class KeyLoggingCallbackVars(BaseModel):
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str | None = None
+
+
+class KeyLoggingCallback(BaseModel):
+    callback_name: str
+    callback_type: str = "success_and_failure"
+    callback_vars: KeyLoggingCallbackVars
+
+
+class KeyMetadata(BaseModel):
+    logging: list[KeyLoggingCallback] | None = None
+
+
 class KeyGenerateBody(BaseModel):
     models: list[str] = []
     duration: str | None = None
@@ -31,6 +47,7 @@ class KeyGenerateBody(BaseModel):
     budget_duration: str | None = None
     user_id: str | None = None
     team_id: str | None = None
+    organization_id: str | None = None
     budget_id: str | None = None
     key_alias: str | None = None
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
@@ -39,6 +56,7 @@ class KeyGenerateBody(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -64,6 +82,7 @@ class KeyInfo(BaseModel):
     key_alias: str | None = None
     models: list[str] = []
     tpm_limit: int | None = None
+    rpm_limit: int | None = None
     team_id: str | None = None
     spend: float | None = None
     max_budget: float | None = None
@@ -105,6 +124,17 @@ class ThinkingParam(BaseModel):
     budget_tokens: int | None = None
 
 
+class ChatToolFunction(BaseModel):
+    name: str
+    description: str | None = None
+    parameters: dict[str, object] | None = None
+
+
+class ChatTool(BaseModel):
+    type: str = "function"
+    function: ChatToolFunction
+
+
 class ChatBody(BaseModel):
     model: str
     messages: list[ChatMessage]
@@ -115,12 +145,20 @@ class ChatBody(BaseModel):
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
+    tools: list[ChatTool] | None = None
+    tool_choice: str | None = None
+    guardrails: list[str] | None = None
 
 
 class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[ChatMessage]
     max_tokens: int
+    stream: bool | None = None
+
+
+class AnthropicMessagesResponse(BaseModel):
+    model: str | None = None
 
 
 class OutMessage(BaseModel):
@@ -218,6 +256,16 @@ class SpendLogs(RootModel[list[SpendLogRow]]):
 class SpendLogsParams(BaseModel):
     request_id: str | None = None
     api_key: str | None = None
+
+    @model_validator(mode="after")
+    def require_filter(self) -> SpendLogsParams:
+        if self.request_id is None and self.api_key is None:
+            raise ValueError(
+                "unfiltered /spend/logs returns the entire spend table and OOMs the "
+                "runner on long-lived environments; filter by request_id or api_key, "
+                "or use Gateway.spend_logs_window for a bounded /spend/logs/v2 read"
+            )
+        return self
 
 
 class SpendLogsPageParams(BaseModel):
@@ -377,10 +425,13 @@ class LiteLLMParamsBody(BaseModel):
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
+    gcs_bucket_name: str | None = None
     bucket_name: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
@@ -389,6 +440,9 @@ class LiteLLMParamsBody(BaseModel):
     aws_batch_role_arn: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    extra_headers: dict[str, str] | None = None
+    use_in_pass_through: bool | None = None
+    complexity_router_config: dict[str, object] | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -456,6 +510,7 @@ class TeamNewBody(BaseModel):
     team_alias: str
     models: list[str] = []
     team_id: str | None = None
+    organization_id: str | None = None
 
 
 class TeamNewResponse(BaseModel):
