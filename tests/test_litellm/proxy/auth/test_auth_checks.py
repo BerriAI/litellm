@@ -522,6 +522,49 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
     assert mock_prisma_client.get_data.await_count == 1
 
 
+def _fake_redis_cache():
+    fake_redis = MagicMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_set_cache = AsyncMock()
+    fake_redis.async_set_cache_pipeline = AsyncMock()
+    fake_redis.async_delete_cache = AsyncMock()
+    return fake_redis
+
+
+class TestAuthCacheRedisWritePolicy:
+    """Redis auth-cache entries may only be written from fresh DB loads.
+
+    With ``enable_redis_auth_cache`` and multiple replicas, a pod that re-publishes
+    a cache-derived key object to Redis can resurrect a stale auth blob after
+    ``/key/update`` or ``/key/delete`` already deleted it, so limit changes never
+    propagate fleet-wide while traffic keeps refreshing the stale entry's TTL.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_key_object_db_load_publishes_to_redis(self):
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.get_data = AsyncMock(
+            return_value=UserAPIKeyAuth(token="hashed-token-db")
+        )
+
+        fake_redis = _fake_redis_cache()
+        cache = UserApiKeyCache()
+        cache.redis_cache = fake_redis
+
+        key_obj = await get_key_object(
+            hashed_token="hashed-token-db",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
+
+        assert key_obj.token == "hashed-token-db"
+        fake_redis.async_set_cache.assert_awaited_once()
+        assert (
+            fake_redis.async_set_cache.await_args.kwargs.get("key")
+            or fake_redis.async_set_cache.await_args.args[0]
+        ) == "hashed-token-db"
+
+
 def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
     """Test generating CLI JWT token with default 24-hour expiration"""
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
@@ -2004,6 +2047,88 @@ async def test_common_checks_metadata_route_keeps_key_tags_out_of_provider_metad
     assert "metadata" not in request_body
 
 
+def _pass_through_request() -> "Request":
+    """A Request whose FastAPI-resolved endpoint carries the pass-through marker,
+    i.e. the request was dispatched to a user-defined pass-through handler."""
+    from fastapi import Request
+
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    def pass_through_endpoint():
+        ...
+
+    setattr(pass_through_endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return Request(scope={"type": "http", "headers": [], "endpoint": pass_through_endpoint})
+
+
+def _builtin_request() -> "Request":
+    """A Request dispatched to a built-in (non-pass-through) handler, e.g. what a
+    custom path colliding with a core route actually resolves to."""
+    from fastapi import Request
+
+    def chat_completions():
+        ...
+
+    return Request(scope={"type": "http", "headers": [], "endpoint": chat_completions})
+
+
+@pytest.mark.asyncio
+async def test_common_checks_auth_enforced_pass_through_ignores_upstream_model():
+    """An auth-enforced (`auth: true`) user-defined pass-through endpoint must
+    authenticate the key but forward the body unchanged; a body `model` naming an
+    upstream-only model must not be rejected against the team/key model allowlist
+    when the request was dispatched to the pass-through handler. The same body on a
+    request dispatched to a built-in handler (e.g. a path collision) must still be
+    enforced."""
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="team-1", models=["gpt-4o"])
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        team_id="team-1",
+        models=[],
+        metadata={"allowed_passthrough_routes": ["/my-custom-endpoint"]},
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        result = await common_checks(
+            request_body={"model": "upstream-special-model", "prompt": "hi"},
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/my-custom-endpoint",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=_pass_through_request(),
+        )
+        assert result is True
+
+        with pytest.raises(ProxyException) as exc_info:
+            await common_checks(
+                request_body={"model": "upstream-special-model", "prompt": "hi"},
+                team_object=team_object,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=valid_token,
+                request=_builtin_request(),
+            )
+        assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
 @pytest.mark.asyncio
 async def test_virtual_key_soft_budget_check_with_user_obj():
     """Test _virtual_key_soft_budget_check includes user_email when user_obj is provided"""
@@ -2634,6 +2759,8 @@ async def test_virtual_key_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "key"
+        assert exc_info.value.entity_id == "test-hashed-token"
 
 
 @pytest.mark.asyncio
@@ -2861,6 +2988,8 @@ async def test_team_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.entity_type == "team"
+        assert exc_info.value.entity_id == "test-team"
 
 
 @pytest.mark.asyncio
@@ -2888,6 +3017,8 @@ async def test_end_user_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "end_user"
+        assert exc_info.value.entity_id == "customer-1"
 
 
 @pytest.mark.asyncio
@@ -2926,6 +3057,8 @@ async def test_tag_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "tag"
+        assert exc_info.value.entity_id == "paid-tag"
 
 
 @pytest.mark.asyncio
@@ -2976,6 +3109,8 @@ async def test_team_member_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.entity_type == "team_member"
+        assert exc_info.value.entity_id == "test-user:test-team"
 
 
 class TestGuardrailModificationCheck:

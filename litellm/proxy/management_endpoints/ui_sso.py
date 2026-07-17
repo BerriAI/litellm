@@ -241,13 +241,34 @@ def _check_cli_sso_start_rate_limit(
 
 
 def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dict:
+    if isinstance(login_id, str) and login_id.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Your litellm CLI is out of date and uses a login flow this proxy no longer supports. "
+                "Upgrade it with `pip install -U 'litellm[proxy]'` and run `litellm-proxy login` again."
+            ),
+        )
     if not _is_valid_cli_sso_login_id(login_id):
-        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+        raise HTTPException(status_code=400, detail="Invalid CLI login session id")
 
     cache_key = _get_cli_sso_flow_cache_key(cast(str, login_id))
     flow = cache.get_cache(key=cache_key)
     if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
-        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+        verbose_proxy_logger.warning(
+            "CLI SSO login session not found in cache for login_id=%s. If the proxy runs multiple replicas, "
+            "a shared Redis cache (enable_redis_auth_cache: true) is required for CLI login to work.",
+            login_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CLI login session not found or expired. Run `litellm-proxy login` again. "
+                "If this happens immediately after starting a login, the proxy is likely running multiple "
+                "replicas without a shared cache; configure Redis with `enable_redis_auth_cache: true` "
+                "so every replica can see the login session."
+            ),
+        )
     return flow
 
 
@@ -2071,12 +2092,8 @@ async def cli_poll_key(
         key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.proxy.auth.auth_checks import (
-        ExperimentalUIJWTToken,
-        get_team_object,
-        get_user_object,
-    )
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.proxy_server import user_api_key_cache
 
     try:
         flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
@@ -2146,43 +2163,11 @@ async def cli_poll_key(
                 models=session_data.get("models", []),
             )
 
-            try:
-                user_db_obj = await get_user_object(
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=False,
-                )
-            except ValueError as e:
-                verbose_proxy_logger.debug(f"CLI poll: user lookup failed, proceeding without user budget: {e}")
-                user_db_obj = None
-            user_budget = user_db_obj.max_budget if user_db_obj is not None else None
-
-            team_budget: Optional[float] = None
-            team_budget_resolved = False
-            if team_id is not None:
-                try:
-                    team_obj = await get_team_object(
-                        team_id=team_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                    )
-                    team_budget = team_obj.max_budget
-                    team_budget_resolved = True
-                except Exception:
-                    pass
-
-            session_max_budget = (
-                litellm.max_ui_session_budget
-                if user_budget is None and (team_id is None or (team_budget_resolved and team_budget is None))
-                else None
-            )
-
             jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
                 user_info=user_info,
                 team_id=team_id,
                 team_alias=team_alias,
-                max_budget=session_max_budget,
+                max_budget=None,
             )
 
             # Delete cache entry (single-use)

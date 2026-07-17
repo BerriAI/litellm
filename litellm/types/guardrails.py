@@ -56,6 +56,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
     HeadroomGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
+    CompresrGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -123,6 +126,7 @@ class SupportedGuardrailIntegrations(Enum):
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
     HEADROOM = "headroom"
+    COMPRESR = "compresr"
 
 
 class Role(Enum):
@@ -796,6 +800,14 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "so only a valid guardrail response can block or modify it."
         ),
     )
+    skip_unscannable_attachments: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
+            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
+            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+        ),
+    )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -806,7 +818,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', and 'headroom'. "
+            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -899,6 +911,7 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     HeadroomGuardrailConfigModel,
+    CompresrGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
@@ -1034,6 +1047,7 @@ class ApplyGuardrailRequest(BaseModel):
     entities: Optional[List[PiiEntityType]] = None
     input_type: str = "request"
     messages: Optional[List[Dict[str, Any]]] = None
+    metadata: Dict[str, Any] | None = None
 
 
 class ApplyGuardrailResponse(BaseModel):

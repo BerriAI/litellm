@@ -18,7 +18,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
@@ -28,6 +28,7 @@ from e2e_gateway import Gateway, build_gateway
 from e2e_http import (
     URL,
     AuthHeaders,
+    require_successful_call,
     NoBody,
     StreamingResponse,
     Success,
@@ -77,11 +78,12 @@ WEATHER_TOOL = ChatTool(
 
 
 class ResponsesRequestBody(BaseModel):
-    """OpenAI Responses API /v1/responses request (non-streaming)."""
+    """OpenAI Responses API /v1/responses request."""
 
     model: str
     input: str
     max_output_tokens: int
+    stream: bool | None = None
 
 
 class TeamCallbackBody(BaseModel):
@@ -464,30 +466,43 @@ class LoggingClient:
             json=body,
         )
 
-    def messages_raw(self, key: str, model: str, text: str, *, max_tokens: int = 16) -> StreamingResponse:
-        """Non-streaming POST /v1/messages (Anthropic-native body): raw outcome
-        judged by status/body/headers, for tests that need x-litellm-call-id."""
+    def messages_raw(
+        self, key: str, model: str, text: str, *, max_tokens: int = 16, stream: bool = False
+    ) -> StreamingResponse:
+        """POST /v1/messages (Anthropic-native body): raw outcome judged by
+        status/body/headers, for tests that need x-litellm-call-id. With
+        ``stream=True`` the SSE body is consumed and its events counted."""
+        body = AnthropicMessagesBody(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[ChatMessage(role="user", content=text)],
+            stream=True if stream else None,
+        )
+        if stream:
+            return self.gateway.transport.stream(
+                "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
+            )
         return self.gateway.transport.send(
-            "/v1/messages",
-            headers=self.gateway.transport.bearer(key),
-            json=AnthropicMessagesBody(
-                model=model,
-                max_tokens=max_tokens,
-                messages=[ChatMessage(role="user", content=text)],
-            ),
+            "/v1/messages", headers=self.gateway.transport.bearer(key), json=body
         )
 
     def responses_raw(
-        self, key: str, model: str, text: str, *, max_output_tokens: int = 64
+        self, key: str, model: str, text: str, *, max_output_tokens: int = 64, stream: bool = False
     ) -> StreamingResponse:
-        """Non-streaming POST /v1/responses (OpenAI Responses API): raw outcome
-        judged by status/body/headers, for tests that need x-litellm-call-id.
+        """POST /v1/responses (OpenAI Responses API): raw outcome judged by
+        status/body/headers, for tests that need x-litellm-call-id.
         max_output_tokens caps reasoning-model output cost; a capped response is
-        still a 200 and still exports the trace."""
+        still a 200 and still exports the trace. With ``stream=True`` the SSE
+        body is consumed and its events counted."""
+        body = ResponsesRequestBody(
+            model=model, input=text, max_output_tokens=max_output_tokens, stream=True if stream else None
+        )
+        if stream:
+            return self.gateway.transport.stream(
+                "/v1/responses", headers=self.gateway.transport.bearer(key), json=body
+            )
         return self.gateway.transport.send(
-            "/v1/responses",
-            headers=self.gateway.transport.bearer(key),
-            json=ResponsesRequestBody(model=model, input=text, max_output_tokens=max_output_tokens),
+            "/v1/responses", headers=self.gateway.transport.bearer(key), json=body
         )
 
     def scrape_metrics(self) -> str:
@@ -601,6 +616,21 @@ class LoggingClient:
         if gen is None or not gen.trace_id:
             return [] if gen is None else [gen]
         return self.list_langfuse_observations(creds, trace_id=gen.trace_id) or [gen]
+
+
+def first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> StreamingResponse:
+    """First successful call on a fresh key. A fresh key may briefly 401 until
+    the data plane's auth cache picks it up, so retry on 401 to a deadline; a
+    401 is rejected before the LLM call, so it cannot contaminate delivery or
+    trace assertions. Any other failure is behavior under test and fails hard."""
+    deadline = time.monotonic() + client.gateway.poll_timeout
+    while True:
+        outcome = send()
+        if outcome.ok:
+            return outcome
+        if outcome.status_code != 401 or time.monotonic() >= deadline:
+            require_successful_call(outcome)
+        time.sleep(client.gateway.poll_interval)
 
 
 def build_logging_client() -> LoggingClient:

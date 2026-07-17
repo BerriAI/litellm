@@ -1158,6 +1158,7 @@ if MCP_AVAILABLE:
                 static_headers=request.static_headers,
                 client_id=client_id,
                 client_secret=client_secret,
+                issuer=request.issuer,
                 token_url=request.token_url,
                 scopes=scopes,
                 authorization_url=request.authorization_url,

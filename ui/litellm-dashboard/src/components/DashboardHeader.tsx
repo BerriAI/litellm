@@ -18,7 +18,7 @@ import WorkerDropdown from "@/components/Navbar/WorkerDropdown/WorkerDropdown";
 import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
+import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 
 interface DashboardHeaderProps {
   page: string;
@@ -37,7 +37,7 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
     clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
-    window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
+    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
   };
 
   return (

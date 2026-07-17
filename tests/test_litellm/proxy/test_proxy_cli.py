@@ -1,3 +1,4 @@
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -14,6 +15,8 @@ sys.path.insert(
 
 import builtins
 import types
+
+import uvicorn
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
@@ -134,6 +137,16 @@ class TestProxyInitializationHelpers:
                 "localhost", 8000, timeout_worker_healthcheck=15
             )
             assert args["timeout_worker_healthcheck"] == 15
+
+    def test_installed_uvicorn_supports_worker_flags(self):
+        params = inspect.signature(uvicorn.Config.__init__).parameters
+        assert "timeout_worker_healthcheck" in params
+        assert "limit_max_requests_jitter" in params
+
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+            "localhost", 8000, timeout_worker_healthcheck=30
+        )
+        assert args["timeout_worker_healthcheck"] == 30
 
     def test_get_reload_options_no_config_still_watches_env(self):
         opts = ProxyInitializationHelpers._get_reload_options(None)
@@ -1555,6 +1568,85 @@ class TestProxyInitializationHelpers:
 
                 # Verify that uvicorn.run was called again
                 mock_uvicorn_run.assert_called_once()
+
+
+class TestQueryEngineReaperWiring:
+    def _invoke_run_server(self, args):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=MagicMock(),
+                        ProxyConfig=MagicMock(),
+                        KeyManagementSettings=MagicMock(),
+                        save_worker_config=MagicMock(),
+                    )
+                },
+            ),
+            patch("uvicorn.run") as mock_uvicorn_run,
+            patch(
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ) as mock_start_reaper,
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+            result = runner.invoke(run_server, args)
+        return result, mock_uvicorn_run, mock_start_reaper
+
+    def test_multi_worker_uvicorn_starts_reaper(self):
+        result, mock_uvicorn_run, mock_start_reaper = self._invoke_run_server(
+            ["--local", "--num_workers", "2"]
+        )
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        mock_uvicorn_run.assert_called_once()
+        mock_start_reaper.assert_called_once()
+
+    def test_single_worker_uvicorn_does_not_start_reaper(self):
+        result, mock_uvicorn_run, mock_start_reaper = self._invoke_run_server(
+            ["--local", "--num_workers", "1"]
+        )
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        mock_uvicorn_run.assert_called_once()
+        mock_start_reaper.assert_not_called()
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_arbiter_starts_reaper(self):
+        pytest.importorskip("gunicorn")
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run"),
+            patch(
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ) as mock_start_reaper,
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4010,
+                app=MagicMock(),
+                num_workers=1,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+            )
+
+        mock_start_reaper.assert_called_once()
 
 
 class TestRunServerDbSetup:

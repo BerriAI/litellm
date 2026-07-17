@@ -2688,6 +2688,70 @@ def test_get_sanitized_user_information_from_key_includes_guardrails_metadata():
     assert result["user_api_key_auth_metadata"]["other_field"] == "value"
 
 
+def test_user_and_team_spend_and_budget_flow_to_standard_logging_metadata():
+    """
+    Full flow: UserAPIKeyAuth -> get_sanitized_user_information_from_key ->
+    get_standard_logging_metadata. User-level and team-level spend + max budget
+    must reach the StandardLoggingPayload metadata that custom loggers receive,
+    alongside the key-level values
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-hash",
+        spend=1.5,
+        max_budget=10.0,
+        user_id="test-user",
+        user_spend=25.5,
+        user_max_budget=100.0,
+        team_id="test-team",
+        team_spend=250.75,
+        team_max_budget=1000.0,
+    )
+
+    sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    assert sanitized["user_api_key_spend"] == 1.5
+    assert sanitized["user_api_key_max_budget"] == 10.0
+    assert sanitized["user_api_key_user_spend"] == 25.5
+    assert sanitized["user_api_key_user_max_budget"] == 100.0
+    assert sanitized["user_api_key_team_spend"] == 250.75
+    assert sanitized["user_api_key_team_max_budget"] == 1000.0
+
+    logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        dict(sanitized)
+    )
+
+    assert logging_metadata["user_api_key_user_spend"] == 25.5
+    assert logging_metadata["user_api_key_user_max_budget"] == 100.0
+    assert logging_metadata["user_api_key_team_spend"] == 250.75
+    assert logging_metadata["user_api_key_team_max_budget"] == 1000.0
+
+
+def test_user_and_team_spend_and_budget_default_to_none_in_standard_logging_metadata():
+    """
+    Keys with no user or team level budgets report None for the new fields in the
+    StandardLoggingPayload metadata instead of raising
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key-hash")
+
+    sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+    logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        dict(sanitized)
+    )
+
+    assert logging_metadata["user_api_key_user_spend"] is None
+    assert logging_metadata["user_api_key_user_max_budget"] is None
+    assert logging_metadata["user_api_key_team_spend"] is None
+    assert logging_metadata["user_api_key_team_max_budget"] is None
+
+
 @pytest.mark.asyncio
 async def test_team_guardrails_append_to_key_guardrails():
     """

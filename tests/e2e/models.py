@@ -154,6 +154,7 @@ class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[ChatMessage]
     max_tokens: int
+    stream: bool | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -439,6 +440,9 @@ class LiteLLMParamsBody(BaseModel):
     aws_batch_role_arn: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    extra_headers: dict[str, str] | None = None
+    use_in_pass_through: bool | None = None
+    complexity_router_config: dict[str, object] | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]

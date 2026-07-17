@@ -56,11 +56,13 @@ class TierClassification(BaseModel):
 
 _CLASSIFICATION_PROMPT_TEMPLATE = """Classify the complexity of the following user request into exactly one tier.
 
+Judge the intellectual difficulty of answering correctly, not how short the request is.
+
 Tiers:
-- SIMPLE: factual lookups, greetings, short direct questions with no reasoning or code involved.
-- MEDIUM: everyday requests needing some explanation or minor code/technical content.
-- COMPLEX: requests involving non-trivial code, architecture, or multi-step technical work.
-- REASONING: requests explicitly requiring step-by-step reasoning, analysis, or weighing tradeoffs.
+- SIMPLE: greetings, chitchat, or factual lookups with a short known answer. Do not use SIMPLE for unsolved problems, proofs, deep theory, multi-step analysis, or non-trivial code, even if the request is only one sentence.
+- MEDIUM: everyday requests that need some explanation, light reasoning, or minor code/technical content.
+- COMPLEX: non-trivial code, architecture, multi-step technical work, or specialized domain depth.
+- REASONING: open-ended analysis, proofs, famous hard problems, step-by-step reasoning, tradeoffs, or anything where a correct answer requires careful thought rather than a quick lookup.
 
 {system_context}Request:
 {prompt}"""
@@ -98,9 +100,9 @@ def _sanitize_user_api_key_auth(auth: Any) -> Any:
     return auth
 
 
-def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+def _classifier_call_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     if not metadata:
-        return metadata
+        return {}
     return {
         k: _sanitize_user_api_key_auth(v) if k == "user_api_key_auth" else v
         for k, v in metadata.items()
@@ -468,6 +470,38 @@ class ComplexityRouter(CustomLogger):
     def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
+    async def _pick_model_for_tier(
+        self,
+        tier: ComplexityTier,
+        raw_messages: list[dict[str, Any]] | None,
+        resolved_messages: list[dict[str, Any]] | None,
+        request_kwargs: dict,
+    ) -> str:
+        if not self.config.plugins:
+            return self.get_model_for_tier(tier)
+
+        from litellm.types.router import RoutingContext
+
+        tier_key = tier.value
+        metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
+        context = RoutingContext(
+            raw_messages=raw_messages or [],
+            structured_messages=resolved_messages or [],
+            candidate_models=list(self._tier_pools().get(tier_key, [])),
+            metadata=request_kwargs.get(metadata_key) or {},
+        )
+        for plugin in self.config.plugins:
+            context = await plugin.run(context)
+
+        if not context.candidate_models:
+            # A plugin narrowing a tier to zero candidates is a policy decision (e.g. no
+            # model this tenant's budget allows) -- falling back to default_model here
+            # (which was never checked against the plugins) would let that policy be
+            # silently bypassed. Raise instead, matching the Router-level plugin
+            # pipeline's own fail-closed behavior for the same situation.
+            raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
+        return self._pick_from_tier_value(context.candidate_models, tier_key)
+
     def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:
             return None
@@ -731,8 +765,8 @@ class ComplexityRouter(CustomLogger):
         # embedding call. Forwarding it would let the embedding's cost callback finalize the
         # reservation, so the routed completion's own callback then skips incrementing the
         # key/team budget. Key/team attribution fields are preserved for spend logging.
-        metadata = _classifier_call_metadata(request_kwargs.get("metadata")) or {}
-        litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata")) or {}
+        metadata = _classifier_call_metadata(request_kwargs.get("metadata"))
+        litellm_metadata = _classifier_call_metadata(request_kwargs.get("litellm_metadata"))
         query_vector = (
             await encoder.aencode_queries([user_message], metadata=metadata, litellm_metadata=litellm_metadata)
         )[0]
@@ -861,10 +895,16 @@ class ComplexityRouter(CustomLogger):
         When `session_affinity` is enabled and a session_id is resolvable on the request,
         pins the model chosen on the session's first turn and reuses it for every later
         turn, skipping classification entirely. Otherwise delegates to `_classify_and_route`.
+
+        Skipped entirely when `plugins` are configured: reusing a stale pin would bypass
+        the plugin pipeline on every turn after the first, since a pinned model was never
+        re-checked against a policy plugin whose decision can change between turns (e.g. a
+        budget plugin, once the session's spend crosses its cap).
         """
         from litellm.types.router import PreRoutingHookResponse
 
-        session_id = self._get_session_id_from_request_kwargs(request_kwargs) if self.config.session_affinity else None
+        use_session_affinity = self.config.session_affinity and not self.config.plugins
+        session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         if cache_key is not None:
@@ -947,14 +987,26 @@ class ComplexityRouter(CustomLogger):
 
         if user_message is None:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
+            if not self.config.plugins and self.config.default_model:
+                # No plugins configured: preserve the pre-existing default_model-first
+                # priority exactly (changing it would be a silent behavior change for
+                # every non-plugin user, not just a security fix).
+                routed_model = self.config.default_model
+            else:
+                # Plugins configured: default_model must never bypass them, so it's not
+                # checked here at all -- _pick_model_for_tier -> get_model_for_tier still
+                # falls back to it (after the MEDIUM tier) once the plugin pipeline runs.
+                routed_model = await self._pick_model_for_tier(
+                    ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
+                )
             return PreRoutingHookResponse(
-                model=self.config.default_model or self.get_model_for_tier(ComplexityTier.MEDIUM),
+                model=routed_model,
                 messages=messages if has_original_messages else None,
             )
 
         override_tier = await self._resolve_keyword_tier_override(user_message, request_kwargs)
         if override_tier is not None:
-            routed_model = self.get_model_for_tier(override_tier)
+            routed_model = await self._pick_model_for_tier(override_tier, messages, resolved_messages, request_kwargs)
             cause = "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
             verbose_router_logger.info(
                 f"ComplexityRouter: routing decision cause={cause}, "
@@ -980,7 +1032,7 @@ class ComplexityRouter(CustomLogger):
                 f"signals={signals}, routed_model={routed_model}"
             )
         else:
-            routed_model = self.get_model_for_tier(tier)
+            routed_model = await self._pick_model_for_tier(tier, messages, resolved_messages, request_kwargs)
             verbose_router_logger.info(
                 f"ComplexityRouter: routing decision cause=complexity_scorer, tier={tier.value}, "
                 f"score={score:.3f}, signals={signals}, routed_model={routed_model}"

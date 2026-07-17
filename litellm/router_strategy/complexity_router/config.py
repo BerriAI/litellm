@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from litellm.types.router import AdaptiveRouterWeights
+from litellm.types.router import AdaptiveRouterWeights, RoutingPlugin
 
 
 class ComplexityTier(str, Enum):
@@ -363,10 +363,13 @@ class ComplexityRouterConfig(BaseModel):
 
     # Session affinity: pin the first turn's routed model for the rest of the session
     session_affinity: bool = Field(
-        default=False,
+        default=True,
         description=(
             "When True and a session_id is resolvable on the request, pin the model chosen on the "
-            "session's first turn and reuse it for every later turn, skipping re-classification."
+            "session's first turn and reuse it for every later turn, skipping re-classification. "
+            "On by default so multi-turn sessions stay on one model, preserving provider prompt "
+            "caches and avoiding cross-model conversation-history errors. Set False to reclassify "
+            "every turn."
         ),
     )
     session_affinity_ttl_seconds: int = Field(
@@ -375,7 +378,12 @@ class ComplexityRouterConfig(BaseModel):
         description="TTL for the session affinity pin; refreshed on every cache hit",
     )
 
-    model_config = ConfigDict(extra="allow")  # Allow additional fields
+    plugins: list[RoutingPlugin] | None = Field(
+        default=None,
+        description="RoutingPlugin instances that narrow the classified tier's candidate models before selection",
+    )
+
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)  # Allow additional fields
 
     @field_validator("tiers", mode="before")
     @classmethod
@@ -419,6 +427,15 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError("embedding_model is required when semantic_keyword_matching is enabled")
         if not self.keyword_tier_rules:
             raise ValueError("keyword_tier_rules must be non-empty when semantic_keyword_matching is enabled")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_plugins_adaptive_combo(self) -> "ComplexityRouterConfig":
+        if self.plugins and self.adaptive:
+            raise ValueError(
+                "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
+                "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
+            )
         return self
 
 
