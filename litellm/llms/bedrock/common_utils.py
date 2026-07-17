@@ -250,6 +250,72 @@ def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
             tool["name"] = f"litellm_unnamed_tool_{i}"
 
 
+_BEDROCK_TOOL_SEARCH_DATED_REGEX = "tool_search_tool_regex_20251119"
+_BEDROCK_TOOL_SEARCH_DATED_BM25 = "tool_search_tool_bm25_20251119"
+
+
+def bedrock_model_supports_tool_search(model: str) -> bool:
+    """Server-side tool search on Bedrock is limited to Sonnet/Opus 4.5+ (not Haiku)."""
+    model_lower = model.lower()
+    patterns = (
+        "opus-4.5",
+        "opus_4.5",
+        "opus-4-5",
+        "opus_4_5",
+        "sonnet-4.5",
+        "sonnet_4.5",
+        "sonnet-4-5",
+        "sonnet_4_5",
+        "opus-4.6",
+        "opus_4.6",
+        "opus-4-6",
+        "opus_4_6",
+        "sonnet-4.6",
+        "sonnet_4.6",
+        "sonnet-4-6",
+        "sonnet_4_6",
+    )
+    return any(p in model_lower for p in patterns)
+
+
+def normalize_bedrock_invoke_tool_search_tools(request_body: dict, model: str = "") -> None:
+    """Normalize Claude Code tool-search tool types for Bedrock Invoke Messages.
+
+    Anthropic API uses dated types (``tool_search_tool_regex_20251119``); Bedrock
+    Invoke expects the undated ``tool_search_tool_regex`` form. BM25 is unsupported
+    on Invoke and is dropped. Models that do not support tool search (e.g. Haiku)
+    have those tools stripped so the rest of the request still succeeds.
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+
+    supports = bedrock_model_supports_tool_search(model) if model else True
+    normalized: list = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            normalized.append(tool)
+            continue
+        tool_type = tool.get("type")
+        if tool_type == _BEDROCK_TOOL_SEARCH_DATED_BM25:
+            continue
+        if tool_type == _BEDROCK_TOOL_SEARCH_DATED_REGEX or tool_type == "tool_search_tool_regex":
+            if not supports:
+                continue
+            entry = dict(tool)
+            entry["type"] = "tool_search_tool_regex"
+            entry["name"] = entry.get("name") or "tool_search_tool_regex"
+            normalized.append(entry)
+            continue
+        if isinstance(tool_type, str) and tool_type.startswith("tool_search_tool"):
+            if not supports:
+                continue
+            normalized.append(tool)
+            continue
+        normalized.append(tool)
+    request_body["tools"] = normalized
+
+
 class AmazonBedrockGlobalConfig:
     def __init__(self):
         pass

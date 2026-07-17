@@ -41,6 +41,7 @@ from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_bedrock_invoke_tool_search_tools,
     normalize_bedrock_opus_output_config_effort,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
@@ -775,6 +776,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         remove_custom_field_from_tools(anthropic_messages_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
+        normalize_bedrock_invoke_tool_search_tools(anthropic_messages_request, model=model)
 
         # 6. AUTO-INJECT beta headers based on features used
         filtered_betas = self._get_bedrock_invoke_anthropic_beta_headers(

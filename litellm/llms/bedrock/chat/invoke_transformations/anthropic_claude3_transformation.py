@@ -196,7 +196,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 model=model,
                 output_config=filtered_params["output_config"],
             )
-        filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
+        from litellm.llms.bedrock.common_utils import normalize_bedrock_invoke_tool_search_tools
+
+        # In-place on a tools-shaped request stub so shared normalizer can run.
+        tools_stub = {"tools": filtered_params.get("tools")}
+        normalize_bedrock_invoke_tool_search_tools(tools_stub, model=model)
+        if "tools" in tools_stub:
+            filtered_params["tools"] = tools_stub["tools"]
 
         anthropic_request = AnthropicConfig.transform_request(
             self,

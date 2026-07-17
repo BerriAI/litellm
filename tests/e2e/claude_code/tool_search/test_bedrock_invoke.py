@@ -52,8 +52,10 @@ from claude_code.http_probe import (
 )
 
 
+# Haiku is omitted: Bedrock server-side tool search is only supported on
+# Sonnet/Opus 4.5+ (see bedrock_model_supports_tool_search). Including Haiku
+# 400s on the dated tool_search type and fails the whole cell.
 BEDROCK_INVOKE_MODELS = [
-    "claude-haiku-4-5-bedrock-invoke",
     "claude-sonnet-4-5-bedrock-invoke",
     "claude-opus-4-7-bedrock-invoke",
 ]

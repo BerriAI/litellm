@@ -3802,7 +3802,39 @@ def _parse_bedrock_tool_result_content_list(
             _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content)
         elif content["type"] == "file":
             _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
-    return tool_result_content_blocks
+        elif content["type"] == "document":
+            # Anthropic-shape document blocks (e.g. Claude Code Read of a PDF) need
+            # the same Bedrock document conversion as user-message document blocks.
+            processed = BedrockConverseMessagesProcessor._process_document_message(content)
+            _append_bedrock_tool_result_media_block(
+                tool_result_content_blocks, processed, content, "document"
+            )
+    return _ensure_bedrock_tool_result_text_with_documents(tool_result_content_blocks)
+
+
+def _ensure_bedrock_tool_result_text_with_documents(
+    blocks: List[BedrockToolResultContentBlock],
+) -> List[BedrockToolResultContentBlock]:
+    """Bedrock Converse requires a text content block when toolResult includes documents.
+
+    Without it: ``A text block must be included when using documents``.
+    """
+    has_document = any(isinstance(b, dict) and "document" in b for b in blocks)
+    has_text = any(isinstance(b, dict) and "text" in b for b in blocks)
+    if has_document and not has_text:
+        return [BedrockToolResultContentBlock(text=" "), *blocks]
+    return blocks
+
+
+def _ensure_bedrock_message_content_text_with_documents(
+    blocks: List[BedrockContentBlock],
+) -> List[BedrockContentBlock]:
+    """Same Converse rule as toolResult: document content needs a sibling text block."""
+    has_document = any(isinstance(b, dict) and "document" in b for b in blocks)
+    has_text = any(isinstance(b, dict) and "text" in b for b in blocks)
+    if has_document and not has_text:
+        return [BedrockContentBlock(text=" "), *blocks]
+    return blocks
 
 
 def _build_bedrock_tool_result_content_blocks(
@@ -4405,6 +4437,7 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
             if user_content:
+                user_content = _ensure_bedrock_message_content_text_with_documents(user_content)
                 if len(contents) > 0 and contents[-1]["role"] == "user":
                     if assistant_continue_message is not None or litellm.modify_params is True:
                         # if last message was a 'user' message, then add a dummy assistant message (bedrock requires alternating roles)
@@ -4780,6 +4813,7 @@ def _bedrock_converse_messages_pt(
 
             msg_i += 1
         if user_content:
+            user_content = _ensure_bedrock_message_content_text_with_documents(user_content)
             if len(contents) > 0 and contents[-1]["role"] == "user":
                 if assistant_continue_message is not None or litellm.modify_params is True:
                     # if last message was a 'user' message, then add a dummy assistant message (bedrock requires alternating roles)
