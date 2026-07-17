@@ -1609,6 +1609,24 @@ class TestComplexityRouterTagBasedRouting:
         assert result is not None
         assert result.model == "cn-simple"
 
+    def test_select_complexity_router_picks_by_tag(self):
+        router = self._make_router(enable_tag_filtering=True)
+
+        assert router._select_complexity_router(model="unknown", request_kwargs={}) is None
+
+        selected = router._select_complexity_router(
+            model="smart-router", request_kwargs={"metadata": {"tags": ["row"]}}
+        )
+        assert selected is not None
+        assert selected.model_id == "row-router"
+
+    def test_resolve_alias_index_matches_selected_model_id(self):
+        router = self._make_router(enable_tag_filtering=True)
+
+        assert router._resolve_alias_index(model="smart-router", selected_model_id="row-router") == 1
+        assert router._resolve_alias_index(model="smart-router", selected_model_id=None) == 0
+        assert router._resolve_alias_index(model="unknown", selected_model_id=None) is None
+
 
 class TestAdaptiveSoftFloors:
     def test_adaptive_defaults_use_cost_weighted_cold_policy(self):
