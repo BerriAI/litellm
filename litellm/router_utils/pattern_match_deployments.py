@@ -2,7 +2,6 @@
 Class to handle llm wildcard routing and regex pattern matching
 """
 
-import copy
 import re
 from re import Match
 from typing import Dict, List, Optional, Tuple
@@ -98,16 +97,19 @@ class PatternMatchRouter:
         return re.escape(pattern).replace(r"\*", "(.*)")
 
     def _return_pattern_matched_deployments(self, matched_pattern: Match, deployments: List[Dict]) -> List[Dict]:
-        new_deployments = []
-        for deployment in deployments:
-            new_deployment = copy.deepcopy(deployment)
-            new_deployment["litellm_params"]["model"] = PatternMatchRouter.set_deployment_model_name(
-                matched_pattern=matched_pattern,
-                litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
-            )
-            new_deployments.append(new_deployment)
-
-        return new_deployments
+        return [
+            {
+                **deployment,
+                "litellm_params": {
+                    **deployment["litellm_params"],
+                    "model": PatternMatchRouter.set_deployment_model_name(
+                        matched_pattern=matched_pattern,
+                        litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
+                    ),
+                },
+            }
+            for deployment in deployments
+        ]
 
     def route(self, request: Optional[str], filtered_model_names: Optional[List[str]] = None) -> Optional[List[Dict]]:
         """

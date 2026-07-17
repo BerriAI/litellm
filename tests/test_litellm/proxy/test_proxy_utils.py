@@ -482,7 +482,7 @@ from litellm.types.router import ModelGroupInfo
 
 def _router_returning(model_group_info):
     router = MagicMock()
-    router.get_model_group_info = MagicMock(return_value=model_group_info)
+    router._cached_get_model_group_info = MagicMock(return_value=model_group_info)
     return router
 
 
@@ -500,7 +500,11 @@ def test_create_model_info_response_includes_max_tokens_when_available():
         model_id="qwen-vllm", provider="openai", llm_router=router
     )
 
-    router.get_model_group_info.assert_called_once_with("qwen-vllm")
+    # /v1/models must read limits through the lru_cached accessor, not the
+    # uncached public method that recomputes group info per listed model and
+    # pegged the event loop for minutes (issue #33636).
+    router._cached_get_model_group_info.assert_called_once_with("qwen-vllm")
+    router.get_model_group_info.assert_not_called()
     assert response["id"] == "qwen-vllm"
     assert response["object"] == "model"
     assert response["max_input_tokens"] == 32768
@@ -582,7 +586,7 @@ def test_create_model_info_response_degrades_when_group_info_raises():
     # A malformed deployment must not turn the listing into a 500; the entry
     # falls back to the base fields without limits.
     router = MagicMock()
-    router.get_model_group_info = MagicMock(side_effect=ValueError("bad deployment"))
+    router._cached_get_model_group_info = MagicMock(side_effect=ValueError("bad deployment"))
 
     response = create_model_info_response(
         model_id="broken", provider="openai", llm_router=router

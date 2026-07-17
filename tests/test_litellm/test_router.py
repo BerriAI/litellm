@@ -1581,6 +1581,36 @@ def test_model_group_info_db_fallback_with_stringified_cost_values():
     assert isinstance(result.output_cost_per_token, float)
 
 
+def test_set_model_group_info_resolves_wildcard_concrete_model():
+    """
+    Regression for issue #33636: _set_model_group_info dropped the per-deployment
+    pattern_router.route(model_group) re-check, one of the repeated wildcard
+    expansions that pegged the proxy CPU on GET /v1/models. The loop now matches
+    only on model_name equality, which is safe because get_model_list already
+    normalizes a matched wildcard deployment's model_name to the requested group.
+    A concrete model served by a wildcard route must still resolve to a valid
+    ModelGroupInfo; if that normalization ever regresses, this fails instead of
+    silently dropping the group's limits.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "fake"},
+            },
+        ]
+    )
+
+    result = router._set_model_group_info(
+        model_group="openai/gpt-4o",
+        user_facing_model_group_name="openai/gpt-4o",
+    )
+
+    assert result is not None
+    assert result.model_group == "openai/gpt-4o"
+    assert "openai" in result.providers
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result

@@ -8746,13 +8746,7 @@ class Router:
         if model_list is None:
             return None
         for model in model_list:
-            is_match = False
-            if "model_name" in model and model["model_name"] == model_group:  # exact match
-                is_match = True
-            elif "model_name" in model and self.pattern_router.route(model_group) is not None:  # wildcard model
-                is_match = True
-
-            if not is_match:
+            if "model_name" not in model or model["model_name"] != model_group:
                 continue
             # model in model group found #
             litellm_params = LiteLLM_Params(**model["litellm_params"])  # type: ignore
