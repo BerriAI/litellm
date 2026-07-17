@@ -886,6 +886,32 @@ class BaseAWSLLM:
                     "Resource": "*",
                     "Condition": {"Bool": {"aws:SecureTransport": "true"}},
                 },
+                # Bedrock Batches (managed files + CreateModelInvocationJob).
+                # The files handler PUTs the input JSONL to S3 and GETs the
+                # job output; the batches handler creates/polls/stops the
+                # invocation job and must iam:PassRole the batch service role
+                # into it. Without these the OIDC path 403s on every
+                # /v1/files + /v1/batches call ("no session policy allows
+                # s3:PutObject") even when the IAM role grants them — static
+                # creds and IRSA don't hit this ceiling. The identity role's
+                # own policy still scopes these to specific buckets/roles;
+                # this ceiling only stops silently denying them.
+                {
+                    "Sid": "BedrockBatchLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock:CreateModelInvocationJob",
+                        "bedrock:GetModelInvocationJob",
+                        "bedrock:StopModelInvocationJob",
+                        "bedrock:ListModelInvocationJobs",
+                        "s3:GetObject",
+                        "s3:PutObject",
+                        "s3:ListBucket",
+                        "iam:PassRole",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
             ],
         }
         assume_role_params = {
