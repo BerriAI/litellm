@@ -5,6 +5,7 @@ import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { getClaudeCodePluginsList } from "@/components/networking";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import SkillHubDashboard from "@/components/AIHub/SkillHubDashboard";

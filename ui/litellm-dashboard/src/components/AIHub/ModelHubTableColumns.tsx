@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
 export interface ModelHubData {
   model_group: string;
@@ -110,14 +111,18 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
     header: ({ column }) => <DataTableSortHeader column={column} title="Provider" />,
     size: 150,
     enableSorting: true,
-    sortingFn: (rowA, rowB) => rowA.original.providers.join(", ").localeCompare(rowB.original.providers.join(", ")),
+    sortingFn: (rowA, rowB) => {
+      const namesA = rowA.original.providers.map((p) => getProviderLogoAndName(p).displayName).join(", ");
+      const namesB = rowB.original.providers.map((p) => getProviderLogoAndName(p).displayName).join(", ");
+      return namesA.localeCompare(namesB);
+    },
     cell: ({ row }) => {
       const providers = row.original.providers;
       return (
         <div className="flex flex-wrap gap-1">
           {providers.slice(0, 2).map((provider) => (
             <Badge key={provider} variant="secondary">
-              {provider}
+              {getProviderLogoAndName(provider).displayName}
             </Badge>
           ))}
           {providers.length > 2 && <span className="text-xs text-muted-foreground">+{providers.length - 2}</span>}

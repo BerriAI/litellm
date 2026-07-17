@@ -37,11 +37,11 @@ describe("getModelHubTableColumns", () => {
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
   });
 
-  it("shows the first two providers and '+1' for overflow", () => {
+  it("shows the first two providers as display names and '+1' for overflow", () => {
     renderTable([mockModel]);
-    expect(screen.getByText("openai")).toBeInTheDocument();
-    expect(screen.getByText("azure")).toBeInTheDocument();
-    expect(screen.queryByText("bedrock")).not.toBeInTheDocument();
+    expect(screen.getByText("OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("Azure")).toBeInTheDocument();
+    expect(screen.queryByText("Amazon Bedrock")).not.toBeInTheDocument();
     expect(screen.getByText("+1")).toBeInTheDocument();
   });
 
