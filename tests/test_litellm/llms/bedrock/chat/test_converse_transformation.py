@@ -3311,7 +3311,9 @@ def test_is_nova_2_model():
     # Test with regional variants
     assert config._is_nova_2_model("us.amazon.nova-2-lite-v1:0") is True
     assert config._is_nova_2_model("eu.amazon.nova-2-lite-v1:0") is True
-    assert config._is_nova_2_model("apac.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_2_model("jp.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_2_model("global.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_2_model("apac.amazon.nova-2-pro-preview-20251202-v1:0") is True
 
     # Test with other Nova 2 variants (pro, micro)
     assert config._is_nova_2_model("amazon.nova-pro-1-5-v1:0") is False
