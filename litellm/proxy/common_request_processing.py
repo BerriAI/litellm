@@ -1566,6 +1566,7 @@ class ProxyBaseLLMRequestProcessing:
         response = responses[1]
 
         _exception_raised = False
+        _defer_logging_until_response_headers = False
         try:
             hidden_params = get_hidden_params_dict(response)
             model_id = self._get_model_id_from_response(hidden_params, self.data)
@@ -1799,14 +1800,23 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 response=response,  # type: ignore[arg-type]
             )
+            # The response-header hook is the first lifecycle point where some
+            # providers expose their upstream headers. Keep deferred success
+            # logging open until that hook has enriched request metadata.
+            _defer_logging_until_response_headers = True
         except Exception:
             _exception_raised = True
             raise
         finally:
-            ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-                logging_obj=logging_obj,
-                exception_raised=_exception_raised,
-            )
+            # Failures and early returns never reach the non-streaming
+            # response-header lifecycle below, so preserve their existing
+            # flush behavior here. Normal non-streaming success flushes after
+            # response-header callbacks have run.
+            if _exception_raised or not _defer_logging_until_response_headers:
+                ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+                    logging_obj=logging_obj,
+                    exception_raised=_exception_raised,
+                )
 
             # Streaming cleanup: if an exception occurred AND the deferred
             # streaming closure is still set, no streaming route will
@@ -1842,6 +1852,22 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
             )
 
+        # Run response-header callbacks before releasing deferred async
+        # logging. This lets callbacks persist provider response metadata in
+        # the same spend row for all OpenAI-compatible request shapes.
+        try:
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+        finally:
+            ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+                logging_obj=logging_obj,
+                exception_raised=False,
+            )
+
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
@@ -1873,13 +1899,6 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(response, dict):
             response.pop("_hidden_params", None)
 
-        # Call response headers hook for non-streaming success
-        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-            data=self.data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_headers=dict(request.headers),
-        )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
 

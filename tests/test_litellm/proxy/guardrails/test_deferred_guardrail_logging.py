@@ -21,6 +21,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
+from fastapi.responses import Response
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -406,6 +408,70 @@ def test_proxy_finally_block_routes_through_flush_helper():
         "Reset of _enqueue_deferred_logging must live inside "
         "_flush_deferred_async_logging, not in base_process_llm_request."
     )
+
+
+@pytest.mark.asyncio
+async def test_response_header_hook_runs_before_deferred_success_log_flush(monkeypatch):
+    """Provider response metadata must reach the deferred spend writer."""
+    call_order = []
+    response = litellm.ModelResponse()
+    logging_obj = MagicMock()
+    logging_obj.litellm_call_id = "test-response-header-order"
+    logging_obj._defer_async_logging = False
+    logging_obj._on_deferred_stream_complete = None
+    logging_obj.cost_breakdown = None
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"model": "fake-model", "litellm_logging_obj": logging_obj}
+    )
+    proxy_logging = MagicMock(spec=ProxyLogging)
+    proxy_logging.during_call_hook = AsyncMock(return_value=None)
+    proxy_logging.update_request_status = AsyncMock(return_value=None)
+    proxy_logging.post_call_success_hook = AsyncMock(return_value=response)
+
+    async def response_headers_hook(**kwargs):
+        call_order.append("response_headers")
+        kwargs["data"].setdefault("metadata", {})["spend_logs_metadata"] = {
+            "router_selected_provider": "switchyard"
+        }
+        return {}
+
+    proxy_logging.post_call_response_headers_hook = response_headers_hook
+
+    async def fake_llm_call():
+        return response
+
+    async def fake_route_request(**kwargs):
+        return fake_llm_call()
+
+    def flush(*, logging_obj, exception_raised):
+        call_order.append("flush")
+        assert exception_raised is False
+        assert logging_obj is not None
+
+    monkeypatch.setattr(
+        "litellm.proxy.common_request_processing.route_request", fake_route_request
+    )
+    monkeypatch.setattr(
+        ProxyBaseLLMRequestProcessing,
+        "_flush_deferred_async_logging",
+        staticmethod(flush),
+    )
+
+    await processor.base_process_llm_request(
+        request=MagicMock(spec=Request),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        route_type="acompletion",
+        proxy_logging_obj=proxy_logging,
+        general_settings={},
+        proxy_config=MagicMock(),
+        skip_pre_call_logic=True,
+    )
+
+    assert call_order == ["response_headers", "flush"]
+    assert processor.data["metadata"]["spend_logs_metadata"] == {
+        "router_selected_provider": "switchyard"
+    }
 
 
 def test_flush_deferred_async_logging_swallows_closure_errors():
