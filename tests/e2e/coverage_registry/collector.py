@@ -22,8 +22,16 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel
 
+from .product_surface import ROUTE_CHECKABLE_ENDPOINTS, route_table_endpoints
 from .registry import load_registry
-from .schema import MODULE_ORDER, Cell, Tier, dashboard_module, loki_module_label
+from .schema import (
+    MODULE_ORDER,
+    Cell,
+    Tier,
+    dashboard_module,
+    loki_module_label,
+    parse_llm_id,
+)
 
 E2E_DIR = Path(__file__).resolve().parent.parent
 
@@ -94,6 +102,7 @@ class CoverageReport:
     p0_gaps: tuple[str, ...]
     orphan_markers: tuple[str, ...]
     collection_errors: tuple[str, ...]
+    route_table_drift: tuple[str, ...] = ()
 
     @property
     def coverage_percent(self) -> float:
@@ -122,6 +131,7 @@ def compute_coverage(
     cells: tuple[Cell, ...],
     covered: frozenset[str],
     collection_errors: tuple[str, ...] = (),
+    route_table_drift: tuple[str, ...] = (),
 ) -> CoverageReport:
     p0_cells = tuple(c for c in cells if c.tier is Tier.P0)
     registry_ids = frozenset(c.id for c in cells)
@@ -134,7 +144,20 @@ def compute_coverage(
         p0_gaps=tuple(sorted(c.id for c in p0_cells if c.id not in covered)),
         orphan_markers=tuple(sorted(covered - registry_ids)),
         collection_errors=collection_errors,
+        route_table_drift=route_table_drift,
     )
+
+
+def compute_route_table_drift(cells: tuple[Cell, ...]) -> tuple[str, ...]:
+    """LLM endpoints the denominator enumerates that the live proxy route table does
+    not serve. Empty when the route table cannot be read (litellm not importable) or
+    when everything the denominator enumerates is served."""
+    served = route_table_endpoints()
+    if served is None:
+        return ()
+    enumerated = frozenset(parsed.endpoint for c in cells if (parsed := parse_llm_id(c.id)) is not None)
+    checkable = enumerated & ROUTE_CHECKABLE_ENDPOINTS
+    return tuple(sorted(endpoint for endpoint in checkable if endpoint not in served))
 
 
 def _row(label: str, covered: int, total: int) -> str:
@@ -170,7 +193,16 @@ def render(report: CoverageReport) -> str:
         if report.collection_errors
         else ()
     )
-    return "\n".join((*lines, *orphans, *warning))
+    drift = (
+        (
+            f"\nWARNING: {len(report.route_table_drift)} enumerated LLM endpoint(s) are not in "
+            f"the live proxy route table (denominator drift, reconcile the schema vocab):\n  "
+            + "\n  ".join(report.route_table_drift),
+        )
+        if report.route_table_drift
+        else ()
+    )
+    return "\n".join((*lines, *orphans, *warning, *drift))
 
 
 def _report_dict(report: CoverageReport) -> dict[str, object]:
@@ -287,7 +319,7 @@ def main() -> int:
     args = _CliArgs.model_validate(vars(parser.parse_args()))
     cells = load_registry()
     covered, errors = collect_covered_ids()
-    report = compute_coverage(cells, covered, errors)
+    report = compute_coverage(cells, covered, errors, compute_route_table_drift(cells))
     output = {
         "text": render,
         "json": render_json,

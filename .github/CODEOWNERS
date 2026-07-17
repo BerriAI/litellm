@@ -1,3 +1,4 @@
 /ui/ @yuneng-jiang @ryan-crabbe-berri
 /litellm/proxy/_experimental/out/ @yuneng-jiang @ryan-crabbe-berri
 /ui/litellm-dashboard/src/lib/http/schema.d.ts
+/tests/e2e/coverage_registry/overlay.yaml @yassin-berriai

@@ -1,17 +1,31 @@
-"""Registry row schema: the contract every denominator cell validates against.
+"""Coverage cell vocabulary, id grammar, and the human-overlay row shape.
 
 A cell is one customer-noticeable behavior a single e2e test can assert pass/fail
-on. `module` is the id's segment-1 prefix (eight of them); dashboard rollups can
-split or merge those prefixes. The union is discriminated on `module`, so an LLM
-row cannot carry a guardrail field and vice versa.
+on, identified by a dotted id whose first segment is the module. The structural
+facets an LLM id encodes (endpoint, route, capability, streaming) are parsed back
+out of the id rather than stored a second time, so an id and its fields can never
+drift. The only per-cell data a human curates lives in `OverlayRow`; the set of
+cells itself (the denominator) is generated in `product_surface.py`.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+
+Module = Literal[
+    "llm",
+    "mgmt",
+    "mcp",
+    "reliability",
+    "quota_management",
+    "logging",
+    "guardrail",
+    "other",
+]
 
 
 class Tier(str, Enum):
@@ -70,82 +84,91 @@ LlmCapability = Literal[
     "web_search",
 ]
 
+LlmStreaming = Literal["stream", "nonstream", "na"]
 
-class _Base(BaseModel):
+
+@dataclass(frozen=True, slots=True)
+class LlmCellId:
+    endpoint: LlmEndpoint
+    route: LlmRoute
+    capability: LlmCapability
+    streaming: LlmStreaming
+    assertion: str
+
+
+def format_llm_id(
+    endpoint: LlmEndpoint,
+    route: LlmRoute,
+    capability: LlmCapability,
+    streaming: LlmStreaming,
+    assertion: str,
+) -> str:
+    return f"llm.{endpoint}.{route}.{capability}.{streaming}.{assertion}"
+
+
+_LLM_CELL_ID_ADAPTER: TypeAdapter[LlmCellId] = TypeAdapter(LlmCellId)
+
+
+def parse_llm_id(cell_id: str) -> LlmCellId | None:
+    """The structural facets of an LLM id, or None when the id is not an LLM cell
+    whose segments all match the typed vocabulary. Non-core LLM endpoints (batches,
+    files, rerank, ...) use an operation grammar that is not part of this vocabulary
+    and return None here by design; they are carried by the overlay, not generated."""
+    parts = tuple(cell_id.split("."))
+    if len(parts) != 6 or parts[0] != "llm":
+        return None
+    _, endpoint, route, capability, streaming, assertion = parts
+    try:
+        return _LLM_CELL_ID_ADAPTER.validate_python(
+            {
+                "endpoint": endpoint,
+                "route": route,
+                "capability": capability,
+                "streaming": streaming,
+                "assertion": assertion,
+            }
+        )
+    except ValidationError:
+        return None
+
+
+class OverlayRow(BaseModel):
+    """The human-curated fields for one cell, keyed by id in overlay.yaml. Holds no
+    structural facet; those are parsed from the id or generated. A generated id with
+    no overlay row defaults to P2 (see registry.py), so a newly grown surface shows
+    up as an uncovered gap rather than vanishing."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    id: str
     tier: Tier
-    assertions: tuple[str, ...]
-    source: str
+    source: str = ""
     rationale: str = ""
     fail_before_fix: FailBeforeFix = FailBeforeFix.unproven
     supported: bool = True
 
 
-class LlmCell(_Base):
-    module: Literal["llm"]
-    subject_endpoint: LlmEndpoint
-    route: LlmRoute
-    capability: LlmCapability
-    streaming: Literal["stream", "nonstream", "na"]
+@dataclass(frozen=True, slots=True)
+class Cell:
+    """A denominator cell: its id, the module parsed from that id, and the curated
+    overlay fields (defaulted when the id has no overlay row)."""
+
+    id: str
+    module: Module
+    tier: Tier
+    source: str = ""
+    rationale: str = ""
+    fail_before_fix: FailBeforeFix = FailBeforeFix.unproven
+    supported: bool = True
 
 
-class MgmtCell(_Base):
-    module: Literal["mgmt"]
-    surface: Literal["api", "ui"]
+_MODULE_ADAPTER: TypeAdapter[Module] = TypeAdapter(Module)
 
 
-class McpCell(_Base):
-    module: Literal["mcp"]
-    operation: str
-    auth_family: Literal["none", "api_key", "bearer", "oauth"]
+def parse_module(cell_id: str) -> Module:
+    """The module (id's first segment), validated against the vocabulary. Raises on
+    an unknown prefix, since that would corrupt the per-module rollups."""
+    return _MODULE_ADAPTER.validate_python(cell_id.split(".", 1)[0])
 
-
-class ReliabilityCell(_Base):
-    module: Literal["reliability"]
-    behavior: str
-    variant: str
-    exercised_on: tuple[str, ...]
-
-
-class QuotaCell(_Base):
-    module: Literal["quota_management"]
-    behavior: Literal["ratelimit", "budget", "spend_tracking"]
-    variant: str
-    exercised_on: tuple[str, ...]
-
-
-class LoggingCell(_Base):
-    module: Literal["logging"]
-    event: str
-    exercised_on: tuple[str, ...]
-
-
-class GuardrailCell(_Base):
-    module: Literal["guardrail"]
-    hook_point: str
-    exercised_on: tuple[str, ...]
-
-
-class OtherCell(_Base):
-    module: Literal["other"]
-    area: str
-
-
-Cell = Annotated[
-    LlmCell
-    | MgmtCell
-    | McpCell
-    | ReliabilityCell
-    | QuotaCell
-    | LoggingCell
-    | GuardrailCell
-    | OtherCell,
-    Field(discriminator="module"),
-]
-
-CELL_ADAPTER: TypeAdapter[Cell] = TypeAdapter(Cell)
 
 CORE_LLM_ENDPOINTS: frozenset[str] = frozenset(
     {
@@ -189,11 +212,11 @@ LOKI_MODULE_LABELS: dict[str, str] = {
 
 
 def dashboard_module(cell: Cell) -> str:
-    """Return the Grafana/reporting module for a registry cell."""
-    if isinstance(cell, LlmCell):
-        if cell.subject_endpoint in CORE_LLM_ENDPOINTS:
-            return "Core LLMs"
-        return "Non-Core LLMs"
+    """The Grafana/reporting module for a cell, decided from its id. LLM cells split
+    into Core vs Non-Core on the endpoint segment; every other module maps by prefix."""
+    if cell.module == "llm":
+        endpoint = cell.id.split(".")[1]
+        return "Core LLMs" if endpoint in CORE_LLM_ENDPOINTS else "Non-Core LLMs"
     return PREFIX_ROLLUP[cell.module]
 
 

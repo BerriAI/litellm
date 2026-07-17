@@ -1,29 +1,35 @@
-"""Load and validate the registry: the denominator, built in one shot from the YAMLs."""
+"""Build the coverage denominator: the generated product surface unioned with the ids
+the overlay still enumerates, each annotated with its curated human fields."""
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 
-import yaml
-from pydantic import TypeAdapter
+from .overlay import OVERLAY_PATH, load_overlay
+from .product_surface import generate_llm_cell_ids
+from .schema import Cell, OverlayRow, Tier, parse_module
 
-from .schema import Cell
-
-REGISTRY_DIR = Path(__file__).resolve().parent
-
-_CELLS_ADAPTER: TypeAdapter[tuple[Cell, ...]] = TypeAdapter(tuple[Cell, ...])
+_DEFAULT_ROW = OverlayRow(tier=Tier.P2)
 
 
-def _load_cells(path: Path) -> tuple[Cell, ...]:
-    return _CELLS_ADAPTER.validate_python(yaml.safe_load(path.read_text()) or ())
+def _cell(cell_id: str, row: OverlayRow) -> Cell:
+    return Cell(
+        id=cell_id,
+        module=parse_module(cell_id),
+        tier=row.tier,
+        source=row.source,
+        rationale=row.rationale,
+        fail_before_fix=row.fail_before_fix,
+        supported=row.supported,
+    )
 
 
-def load_registry(registry_dir: Path = REGISTRY_DIR) -> tuple[Cell, ...]:
-    """Every cell across every `*.yaml`, validated. Raises on a schema violation or
-    a duplicate id, since either would corrupt the coverage denominator."""
-    cells = tuple(cell for path in sorted(registry_dir.glob("*.yaml")) for cell in _load_cells(path))
-    duplicates = sorted(cid for cid, n in Counter(c.id for c in cells).items() if n > 1)
-    if duplicates:
-        raise ValueError(f"duplicate cell ids in registry: {duplicates}")
-    return cells
+def load_registry(overlay_path: Path = OVERLAY_PATH) -> tuple[Cell, ...]:
+    """Every denominator cell, validated. The id set is the generated LLM surface
+    unioned with the overlay's ids; each cell carries its overlay row when one exists
+    and otherwise a default P2 row, so a newly generated surface shows up as an
+    uncovered gap rather than silently vanishing. Raises on a bad module prefix or a
+    malformed overlay row, since either would corrupt the denominator."""
+    overlay = load_overlay(overlay_path)
+    cell_ids = generate_llm_cell_ids() | frozenset(overlay)
+    return tuple(_cell(cid, overlay.get(cid, _DEFAULT_ROW)) for cid in sorted(cell_ids))
