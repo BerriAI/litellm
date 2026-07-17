@@ -95,8 +95,6 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_healthy
-      mcp-upstream:
-        condition: service_healthy
     env_file: .env
     environment:
       LITELLM_MASTER_KEY: sk-1234
@@ -137,12 +135,13 @@ services:
 
 # deterministic self-hosted upstream MCP server (FastMCP add/multiply over
 # streamable-http), reachable by the litellm container at mcp-upstream:8090/mcp.
-# The suite registers it through /v1/mcp/server at test time.
+# Not a depends_on of litellm on purpose: only the mcp suite needs it, and it
+# boots long before the proxy is live, so it must not gate the other suites'
+# stack. The suite registers it through /v1/mcp/server at test time.
   mcp-upstream:
     image: ghcr.io/berriai/litellm:main-latest
     entrypoint: ["python3", "/app/mcp_upstream_server.py"]
     environment:
-      MCP_TRANSPORT: http
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8090"
     configs:
