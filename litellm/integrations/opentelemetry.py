@@ -1000,9 +1000,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return dynamic_headers if dynamic_headers else None
 
-    def _get_dynamic_otel_config_from_kwargs(self, kwargs: dict) -> Optional[OpenTelemetryConfig]:
+    def _get_dynamic_otel_config_from_kwargs(self, kwargs: dict) -> OpenTelemetryConfig | None:
         """Extract a full dynamic exporter config from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = kwargs.get(
+        standard_callback_dynamic_params: StandardCallbackDynamicParams | None = kwargs.get(
             "standard_callback_dynamic_params"
         )
 
@@ -1059,7 +1059,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def construct_dynamic_otel_config(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ) -> Optional[OpenTelemetryConfig]:
+    ) -> OpenTelemetryConfig | None:
         """
         Construct a full exporter config from standard callback dynamic params.
 
@@ -2799,8 +2799,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def _get_span_processor(
         self,
-        dynamic_headers: Optional[dict] = None,
-        config_override: Optional[OpenTelemetryConfig] = None,
+        dynamic_headers: dict | None = None,
+        config_override: OpenTelemetryConfig | None = None,
     ):
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,

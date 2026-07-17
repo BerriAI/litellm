@@ -252,7 +252,7 @@ else:
     PreRoutingHookResponse = Any
 
 
-def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]:
+def _cost_value_as_float(value: Union[str, int, float, None]) -> float | None:
     if value is None:
         return None
     try:
@@ -1175,7 +1175,7 @@ class Router:
 
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
-    def _get_request_routing_strategy_override(self, request_kwargs: Optional[dict]) -> Optional[str]:
+    def _get_request_routing_strategy_override(self, request_kwargs: dict | None) -> str | None:
         """
         Reads a per-request `routing_strategy` override (forwarded by the proxy
         from key/team `router_settings`) out of the request kwargs.
@@ -1200,7 +1200,7 @@ class Router:
             return None
         return strategy
 
-    def _get_override_strategy_selector(self, strategy: str) -> Optional[Any]:
+    def _get_override_strategy_selector(self, strategy: str) -> Any | None:
         """
         Returns the selector for a per-request strategy override.
 
@@ -1222,8 +1222,8 @@ class Router:
             return self._override_selectors[strategy]
 
     def _get_routing_context(
-        self, model: str, request_kwargs: Optional[dict] = None
-    ) -> tuple[Optional[str], Optional[Any]]:
+        self, model: str, request_kwargs: dict | None = None
+    ) -> tuple[str | None, Any | None]:
         """
         Resolves the routing strategy and selector to use for the given model.
 

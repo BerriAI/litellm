@@ -144,7 +144,7 @@ def _get_guardrail_field(g: Any, field: str) -> Any:
     return getattr(g, field, None)
 
 
-def _to_dict(value: Any) -> Dict[str, Any]:
+def _to_dict(value: Any) -> dict[str, Any]:
     """Coerce a pydantic model (e.g. LitellmParams) / dict value into a plain dict."""
     if isinstance(value, BaseModel):
         return value.model_dump(exclude_none=True)
@@ -286,7 +286,7 @@ async def guardrails_usage_overview(
         config_guardrails = [
             g for g in IN_MEMORY_GUARDRAIL_HANDLER.list_config_guardrails() if g.get("guardrail_id") not in seen_ids
         ]
-        guardrails: List[Any] = [*db_guardrails, *config_guardrails]
+        guardrails: list[Any] = [*db_guardrails, *config_guardrails]
 
         # Daily metrics in range
         metrics = await DailyGuardrailMetricsRepository(prisma_client).table.find_many(

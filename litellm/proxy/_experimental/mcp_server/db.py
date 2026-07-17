@@ -62,7 +62,7 @@ _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
 )
 
 
-def _blank_to_none(value: Optional[str]) -> Optional[str]:
+def _blank_to_none(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None

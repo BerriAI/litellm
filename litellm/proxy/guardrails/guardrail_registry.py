@@ -613,7 +613,7 @@ class InMemoryGuardrailHandler:
         """
         return self._sources.get(guardrail_id)
 
-    def list_config_guardrails(self) -> List[Guardrail]:
+    def list_config_guardrails(self) -> list[Guardrail]:
         """
         List in-memory guardrails owned by config.yaml.
 
@@ -623,7 +623,7 @@ class InMemoryGuardrailHandler:
         """
         return [g for gid, g in self.IN_MEMORY_GUARDRAILS.items() if self._sources.get(gid) == "config"]
 
-    def get_config_guardrail_by_id(self, guardrail_id: str) -> Optional[Guardrail]:
+    def get_config_guardrail_by_id(self, guardrail_id: str) -> Guardrail | None:
         """
         Get a config-owned in-memory guardrail by its ID, or None.
 

@@ -966,8 +966,8 @@ class BudgetExceededError(Exception):
         max_budget: float,
         message: Optional[str] = None,
         llm_provider: Optional[str] = None,
-        entity_type: Optional[str] = None,
-        entity_id: Optional[str] = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget

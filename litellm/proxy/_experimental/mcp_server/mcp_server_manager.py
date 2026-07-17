@@ -1573,22 +1573,22 @@ class MCPServerManager:
         *,
         mcp_server: LiteLLM_MCPServerTable,
         auth_type: MCPAuthType,
-        server_url: Optional[str],
-        manual_issuer: Optional[str],
-        manual_authorization_url: Optional[str],
-        manual_token_url: Optional[str],
+        server_url: str | None,
+        manual_issuer: str | None,
+        manual_authorization_url: str | None,
+        manual_token_url: str | None,
         is_discovery_auth_type: bool,
         use_issuer_anchor: bool,
-        scopes: Optional[list[str]],
-        token_exchange_endpoint: Optional[str],
-    ) -> Optional[MCPOAuthMetadata]:
+        scopes: list[str] | None,
+        token_exchange_endpoint: str | None,
+    ) -> MCPOAuthMetadata | None:
         has_all_upstream_oauth_fields = bool(manual_authorization_url and manual_token_url and scopes)
         needs_discovery = bool(server_url) and (
             (is_discovery_auth_type and not has_all_upstream_oauth_fields)
             or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url)
         )
         if not needs_discovery:
-            mcp_oauth_metadata: Optional[MCPOAuthMetadata] = None
+            mcp_oauth_metadata: MCPOAuthMetadata | None = None
         elif use_issuer_anchor and manual_issuer is not None:
             mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
         else:
@@ -3481,8 +3481,8 @@ class MCPServerManager:
         return None
 
     async def _fetch_issuer_anchored_oauth_metadata(
-        self, issuer: str, server_url: Optional[str]
-    ) -> Optional[MCPOAuthMetadata]:
+        self, issuer: str, server_url: str | None
+    ) -> MCPOAuthMetadata | None:
         """RFC 8414 issuer-anchored discovery for the OAuth endpoints, with resource-driven scopes.
 
         Fetch authorization-server metadata from the admin-configured issuer's own origin and adopt
@@ -3514,7 +3514,7 @@ class MCPServerManager:
         return metadata.model_copy(update={"scopes": resource_scopes})
 
     async def _fetch_single_authorization_server_metadata(
-        self, issuer_url: str, server_url: str, require_issuer: Optional[str] = None
+        self, issuer_url: str, server_url: str, require_issuer: str | None = None
     ) -> Optional[MCPOAuthMetadata]:
         try:
             parsed = urlparse(issuer_url)

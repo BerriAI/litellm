@@ -305,7 +305,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     @staticmethod
     def _build_langfuse_otel_config(
-        public_key: str, secret_key: str, langfuse_host: Optional[str]
+        public_key: str, secret_key: str, langfuse_host: str | None
     ) -> "OpenTelemetryConfig":
         """
         Builds an OTLP HTTP config pointing at the Langfuse OTEL endpoint for the

@@ -467,7 +467,7 @@ class ChunkProcessor:
         cache_read_input_tokens: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
-        cost: Optional[float] = None
+        cost: float | None = None
 
         if "prompt_tokens" in usage_chunk:
             prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
@@ -568,7 +568,7 @@ class ChunkProcessor:
         # is last-wins, so without preserving this separately the 1h breakdown is
         # lost and 1h cache writes get billed at the 5m rate.
         cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
-        cost: Optional[float] = None
+        cost: float | None = None
 
         for chunk in chunks:
             usage_chunk = self._extract_usage_chunk(chunk)
@@ -745,7 +745,7 @@ class ChunkProcessor:
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = calculated_usage_per_chunk[
             "prompt_tokens_details"
         ]
-        cost: Optional[float] = calculated_usage_per_chunk["cost"]
+        cost: float | None = calculated_usage_per_chunk["cost"]
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
