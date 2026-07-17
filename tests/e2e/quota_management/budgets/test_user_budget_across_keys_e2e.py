@@ -14,7 +14,7 @@ import pytest
 
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
+from e2e_http import StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
@@ -24,7 +24,7 @@ TINY_CAP = 3e-6
 RECORDED_SPEND_DEADLINE_SECONDS = 90
 
 
-def _call(client: BudgetClient, key: str):
+def _call(client: BudgetClient, key: str) -> StreamingResponse:
     return client.chat(key, MODEL, f"across {unique_marker()}", max_tokens=16)
 
 
