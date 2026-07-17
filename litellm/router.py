@@ -473,6 +473,8 @@ class Router:
             None  # use this to track the users default deployment, when they want to use model = *
         )
         self.default_max_parallel_requests = default_max_parallel_requests
+        self.weighted_inflight_admission = None
+        self.weighted_inflight_admission_class = None
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
@@ -6539,13 +6541,49 @@ class Router:
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
         model_group = kwargs.get("model")
-        response = original_function(*args, **kwargs)
-        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-            response = await response
-        ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
+        admission_lease = None
+        if self.weighted_inflight_admission is not None:
+            admission_class = self.weighted_inflight_admission_class
+            if admission_class is None:
+                raise ValueError(
+                    "weighted_inflight_admission_class is required when weighted_inflight_admission is configured"
+                )
+            admission_lease = await self.weighted_inflight_admission.acquire(admission_class)
 
-        return response
+        try:
+            call_kwargs = cast(  # cast-ok: copy isolates untyped Router kwargs before provider dispatch
+                dict[str, object], kwargs.copy()
+            )
+            call_kwargs.pop("admission_class", None)
+            for metadata_key in ("metadata", "litellm_metadata"):
+                metadata_value = call_kwargs.get(metadata_key)
+                if isinstance(metadata_value, dict):
+                    sanitized_metadata = (
+                        cast(  # cast-ok: metadata is normalized to string keys before provider dispatch
+                            dict[str, object], metadata_value.copy()
+                        )
+                    )
+                    sanitized_metadata.pop("admission_class", None)
+                    call_kwargs[metadata_key] = sanitized_metadata
+            response = original_function(*args, **call_kwargs)
+            if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+                response = await response
+            response = await self.set_response_headers(
+                response=response, model_group=model_group, request_kwargs=call_kwargs
+            )
+
+            if admission_lease is not None:
+                if kwargs.get("stream") is True and hasattr(response, "__aiter__"):
+                    response = admission_lease.wrap_async_iterator(response)
+                    admission_lease = None
+                else:
+                    await admission_lease.release()
+                    admission_lease = None
+            return response
+        except BaseException:
+            if admission_lease is not None:
+                await admission_lease.release()
+            raise
 
     def _handle_mock_testing_rate_limit_error(self, kwargs: dict, model_group: Optional[str] = None):
         """
