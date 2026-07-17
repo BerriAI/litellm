@@ -311,16 +311,26 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return ChatCompletionCachedContent(type="ephemeral")
 
     @staticmethod
-    def _request_has_cache_control(messages: list[AllMessageValues], system: Optional[Union[str, list]]) -> bool:
+    def _request_has_cache_control(
+        messages: list[AllMessageValues],
+        system: Optional[Union[str, list]],
+        tools: Optional[list] = None,
+    ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
         When the client (e.g. Claude Code) already marks its own breakpoints we
         stand down entirely rather than add more, per the auto-caching contract.
+        Tools count: they are a breakpoint the client can mark, they count toward
+        the provider's four-block limit, and caching only the tool definitions is
+        a common pattern, so injecting alongside them can exceed the cap.
         """
         if any(AnthropicCacheControlHook._count_cache_control_blocks(msg) for msg in messages):
             return True
         if isinstance(system, list):
-            return any(isinstance(block, dict) and block.get("cache_control") is not None for block in system)
+            if any(isinstance(block, dict) and block.get("cache_control") is not None for block in system):
+                return True
+        if tools is not None:
+            return any(isinstance(tool, dict) and tool.get("cache_control") is not None for tool in tools)
         return False
 
     @staticmethod
@@ -329,6 +339,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         system: Optional[Union[str, list]],
         model: str,
         custom_llm_provider: Optional[str],
+        tools: Optional[list] = None,
     ) -> list[CacheControlInjectionPoint]:
         """Default breakpoints when ``litellm.enable_anthropic_prompt_caching`` is on.
 
@@ -363,7 +374,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not supports_prompt_caching(model=model, custom_llm_provider=provider):
             return []
 
-        if AnthropicCacheControlHook._request_has_cache_control(messages, system):
+        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools):
             return []
 
         control = AnthropicCacheControlHook._default_control()
@@ -379,6 +390,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         model: str,
         custom_llm_provider: Optional[str],
+        tools: Optional[list] = None,
     ) -> None:
         """For /chat/completions: add default injection points to the request params.
 
@@ -393,6 +405,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             system=None,
             model=model,
             custom_llm_provider=custom_llm_provider,
+            tools=tools,
         )
         if points:
             non_default_params["cache_control_injection_points"] = points
@@ -404,6 +417,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         kwargs: Dict[str, Any],
         model: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
+        tools: Optional[list[dict]] = None,
     ) -> Tuple[List[Dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
@@ -420,6 +434,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             injection_points = AnthropicCacheControlHook.get_default_injection_points(
                 messages=cast(list[AllMessageValues], messages),  # cast-ok: Anthropic-shaped dicts from v1/messages
                 system=system,
+                tools=tools,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
             )
