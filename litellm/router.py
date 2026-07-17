@@ -388,6 +388,8 @@ class _RefusalStreamHold:
             self._text += delta_text
             if _text_matches_refusal_patterns(self._text, self.patterns):
                 self._raise_refusal()
+        if self._is_blocked_terminal(item):
+            self._raise_refusal()
         if saw_tool_call or len(self._text) + self._reasoning_len >= self.hold_chars:
             return self._release()
         return []
@@ -423,6 +425,14 @@ class _RefusalStreamHold:
         )
         return text, len(reasoning) if isinstance(reasoning, str) else 0, saw_tool_call
 
+    @staticmethod
+    def _is_blocked_terminal(item: Any) -> bool:
+        """Hook for stream shapes whose provider expresses a content-policy block
+        as a terminal EVENT rather than an exception (Responses API). The chat
+        completions path has no such event — finish_reason=content_filter mid-
+        stream surfaces through the non-streaming bridge or provider errors."""
+        return False
+
     def _raise_refusal(self) -> "NoReturn":
         from litellm.exceptions import MidStreamFallbackError
 
@@ -439,6 +449,84 @@ class _RefusalStreamHold:
             generated_content="",
             is_pre_first_chunk=True,
         )
+
+
+class _ResponsesRefusalStreamHold(_RefusalStreamHold):
+    """Refusal stream hold for the Responses API event stream. Two triggers:
+
+    1. Refusal TEXT: `response.output_text.delta` / `response.refusal.delta`
+       deltas accumulate as matchable text (same patterns as chat).
+    2. Blocked TERMINAL event: a `response.incomplete` whose
+       `incomplete_details.reason == "content_filter"` (Azure's jailbreak /
+       content filter kills the stream with HTTP 200 + this event, never an
+       exception) — while chunks are still held, treat it exactly like a
+       content-policy violation so the fallback group re-serves the request.
+
+    Reasoning-summary deltas advance the hold window without being matchable;
+    function-call argument deltas release immediately (refusals are text).
+    ResponsesAPIStreamEvents is a str-Enum, so `event.type` compares directly
+    against the literal event strings."""
+
+    @staticmethod
+    def _delta_state(item: Any) -> "tuple[str, int, bool]":
+        event_type = getattr(item, "type", None)
+        if event_type in ("response.output_text.delta", "response.refusal.delta"):
+            delta = getattr(item, "delta", None)
+            return (delta if isinstance(delta, str) else ""), 0, False
+        if event_type == "response.reasoning_summary_text.delta":
+            delta = getattr(item, "delta", None)
+            return "", len(delta) if isinstance(delta, str) else 0, False
+        if event_type in (
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        ):
+            return "", 0, True
+        return "", 0, False
+
+    @staticmethod
+    def _is_blocked_terminal(item: Any) -> bool:
+        if getattr(item, "type", None) != "response.incomplete":
+            return False
+        response_obj = getattr(item, "response", None)
+        details = getattr(response_obj, "incomplete_details", None)
+        reason = getattr(details, "reason", None)
+        if reason is None and isinstance(details, dict):
+            reason = details.get("reason")
+        return reason == "content_filter"
+
+
+def _fallback_dispatch_exception(e: Any) -> Exception:
+    """Fallback selection dispatches on isinstance(e, ...): unwrap a
+    MidStreamFallbackError carrying a ContentPolicyViolationError (the refusal /
+    content-filter stream hold) so it reaches content_policy_fallbacks instead
+    of generic fallbacks."""
+    original = getattr(e, "original_exception", None)
+    if isinstance(original, litellm.ContentPolicyViolationError):
+        return original
+    return e
+
+
+async def _maybe_abandon_refused_stream_source(e: Any, source: Any, log_label: str) -> None:
+    """When a mid-stream error wraps a ContentPolicyViolationError (the refusal /
+    content-filter hold), early-release the source stream the hold abandoned:
+    close its HTTP connection now instead of holding it through the fallback
+    stream (the outer finally re-close is a no-op), and clear any latched
+    terminal event so the abandoned blocked response is never reported as the
+    rescued request's completed response. No-op for other mid-stream errors."""
+    if not isinstance(getattr(e, "original_exception", None), litellm.ContentPolicyViolationError):
+        return
+    if hasattr(source, "aclose"):
+        with anyio.CancelScope(shield=True):
+            try:
+                await source.aclose()
+            except BaseException as close_err:  # noqa: BLE001 — shielded cleanup must never raise
+                verbose_router_logger.debug(
+                    "%s: error closing refused source: %s", log_label, close_err
+                )
+    try:
+        source.completed_response = None
+    except (AttributeError, TypeError):
+        pass
 
 
 class Router:
@@ -2290,14 +2378,8 @@ class Router:
                             },
                         ]
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
-                    # Fallback selection dispatches on isinstance(e, ...): unwrap a
-                    # content-policy violation (e.g. the refusal stream hold) so it
-                    # reaches content_policy_fallbacks instead of generic fallbacks.
-                    dispatch_exception: Exception = e
-                    if isinstance(e.original_exception, litellm.ContentPolicyViolationError):
-                        dispatch_exception = e.original_exception
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=dispatch_exception,
+                        e=_fallback_dispatch_exception(e),
                         disable_fallbacks=False,
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -2434,6 +2516,19 @@ class Router:
         ):
             return completed.response.usage
         return None
+
+    @staticmethod
+    def _prepare_responses_fallback_item(
+        fallback_item: Any,
+        prepared_hidden_params: Any,
+        partial_usage: Optional["ResponseAPIUsage"],
+    ) -> None:
+        """Per-item bookkeeping for a Responses-API fallback stream: propagate
+        hidden params and merge the abandoned source's partial usage onto the
+        fallback's terminal event."""
+        Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_hidden_params)
+        if partial_usage is not None:
+            Router._combine_responses_fallback_usage(fallback_item, partial_usage)
 
     @staticmethod
     def _combine_responses_fallback_usage(
@@ -2683,11 +2778,18 @@ class Router:
 
         async def stream_with_fallbacks():
             fallback_response = None
+            refusal_hold = self._refusal_stream_hold_for_call(
+                initial_kwargs, hold_cls=_ResponsesRefusalStreamHold
+            )
             try:
                 async for item in source_iterator:
-                    yield item
+                    for released_item in refusal_hold.process(item):
+                        yield released_item
+                for released_item in refusal_hold.flush():
+                    yield released_item
             except MidStreamFallbackError as e:
                 partial_usage = Router._extract_partial_responses_usage(source_iterator)
+                await _maybe_abandon_refused_stream_source(e, source_iterator, "stream_with_fallbacks(aresponses)")
                 try:
                     model_group = cast(str, initial_kwargs.get("model"))
                     fallbacks: Optional[List] = initial_kwargs.get("fallbacks", self.fallbacks)
@@ -2703,10 +2805,15 @@ class Router:
                     # original_generic_function is preserved by the caller so
                     # the helper knows what underlying API to invoke per attempt.
                     initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
-                    if e.is_pre_first_chunk or not e.generated_content:
+                    if e.is_pre_first_chunk or not e.generated_content or refusal_hold.active:
                         # No content generated before the error — retry with the
                         # original input. Adding a continuation prompt would
                         # waste tokens and confuse the model.
+                        # refusal_hold.active covers a provider error arriving while
+                        # the hold still buffers the stream head: e.generated_content
+                        # is wrapper-relative, but the CLIENT has seen nothing, so a
+                        # continuation would silently skip the held (never-delivered)
+                        # text.
                         pass
                     else:
                         initial_kwargs["input"] = Router._build_responses_continuation_input(
@@ -2724,7 +2831,7 @@ class Router:
                         metadata_variable_name="litellm_metadata",
                     )
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=_fallback_dispatch_exception(e),
                         disable_fallbacks=False,
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -2738,9 +2845,9 @@ class Router:
                     if hasattr(fallback_response, "__aiter__"):
                         prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
                         async for fallback_item in fallback_response:  # type: ignore
-                            Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
-                            if partial_usage is not None:
-                                Router._combine_responses_fallback_usage(fallback_item, partial_usage)
+                            Router._prepare_responses_fallback_item(
+                                fallback_item, prepared_fallback_hidden_params, partial_usage
+                            )
                             yield fallback_item
                     else:
                         yield fallback_response
@@ -7373,11 +7480,17 @@ class Router:
                     return True
         return False
 
-    def _refusal_stream_hold_for_call(self, initial_kwargs: dict) -> _RefusalStreamHold:
+    def _refusal_stream_hold_for_call(
+        self,
+        initial_kwargs: dict,
+        hold_cls: "type[_RefusalStreamHold]" = _RefusalStreamHold,
+    ) -> _RefusalStreamHold:
         """Build the refusal stream hold for one streaming call. Armed only when
         refusal patterns are configured AND the model group has a
         content_policy_fallbacks entry — holding delays time-to-first-chunk, so
-        groups with no rescue route must stream untouched."""
+        groups with no rescue route must stream untouched. `hold_cls` selects the
+        stream shape (_RefusalStreamHold for chat chunks,
+        _ResponsesRefusalStreamHold for Responses API events)."""
         patterns = _get_refusal_fallback_patterns()
         model_group = initial_kwargs.get("model")
         hold_chars = 0
@@ -7398,7 +7511,7 @@ class Router:
                 fallbacks=content_policy_fallbacks, model_group=model_group
             ):
                 hold_chars = _refusal_stream_hold_chars()
-        return _RefusalStreamHold(
+        return hold_cls(
             patterns=patterns,
             hold_chars=hold_chars,
             model=model_group if isinstance(model_group, str) else "",

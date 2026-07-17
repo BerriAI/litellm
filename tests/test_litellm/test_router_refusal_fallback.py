@@ -393,3 +393,341 @@ def test_stream_hold_raise_refusal_direct():
     assert exc.value.model == "my-model"
     assert exc.value.is_pre_first_chunk is True
     assert isinstance(exc.value.original_exception, litellm.ContentPolicyViolationError)
+
+
+# ---------------------------------------------------------------------------
+# Responses API streaming: the hold must also cover /v1/responses streams,
+# where Azure expresses a content-filter block as a terminal
+# `response.incomplete` EVENT (HTTP 200), never an exception.
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+
+def _ev(type_, **kw):
+    return SimpleNamespace(type=type_, **kw)
+
+
+def _incomplete_event(reason="content_filter"):
+    return _ev(
+        "response.incomplete",
+        response=SimpleNamespace(
+            incomplete_details=SimpleNamespace(reason=reason), usage=None
+        ),
+    )
+
+
+def _responses_hold(hold_chars=400):
+    from litellm.router import _ResponsesRefusalStreamHold
+
+    return _ResponsesRefusalStreamHold(
+        patterns=["cannot assist"], hold_chars=hold_chars, model="gpt-5.5"
+    )
+
+
+def test_responses_hold_raises_on_content_filter_terminal():
+    """Azure jailbreak filter: 200 stream ending response.incomplete with
+    reason=content_filter must be treated like a content-policy violation."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    hold = _responses_hold()
+    assert hold.process(_ev("response.created", response=SimpleNamespace())) == []
+    assert hold.process(_ev("response.output_text.delta", delta="I'm")) == []
+    with pytest.raises(MidStreamFallbackError) as exc:
+        hold.process(_incomplete_event())
+    assert isinstance(exc.value.original_exception, litellm.ContentPolicyViolationError)
+    assert exc.value.is_pre_first_chunk is True
+
+    # A non-filter incomplete (e.g. max_output_tokens) is NOT a block.
+    hold = _responses_hold()
+    assert hold.process(_incomplete_event(reason="max_output_tokens")) == []
+    assert len(hold.flush()) == 1
+
+
+def test_responses_hold_matches_refusal_text_delta():
+    from litellm.exceptions import MidStreamFallbackError
+
+    hold = _responses_hold()
+    assert hold.process(_ev("response.output_text.delta", delta="I'm sorry, but I ")) == []
+    with pytest.raises(MidStreamFallbackError):
+        hold.process(_ev("response.output_text.delta", delta="cannot assist with that."))
+
+
+def test_responses_hold_releases_on_reasoning_window_and_tool_calls():
+    hold = _responses_hold(hold_chars=10)
+    assert hold.process(_ev("response.reasoning_summary_text.delta", delta="thinking hard...")) != []
+    assert hold.active is False
+
+    hold = _responses_hold()
+    released = hold.process(_ev("response.function_call_arguments.delta", delta='{"a"'))
+    assert len(released) == 1
+    assert hold.active is False
+
+
+def test_responses_hold_inert_when_env_unset(monkeypatch):
+    monkeypatch.delenv("LITELLM_REFUSAL_FALLBACK_PATTERNS", raising=False)
+    router = _streaming_router("x")
+    from litellm.router import _ResponsesRefusalStreamHold
+
+    hold = router._refusal_stream_hold_for_call(
+        {"model": "m"}, hold_cls=_ResponsesRefusalStreamHold
+    )
+    assert hold.active is False
+    ev = _incomplete_event()
+    assert hold.process(ev) == [ev]  # passthrough, no raise
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_content_filter_fails_over(monkeypatch):
+    """Full _aresponses_streaming_iterator path: a held content-filter stream is
+    replaced by the fallback stream; no source event leaks to the client."""
+    monkeypatch.setenv(
+        "LITELLM_REFUSAL_FALLBACK_PATTERNS", json.dumps(["cannot assist"])
+    )
+    router = _streaming_router("unused")
+
+    class FakeSource:
+        completed_response = None
+
+        def __aiter__(self):
+            return self._gen()
+
+        async def _gen(self):
+            yield _ev("response.created", response=SimpleNamespace())
+            yield _ev("response.output_text.delta", delta="I'm sorry, but I ")
+            yield _incomplete_event()
+
+        async def aclose(self):
+            self.closed = True
+
+    rescue_events = [
+        _ev("response.output_text.delta", delta='{"correct":"yes"}'),
+        _ev("response.completed", response=SimpleNamespace(usage=None)),
+    ]
+
+    class FakeFallback:
+        def __aiter__(self):
+            return self._gen()
+
+        async def _gen(self):
+            for e in rescue_events:
+                yield e
+
+        async def aclose(self):
+            pass
+
+    captured = {}
+
+    async def fake_common_utils(**kwargs):
+        captured["e"] = kwargs["e"]
+        return FakeFallback()
+
+    monkeypatch.setattr(
+        router, "async_function_with_fallbacks_common_utils", fake_common_utils
+    )
+
+    wrapper = await router._aresponses_streaming_iterator(
+        response=FakeSource(),
+        initial_kwargs={"model": "m", "input": "judge this"},
+    )
+    seen = [item async for item in wrapper]
+    assert seen == rescue_events  # only fallback events; nothing from the source
+    assert isinstance(captured["e"], litellm.ContentPolicyViolationError)
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_normal_stream_passes_through(monkeypatch):
+    monkeypatch.setenv(
+        "LITELLM_REFUSAL_FALLBACK_PATTERNS", json.dumps(["cannot assist"])
+    )
+    router = _streaming_router("unused")
+
+    events = [
+        _ev("response.created", response=SimpleNamespace()),
+        _ev("response.output_text.delta", delta='{"extracted_final_answer":"0.186593"}'),
+        _ev("response.completed", response=SimpleNamespace(usage=None)),
+    ]
+
+    class FakeSource:
+        completed_response = None
+
+        def __aiter__(self):
+            return self._gen()
+
+        async def _gen(self):
+            for e in events:
+                yield e
+
+        async def aclose(self):
+            pass
+
+    wrapper = await router._aresponses_streaming_iterator(
+        response=FakeSource(), initial_kwargs={"model": "m", "input": "judge this"}
+    )
+    assert [item async for item in wrapper] == events
+
+
+def test_responses_hold_blocked_terminal_with_dict_details_and_enum_type():
+    """incomplete_details may arrive dict-shaped, and event.type may be the
+    str-Enum member rather than a plain string — both must trigger."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    hold = _responses_hold()
+    ev = _ev(
+        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        response=SimpleNamespace(incomplete_details={"reason": "content_filter"}, usage=None),
+    )
+    with pytest.raises(MidStreamFallbackError):
+        hold.process(ev)
+
+    # Enum-typed text delta accumulates too.
+    hold = _responses_hold()
+    with pytest.raises(MidStreamFallbackError):
+        hold.process(_ev(ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, delta="I cannot assist."))
+
+
+@pytest.mark.asyncio
+async def test_responses_failover_closes_source_and_reports_fallback_terminal(monkeypatch):
+    """The abandoned source is closed early, and completed_response reflects the
+    FALLBACK's terminal (never the source's swallowed content-filter incomplete) —
+    even when the fallback stream ends without a terminal event."""
+    monkeypatch.setenv(
+        "LITELLM_REFUSAL_FALLBACK_PATTERNS", json.dumps(["cannot assist"])
+    )
+    router = _streaming_router("unused")
+
+    class FakeSource:
+        completed_response = None
+        closed = False
+
+        def __aiter__(self):
+            return self._gen()
+
+        async def _gen(self):
+            yield _ev("response.output_text.delta", delta="x")
+            self.completed_response = _incomplete_event()  # latched like the real iterator
+            yield self.completed_response
+
+        async def aclose(self):
+            self.closed = True
+
+    class TerminalLessFallback:
+        def __aiter__(self):
+            return self._gen()
+
+        async def _gen(self):
+            yield _ev("response.output_text.delta", delta="rescued")
+
+        async def aclose(self):
+            pass
+
+    async def fake_common_utils(**kwargs):
+        return TerminalLessFallback()
+
+    monkeypatch.setattr(
+        router, "async_function_with_fallbacks_common_utils", fake_common_utils
+    )
+    source = FakeSource()
+    wrapper = await router._aresponses_streaming_iterator(
+        response=source, initial_kwargs={"model": "m", "input": "judge this"}
+    )
+    seen = [item async for item in wrapper]
+    assert [getattr(i, "delta", None) for i in seen] == ["rescued"]
+    assert source.closed is True
+    # The blocked source terminal must NOT be reported as the completed response.
+    assert wrapper.completed_response is None
+
+
+def test_is_blocked_terminal_direct():
+    """Direct coverage of the _is_blocked_terminal hook on both classes."""
+    from litellm.router import _RefusalStreamHold, _ResponsesRefusalStreamHold
+
+    # Base hook: always False (chat has no blocked-terminal event shape).
+    assert _RefusalStreamHold._is_blocked_terminal(_stream_chunk("x")) is False
+
+    assert _ResponsesRefusalStreamHold._is_blocked_terminal(_incomplete_event()) is True
+    assert (
+        _ResponsesRefusalStreamHold._is_blocked_terminal(
+            _incomplete_event(reason="max_output_tokens")
+        )
+        is False
+    )
+    assert (
+        _ResponsesRefusalStreamHold._is_blocked_terminal(
+            _ev("response.completed", response=SimpleNamespace(usage=None))
+        )
+        is False
+    )
+
+
+def test_fallback_dispatch_exception_unwraps_only_cpv():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router import _fallback_dispatch_exception
+
+    cpv = litellm.ContentPolicyViolationError(message="m", model="m", llm_provider="")
+    wrapped = MidStreamFallbackError(
+        message="m", model="m", llm_provider="", original_exception=cpv
+    )
+    assert _fallback_dispatch_exception(wrapped) is cpv
+
+    plain = MidStreamFallbackError(
+        message="m", model="m", llm_provider="", original_exception=ValueError("x")
+    )
+    assert _fallback_dispatch_exception(plain) is plain
+
+
+def _mid_stream_error(original):
+    from litellm.exceptions import MidStreamFallbackError
+
+    return MidStreamFallbackError(
+        message="m", model="m", llm_provider="", original_exception=original
+    )
+
+
+@pytest.mark.asyncio
+async def test_maybe_abandon_refused_stream_source_closes_and_clears_latch():
+    from litellm.router import _maybe_abandon_refused_stream_source
+
+    cpv = litellm.ContentPolicyViolationError(message="m", model="m", llm_provider="")
+
+    class Src:
+        closed = False
+        completed_response = "latched-blocked-terminal"
+
+        async def aclose(self):
+            self.closed = True
+
+    src = Src()
+    await _maybe_abandon_refused_stream_source(_mid_stream_error(cpv), src, "test")
+    assert src.closed is True
+    assert src.completed_response is None
+
+    # Non-CPV mid-stream errors (429/5xx) leave the source untouched.
+    other = Src()
+    await _maybe_abandon_refused_stream_source(_mid_stream_error(ValueError("x")), other, "test")
+    assert other.closed is False
+    assert other.completed_response == "latched-blocked-terminal"
+
+    # aclose raising must never propagate.
+    class Angry:
+        completed_response = "x"
+
+        async def aclose(self):
+            raise RuntimeError("boom")
+
+    angry = Angry()
+    await _maybe_abandon_refused_stream_source(_mid_stream_error(cpv), angry, "test")
+    assert angry.completed_response is None
+
+
+def test_prepare_responses_fallback_item_combines_partial_usage():
+    from litellm.router import Router
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent
+
+    usage = ResponseAPIUsage(input_tokens=3, output_tokens=4, total_tokens=7)
+    # A plain event with no response/usage passes through untouched.
+    plain = _ev("response.output_text.delta", delta="x")
+    Router._prepare_responses_fallback_item(plain, None, usage)
+    Router._prepare_responses_fallback_item(plain, None, None)
+    assert plain.delta == "x"
