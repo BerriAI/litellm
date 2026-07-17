@@ -2574,10 +2574,46 @@ def test_add_litellm_metadata_from_anthropic_user_id_sets_session_id():
     assert "litellm_trace_id" not in data
 
 
+def test_add_litellm_metadata_from_anthropic_user_id_dict_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": {
+                "device_id": "device",
+                "account_uuid": "account",
+                "session_id": "sess_4f8c1d2a-1234",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "sess_4f8c1d2a-1234"
+    assert data["litellm_session_id"] == "sess_4f8c1d2a-1234"
+    assert "litellm_trace_id" not in data
+
+
 def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id():
     data = {
         "metadata": {
             "user_id": "user_abc123_account__session_body-session-id",
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id_dict():
+    data = {
+        "metadata": {
+            "user_id": {
+                "session_id": "body-session-id",
+            }
         }
     }
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -2599,6 +2635,25 @@ def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id():
     ],
 )
 def test_add_litellm_metadata_from_anthropic_user_id_ignores_invalid_session_id(user_id: str):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        {},
+        {"session_id": 123},
+        {"session_id": "invalid session id"},
+        {"session_id": ""},
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_dict_ignores_invalid_session_id(
+    user_id: object,
+):
     data = {"metadata": {"user_id": user_id}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers={}, data=data, _metadata_variable_name="metadata"

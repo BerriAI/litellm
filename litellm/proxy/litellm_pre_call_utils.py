@@ -432,6 +432,11 @@ def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
         return None
 
     user_id = metadata.get("user_id")
+    if isinstance(user_id, dict):
+        session_id = user_id.get("session_id")
+        if isinstance(session_id, str) and _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+            return session_id
+        return None
     if not isinstance(user_id, str):
         return None
 
