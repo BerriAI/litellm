@@ -39,6 +39,19 @@ class UserNewResponse(BaseModel):
     user_id: str
 
 
+class UserInfoParams(BaseModel):
+    user_id: str
+
+
+class UserInfoRow(BaseModel):
+    spend: float | None = None
+    max_budget: float | None = None
+
+
+class UserInfoResponse(BaseModel):
+    user_info: UserInfoRow | None = None
+
+
 class UserDeleteBody(BaseModel):
     user_ids: list[str]
 
@@ -261,6 +274,19 @@ class BudgetClient:
             json=UserDeleteBody(user_ids=[user_id]),
             response_type=NoBody,
         )
+
+    def user_info(self, user_id: str) -> UserInfoRow | None:
+        result = self.gateway.transport.get(
+            "/user/info",
+            headers=self.gateway.transport.master,
+            params=UserInfoParams(user_id=user_id),
+            response_type=UserInfoResponse,
+        )
+        match result:
+            case Success(data=data):
+                return data.user_info
+            case _:
+                return None
 
     # ---- customer / end-user -------------------------------------------
 
