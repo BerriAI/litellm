@@ -2864,6 +2864,93 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
     assert calls == [1]
 
 
+def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
+    """
+    Responses API calls pass `input` (str) instead of `messages`. Context-window
+    checks must count tokens from `input` and filter deployments over the limit.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        litellm,
+        "token_counter",
+        lambda *a, **k: captured.update(k) or 1000,
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input="a very long prompt that exceeds the tiny context window",
+        )
+
+    assert captured.get("text") == "a very long prompt that exceeds the tiny context window"
+    assert captured.get("messages") is None
+
+
+def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
+    """
+    Responses API `input` can be a list of input items. It must be normalized to
+    chat messages and counted so oversized requests are filtered out. Uses the real
+    token_counter (no mock) so the transform + counting path is a true regression guard.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input=[
+                {"role": "user", "content": "count these tokens against the one token limit please"},
+            ],
+        )
+
+
+def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
+    """
+    When neither messages nor input is provided (e.g. endpoints without prompt text),
+    token counting is skipped gracefully and all deployments are returned.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    result = router._pre_call_checks(model="m", healthy_deployments=deployments)
+    assert len(result) == 1
+
+
 def test_get_deployment_model_info_base_model_flow():
     """Test that get_deployment_model_info correctly handles the base model flow"""
     from unittest.mock import patch
