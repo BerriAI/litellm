@@ -2649,8 +2649,8 @@ class ProxyBaseLLMRequestProcessing:
         response: Any,
         stream_completed: bool = False,
         client_disconnected: bool = False,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-        proxy_logging_obj: Optional[ProxyLogging] = None,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+        proxy_logging_obj: ProxyLogging | None = None,
     ) -> None:
         with anyio.CancelScope(shield=True):
             should_record_client_disconnect = client_disconnected or (not stream_completed)
