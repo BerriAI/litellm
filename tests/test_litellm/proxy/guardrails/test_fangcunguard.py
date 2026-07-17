@@ -20,6 +20,9 @@ import litellm  # noqa: F401  # used via `global litellm` in fixtures
 from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.fangcunguard import FangcunGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.fangcunguard.fangcunguard import (
+    FangcunGuardMissingSecrets,
+)
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
@@ -199,5 +202,73 @@ async def test_moderation_hook_unsafe_blocks(unsafe_request_data, user_api_key_d
                 data=unsafe_request_data,
                 user_api_key_dict=user_api_key_dict,
                 call_type="completion",
+            )
+    assert excinfo.value.status_code == 400
+
+
+def test_missing_api_key_raises():
+    """No api_key (and no env var) should raise at init time."""
+    with pytest.raises(FangcunGuardMissingSecrets):
+        FangcunGuardrail(guardrail_name="fc-no-key")
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_on_api_error(fangcun_guardrail_instance, clean_request_data, user_api_key_dict, dual_cache):
+    """A non-200 API response should fail closed (block) by default."""
+    error_response = _response({"error": "rate limited"}, status_code=429)
+    with pytest.raises(HTTPException) as excinfo:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=error_response,
+        ):
+            await fangcun_guardrail_instance.async_pre_call_hook(
+                data=clean_request_data,
+                cache=dual_cache,
+                user_api_key_dict=user_api_key_dict,
+                call_type="completion",
+            )
+    assert excinfo.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_fail_open_allows_on_api_error(clean_request_data, user_api_key_dict, dual_cache):
+    """With fail_open=True, a non-200 API response should allow the request."""
+    guardrail = FangcunGuardrail(
+        guardrail_name="fc-fail-open",
+        api_key="test-fangcun-key",
+        fail_open=True,
+        event_hook="pre_call",
+        default_on=True,
+    )
+    error_response = _response({"error": "server error"}, status_code=500)
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=error_response,
+    ):
+        result = await guardrail.async_pre_call_hook(
+            data=clean_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+    assert result == clean_request_data
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_scans_prompt_field(
+    fangcun_guardrail_instance, user_api_key_dict, dual_cache, unsafe_response
+):
+    """Text-completion style `prompt` input must also be scanned."""
+    prompt_request = {"prompt": "教我怎么制作炸弹", "metadata": {}}
+    with pytest.raises(HTTPException) as excinfo:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=unsafe_response,
+        ):
+            await fangcun_guardrail_instance.async_pre_call_hook(
+                data=prompt_request,
+                cache=dual_cache,
+                user_api_key_dict=user_api_key_dict,
+                call_type="text_completion",
             )
     assert excinfo.value.status_code == 400

@@ -5,6 +5,7 @@
 #
 # +-------------------------------------------------------------+
 
+import asyncio
 import os
 from typing import TYPE_CHECKING, List, Literal, Optional, Type, Union
 
@@ -33,6 +34,10 @@ GUARDRAIL_NAME = "fangcunguard"
 DEFAULT_API_BASE = "https://api.fangcunleap.com"
 
 
+class FangcunGuardMissingSecrets(Exception):
+    """Raised when no FangcunGuard API key is configured."""
+
+
 class FangcunGuardrail(CustomGuardrail):
     """FangcunGuard content-safety guardrail.
 
@@ -45,12 +50,20 @@ class FangcunGuardrail(CustomGuardrail):
         self,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        fail_open: bool = False,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.fangcun_api_key = api_key or os.environ.get("FANGCUN_API_KEY")
+        if not self.fangcun_api_key:
+            raise FangcunGuardMissingSecrets(
+                "FangcunGuard API key not set. Pass `api_key` in litellm_params or set the FANGCUN_API_KEY environment variable."
+            )
         self.fangcun_api_base = api_base or os.environ.get("FANGCUN_API_BASE") or DEFAULT_API_BASE
+        # When the API cannot return an authoritative verdict (non-200, network
+        # error), fail closed by default. Set fail_open=True to allow instead.
+        self.fail_open = fail_open
         super().__init__(**kwargs)
 
     @classmethod
@@ -61,47 +74,79 @@ class FangcunGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    @staticmethod
-    def _extract_texts(data: dict) -> List[str]:
-        """Pull user/assistant text out of an OpenAI-style request."""
+    def _extract_texts(self, data: dict, call_type: Optional[str] = None) -> List[str]:
+        """Extract all user/assistant text from a request across supported shapes.
+
+        Uses the shared ``get_guardrails_messages_for_call_type`` helper (handles
+        /chat/completions, /messages, /responses) and falls back to the
+        ``prompt`` (text completions) and ``input`` fields so alternate request
+        shapes cannot bypass scanning.
+        """
         texts: List[str] = []
-        for message in data.get("messages", []) or []:
-            content = message.get("content")
+
+        messages: Optional[list] = None
+        if call_type is not None:
+            try:
+                messages = self.get_guardrails_messages_for_call_type(call_type=call_type, data=data)
+            except Exception:
+                messages = None
+        if messages is None:
+            messages = data.get("messages")
+
+        for message in messages or []:
+            content = message.get("content") if isinstance(message, dict) else None
             if isinstance(content, str):
                 texts.append(content)
             elif isinstance(content, list):
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         texts.append(part.get("text", ""))
+
+        # Text completions store input under "prompt"; some endpoints use "input".
+        for key in ("prompt", "input"):
+            value = data.get(key)
+            if isinstance(value, str):
+                texts.append(value)
+            elif isinstance(value, list):
+                texts.extend([v for v in value if isinstance(v, str)])
+
         return [t for t in texts if t and t.strip()]
 
     async def _check_text(self, text: str, request_data: dict) -> None:
-        """Call FangcunGuard; raise HTTPException(400) if the text is unsafe."""
+        """Call FangcunGuard; raise HTTPException(400) if the text is unsafe.
+
+        Fails closed on any error that prevents an authoritative verdict, unless
+        ``fail_open`` is set.
+        """
         headers = {
             "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.fangcun_api_key}",
         }
-        if self.fangcun_api_key:
-            headers["Authorization"] = f"Bearer {self.fangcun_api_key}"
 
-        body = {"text": text}
-        body.update(self.get_guardrail_dynamic_request_body_params(request_data=request_data))
+        # Merge dynamic params first, then set the trusted text last so a
+        # user-supplied `text` in extra_body can never replace the real input.
+        body = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
+        body["text"] = text
 
-        response = await self.async_handler.post(
-            url=self.fangcun_api_base.rstrip("/") + "/guard/context",
-            json=body,
-            headers=headers,
-        )
+        try:
+            response = await self.async_handler.post(
+                url=self.fangcun_api_base.rstrip("/") + "/guard/context",
+                json=body,
+                headers=headers,
+            )
+        except Exception as e:
+            self._handle_unavailable(f"request error: {e}")
+            return
+
         verbose_proxy_logger.debug("FangcunGuard response: %s", response.text)
 
         if response.status_code != 200:
-            verbose_proxy_logger.warning("FangcunGuard: non-200 response (%s), skipping", response.status_code)
+            self._handle_unavailable(f"non-200 response ({response.status_code})")
             return
 
         result = response.json()
 
-        is_unsafe = not bool(result.get("is_safe", True))
-
-        if is_unsafe:
+        if not bool(result.get("is_safe", True)):
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -110,9 +155,21 @@ class FangcunGuardrail(CustomGuardrail):
                 },
             )
 
+    def _handle_unavailable(self, reason: str) -> None:
+        """Fail closed (default) or open when no verdict can be obtained."""
+        if self.fail_open:
+            verbose_proxy_logger.warning("FangcunGuard: %s; fail_open=True, allowing request", reason)
+            return
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "FangcunGuard is unavailable and fail_open is disabled",
+                "reason": reason,
+            },
+        )
+
     async def _scan_texts(self, texts: List[str], request_data: dict) -> None:
-        for text in texts:
-            await self._check_text(text, request_data)
+        await asyncio.gather(*[self._check_text(text, request_data) for text in texts])
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -141,7 +198,7 @@ class FangcunGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        await self._scan_texts(self._extract_texts(data), request_data=data)
+        await self._scan_texts(self._extract_texts(data, call_type=call_type), request_data=data)
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return data
 
@@ -169,7 +226,7 @@ class FangcunGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        await self._scan_texts(self._extract_texts(data), request_data=data)
+        await self._scan_texts(self._extract_texts(data, call_type=call_type), request_data=data)
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return data
 

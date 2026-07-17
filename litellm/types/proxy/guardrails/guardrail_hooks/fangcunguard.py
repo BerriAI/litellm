@@ -14,6 +14,10 @@ class FangcunGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="The API base for FangcunGuard. Defaults to https://api.fangcunleap.com; the `FANGCUN_API_BASE` environment variable is checked if set.",
     )
+    fail_open: Optional[bool] = Field(
+        default=False,
+        description="When True, allow requests through if FangcunGuard cannot return a verdict (non-200 or network error). Defaults to False (fail closed).",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

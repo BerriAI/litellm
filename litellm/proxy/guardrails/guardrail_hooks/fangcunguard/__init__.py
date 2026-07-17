@@ -14,6 +14,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     _fangcun_callback = FangcunGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        fail_open=getattr(litellm_params, "fail_open", False) or False,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
