@@ -2569,6 +2569,14 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Records which upstream received a relayed request; never a credential.
     """
 
+    mcp_on_behalf_of_user_id: str | None
+    """
+    When the call ran under a validated user->agent delegation, the user_id the calling agent
+    acted on behalf of. The agent key remains the primary spend/audit attribution; this records
+    the delegated (triggering) user so N users behind one agent stay distinguishable in the logs.
+    Absent on non-delegated calls.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """

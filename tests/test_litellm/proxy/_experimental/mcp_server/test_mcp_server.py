@@ -7573,3 +7573,99 @@ class TestPreemptive401ModeAware:
             await self._run(delegate, None, has_stored_token=False)
         assert exc.value.status_code == 401
         await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_records_delegated_user_in_logging_metadata():
+    """A delegated call (user_api_key_auth.delegated_user_id set) records the
+    on-behalf-of user in mcp_tool_call_metadata, in addition to the agent key."""
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = MCPServer(
+        server_id="srv",
+        name="echo",
+        server_name="echo",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc",
+    )
+
+    async def fake_handle_managed_mcp_tool(**kwargs):
+        return mcp_module.CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    agent_auth = UserAPIKeyAuth(api_key="agent-key", user_id="agent-svc-user", delegated_user_id="alice-id")
+
+    with (
+        patch.object(mcp_module.global_mcp_server_manager, "get_registry", return_value={server.server_id: server}),
+        patch.object(mcp_module.global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
+        patch.object(mcp_module, "_handle_managed_mcp_tool", new=fake_handle_managed_mcp_tool),
+        patch.object(mcp_module.MCPRequestHandler, "is_tool_allowed", return_value=True),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=None),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo",
+            arguments={"message": "hi"},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            requested_server_id=server.server_id,
+            user_api_key_auth=agent_auth,
+            litellm_logging_obj=logging_obj,
+        )
+
+    meta = logging_obj.model_call_details["mcp_tool_call_metadata"]
+    assert meta["mcp_on_behalf_of_user_id"] == "alice-id"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_omits_delegated_user_when_not_delegated():
+    """No delegation -> the on-behalf-of field is absent (payload byte-identical
+    to today for non-delegated calls)."""
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = MCPServer(
+        server_id="srv",
+        name="echo",
+        server_name="echo",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="abc",
+    )
+
+    async def fake_handle_managed_mcp_tool(**kwargs):
+        return mcp_module.CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    plain_auth = UserAPIKeyAuth(api_key="user-key", user_id="alice-id")
+
+    with (
+        patch.object(mcp_module.global_mcp_server_manager, "get_registry", return_value={server.server_id: server}),
+        patch.object(mcp_module.global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
+        patch.object(mcp_module, "_handle_managed_mcp_tool", new=fake_handle_managed_mcp_tool),
+        patch.object(mcp_module.MCPRequestHandler, "is_tool_allowed", return_value=True),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=None),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo",
+            arguments={"message": "hi"},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            requested_server_id=server.server_id,
+            user_api_key_auth=plain_auth,
+            litellm_logging_obj=logging_obj,
+        )
+
+    meta = logging_obj.model_call_details["mcp_tool_call_metadata"]
+    assert "mcp_on_behalf_of_user_id" not in meta
