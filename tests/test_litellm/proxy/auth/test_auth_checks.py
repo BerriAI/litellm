@@ -2047,6 +2047,88 @@ async def test_common_checks_metadata_route_keeps_key_tags_out_of_provider_metad
     assert "metadata" not in request_body
 
 
+def _pass_through_request() -> "Request":
+    """A Request whose FastAPI-resolved endpoint carries the pass-through marker,
+    i.e. the request was dispatched to a user-defined pass-through handler."""
+    from fastapi import Request
+
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    def pass_through_endpoint():
+        ...
+
+    setattr(pass_through_endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return Request(scope={"type": "http", "headers": [], "endpoint": pass_through_endpoint})
+
+
+def _builtin_request() -> "Request":
+    """A Request dispatched to a built-in (non-pass-through) handler, e.g. what a
+    custom path colliding with a core route actually resolves to."""
+    from fastapi import Request
+
+    def chat_completions():
+        ...
+
+    return Request(scope={"type": "http", "headers": [], "endpoint": chat_completions})
+
+
+@pytest.mark.asyncio
+async def test_common_checks_auth_enforced_pass_through_ignores_upstream_model():
+    """An auth-enforced (`auth: true`) user-defined pass-through endpoint must
+    authenticate the key but forward the body unchanged; a body `model` naming an
+    upstream-only model must not be rejected against the team/key model allowlist
+    when the request was dispatched to the pass-through handler. The same body on a
+    request dispatched to a built-in handler (e.g. a path collision) must still be
+    enforced."""
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="team-1", models=["gpt-4o"])
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        team_id="team-1",
+        models=[],
+        metadata={"allowed_passthrough_routes": ["/my-custom-endpoint"]},
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
+        result = await common_checks(
+            request_body={"model": "upstream-special-model", "prompt": "hi"},
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/my-custom-endpoint",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=_pass_through_request(),
+        )
+        assert result is True
+
+        with pytest.raises(ProxyException) as exc_info:
+            await common_checks(
+                request_body={"model": "upstream-special-model", "prompt": "hi"},
+                team_object=team_object,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=valid_token,
+                request=_builtin_request(),
+            )
+        assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
 @pytest.mark.asyncio
 async def test_virtual_key_soft_budget_check_with_user_obj():
     """Test _virtual_key_soft_budget_check includes user_email when user_obj is provided"""
