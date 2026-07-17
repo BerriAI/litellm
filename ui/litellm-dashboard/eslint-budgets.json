@@ -2,5 +2,7 @@
   "@typescript-eslint/no-explicit-any": { "max": 2040, "target": 1500 },
   "no-console": { "max": 484, "target": 0 },
   "complexity": { "max": 140, "target": 80 },
-  "max-depth": { "max": 70, "target": 30 }
+  "max-depth": { "max": 70, "target": 30 },
+  "local/no-large-inline-object-arg": { "max": 560, "target": 300 },
+  "local/no-long-condition-chain": { "max": 265, "target": 120 }
 }

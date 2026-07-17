@@ -50,6 +50,8 @@ _STS_REGION_FROM_ENDPOINT_PATTERN = re.compile(
     r"(?:^|\.)sts(?:-fips)?\.([a-z0-9-]+)\.(?:amazonaws\.com(?:\.cn)?|vpce\.amazonaws\.com)"
 )
 
+SIGV4_COMPUTED_HEADERS = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
+
 
 class Boto3CredentialsInfo(BaseModel):
     credentials: Credentials
@@ -875,6 +877,15 @@ class BaseAWSLLM:
                     "Resource": "*",
                     "Condition": {"Bool": {"aws:SecureTransport": "true"}},
                 },
+                {
+                    "Sid": "BedrockMantleLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock-mantle:CreateInference",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
             ],
         }
         assume_role_params = {
@@ -1400,11 +1411,13 @@ class BaseAWSLLM:
 
             # Add back all original headers (including forwarded ones) after signature calculation
             for header_name, header_value in headers.items():
-                if header_value is not None:
+                if header_value is not None and header_name.lower() not in SIGV4_COMPUTED_HEADERS:
                     request.headers[header_name] = header_value
 
             if (
-                extra_headers is not None and "Authorization" in extra_headers
+                extra_headers is not None
+                and "Authorization" in extra_headers
+                and not extra_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
             ):  # prevent sigv4 from overwriting the auth header
                 request.headers["Authorization"] = extra_headers["Authorization"]
         prepped = request.prepare()
@@ -1527,9 +1540,15 @@ class BaseAWSLLM:
         # Add back original headers after signing. Only headers in SignedHeaders
         # are integrity-protected; forwarded headers (x-forwarded-*) must remain unsigned.
         for header_name, header_value in headers.items():
-            if header_value is not None:
+            if header_value is not None and header_name.lower() not in SIGV4_COMPUTED_HEADERS:
                 request_headers_dict[header_name] = header_value
-        if headers is not None and "Authorization" in headers:  # prevent sigv4 from overwriting the auth header
-            request_headers_dict["Authorization"] = headers["Authorization"]
+        incoming_authorization = next(
+            (value for name, value in headers.items() if name.lower() == "authorization" and value is not None),
+            None,
+        )
+        if incoming_authorization is not None and not incoming_authorization.startswith(
+            "AWS4-HMAC-SHA256"
+        ):  # prevent sigv4 from overwriting the auth header
+            request_headers_dict["Authorization"] = incoming_authorization
 
         return request_headers_dict, request.body

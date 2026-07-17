@@ -12,6 +12,7 @@ import time
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from e2e_http import (
     NoBody,
@@ -28,6 +29,9 @@ from models import (
     CustomerDeleteBody,
     EmbedBody,
     EmbedResponse,
+    FileListResponse,
+    FineTuningJobsParams,
+    FineTuningJobsResponse,
     KeyDeleteBody,
     KeyGenerateBody,
     KeyGenerateResponse,
@@ -42,10 +46,13 @@ from models import (
     ModelMode,
     ModelNewBody,
     ModelNewResponse,
+    ModelsListResponse,
     OcrBody,
     OcrResponse,
     SpendLogRow,
     SpendLogs,
+    SpendLogsPage,
+    SpendLogsPageParams,
     SpendLogsParams,
 )
 from e2e_config import (
@@ -119,27 +126,83 @@ class Gateway:
             )
         ).data
 
+    def list_files(self, key: str) -> Result[FileListResponse]:
+        return self.transport.get(
+            "/v1/files",
+            headers=self.transport.bearer(key),
+            params=NoBody(),
+            response_type=FileListResponse,
+        )
+
+    def list_fine_tuning_jobs(
+        self, key: str, params: FineTuningJobsParams
+    ) -> Result[FineTuningJobsResponse]:
+        return self.transport.get(
+            "/v1/fine_tuning/jobs",
+            headers=self.transport.bearer(key),
+            params=params,
+            response_type=FineTuningJobsResponse,
+        )
+
     def create_model(
         self,
         model_name: str,
         litellm_params: LiteLLMParamsBody,
         mode: ModelMode | None = None,
     ) -> str:
-        """Register a deployment under `model_name` (id == model_name) and return the
-        model_id. add_deployment runs synchronously in /model/new, so the model is
-        callable as soon as this returns."""
-        return unwrap(
+        """Register a deployment under `model_name` and return its proxy-assigned
+        model_id, once the model is actually servable on the data plane.
+
+        /model/new is a control-plane route; in a split control/data-plane
+        deployment the gateway (data plane, which serves /chat, /ocr, ...) only
+        picks the new model up on its next DB reload, so a call issued the instant
+        this returns can race the reload and 400 with "Invalid model name passed".
+        We therefore poll the data-plane /v1/models until the model appears before
+        handing back, so callers can invoke it immediately. In the monolithic case
+        it is already present on the first poll, so this adds one request."""
+        model_id = unwrap(
             self.transport.post(
                 "/model/new",
                 headers=self.transport.master,
                 json=ModelNewBody(
                     model_name=model_name,
                     litellm_params=litellm_params,
-                    model_info=ModelInfoBody(id=model_name, mode=mode),
+                    model_info=ModelInfoBody(mode=mode),
                 ),
                 response_type=ModelNewResponse,
             )
         ).model_id
+        self._await_model_servable(model_name)
+        return model_id
+
+    def _await_model_servable(self, model_name: str) -> None:
+        """Block until the data plane lists `model_name`, or fail loudly if it does
+        not within poll_timeout (a real propagation/config problem, surfaced here
+        instead of as a downstream "Invalid model name passed")."""
+        deadline = time.monotonic() + self.poll_timeout
+        last_result: Result[ModelsListResponse] | None = None
+        while time.monotonic() < deadline:
+            last_result = self.transport.get(
+                "/v1/models",
+                headers=self.transport.master,
+                params=NoBody(),
+                response_type=ModelsListResponse,
+            )
+            if isinstance(last_result, Success) and any(
+                entry.id == model_name for entry in last_result.data.data
+            ):
+                return
+            time.sleep(self.poll_interval)
+        last_error = (
+            f"; last /v1/models poll did not succeed: {last_result}"
+            if last_result is not None and not isinstance(last_result, Success)
+            else ""
+        )
+        raise AssertionError(
+            f"model {model_name!r} was created but never became servable on the data "
+            f"plane within {self.poll_timeout}s of /model/new (control/data-plane "
+            f"propagation or STORE_MODEL_IN_DB reload issue){last_error}"
+        )
 
     def delete_model(self, model_id: str) -> None:
         result = self.transport.post(
@@ -195,6 +258,28 @@ class Gateway:
             case _:
                 return []
 
+    def spend_logs_window(self, *, start: datetime, end: datetime) -> list[SpendLogRow]:
+        def fetch(page: int) -> SpendLogsPage:
+            return unwrap(
+                self.transport.get(
+                    "/spend/logs/v2",
+                    headers=self.transport.master,
+                    params=SpendLogsPageParams(
+                        start_date=start.strftime("%Y-%m-%d %H:%M:%S"),
+                        end_date=end.strftime("%Y-%m-%d %H:%M:%S"),
+                        page=page,
+                        page_size=100,
+                    ),
+                    response_type=SpendLogsPage,
+                )
+            )
+
+        first = fetch(1)
+        return [
+            *first.data,
+            *(row for page in range(2, first.total_pages + 1) for row in fetch(page).data),
+        ]
+
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
@@ -234,21 +319,31 @@ class Gateway:
         return self.transport.probe(path, params=params)
 
 
-def build_gateway() -> Gateway:
+def build_gateway(
+    *,
+    base_url: str = PROXY_BASE_URL,
+    master_key: str = MASTER_KEY,
+    control_plane_base_url: str = CONTROL_PLANE_BASE_URL,
+) -> Gateway:
     """The Gateway every suite's client is built from: a SplitTransport that routes
     LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
     control plane (CONTROL_PLANE_BASE_URL), with the shared poll budget. The two
-    base URLs are the same for a monolithic proxy, so routing is then a no-op."""
+    base URLs are the same for a monolithic proxy, so routing is then a no-op.
+
+    The endpoints are injectable for callers that resolve the proxy some other
+    way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
+    pass all three together, since a caller that overrides only the data plane
+    would leave management calls pointed at the env default."""
     return Gateway(
         transport=SplitTransport(
             data=HttpTransport(
-                base_url=PROXY_BASE_URL,
-                master_key=MASTER_KEY,
+                base_url=base_url,
+                master_key=master_key,
                 request_timeout=REQUEST_TIMEOUT,
             ),
             control=HttpTransport(
-                base_url=CONTROL_PLANE_BASE_URL,
-                master_key=MASTER_KEY,
+                base_url=control_plane_base_url,
+                master_key=master_key,
                 request_timeout=REQUEST_TIMEOUT,
             ),
         ),

@@ -3,6 +3,7 @@ import {
   clearStoredReturnUrl,
   consumeReturnUrl,
   getCurrentUrl,
+  getLoginUrl,
   getReturnUrl,
   getReturnUrlFromParams,
   getStoredReturnUrl,
@@ -95,6 +96,29 @@ describe("returnUrlUtils", () => {
 
       const returnUrl = getReturnUrlFromParams();
       expect(returnUrl).toBeNull();
+    });
+  });
+
+  describe("getLoginUrl", () => {
+    it("should build a relative login URL with a trailing slash", () => {
+      expect(getLoginUrl()).toBe("/ui/login/");
+    });
+
+    it("should prepend the given base URL and keep the trailing slash", () => {
+      expect(getLoginUrl("http://proxy.example")).toBe("http://proxy.example/ui/login/");
+    });
+
+    it("should keep the trailing slash before the query when composed with buildLoginUrlWithReturn", () => {
+      Object.defineProperty(window, "location", {
+        value: {
+          ...window.location,
+          href: "http://localhost:3000/ui?page=api-keys",
+        },
+        writable: true,
+      });
+
+      const loginUrl = buildLoginUrlWithReturn(getLoginUrl());
+      expect(loginUrl).toBe("/ui/login/?redirect_to=http%3A%2F%2Flocalhost%3A3000%2Fui%3Fpage%3Dapi-keys");
     });
   });
 

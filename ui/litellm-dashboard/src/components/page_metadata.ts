@@ -7,7 +7,6 @@
 export const pageDescriptions: Record<string, string> = {
   "api-keys": "Manage virtual keys for API access and authentication",
   "llm-playground": "Interactive playground for testing LLM requests",
-  chat: "Chat with an LLM and connect your own MCP server credentials via OAuth",
   models: "Configure and manage LLM models and endpoints",
   agents: "Create and manage AI agents",
   agentic: "Manage agentic resources: agents, workflow runs, and memory",
@@ -31,7 +30,7 @@ export const pageDescriptions: Record<string, string> = {
   api_ref: "Browse API documentation and endpoints",
   "model-hub-table": "Explore available AI models and providers",
   "learning-resources": "Access tutorials and documentation",
-  caching: "Configure response caching settings",
+  caching: "Configure response caching and coordination Redis settings",
   "transform-request": "Set up request transformation rules",
   "cost-tracking": "Track and analyze API costs",
   "ui-theme": "Customize dashboard appearance",
