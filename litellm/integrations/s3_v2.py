@@ -55,6 +55,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
         s3_server_side_encryption: Optional[str] = None,
+        s3_server_side_encryption_kms_key_id: str | None = None,
         s3_callback_params_override: Optional[dict] = None,
         **kwargs,
     ):
@@ -94,6 +95,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_use_key_prefix=s3_use_key_prefix,
                 s3_use_virtual_hosted_style=s3_use_virtual_hosted_style,
                 s3_server_side_encryption=s3_server_side_encryption,
+                s3_server_side_encryption_kms_key_id=s3_server_side_encryption_kms_key_id,
             )
             verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
 
@@ -148,6 +150,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_use_key_prefix: bool = False,
         s3_use_virtual_hosted_style: bool = False,
         s3_server_side_encryption: Optional[str] = None,
+        s3_server_side_encryption_kms_key_id: str | None = None,
         params_source: Optional[dict] = None,
     ):
         """
@@ -198,6 +201,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         )
 
         self.s3_server_side_encryption = params.get("s3_server_side_encryption") or s3_server_side_encryption
+
+        self.s3_server_side_encryption_kms_key_id = (
+            params.get("s3_server_side_encryption_kms_key_id") or s3_server_side_encryption_kms_key_id
+        )
 
         return
 
@@ -338,6 +345,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 **(
                     {"x-amz-server-side-encryption": self.s3_server_side_encryption}
                     if self.s3_server_side_encryption
+                    else {}
+                ),
+                **(
+                    {"x-amz-server-side-encryption-aws-kms-key-id": self.s3_server_side_encryption_kms_key_id}
+                    if self.s3_server_side_encryption_kms_key_id
                     else {}
                 ),
             }
@@ -513,6 +525,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 **(
                     {"x-amz-server-side-encryption": self.s3_server_side_encryption}
                     if self.s3_server_side_encryption
+                    else {}
+                ),
+                **(
+                    {"x-amz-server-side-encryption-aws-kms-key-id": self.s3_server_side_encryption_kms_key_id}
+                    if self.s3_server_side_encryption_kms_key_id
                     else {}
                 ),
             }
