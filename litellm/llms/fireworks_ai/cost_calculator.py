@@ -2,7 +2,7 @@
 For calculating cost of fireworks ai serverless inference models.
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 from litellm.constants import (
     FIREWORKS_AI_4_B,
@@ -75,8 +75,17 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         model_info = get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
 
     ## CALCULATE INPUT COST
+    input_cost_per_token: float = model_info["input_cost_per_token"]
+    cache_read_cost: Optional[float] = model_info.get("cache_read_input_token_cost")
 
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
+    cached_tokens: int = 0
+    if usage.prompt_tokens_details:
+        cached_tokens = usage.prompt_tokens_details.cached_tokens or 0
+
+    non_cached_tokens: int = max(usage["prompt_tokens"] - cached_tokens, 0)
+    prompt_cost: float = non_cached_tokens * input_cost_per_token + cached_tokens * (
+        cache_read_cost if cache_read_cost is not None else input_cost_per_token
+    )
 
     ## CALCULATE OUTPUT COST
     completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
