@@ -3379,3 +3379,17 @@ class TestBedrockGuardrailOutputScope:
                 guardrailVersion="DRAFT",
                 outputScope="EVERYTHING",  # type: ignore[arg-type]
             )
+
+    def test_output_scope_warns_when_checks_mode_active(self):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.verbose_proxy_logger.warning"
+        ) as mock_warning:
+            BedrockGuardrail(
+                checks={"contentFilter": {"type": "SEXUAL"}},
+                outputScope="FULL",
+            )
+            mock_warning.assert_any_call(
+                "Bedrock Guardrail: outputScope has no effect with 'checks' "
+                "(InvokeGuardrailChecks does not accept outputScope; it is only "
+                "used by the ApplyGuardrail API)."
+            )

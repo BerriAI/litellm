@@ -244,6 +244,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 "effect with 'checks' (InvokeGuardrailChecks is detect-only)."
             )
 
+        if self.checks is not None and self.output_scope is not None:
+            verbose_proxy_logger.warning(
+                "Bedrock Guardrail: outputScope has no effect with 'checks' "
+                "(InvokeGuardrailChecks does not accept outputScope; it is only "
+                "used by the ApplyGuardrail API)."
+            )
+
         verbose_proxy_logger.debug(
             "Bedrock Guardrail initialized with guardrailIdentifier: %s, guardrailVersion: %s, checks: %s",
             self.guardrailIdentifier,
