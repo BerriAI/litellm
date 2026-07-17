@@ -81,9 +81,14 @@ pub(super) fn string_headers(
 }
 
 pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
+    header_value(headers, name).is_some()
+}
+
+pub(super) fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers
         .iter()
-        .any(|(key, _)| key.eq_ignore_ascii_case(name))
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
 }
 
 fn document_url_field(document: &Value) -> CoreResult<Option<(&str, &str)>> {

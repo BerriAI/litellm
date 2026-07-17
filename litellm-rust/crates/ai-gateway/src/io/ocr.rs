@@ -12,7 +12,7 @@ use litellm_core::ocr::transformation::{
     OcrAuth, OcrAuthStrategy, OcrDocumentPreparation, OcrResponseHandling,
 };
 use litellm_core::providers::vertex_ai::ocr::transformation::{
-    classify_vertex_bearer, VertexTokenSource,
+    classify_vertex_bearer, reject_google_api_key_authorization, VertexTokenSource,
 };
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
@@ -22,8 +22,8 @@ use crate::io::vertex_auth;
 mod common_utils;
 
 use common_utils::{
-    convert_document_url_to_data_uri, has_header, ocr_provider_config, poll_document_intelligence,
-    string_headers, truncate_error_body, upload_reducto_document,
+    convert_document_url_to_data_uri, has_header, header_value, ocr_provider_config,
+    poll_document_intelligence, string_headers, truncate_error_body, upload_reducto_document,
 };
 
 /// OCR over large documents can take a while; bound it generously rather than
@@ -111,6 +111,11 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let headers = string_headers(request.extra_headers)?;
     let auth_strategy = config.auth_strategy();
     let api_key = if has_header(&headers, auth_strategy.header_name()) {
+        if config.ocr_auth() == OcrAuth::VertexOauth {
+            if let Some(value) = header_value(&headers, auth_strategy.header_name()) {
+                reject_google_api_key_authorization(value)?;
+            }
+        }
         None
     } else {
         Some(match config.ocr_auth() {
@@ -522,6 +527,43 @@ mod tests {
         })
         .await
         .expect_err("google api key is rejected");
+
+        match err {
+            CoreError::Auth(message) => assert!(message.contains("OAuth"), "{message}"),
+            other => panic!("expected auth error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn vertex_ocr_rejects_google_api_key_in_caller_authorization_header_before_upstream() {
+        let mut optional_params = Map::new();
+        optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+        optional_params.insert(
+            "vertex_location".to_string(),
+            Value::String("global".into()),
+        );
+
+        let mut headers = Map::new();
+        headers.insert(
+            "Authorization".to_string(),
+            Value::String("Bearer AIzaSyExampleApiKeyValue000000000000000".to_string()),
+        );
+
+        let err = ocr(OcrRequest {
+            model: "mistral-ocr-maas",
+            document: json!({
+                "type": "image_url",
+                "image_url": "data:image/png;base64,abc"
+            }),
+            api_key: None,
+            api_base: Some("http://192.0.2.1:9"),
+            custom_llm_provider: "vertex_ai",
+            extra_headers: Some(headers),
+            optional_params,
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect_err("google api key in authorization header is rejected");
 
         match err {
             CoreError::Auth(message) => assert!(message.contains("OAuth"), "{message}"),

@@ -51,6 +51,14 @@ fn is_google_api_key(token: &str) -> bool {
     token.starts_with(GOOGLE_API_KEY_PREFIX)
 }
 
+fn google_api_key_not_oauth_error() -> CoreError {
+    CoreError::Auth(
+        "Received a Google API key (AIza...) for Vertex AI, which is not an OAuth access token. \
+         Provide service-account credentials/ADC or an OAuth access token instead"
+            .to_string(),
+    )
+}
+
 pub fn classify_vertex_bearer(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
@@ -63,14 +71,23 @@ pub fn classify_vertex_bearer(
         .or_else(|| env_lookup(VERTEXAI_API_KEY_ENV).filter(|key| !key.trim().is_empty()));
 
     match token {
-        Some(token) if is_google_api_key(token.trim()) => Err(CoreError::Auth(
-            "Received a Google API key (AIza...) for Vertex AI, which is not an OAuth access token. \
-             Provide service-account credentials/ADC or an OAuth access token instead"
-                .to_string(),
-        )),
+        Some(token) if is_google_api_key(token.trim()) => Err(google_api_key_not_oauth_error()),
         Some(token) => Ok(VertexTokenSource::Explicit(token.trim().to_string())),
         None => Ok(VertexTokenSource::Mint),
     }
+}
+
+pub fn reject_google_api_key_authorization(header_value: &str) -> CoreResult<()> {
+    let trimmed = header_value.trim();
+    let token = trimmed
+        .strip_prefix("Bearer ")
+        .or_else(|| trimmed.strip_prefix("bearer "))
+        .unwrap_or(trimmed)
+        .trim();
+    if is_google_api_key(token) {
+        return Err(google_api_key_not_oauth_error());
+    }
+    Ok(())
 }
 
 fn vertex_project(
@@ -491,6 +508,27 @@ mod tests {
         })
         .expect_err("google api key from env is rejected");
         assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+    }
+
+    #[test]
+    fn reject_google_api_key_authorization_rejects_bearer_api_key() {
+        let err = reject_google_api_key_authorization("Bearer AIzaSyExampleApiKeyValue")
+            .expect_err("bearer api key rejected");
+        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+
+        let err = reject_google_api_key_authorization("  bearer   AIzaSyExampleApiKeyValue  ")
+            .expect_err("lowercase bearer api key rejected");
+        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+
+        let err = reject_google_api_key_authorization("AIzaSyExampleApiKeyValue")
+            .expect_err("raw api key rejected");
+        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+    }
+
+    #[test]
+    fn reject_google_api_key_authorization_allows_oauth_bearer() {
+        reject_google_api_key_authorization("Bearer ya29.real-oauth-token")
+            .expect("oauth bearer allowed");
     }
 
     #[test]
