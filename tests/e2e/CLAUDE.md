@@ -131,7 +131,7 @@ Quota Management - behavior features (entity- or config-driven caps and their ac
 quota_management.<behavior>.<variant>.<assertion>
   behavior  : ratelimit | budget | spend_tracking
   variant   : <ratelimit>      rpm | tpm | priority_generous | priority_strict
-              <budget>         key | internal_user | end_user | organization | team_member | tag
+              <budget>         key | internal_user | end_user | organization | team | team_member | tag
                                | model_max | soft | key_multi_window | team_multi_window
                                | fallback | spend_counter
               <spend_tracking> chat_completions | stream | embeddings | cache_hit | key_rollup

@@ -2250,43 +2250,6 @@ if MCP_AVAILABLE:
         server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
         return [t for t in tools if strip_known_server_prefix(t.name, server) in allowed_tool_names]
 
-    async def _merge_toolset_permissions(
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-    ) -> Optional[UserAPIKeyAuth]:
-        """
-        Resolve mcp_toolsets on the key's object_permission into tool-level permissions
-        and merge them (union) into object_permission.mcp_tool_permissions.
-
-        Returns the (possibly mutated copy of) user_api_key_auth.
-        """
-        if user_api_key_auth is None:
-            return None
-        op = user_api_key_auth.object_permission
-        if op is None:
-            return user_api_key_auth
-        toolset_ids = getattr(op, "mcp_toolsets", None) or []
-        if not toolset_ids:
-            return user_api_key_auth
-
-        toolset_perms = await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=toolset_ids)
-        if not toolset_perms:
-            return user_api_key_auth
-
-        # Merge toolset_perms into existing mcp_tool_permissions (union)
-        existing = dict(op.mcp_tool_permissions or {})
-        for server_id, tool_names in toolset_perms.items():
-            existing_tools = existing.get(server_id, [])
-            merged = list(set(existing_tools) | set(tool_names))
-            existing[server_id] = merged
-
-        # Build updated object_permission with merged tool permissions and server IDs.
-        # Union the toolset's server IDs into mcp_servers so downstream server-level
-        # filtering doesn't silently drop servers that the toolset references but that
-        # aren't already in the key's explicit mcp_servers list.
-        merged_servers = list(set(op.mcp_servers or []) | set(existing.keys()))
-        updated_op = op.model_copy(update={"mcp_servers": merged_servers, "mcp_tool_permissions": existing})
-        return user_api_key_auth.model_copy(update={"object_permission": updated_op})
-
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
@@ -2314,10 +2277,6 @@ if MCP_AVAILABLE:
         """
         if not MCP_AVAILABLE:
             return AggregateToolListing(tools=[], outcomes={})
-
-        # Resolve toolset permissions and merge into the key's object_permission
-        # so that the existing filter_tools_by_key_team_permissions logic picks them up.
-        user_api_key_auth = await _merge_toolset_permissions(user_api_key_auth)
 
         try:
             listing = await _get_tools_from_mcp_servers(

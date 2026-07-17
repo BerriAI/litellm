@@ -269,4 +269,22 @@ describe("ComplexityRouterConfig", () => {
     );
     expect(screen.getAllByText("This tier is required")).toHaveLength(1);
   });
+
+  it("renders the escalation keywords section with current keywords when the handler is provided", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        escalationKeywords={["LITELLM ESCALATE"]}
+        onEscalationKeywordsChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Escalation Keywords"));
+    expect(screen.getByText("Escalation Keywords")).toBeInTheDocument();
+    expect(screen.getByText("LITELLM ESCALATE")).toBeInTheDocument();
+  });
+
+  it("hides the escalation keywords section when no handler is provided", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.queryByText("Advanced: Escalation Keywords")).not.toBeInTheDocument();
+  });
 });

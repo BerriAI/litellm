@@ -522,20 +522,19 @@ if MCP_AVAILABLE:
         # enforced even when no allowlist is set (matches the SSE/HTTP path).
         tools = filter_tools_by_allowed_tools(tools, server)
 
-        # Filter tools based on user_api_key_auth.object_permission.mcp_tool_permissions
-        # This provides per-key/team/org control over which tools can be accessed
-        if (
-            user_api_key_auth
-            and user_api_key_auth.object_permission
-            and user_api_key_auth.object_permission.mcp_tool_permissions
-        ):
-            # Dict keys may be server_ids OR names/aliases; normalize so lookup
-            # by concrete server_id resolves name-keyed restrictions too.
-            allowed_tools_for_server = global_mcp_server_manager.expand_tool_permissions(
-                user_api_key_auth.object_permission.mcp_tool_permissions
-            ).get(server.server_id)
-            if allowed_tools_for_server is not None and len(allowed_tools_for_server) > 0:
-                # Filter tools to only include those in the allowed list
+        # Filter by the key's effective tool permissions through the same
+        # primitive the MCP protocol path uses (direct grants, toolset grants,
+        # and team/agent/org ceilings), so REST listing cannot drift from it
+        if user_api_key_auth:
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler,
+            )
+
+            allowed_tools_for_server = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id=server.server_id,
+                user_api_key_auth=user_api_key_auth,
+            )
+            if allowed_tools_for_server is not None:
                 tools = [tool for tool in tools if _tool_name_matches(tool.name, allowed_tools_for_server)]
 
         return _create_tool_response_objects(tools, server)
