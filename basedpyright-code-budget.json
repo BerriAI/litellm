@@ -24,7 +24,7 @@
     "limit": 42
   },
   "reportExplicitAny": {
-    "limit": 10393
+    "limit": 10389
   },
   "reportFunctionMemberAccess": {
     "limit": 11

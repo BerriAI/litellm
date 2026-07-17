@@ -109,6 +109,27 @@ def test_load_rust_messages_returns_injected_impl():
     assert rust_messages.load_rust_messages() is bridge
 
 
+def test_configuring_messages_does_not_enable_ocr():
+    from litellm.rust_bridge.ocr import rust_ocr_enabled
+
+    litellm.use_litellm_rust(False)
+    assert rust_ocr_enabled() is False
+
+    litellm.use_litellm_rust(True, messages=RecordingMessages())
+
+    assert rust_ocr_enabled() is False
+
+
+def test_bare_use_litellm_rust_still_toggles_ocr():
+    from litellm.rust_bridge.ocr import rust_ocr_enabled
+
+    litellm.use_litellm_rust(True)
+    assert rust_ocr_enabled() is True
+
+    litellm.use_litellm_rust(False)
+    assert rust_ocr_enabled() is False
+
+
 def test_load_rust_amessages_returns_injected_impl():
     bridge = RecordingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)

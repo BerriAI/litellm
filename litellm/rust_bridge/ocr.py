@@ -73,21 +73,24 @@ def use_litellm_rust(
     amessages: RustAmessages | None | _Unset = _UNSET,
 ) -> None:
     global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
-    _rust_ocr_enabled = enabled
+    configuring_ocr = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
+    configuring_messages = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
+    if configuring_ocr or not configuring_messages:
+        _rust_ocr_enabled = enabled
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
         _rust_aocr_impl = aocr
-    if isinstance(messages, _Unset) and isinstance(amessages, _Unset):
+    if not configuring_messages:
         return
     from litellm.rust_bridge.messages import set_rust_messages
 
     if not isinstance(messages, _Unset) and not isinstance(amessages, _Unset):
-        set_rust_messages(enabled, messages=messages, amessages=amessages)
+        set_rust_messages(messages=messages, amessages=amessages)
     elif not isinstance(messages, _Unset):
-        set_rust_messages(enabled, messages=messages)
+        set_rust_messages(messages=messages)
     else:
-        set_rust_messages(enabled, amessages=amessages)
+        set_rust_messages(amessages=amessages)
 
 
 def rust_ocr_enabled() -> bool:

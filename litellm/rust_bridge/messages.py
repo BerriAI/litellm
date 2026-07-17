@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Awaitable, Final, Protocol, Union, cast
 
@@ -46,41 +45,24 @@ class _Unset:
 _UNSET: Final[_Unset] = _Unset()
 
 
-def _env_enables_rust_messages() -> bool:
-    return os.getenv("LITELLM_USE_RUST_MESSAGES", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 @dataclass(slots=True)
 class _RustMessagesState:
-    enabled: bool
     messages: RustMessages | None = None
     amessages: RustAmessages | None = None
 
 
-_STATE: Final[_RustMessagesState] = _RustMessagesState(enabled=_env_enables_rust_messages())
+_STATE: Final[_RustMessagesState] = _RustMessagesState()
 
 
 def set_rust_messages(
-    enabled: bool | _Unset = _UNSET,
     *,
     messages: RustMessages | None | _Unset = _UNSET,
     amessages: RustAmessages | None | _Unset = _UNSET,
 ) -> None:
-    if not isinstance(enabled, _Unset):
-        _STATE.enabled = enabled
     if not isinstance(messages, _Unset):
         _STATE.messages = messages
     if not isinstance(amessages, _Unset):
         _STATE.amessages = amessages
-
-
-def rust_messages_enabled() -> bool:
-    return _STATE.enabled
 
 
 def load_rust_messages() -> RustMessages | None:
