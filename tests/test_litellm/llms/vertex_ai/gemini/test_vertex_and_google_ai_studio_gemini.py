@@ -474,6 +474,22 @@ def test_vertex_ai_empty_content():
                 reasoning_tokens=5,
             ),
         ),
+        (
+            UsageMetadata(
+                promptTokenCount=4647,
+                candidatesTokenCount=1495,
+                totalTokenCount=29426,
+                thoughtsTokenCount=10785,
+                toolUsePromptTokenCount=12499,
+            ),
+            False,
+            Usage(
+                prompt_tokens=17146,
+                completion_tokens=12280,
+                total_tokens=29426,
+                reasoning_tokens=10785,
+            ),
+        ),
     ],
 )
 def test_vertex_ai_candidate_token_count_inclusive(
@@ -492,6 +508,43 @@ def test_vertex_ai_candidate_token_count_inclusive(
     assert usage.prompt_tokens == expected_usage.prompt_tokens
     assert usage.completion_tokens == expected_usage.completion_tokens
     assert usage.total_tokens == expected_usage.total_tokens
+
+
+def test_vertex_ai_grounded_usage_surfaces_tool_use_tokens():
+    """
+    Grounded Gemini requests (googleSearch) return toolUsePromptTokenCount as part of totalTokenCount.
+    Regression for https://github.com/BerriAI/litellm/issues/33530: it must be folded into
+    prompt_tokens (so prompt_tokens + completion_tokens == total_tokens) and surfaced on
+    prompt_tokens_details.tool_use_tokens.
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = UsageMetadata(
+        promptTokenCount=4647,
+        candidatesTokenCount=1495,
+        totalTokenCount=29426,
+        thoughtsTokenCount=10785,
+        toolUsePromptTokenCount=12499,
+    )
+
+    usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
+    assert usage.prompt_tokens_details.tool_use_tokens == 12499
+
+
+def test_vertex_ai_non_grounded_usage_omits_tool_use_tokens():
+    """Non-grounded responses must not surface a tool_use_tokens field on prompt_tokens_details."""
+    v = VertexGeminiConfig()
+    usage_metadata = UsageMetadata(
+        promptTokenCount=10,
+        candidatesTokenCount=10,
+        totalTokenCount=20,
+    )
+
+    usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert usage.prompt_tokens == 10
+    assert not hasattr(usage.prompt_tokens_details, "tool_use_tokens")
 
 
 def test_streaming_chunk_includes_reasoning_tokens():
