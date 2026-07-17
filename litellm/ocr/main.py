@@ -43,57 +43,62 @@ def _rust_ocr_error_to_public_exception(
     provider = custom_llm_provider or "mistral"
     status_code = err.status_code
     message = err.message
-    if status_code is None:
-        return litellm.APIConnectionError(
-            message=message, llm_provider=provider, model=model
-        )
-    if status_code == 400:
-        return litellm.BadRequestError(
-            message=message, model=model, llm_provider=provider
-        )
-    if status_code == 401:
-        return litellm.AuthenticationError(
-            message=message, llm_provider=provider, model=model
-        )
-    if status_code == 403:
-        return litellm.PermissionDeniedError(
-            message=message,
-            llm_provider=provider,
-            model=model,
-            response=_ocr_error_response(403),
-        )
-    if status_code == 404:
-        return litellm.NotFoundError(
-            message=message, model=model, llm_provider=provider
-        )
-    if status_code == 408:
-        return litellm.Timeout(message=message, model=model, llm_provider=provider)
-    if status_code == 422:
-        return litellm.UnprocessableEntityError(
-            message=message,
-            model=model,
-            llm_provider=provider,
-            response=_ocr_error_response(422),
-        )
-    if status_code == 429:
-        return litellm.RateLimitError(
-            message=message, llm_provider=provider, model=model
-        )
-    if status_code == 500:
-        return litellm.InternalServerError(
-            message=message, llm_provider=provider, model=model
-        )
-    if status_code == 502:
-        return litellm.BadGatewayError(
-            message=message, llm_provider=provider, model=model
-        )
-    if status_code == 503:
-        return litellm.ServiceUnavailableError(
-            message=message, llm_provider=provider, model=model
-        )
-    return litellm.APIError(
-        status_code=status_code, message=message, llm_provider=provider, model=model
-    )
+    match status_code:
+        case None:
+            return litellm.APIConnectionError(
+                message=message, llm_provider=provider, model=model
+            )
+        case 400:
+            return litellm.BadRequestError(
+                message=message, model=model, llm_provider=provider
+            )
+        case 401:
+            return litellm.AuthenticationError(
+                message=message, llm_provider=provider, model=model
+            )
+        case 403:
+            return litellm.PermissionDeniedError(
+                message=message,
+                llm_provider=provider,
+                model=model,
+                response=_ocr_error_response(403),
+            )
+        case 404:
+            return litellm.NotFoundError(
+                message=message, model=model, llm_provider=provider
+            )
+        case 408:
+            return litellm.Timeout(message=message, model=model, llm_provider=provider)
+        case 422:
+            return litellm.UnprocessableEntityError(
+                message=message,
+                model=model,
+                llm_provider=provider,
+                response=_ocr_error_response(422),
+            )
+        case 429:
+            return litellm.RateLimitError(
+                message=message, llm_provider=provider, model=model
+            )
+        case 500:
+            return litellm.InternalServerError(
+                message=message, llm_provider=provider, model=model
+            )
+        case 502:
+            return litellm.BadGatewayError(
+                message=message, llm_provider=provider, model=model
+            )
+        case 503:
+            return litellm.ServiceUnavailableError(
+                message=message, llm_provider=provider, model=model
+            )
+        case _:
+            return litellm.APIError(
+                status_code=status_code,
+                message=message,
+                llm_provider=provider,
+                model=model,
+            )
 
 
 def _map_ocr_exception(

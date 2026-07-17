@@ -3,6 +3,7 @@
 import importlib
 import builtins
 import types
+from unittest.mock import Mock
 
 import httpx
 import pydantic
@@ -437,21 +438,16 @@ def test_ocr_routes_azure_ai_to_rust_by_default(fake_bridge):
 
 def test_ocr_exception_type_uses_resolved_provider_context(
     monkeypatch: pytest.MonkeyPatch,
-):
-    captured: dict[str, object] = {}
-
-    def fake_exception_type(**kwargs: object) -> CapturedException:
-        captured.update(kwargs)
-        return CapturedException("wrapped")
-
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+) -> None:
+    exception_type = Mock(return_value=CapturedException("wrapped"))
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", exception_type)
     rust_bridge._set_rust_ocr_bridge(ocr=RaisingBridge())
 
     with pytest.raises(CapturedException):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
-    assert captured["model"] == "mistral-ocr-latest"
-    assert captured["custom_llm_provider"] == "mistral"
+    assert exception_type.call_args.kwargs["model"] == "mistral-ocr-latest"
+    assert exception_type.call_args.kwargs["custom_llm_provider"] == "mistral"
 
 
 @pytest.mark.asyncio
@@ -479,21 +475,16 @@ async def test_aocr_routes_to_async_rust_by_default(fake_async_bridge):
 @pytest.mark.asyncio
 async def test_aocr_exception_type_uses_resolved_provider_context(
     monkeypatch: pytest.MonkeyPatch,
-):
-    captured: dict[str, object] = {}
-
-    def fake_exception_type(**kwargs: object) -> CapturedException:
-        captured.update(kwargs)
-        return CapturedException("wrapped")
-
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+) -> None:
+    exception_type = Mock(return_value=CapturedException("wrapped"))
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", exception_type)
     rust_bridge._set_rust_ocr_bridge(aocr=RaisingAsyncBridge())
 
     with pytest.raises(CapturedException):
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
-    assert captured["model"] == "mistral-ocr-latest"
-    assert captured["custom_llm_provider"] == "mistral"
+    assert exception_type.call_args.kwargs["model"] == "mistral-ocr-latest"
+    assert exception_type.call_args.kwargs["custom_llm_provider"] == "mistral"
 
 
 def test_ocr_forwards_timeout_to_rust(fake_bridge):
@@ -601,7 +592,9 @@ UNKNOWN_STATUS_CASES = [
 
 
 @pytest.mark.parametrize("status_code", UNKNOWN_STATUS_CASES)
-def test_rust_ocr_error_unknown_status_preserves_exact_status(status_code):
+def test_rust_ocr_error_unknown_status_preserves_exact_status(
+    status_code: int,
+) -> None:
     exc = ocr_main._rust_ocr_error_to_public_exception(
         RustOcrError("upstream boom", status_code),
         model="mistral-ocr-latest",
@@ -662,14 +655,11 @@ def test_map_ocr_exception_maps_input_error_to_bad_request():
     assert "Invalid document type" in str(result)
 
 
-def test_map_ocr_exception_keeps_plain_value_error_off_bad_request(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def fake_exception_type(**kwargs: object) -> CapturedException:
-        captured.update(kwargs)
-        return CapturedException("wrapped")
-
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+def test_map_ocr_exception_keeps_plain_value_error_off_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exception_type = Mock(return_value=CapturedException("wrapped"))
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", exception_type)
 
     internal = ValueError("internal invariant broke")
     result = ocr_main._map_ocr_exception(
@@ -681,31 +671,31 @@ def test_map_ocr_exception_keeps_plain_value_error_off_bad_request(monkeypatch):
     )
 
     assert isinstance(result, CapturedException)
-    assert captured["original_exception"] is internal
+    assert exception_type.call_args.kwargs["original_exception"] is internal
 
 
-def test_map_ocr_exception_keeps_validation_error_off_bad_request(monkeypatch):
+def test_map_ocr_exception_keeps_validation_error_off_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _Model(pydantic.BaseModel):
         value: int
 
-    try:
-        _Model(value="not-an-int")  # type: ignore[arg-type]
-    except pydantic.ValidationError as validation_error:
-        captured: dict[str, object] = {}
+    adapter = pydantic.TypeAdapter(_Model)
+    with pytest.raises(pydantic.ValidationError) as validation_info:
+        adapter.validate_python({"value": "not-an-int"})
 
-        def fake_exception_type(**kwargs: object) -> CapturedException:
-            captured.update(kwargs)
-            return CapturedException("wrapped")
+    exception_type = Mock(return_value=CapturedException("wrapped"))
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", exception_type)
 
-        monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+    result = ocr_main._map_ocr_exception(
+        validation_info.value,
+        model="mistral-ocr-latest",
+        custom_llm_provider="mistral",
+        completion_kwargs={},
+        kwargs={},
+    )
 
-        result = ocr_main._map_ocr_exception(
-            validation_error,
-            model="mistral-ocr-latest",
-            custom_llm_provider="mistral",
-            completion_kwargs={},
-            kwargs={},
-        )
-
-        assert isinstance(result, CapturedException)
-        assert captured["original_exception"] is validation_error
+    assert isinstance(result, CapturedException)
+    assert (
+        exception_type.call_args.kwargs["original_exception"] is validation_info.value
+    )
