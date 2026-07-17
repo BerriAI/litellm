@@ -143,6 +143,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
     supports_adaptive_thinking: Optional[bool]
+    supports_mid_conversation_system: Optional[bool]
     supports_url_context: Optional[bool]
     supports_none_reasoning_effort: Optional[bool]
     supports_minimal_reasoning_effort: Optional[bool]
@@ -196,6 +197,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_512k_tokens: Optional[float]
+    # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
+    # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
+    prompt_cache_min_tokens: Optional[int]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -208,6 +212,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_image_token: Optional[float]  # for gpt-image-1 and similar models
+    input_cost_per_video_token: Optional[float]  # for gemini omni models with video input
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -233,6 +238,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_cost_per_image_token: Optional[float]
+    output_cost_per_video_token: Optional[float]  # for gemini omni models with video output
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -260,6 +266,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "responses",
             "ocr",
+            "realtime",
         ]
     ]
     tpm: Optional[int]
@@ -322,6 +329,7 @@ class CallTypes(str, Enum):
     cancel_batch = "cancel_batch"
     pass_through = "pass_through_endpoint"
     anthropic_messages = "anthropic_messages"
+    aanthropic_messages = "aanthropic_messages"
     get_assistants = "get_assistants"
     aget_assistants = "aget_assistants"
     create_assistants = "create_assistants"
@@ -394,6 +402,11 @@ class CallTypes(str, Enum):
     avector_store_create = "avector_store_create"
     vector_store_search = "vector_store_search"
     avector_store_search = "avector_store_search"
+
+    ingest = "ingest"
+    aingest = "aingest"
+    query = "query"
+    aquery = "aquery"
 
     #########################################################
     # Container Call Types
@@ -490,6 +503,7 @@ CallTypesLiteral = Literal[
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",
+    "aanthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
     "generate_content",
@@ -1471,6 +1485,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: Optional[int] = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    tool_use_tokens: Optional[int] = None
+    """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
+
     character_count: Optional[int] = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -1501,6 +1518,8 @@ class PromptTokensDetailsWrapper(
             del self.audio_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
+        if self.tool_use_tokens is None:
+            del self.tool_use_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
@@ -1795,14 +1814,17 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
+        usage_to_set = None
         if "usage" in kwargs and kwargs["usage"] is not None:
             if isinstance(kwargs["usage"], dict):
-                kwargs["usage"] = Usage(**kwargs["usage"])
+                usage_to_set = Usage(**kwargs["usage"])
+                kwargs["usage"] = usage_to_set
             elif isinstance(kwargs["usage"], BaseModel):
                 dump = (
                     kwargs["usage"].model_dump() if hasattr(kwargs["usage"], "model_dump") else kwargs["usage"].dict()
                 )
-                kwargs["usage"] = Usage(**dump)
+                usage_to_set = Usage(**dump)
+                kwargs["usage"] = usage_to_set
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1810,6 +1832,9 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
+
+        if usage_to_set is not None:
+            self.usage = usage_to_set
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2466,6 +2491,10 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_spend: Optional[float]
     user_api_key_max_budget: Optional[float]
     user_api_key_budget_reset_at: Optional[str]
+    user_api_key_user_spend: Optional[float]
+    user_api_key_user_max_budget: Optional[float]
+    user_api_key_team_spend: Optional[float]
+    user_api_key_team_max_budget: Optional[float]
     user_api_key_org_id: Optional[str]
     user_api_key_org_alias: Optional[str]
     user_api_key_team_id: Optional[str]
@@ -2521,6 +2550,23 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     """
     The MCP `mcp-session-id` of the stateful session this tool call ran in, when
     the client is driving a stateful session. Absent for stateless calls.
+    """
+
+    mcp_auth_mode: Optional[str]
+    """
+    The server's auth_type for this call (e.g. `true_passthrough`, `oauth_delegate`,
+    `oauth2`). For the client-forwarded token modes this records that the caller's own
+    upstream token was relayed, so an audit can attribute a relayed request to its mode
+    without logging any credential.
+    """
+
+    mcp_server_resource: Optional[str]
+    """
+    The origin (scheme + host + port) of the upstream MCP server the tool call was forwarded
+    to. Redacted for logging: userinfo, the path, the query string, and the fragment are all
+    stripped, because hosted MCP servers routinely embed the credential in the URL path and
+    this value is readable by callers via request logs.
+    Records which upstream received a relayed request; never a credential.
     """
 
 
@@ -2667,6 +2713,10 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     #   hints). Lets dashboards split rate-limit failures by cause without
     #   parsing free-text error messages.
     error_rate_limit_type: Optional[str]
+    error_budget_entity_type: Optional[str]
+    error_budget_entity_id: Optional[str]
+    error_budget_limit: Optional[float]
+    error_budget_spend: Optional[float]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -2681,7 +2731,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
     guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]]
-    guardrail_request: Optional[dict]
+    guardrail_request: Optional[Union[str, dict]]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: GuardrailStatus
     start_time: Optional[float]
@@ -2712,10 +2762,10 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     confidence_score: Optional[float]
     """For LLM-judge guardrails: confidence score 0.0-1.0"""
 
-    classification: Optional[dict]
+    classification: Optional[Union[str, dict]]
     """For LLM-judge guardrails: structured classification output"""
 
-    match_details: Optional[List[dict]]
+    match_details: Optional[Union[str, List[dict]]]
     """Detailed match information for each detected pattern"""
 
     patterns_checked: Optional[int]
@@ -3028,6 +3078,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
+    output_cost_per_video_token: Optional[float] = None
     output_cost_per_reasoning_token: Optional[float] = None
     output_cost_per_video_per_second: Optional[float] = None
     output_cost_per_audio_per_second: Optional[float] = None
@@ -3037,6 +3088,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_272k_tokens: Optional[float] = None
     cache_read_input_token_cost_above_512k_tokens: Optional[float] = None
     input_cost_per_image_token: Optional[float] = None
+    input_cost_per_video_token: Optional[float] = None
     input_cost_per_token_above_272k_tokens: Optional[float] = None
     input_cost_per_token_above_512k_tokens: Optional[float] = None
     output_cost_per_token_above_272k_tokens: Optional[float] = None
@@ -3114,6 +3166,7 @@ all_litellm_params = (
         "use_client",
         "id",
         "fallbacks",
+        "routing_strategy",
         "azure",
         "headers",
         "model_list",
@@ -3185,6 +3238,7 @@ all_litellm_params = (
         "shared_session",
         "search_tool_name",
         "order",
+        "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
         "_litellm_rate_limit_descriptors",
@@ -3192,6 +3246,16 @@ all_litellm_params = (
         "_litellm_tpm_reserved_model",
         "_litellm_tpm_reserved_scopes",
         "_litellm_tpm_reservation_released",
+        "auto_router_config_path",
+        "auto_router_config",
+        "auto_router_default_model",
+        "auto_router_embedding_model",
+        "complexity_router_config",
+        "complexity_router_default_model",
+        "adaptive_router_config",
+        "adaptive_router_default_model",
+        "quality_router_config",
+        "quality_router_default_model",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3381,6 +3445,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     DARKBLOOM = "darkbloom"
+    META = "meta"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3745,3 +3810,6 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
     model: Optional[str]  # the model being used for the LLM call
+    stream_holdback_chars: List[
+        int
+    ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)

@@ -966,11 +966,15 @@ class BudgetExceededError(Exception):
         max_budget: float,
         message: Optional[str] = None,
         llm_provider: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        entity_id: Optional[str] = None,
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
         self.status_code = 429
         self.llm_provider = llm_provider or ""
+        self.entity_type = entity_type
+        self.entity_id = entity_id
         # Surface unified rate-limit fields without joining the RateLimitError
         # hierarchy so existing `except BudgetExceededError:` handlers keep
         # working; custom callbacks reading StandardLoggingPayload pick these
@@ -1178,20 +1182,6 @@ class ModifyResponseException(Exception):
         # was never invoked).
         self.original_response = original_response
         super().__init__(message)
-
-
-class GuardrailInterventionNormalStringError(
-    Exception
-):  # custom exception to raise when a guardrail intervenes, but we want to return a normal string to the user
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(self.message)
-
-    def __str__(self):
-        return self.message
-
-    def __repr__(self):
-        return self.__str__()
 
 
 class SensitiveDataRouteException(Exception):

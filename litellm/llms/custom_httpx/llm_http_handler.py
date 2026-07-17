@@ -1879,6 +1879,7 @@ class BaseLLMHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         api_key: Optional[str],
         model: str,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> httpx.Response:
         max_attempts = max(provider_config.max_retry_on_anthropic_messages_http_error, 1)
         litellm_params_dict = dict(litellm_params)
@@ -1891,6 +1892,7 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body or json.dumps(request_body),
                     stream=stream or False,
                     logging_obj=logging_obj,
+                    timeout=timeout,
                 )
                 response.raise_for_status()
                 return response
@@ -1924,6 +1926,32 @@ class BaseLLMHTTPHandler:
                 raise self._handle_error(e=e, provider_config=provider_config)
 
         raise RuntimeError("unreachable: anthropic messages HTTP retry loop exited without return")
+
+    @staticmethod
+    def _resolve_anthropic_messages_timeout(
+        litellm_params: GenericLiteLLMParams,
+        stream: bool,
+        custom_llm_provider: str,
+    ) -> Optional[Union[float, httpx.Timeout]]:
+        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+        from litellm.litellm_core_utils.request_timeout_resolver import (
+            get_configured_request_timeout,
+        )
+        from litellm.utils import supports_httpx_timeout
+
+        stream_timeout = litellm_params.get("stream_timeout") if stream else None
+        model_timeout = stream_timeout if stream_timeout is not None else litellm_params.get("timeout")
+        request_timeout = litellm_params.get("request_timeout")
+        global_timeout = get_configured_request_timeout()
+        if model_timeout is None and request_timeout is None and global_timeout is None:
+            return None
+        return CompletionTimeout.resolve(
+            model_timeout,
+            {"request_timeout": request_timeout},
+            custom_llm_provider,
+            global_timeout=global_timeout,
+            supports_httpx_timeout=supports_httpx_timeout,
+        )
 
     async def async_anthropic_messages_handler(
         self,
@@ -2075,6 +2103,11 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
+            timeout=self._resolve_anthropic_messages_timeout(
+                litellm_params=litellm_params,
+                stream=stream or False,
+                custom_llm_provider=custom_llm_provider,
+            ),
         )
 
         # used for logging + cost tracking
@@ -2657,9 +2690,10 @@ class BaseLLMHTTPHandler:
         )
 
         result = final_response if final_response is not None else initial_response
-        if litellm_params.get("_code_interpreter_interception_converted_stream") and not litellm_params.get(
-            "_agentic_loop_depth"
-        ):
+        interception_converted_stream = litellm_params.get(
+            "_code_interpreter_interception_converted_stream"
+        ) or litellm_params.get("_websearch_interception_converted_stream")
+        if interception_converted_stream and not litellm_params.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -5224,6 +5258,8 @@ class BaseLLMHTTPHandler:
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
+        hook_kwargs = {**kwargs, "_agentic_loop_api_surface": api_surface}
+
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
                 continue
@@ -5244,7 +5280,7 @@ class BaseLLMHTTPHandler:
                     tools=tools,
                     stream=stream,
                     custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
+                    kwargs=hook_kwargs,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -5270,7 +5306,7 @@ class BaseLLMHTTPHandler:
             )
 
             try:
-                kwargs_with_provider = kwargs.copy() if kwargs else {}
+                kwargs_with_provider = hook_kwargs.copy()
                 kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
                 build_plan_overridden = (
                     callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan

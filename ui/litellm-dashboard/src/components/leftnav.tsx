@@ -1,38 +1,68 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
+import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
+import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  ApiOutlined,
-  ApartmentOutlined,
-  AppstoreOutlined,
-  AuditOutlined,
-  BankOutlined,
-  BarChartOutlined,
-  BgColorsOutlined,
-  BlockOutlined,
-  BookOutlined,
-  CommentOutlined,
-  CreditCardOutlined,
-  DatabaseOutlined,
-  ExperimentOutlined,
-  ExportOutlined,
-  FileTextOutlined,
-  FolderOutlined,
-  KeyOutlined,
-  LineChartOutlined,
-  PlayCircleOutlined,
-  RobotOutlined,
-  SafetyOutlined,
-  SearchOutlined,
-  SettingOutlined,
-  TagsOutlined,
-  TeamOutlined,
-  ToolOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
-import type { MenuProps } from "antd";
-import { ConfigProvider, Layout, Menu } from "antd";
-import { useMemo } from "react";
+  Sidebar,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarSeparator,
+  sidebarMenuButtonVariants,
+} from "@/components/ui/sidebar";
+import {
+  Activity,
+  BarChart3,
+  Bell,
+  Blocks,
+  Bot,
+  BookOpen,
+  Building2,
+  Boxes,
+  ChevronRight,
+  Code2,
+  Database,
+  ExternalLink,
+  FileText,
+  FlaskConical,
+  Folder,
+  HeartPulse,
+  KeyRound,
+  LayoutGrid,
+  Network,
+  Palette,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PlayCircle,
+  Route,
+  ScrollText,
+  Search,
+  Server,
+  Settings as SettingsIcon,
+  Shield,
+  ShieldCheck,
+  Tags,
+  Terminal,
+  User,
+  Users,
+  Wallet,
+  Wrench,
+  Workflow,
+} from "lucide-react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import { cn } from "@/lib/cva.config";
 import {
   all_admin_roles,
   internalUserRoles,
@@ -41,27 +71,28 @@ import {
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "../utils/roles";
+import BetaBadge from "./BetaBadge";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
-import UsageIndicator from "./UsageIndicator";
+import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
+import SidebarUsageCard from "./SidebarUsageCard";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
-const { Sider } = Layout;
 
-// Define the props type
+const ICON = { strokeWidth: 1.75 } as const;
+
 interface SidebarProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
   collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
-  enableChatUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
   allowVectorStoresForTeamAdmins?: boolean;
 }
 
-// Menu item configuration
 interface MenuItem {
   key: string;
   page: string;
@@ -72,129 +103,70 @@ interface MenuItem {
   external_url?: string;
 }
 
-// Group configuration
 interface MenuGroup {
   groupLabel: string;
   items: MenuItem[];
   roles?: string[];
 }
 
-// Menu groups organized by category - defined outside component for export
+// Menu groups organized by category - defined outside component for export.
+// Shape (key/page/label/roles/children) is consumed by page_utils.ts; only the
+// icons changed to lucide as part of the sidebar redesign.
 const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
     items: [
-      {
-        key: "api-keys",
-        page: "api-keys",
-        label: "Virtual Keys",
-        icon: <KeyOutlined />,
-      },
+      { key: "api-keys", page: "api-keys", label: "Virtual Keys", icon: <KeyRound {...ICON} /> },
       {
         key: "llm-playground",
         page: "llm-playground",
         label: "Playground",
-        icon: <PlayCircleOutlined />,
+        icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
-      },
-      {
-        key: "chat",
-        page: "chat",
-        label: (
-          <span className="flex items-center gap-2">
-            Chat <NewBadge />
-          </span>
-        ),
-        icon: <CommentOutlined />,
       },
       {
         key: "models",
         page: "models",
         label: "Models + Endpoints",
-        icon: <BlockOutlined />,
-        // Admin Viewer can view models read-only (write actions are
-        // hidden inside the page); Playground above stays write-only.
+        icon: <Network {...ICON} />,
         roles: rolesAllowedToViewWriteScopedPages,
       },
       {
         key: "agentic",
         page: "agentic",
         label: "Agentic",
-        icon: <RobotOutlined />,
+        icon: <Bot {...ICON} />,
         children: [
           {
             key: "agents",
             page: "agents",
             label: "Agents",
-            icon: <RobotOutlined />,
-            // Admin Viewer can view agents read-only (write actions are
-            // hidden inside the page); Playground above stays write-only.
+            icon: <Bot {...ICON} />,
             roles: rolesAllowedToViewWriteScopedPages,
           },
-          {
-            key: "workflows",
-            page: "workflows",
-            label: "Workflow Runs",
-            icon: <ApartmentOutlined />,
-          },
-          {
-            key: "memory",
-            page: "memory",
-            label: "Memory",
-            icon: <BookOutlined />,
-          },
+          { key: "workflows", page: "workflows", label: "Workflow Runs", icon: <Workflow {...ICON} /> },
+          { key: "memory", page: "memory", label: "Memory", icon: <Database {...ICON} /> },
         ],
       },
-      {
-        key: "mcp-servers",
-        page: "mcp-servers",
-        label: "MCP Servers",
-        icon: <ToolOutlined />,
-      },
-      {
-        key: "skills",
-        page: "skills",
-        label: "Skills",
-        icon: <ApiOutlined />,
-        roles: all_admin_roles,
-      },
-      {
-        key: "guardrails",
-        page: "guardrails",
-        label: "Guardrails",
-        icon: <SafetyOutlined />,
-      },
+      { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
+      { key: "skills", page: "skills", label: "Skills", icon: <Blocks {...ICON} />, roles: all_admin_roles },
+      { key: "guardrails", page: "guardrails", label: "Guardrails", icon: <Shield {...ICON} /> },
       {
         key: "policies",
         page: "policies",
-        label: <span className="flex items-center gap-4">Policies</span>,
-        icon: <AuditOutlined />,
+        label: "Policies",
+        icon: <ScrollText {...ICON} />,
         roles: all_admin_roles,
       },
       {
         key: "tools",
         page: "tools",
         label: "Tools",
-        icon: <ToolOutlined />,
+        icon: <Wrench {...ICON} />,
         children: [
-          {
-            key: "search-tools",
-            page: "search-tools",
-            label: "Search Tools",
-            icon: <SearchOutlined />,
-          },
-          {
-            key: "vector-stores",
-            page: "vector-stores",
-            label: "Vector Stores",
-            icon: <DatabaseOutlined />,
-          },
-          {
-            key: "tool-policies",
-            page: "tool-policies",
-            label: "Tool Policies",
-            icon: <SafetyOutlined />,
-          },
+          { key: "search-tools", page: "search-tools", label: "Search Tools", icon: <Search {...ICON} /> },
+          { key: "vector-stores", page: "vector-stores", label: "Vector Stores", icon: <Database {...ICON} /> },
+          { key: "tool-policies", page: "tool-policies", label: "Tool Policies", icon: <ShieldCheck {...ICON} /> },
         ],
       },
     ],
@@ -205,21 +177,16 @@ const menuGroups: MenuGroup[] = [
       {
         key: "new_usage",
         page: "new_usage",
-        icon: <BarChartOutlined />,
+        icon: <BarChart3 {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "Usage",
       },
-      {
-        key: "logs",
-        page: "logs",
-        label: "Logs",
-        icon: <LineChartOutlined />,
-      },
+      { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
         label: "Guardrails Monitor",
-        icon: <SafetyOutlined />,
+        icon: <HeartPulse {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
       },
     ],
@@ -227,116 +194,71 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "ACCESS CONTROL",
     items: [
-      {
-        key: "teams",
-        page: "teams",
-        label: "Teams",
-        icon: <TeamOutlined />,
-      },
+      { key: "teams", page: "teams", label: "Teams", icon: <Users {...ICON} /> },
       {
         key: "projects",
         page: "projects",
         label: (
           <span className="flex items-center gap-2">
-            Projects <NewBadge />
+            Projects <BetaBadge />
           </span>
         ),
-        icon: <FolderOutlined />,
+        icon: <Folder {...ICON} />,
         roles: all_admin_roles,
       },
-      {
-        key: "users",
-        page: "users",
-        label: "Internal Users",
-        icon: <UserOutlined />,
-        roles: all_admin_roles,
-      },
+      { key: "users", page: "users", label: "Internal Users", icon: <User {...ICON} />, roles: all_admin_roles },
       {
         key: "organizations",
         page: "organizations",
         label: "Organizations",
-        icon: <BankOutlined />,
+        icon: <Building2 {...ICON} />,
         roles: all_admin_roles,
       },
       {
         key: "access-groups",
         page: "access-groups",
         label: "Access Groups",
-        icon: <BlockOutlined />,
+        icon: <Boxes {...ICON} />,
         roles: all_admin_roles,
       },
-      {
-        key: "budgets",
-        page: "budgets",
-        label: "Budgets",
-        icon: <CreditCardOutlined />,
-        roles: all_admin_roles,
-      },
+      { key: "budgets", page: "budgets", label: "Budgets", icon: <Wallet {...ICON} />, roles: all_admin_roles },
     ],
   },
   {
     groupLabel: "DEVELOPER TOOLS",
     items: [
-      {
-        key: "api_ref",
-        page: "api_ref",
-        label: "API Reference",
-        icon: <ApiOutlined />,
-      },
-      {
-        key: "model-hub-table",
-        page: "model-hub-table",
-        label: "AI Hub",
-        icon: <AppstoreOutlined />,
-      },
-
+      { key: "api_ref", page: "api_ref", label: "API Reference", icon: <Code2 {...ICON} /> },
+      { key: "model-hub-table", page: "model-hub-table", label: "AI Hub", icon: <LayoutGrid {...ICON} /> },
       {
         key: "learning-resources",
         page: "learning-resources",
         label: "Learning Resources",
-        icon: <BookOutlined />,
+        icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
+      { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
       {
         key: "experimental",
         page: "experimental",
         label: "Experimental",
-        icon: <ExperimentOutlined />,
+        icon: <FlaskConical {...ICON} />,
         children: [
-          {
-            key: "caching",
-            page: "caching",
-            label: "Caching",
-            icon: <DatabaseOutlined />,
-            roles: all_admin_roles,
-          },
-          {
-            key: "prompts",
-            page: "prompts",
-            label: "Prompts",
-            icon: <FileTextOutlined />,
-            roles: all_admin_roles,
-          },
+          { key: "prompts", page: "prompts", label: "Prompts", icon: <FileText {...ICON} />, roles: all_admin_roles },
           {
             key: "transform-request",
             page: "transform-request",
             label: "API Playground",
-            icon: <ApiOutlined />,
+            icon: <Terminal {...ICON} />,
             roles: [...all_admin_roles, ...internalUserRoles],
           },
           {
             key: "tag-management",
             page: "tag-management",
             label: "Tag Management",
-            icon: <TagsOutlined />,
+            icon: <Tags {...ICON} />,
             roles: all_admin_roles,
           },
-          {
-            key: "4",
-            page: "usage",
-            label: "Old Usage",
-            icon: <BarChartOutlined />,
-          },
+          { key: "4", page: "usage", label: "Old Usage", icon: <BarChart3 {...ICON} /> },
         ],
       },
     ],
@@ -353,21 +275,21 @@ const menuGroups: MenuGroup[] = [
             Settings <NewBadge />
           </span>
         ),
-        icon: <SettingOutlined />,
+        icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
           {
             key: "router-settings",
             page: "router-settings",
             label: "Router Settings",
-            icon: <SettingOutlined />,
+            icon: <Route {...ICON} />,
             roles: all_admin_roles,
           },
           {
             key: "logging-and-alerts",
             page: "logging-and-alerts",
             label: "Logging & Alerts",
-            icon: <SettingOutlined />,
+            icon: <Bell {...ICON} />,
             roles: all_admin_roles,
           },
           {
@@ -381,36 +303,80 @@ const menuGroups: MenuGroup[] = [
                 </NewBadge>
               </span>
             ),
-            icon: <SettingOutlined />,
+            icon: <SettingsIcon {...ICON} />,
             roles: all_admin_roles,
           },
           {
             key: "cost-tracking",
             page: "cost-tracking",
             label: "Cost Tracking",
-            icon: <BarChartOutlined />,
+            icon: <BarChart3 {...ICON} />,
             roles: all_admin_roles,
           },
-          {
-            key: "ui-theme",
-            page: "ui-theme",
-            label: "UI Theme",
-            icon: <BgColorsOutlined />,
-            roles: all_admin_roles,
-          },
+          { key: "ui-theme", page: "ui-theme", label: "UI Theme", icon: <Palette {...ICON} />, roles: all_admin_roles },
         ],
       },
     ],
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({
+const findParentKey = (page: string): string | null => {
+  for (const group of menuGroups) {
+    for (const item of group.items) {
+      if (item.children?.some((c) => c.page === page || c.key === page)) return item.key;
+    }
+  }
+  return null;
+};
+
+const findMenuItemKey = (page: string): string => {
+  for (const group of menuGroups) {
+    for (const item of group.items) {
+      if (item.page === page) return item.key;
+      const child = item.children?.find((c) => c.page === page);
+      if (child) return child.key;
+    }
+  }
+  return "api-keys";
+};
+
+const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : item.key);
+
+const SECTION_DISPLAY: Record<string, string> = {
+  "AI GATEWAY": "AI Gateway",
+  OBSERVABILITY: "Observability",
+  "ACCESS CONTROL": "Access Control",
+  "DEVELOPER TOOLS": "Developer Tools",
+  SETTINGS: "Settings",
+};
+
+const prettify = (key: string): string =>
+  key
+    .split(/[-_]/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+
+// Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
+export const getBreadcrumb = (page: string): { section: string | null; title: string } => {
+  for (const group of menuGroups) {
+    for (const item of group.items) {
+      const section = SECTION_DISPLAY[group.groupLabel] ?? group.groupLabel;
+      if (item.page === page)
+        return { section, title: typeof item.label === "string" ? item.label : prettify(item.key) };
+      const child = item.children?.find((c) => c.page === page);
+      if (child) return { section, title: typeof child.label === "string" ? child.label : prettify(child.key) };
+    }
+  }
+  return { section: null, title: prettify(page) };
+};
+
+const Sidebar_: React.FC<SidebarProps> = ({
   setPage,
   defaultSelectedKey,
   collapsed = false,
+  onToggleCollapsed,
   enabledPagesInternalUsers,
   enableProjectsUI,
-  enableChatUI,
   disableAgentsForInternalUsers,
   allowAgentsForTeamAdmins,
   disableVectorStoresForInternalUsers,
@@ -419,8 +385,31 @@ const Sidebar: React.FC<SidebarProps> = ({
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
+  const { logoUrl } = useTheme();
+  const { data: healthData } = useHealthReadinessDetails(accessToken);
+  const logout = useLogout(accessToken);
 
-  // Check if user is an org_admin
+  const baseUrl = getProxyBaseUrl();
+  const version = healthData?.litellm_version;
+  const selectedKey = findMenuItemKey(defaultSelectedKey);
+
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    const parent = findParentKey(defaultSelectedKey);
+    return new Set(parent ? [parent] : []);
+  });
+
+  // Keep the active page's parent group expanded as the user navigates, using the
+  // "adjust state during render" pattern rather than an effect (avoids a
+  // setState-in-effect render cascade).
+  const [prevSelectedKey, setPrevSelectedKey] = useState(defaultSelectedKey);
+  if (defaultSelectedKey !== prevSelectedKey) {
+    setPrevSelectedKey(defaultSelectedKey);
+    const parent = findParentKey(defaultSelectedKey);
+    if (parent && !openGroups.has(parent)) {
+      setOpenGroups((prev) => new Set(prev).add(parent));
+    }
+  }
+
   const isOrgAdmin = useMemo(() => {
     if (!userId || !organizations) return false;
     return organizations.some((org: Organization) =>
@@ -428,83 +417,20 @@ const Sidebar: React.FC<SidebarProps> = ({
     );
   }, [userId, organizations]);
 
-  // Check if user is a team admin for any team
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
-  // The parent (legacy root page or dashboard layout) owns navigation for both
-  // migrated and legacy pages; the sidebar only reports the selected page.
-  const navigateToPage = (page: string) => setPage(page);
-
-  // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
-  // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
-  const renderNavLink = (label: React.ReactNode, page: string, externalUrl?: string): React.ReactNode => {
-    if (externalUrl) {
-      return (
-        <a
-          href={externalUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          style={{ color: "inherit", textDecoration: "none" }}
-        >
-          {label} <ExportOutlined style={{ fontSize: 10, marginLeft: 4 }} />
-        </a>
-      );
-    }
-    const migratedRoute = MIGRATED_PAGES[page];
-    const href = migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(page);
-    return (
-      <a
-        href={href}
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
-            e.stopPropagation();
-            return;
-          }
-          e.preventDefault();
-        }}
-        style={{ color: "inherit", textDecoration: "none" }}
-      >
-        {label}
-      </a>
-    );
-  };
-
-  // Filter items based on user role and enabled pages for internal users
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
     const isAdmin = isAdminRole(userRole);
-
-    // Debug logging
-    if (enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-    }
-
     return items
-      .map((item) => ({
-        ...item,
-        children: item.children ? filterItemsByRole(item.children) : undefined,
-      }))
+      .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
       .filter((item) => {
-        // Special handling for organizations and users menu items - allow org_admins
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
           if (!hasRoleAccess) return false;
-
-          // Check enabled pages for internal users (non-admins)
-          if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-            const isIncluded = enabledPagesInternalUsers.includes(item.page);
-            return isIncluded;
-          }
+          if (!isAdmin && enabledPagesInternalUsers != null) return enabledPagesInternalUsers.includes(item.page);
           return true;
         }
-
-        // Hide Projects page if enableProjectsUI is not enabled
         if (item.key === "projects" && !enableProjectsUI) return false;
-
-        // Hide Chat page if enableChatUI is not enabled
-        if (item.key === "chat" && !enableChatUI) return false;
-
-        // Hide agents and vector-stores pages for non-admin users when disabled,
-        // unless allow_*_for_team_admins is on and the user is a team admin.
         if (
           !isAdmin &&
           item.key === "agents" &&
@@ -519,160 +445,182 @@ const Sidebar: React.FC<SidebarProps> = ({
           !(allowVectorStoresForTeamAdmins && isTeamAdmin)
         )
           return false;
-
-        // Existing role check
         if (item.roles && !item.roles.includes(userRole)) return false;
-
-        // Check enabled pages for internal users (non-admins)
-        if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-          // If item has children, check if any children are visible
+        if (!isAdmin && enabledPagesInternalUsers != null) {
           if (item.children && item.children.length > 0) {
             const hasVisibleChildren = item.children.some((child) => enabledPagesInternalUsers.includes(child.page));
-            if (hasVisibleChildren) {
-              return true;
-            }
+            if (hasVisibleChildren) return true;
           }
-
-          const isIncluded = enabledPagesInternalUsers.includes(item.page);
-          return isIncluded;
+          return enabledPagesInternalUsers.includes(item.page);
         }
-
         return true;
       });
   };
 
-  // Build menu items with groups
-  const buildMenuItems = (): MenuProps["items"] => {
-    const items: MenuProps["items"] = [];
+  const visibleGroups = menuGroups
+    .filter((group) => !group.roles || group.roles.includes(userRole))
+    .map((group) => ({ groupLabel: group.groupLabel, items: filterItemsByRole(group.items) }))
+    .filter((group) => group.items.length > 0);
 
-    menuGroups.forEach((group) => {
-      // Check if group has role restriction
-      if (group.roles && !group.roles.includes(userRole)) {
-        return;
-      }
-
-      const filteredItems = filterItemsByRole(group.items);
-      if (filteredItems.length === 0) return;
-
-      // Add group with items
-      items.push({
-        type: "group",
-        label: collapsed ? null : (
-          <span
-            style={{
-              fontSize: "10px",
-              fontWeight: 600,
-              color: "#6b7280",
-              letterSpacing: "0.05em",
-              padding: "12px 0 4px 12px",
-              display: "block",
-              marginBottom: "2px",
-            }}
-          >
-            {group.groupLabel}
-          </span>
-        ),
-        children: filteredItems.map((item) => ({
-          key: item.key,
-          icon: item.icon,
-          label: renderNavLink(item.label, item.page, item.external_url),
-          children: item.children?.map((child) => ({
-            key: child.key,
-            icon: child.icon,
-            label: renderNavLink(child.label, child.page, child.external_url),
-            onClick: () => {
-              if (child.external_url) {
-                window.open(child.external_url, "_blank");
-              } else {
-                navigateToPage(child.page);
-              }
-            },
-          })),
-          onClick: !item.children
-            ? () => {
-                if (item.external_url) {
-                  window.open(item.external_url, "_blank");
-                } else {
-                  navigateToPage(item.page);
-                }
-              }
-            : undefined,
-        })),
-      });
-    });
-
-    return items;
-  };
-
-  // Find selected menu key
-  const findMenuItemKey = (page: string): string => {
-    for (const group of menuGroups) {
-      for (const item of group.items) {
-        if (item.page === page) return item.key;
-        if (item.children) {
-          const child = item.children.find((c) => c.page === page);
-          if (child) return child.key;
-        }
-      }
+  const toggleGroup = (key: string) => {
+    if (collapsed) {
+      onToggleCollapsed?.();
+      setOpenGroups((prev) => new Set(prev).add(key));
+      return;
     }
-    return "api-keys";
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
 
-  const selectedMenuKey = findMenuItemKey(defaultSelectedKey);
+  const handleLeafClick = (e: React.MouseEvent, item: MenuItem) => {
+    if (item.external_url) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+    e.preventDefault();
+    setPage(item.page);
+  };
+
+  const renderLeaf = (item: MenuItem, isChild: boolean) => {
+    const active = selectedKey === item.key;
+    const size = isChild ? "sub" : "default";
+    const label = <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{item.label}</span>;
+
+    if (item.external_url) {
+      return (
+        <a
+          key={item.key}
+          href={item.external_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={collapsed ? labelText(item) : undefined}
+          data-active={active || undefined}
+          className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
+        >
+          {item.icon}
+          {label}
+          <ExternalLink className="size-3.5 shrink-0 opacity-70 group-data-[collapsed=true]/sidebar:hidden" />
+        </a>
+      );
+    }
+
+    const href = MIGRATED_PAGES[item.page] ? migratedHref(MIGRATED_PAGES[item.page]) : legacyPageHref(item.page);
+    return (
+      <a
+        key={item.key}
+        href={href}
+        onClick={(e) => handleLeafClick(e, item)}
+        title={collapsed ? labelText(item) : undefined}
+        data-active={active || undefined}
+        className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
+      >
+        {item.icon}
+        {label}
+      </a>
+    );
+  };
+
+  const renderItem = (item: MenuItem) => {
+    const isGroup = !!item.children && item.children.length > 0;
+    if (!isGroup) {
+      return <SidebarMenuItem key={item.key}>{renderLeaf(item, false)}</SidebarMenuItem>;
+    }
+
+    const active = selectedKey === item.key;
+    const open = openGroups.has(item.key);
+    return (
+      <SidebarMenuItem key={item.key}>
+        <SidebarMenuButton
+          isActive={active}
+          onClick={() => toggleGroup(item.key)}
+          title={collapsed ? labelText(item) : undefined}
+        >
+          {item.icon}
+          <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{item.label}</span>
+          <ChevronRight
+            className={cn(
+              "size-4 shrink-0 transition-transform group-data-[collapsed=true]/sidebar:hidden",
+              open && "rotate-90",
+            )}
+          />
+        </SidebarMenuButton>
+        {open && (
+          <SidebarMenuSub>
+            {item.children!.map((child) => (
+              <SidebarMenuItem key={child.key}>{renderLeaf(child, true)}</SidebarMenuItem>
+            ))}
+          </SidebarMenuSub>
+        )}
+      </SidebarMenuItem>
+    );
+  };
+
+  const logoSrc = logoUrl || `${baseUrl}/get_image`;
 
   return (
-    <Layout>
-      <Sider
-        theme="light"
-        width={220}
-        collapsed={collapsed}
-        collapsedWidth={80}
-        collapsible
-        trigger={null}
-        style={{
-          transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-          position: "relative",
-        }}
-      >
-        <ConfigProvider
-          theme={{
-            components: {
-              Menu: {
-                iconSize: 15,
-                fontSize: 13,
-                itemMarginInline: 4,
-                itemPaddingInline: 8,
-                itemHeight: 30,
-                itemBorderRadius: 6,
-                subMenuItemBorderRadius: 6,
-                groupTitleFontSize: 10,
-                groupTitleLineHeight: 1.5,
-              },
-            },
-          }}
-        >
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedMenuKey]}
-            defaultOpenKeys={[]}
-            inlineCollapsed={collapsed}
-            className="custom-sidebar-menu"
-            style={{
-              borderRight: 0,
-              backgroundColor: "transparent",
-              fontSize: "13px",
-              paddingTop: "4px",
-            }}
-            items={buildMenuItems()}
+    <Sidebar collapsed={collapsed}>
+      <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
+        <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
+          <div className="flex min-w-0 items-center gap-2">
+            <Link href={baseUrl || "/"} className="flex min-w-0 items-center" aria-label="LiteLLM home">
+              <img
+                src={logoSrc}
+                alt="LiteLLM"
+                className="h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7"
+              />
+            </Link>
+            {version && (
+              <Badge
+                variant="outline"
+                render={<a href="https://docs.litellm.ai/release_notes" target="_blank" rel="noopener noreferrer" />}
+                className="px-1.5 py-0 font-mono text-[10px] font-medium text-muted-foreground group-data-[collapsed=true]/sidebar:hidden"
+              >
+                v{version}
+              </Badge>
+            )}
+          </div>
+          {onToggleCollapsed && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onToggleCollapsed}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="flex-none text-muted-foreground"
+            >
+              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+            </Button>
+          )}
+        </div>
+      </SidebarHeader>
+
+      <ScrollArea className="min-h-0 flex-1">
+        <nav className="flex flex-col gap-0.5 px-3 pb-3">
+          {visibleGroups.map((group, gi) => (
+            <SidebarGroup key={group.groupLabel}>
+              {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
+              <SidebarGroupLabel>{group.groupLabel}</SidebarGroupLabel>
+              <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
+            </SidebarGroup>
+          ))}
+        </nav>
+      </ScrollArea>
+
+      <SidebarFooter>
+        {isAdminRole(userRole) && (
+          <SidebarUsageCard
+            accessToken={accessToken}
+            collapsed={collapsed}
+            onExpandRail={() => onToggleCollapsed?.()}
           />
-        </ConfigProvider>
-        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
-      </Sider>
-    </Layout>
+        )}
+        <SidebarAccountMenu onLogout={logout} collapsed={collapsed} />
+      </SidebarFooter>
+    </Sidebar>
   );
 };
 
-export default Sidebar;
+export default Sidebar_;
 
-// Also export menuGroups for advanced use cases
 export { menuGroups };
