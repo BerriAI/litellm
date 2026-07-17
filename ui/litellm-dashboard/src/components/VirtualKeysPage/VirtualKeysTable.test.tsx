@@ -410,6 +410,24 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
     });
   });
 
+  it("threads an applied Key Alias filter into the useKeys query as selectedKeyAlias", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+
+    const aliasInput = await screen.findByPlaceholderText(/Enter key alias/);
+    fireEvent.change(aliasInput, { target: { value: "claude-code-mub" } });
+    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ selectedKeyAlias: "claude-code-mub" }),
+      );
+    });
+  });
+
   it("does not send filter params to useKeys when no filter is active", () => {
     renderWithProviders(<VirtualKeysTable />);
 
