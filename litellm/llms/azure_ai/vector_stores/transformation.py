@@ -38,8 +38,8 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
         return {
-            "read": [("GET", "/docs/search"), ("POST", "/docs/search")],
-            "write": [("PUT", "/docs")],
+            "read": [("GET", "/indexes/"), ("POST", "/docs/search")],
+            "write": [("POST", "/docs/index")],
         }
 
     def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
