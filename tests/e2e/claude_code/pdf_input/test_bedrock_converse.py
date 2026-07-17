@@ -88,6 +88,7 @@ def _build_minimal_pdf(marker: str) -> bytes:
     return bytes(out)
 
 
+@pytest.mark.skip(reason="stage red: Bedrock Converse requires text block with document (LIT-4523)")
 @pytest.mark.covers("llm.messages.bedrock_converse.pdf_input.nonstream.works")
 def test_pdf_input_bedrock_converse(compat_result, tmp_path):
     base_url, api_key = require_proxy(compat_result)
