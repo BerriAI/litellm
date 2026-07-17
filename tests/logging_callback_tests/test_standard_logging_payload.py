@@ -1169,3 +1169,162 @@ def test_merge_litellm_metadata_bedrock_passthrough_scenario():
 
     # Verify total number of fields (9 user fields + 4 model fields = 13)
     assert len(result) == 13
+
+
+
+def test_standard_logging_payload_failure_uses_litellm_params_model_not_alias():
+    """Regression test for #33572: on the failure path, the router resets
+    kwargs["model"] back to the model-group alias so retries can re-route,
+    while litellm_params["model"] retains the backend deployment model that
+    actually failed. The payload must carry the backend deployment model, not
+    the alias, so dashboards aggregating by payload["model"] do not split a
+    single deployment's traffic across two keys."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="ssg/anthropic-claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-failure-stable-model",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "ssg/anthropic-claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hi"}],
+        "custom_llm_provider": "anthropic",
+        "litellm_params": {
+            "model": "anthropic/claude-sonnet-4-6",
+            "api_base": "https://api.anthropic.com",
+            "metadata": {
+                "model_group": "ssg/anthropic-claude-sonnet-4-6",
+            },
+        },
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="failure",
+        error_str="overloaded_error",
+    )
+
+    assert payload is not None
+    assert payload["model"] == "anthropic/claude-sonnet-4-6"
+    assert payload["model"] != "ssg/anthropic-claude-sonnet-4-6"
+
+
+def test_standard_logging_payload_failure_falls_back_to_kwargs_model_when_no_litellm_params_model():
+    """Backwards-compat: direct litellm.completion() calls without a router do
+    not populate litellm_params["model"]. The payload must still carry
+    kwargs["model"] unchanged so non-router callers see no behavior change."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="anthropic/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-failure-no-router-fallback",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "anthropic/claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hi"}],
+        "custom_llm_provider": "anthropic",
+        "litellm_params": {},
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="failure",
+        error_str="overloaded_error",
+    )
+
+    assert payload is not None
+    assert payload["model"] == "anthropic/claude-sonnet-4-6"
+
+
+def test_standard_logging_payload_success_prefers_litellm_params_model():
+    """Symmetry guard: on the success path, when both kwargs["model"] (the
+    router's post-dispatch value) and litellm_params["model"] (the stable
+    deployment identifier) are set, the payload must carry
+    litellm_params["model"]. This pins the success/failure invariant so a
+    future router change cannot silently regress it by re-introducing
+    divergence."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="ssg/anthropic-claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-success-stable-model",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "ssg/anthropic-claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hi"}],
+        "custom_llm_provider": "anthropic",
+        "litellm_params": {
+            "model": "anthropic/claude-sonnet-4-6",
+            "api_base": "https://api.anthropic.com",
+            "metadata": {
+                "model_group": "ssg/anthropic-claude-sonnet-4-6",
+            },
+        },
+    }
+    mock_response = {
+        "id": "chatcmpl-success-stable",
+        "object": "chat.completion",
+        "model": "anthropic/claude-sonnet-4-6",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["model"] == "anthropic/claude-sonnet-4-6"
+    assert payload["model"] != "ssg/anthropic-claude-sonnet-4-6"
