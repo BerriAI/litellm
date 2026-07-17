@@ -88,6 +88,14 @@ pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
         .any(|(key, _)| key.eq_ignore_ascii_case(name))
 }
 
+pub(super) fn header_values<'a>(headers: &'a [(String, String)], name: &str) -> Vec<&'a str> {
+    headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+        .collect()
+}
+
 fn document_url_field(document: &Value) -> CoreResult<Option<(&str, &str)>> {
     let Some(object) = document.as_object() else {
         return Ok(None);

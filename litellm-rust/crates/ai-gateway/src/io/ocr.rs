@@ -9,19 +9,23 @@ use std::time::Duration;
 
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::{
-    OcrAuthStrategy, OcrDocumentPreparation, OcrResponseHandling,
+    OcrAuth, OcrAuthStrategy, OcrDocumentPreparation, OcrResponseHandling,
+};
+use litellm_core::providers::vertex_ai::ocr::transformation::{
+    classify_vertex_bearer, validate_vertex_authorization_headers, VertexTokenSource,
 };
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
 
 use crate::config::resolve_env_reference;
+use crate::io::vertex_ai::VertexAiBase;
 
 mod common_utils;
 
 use crate::errors::map_reqwest_error;
 use common_utils::{
-    convert_document_url_to_data_uri, has_header, ocr_provider_config, poll_document_intelligence,
-    string_headers, truncate_error_body, upload_reducto_document,
+    convert_document_url_to_data_uri, has_header, header_values, ocr_provider_config,
+    poll_document_intelligence, string_headers, truncate_error_body, upload_reducto_document,
 };
 
 /// OCR over large documents can take a while; bound it generously rather than
@@ -96,9 +100,31 @@ async fn ocr_with_env(
 
     let headers = string_headers(request.extra_headers)?;
     let auth_strategy = config.auth_strategy();
-    let api_key = (!has_header(&headers, auth_strategy.header_name()))
-        .then(|| config.resolve_api_key(api_key.as_deref(), env_lookup))
-        .transpose()?;
+    let api_key = if has_header(&headers, auth_strategy.header_name()) {
+        if config.ocr_auth() == OcrAuth::VertexOauth {
+            validate_vertex_authorization_headers(&header_values(
+                &headers,
+                auth_strategy.header_name(),
+            ))?;
+        }
+        None
+    } else {
+        Some(match config.ocr_auth() {
+            OcrAuth::ProviderKey => config.resolve_api_key(api_key.as_deref(), env_lookup)?,
+            OcrAuth::VertexOauth => match classify_vertex_bearer(api_key.as_deref(), env_lookup)? {
+                VertexTokenSource::Explicit(token) => token,
+                VertexTokenSource::Mint => {
+                    let credentials = VertexAiBase::resolve_credential_source(
+                        &request.optional_params,
+                        env_lookup,
+                    );
+                    VertexAiBase::shared()
+                        .get_access_token(credentials.as_deref())
+                        .await?
+                }
+            },
+        })
+    };
     let url = config.complete_url(
         api_base.as_deref(),
         model,

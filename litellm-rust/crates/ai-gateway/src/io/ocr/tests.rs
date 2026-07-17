@@ -571,3 +571,216 @@ async fn ocr_maps_unregistered_provider_to_invalid_provider() {
     assert_eq!(err.public_status_code(), Some(400));
     assert_eq!(err.public_message(), "Invalid OCR request");
 }
+
+#[tokio::test]
+async fn vertex_ocr_sends_explicit_oauth_bearer_to_raw_predict_endpoint() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts one request");
+        let request = read_http_headers(&mut socket).await;
+        let response_body = r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-maas","usage_info":{"pages_processed":1}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+
+    let mut optional_params = Map::new();
+    optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+    optional_params.insert(
+        "vertex_location".to_string(),
+        Value::String("global".into()),
+    );
+
+    let response = ocr(OcrRequest {
+        model: "mistral-ocr-maas",
+        document: json!({
+            "type": "image_url",
+            "image_url": "data:image/png;base64,abc"
+        }),
+        api_key: Some("ya29.explicit-oauth-token"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: "vertex_ai",
+        extra_headers: None,
+        optional_params,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect("vertex ocr request succeeds");
+
+    assert_eq!(response["pages"][0]["markdown"], "ok");
+
+    let request = server.await.expect("server task completes");
+    let request_line = request.lines().next().unwrap_or_default();
+    assert!(
+        request_line
+            .contains("/v1/projects/proj-1/locations/global/publishers/mistralai/models/mistral-ocr-maas:rawPredict"),
+        "{request}"
+    );
+    let authorization_count = request
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+        .count();
+    assert_eq!(authorization_count, 1, "{request}");
+    assert!(
+        request.contains("authorization: Bearer ya29.explicit-oauth-token")
+            || request.contains("Authorization: Bearer ya29.explicit-oauth-token"),
+        "{request}"
+    );
+}
+
+#[tokio::test]
+async fn vertex_ocr_rejects_google_api_key_shaped_token_before_calling_upstream() {
+    let mut optional_params = Map::new();
+    optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+    optional_params.insert(
+        "vertex_location".to_string(),
+        Value::String("global".into()),
+    );
+
+    let err = ocr(OcrRequest {
+        model: "mistral-ocr-maas",
+        document: json!({
+            "type": "image_url",
+            "image_url": "data:image/png;base64,abc"
+        }),
+        api_key: Some("AIzaSyExampleApiKeyValue000000000000000"),
+        api_base: Some("http://192.0.2.1:9"),
+        custom_llm_provider: "vertex_ai",
+        extra_headers: None,
+        optional_params,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect_err("google api key is rejected");
+
+    match err {
+        CoreError::Auth(message) => assert!(message.contains("OAuth"), "{message}"),
+        other => panic!("expected auth error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn vertex_ocr_rejects_google_api_key_in_caller_authorization_header_before_upstream() {
+    let mut optional_params = Map::new();
+    optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+    optional_params.insert(
+        "vertex_location".to_string(),
+        Value::String("global".into()),
+    );
+
+    let mut headers = Map::new();
+    headers.insert(
+        "Authorization".to_string(),
+        Value::String("Bearer AIzaSyExampleApiKeyValue000000000000000".to_string()),
+    );
+
+    let err = ocr(OcrRequest {
+        model: "mistral-ocr-maas",
+        document: json!({
+            "type": "image_url",
+            "image_url": "data:image/png;base64,abc"
+        }),
+        api_key: None,
+        api_base: Some("http://192.0.2.1:9"),
+        custom_llm_provider: "vertex_ai",
+        extra_headers: Some(headers),
+        optional_params,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect_err("google api key in authorization header is rejected");
+
+    match err {
+        CoreError::Auth(message) => assert!(message.contains("OAuth"), "{message}"),
+        other => panic!("expected auth error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn vertex_ocr_rejects_malformed_authorization_scheme_before_upstream() {
+    let mut optional_params = Map::new();
+    optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+    optional_params.insert(
+        "vertex_location".to_string(),
+        Value::String("global".into()),
+    );
+
+    let mut headers = Map::new();
+    headers.insert(
+        "Authorization".to_string(),
+        Value::String("Basic dXNlcjpwYXNzd29yZA==".to_string()),
+    );
+
+    let err = ocr(OcrRequest {
+        model: "mistral-ocr-maas",
+        document: json!({
+            "type": "image_url",
+            "image_url": "data:image/png;base64,abc"
+        }),
+        api_key: None,
+        api_base: Some("http://192.0.2.1:9"),
+        custom_llm_provider: "vertex_ai",
+        extra_headers: Some(headers),
+        optional_params,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect_err("malformed authorization scheme is rejected");
+
+    match err {
+        CoreError::Auth(message) => assert!(message.contains("Bearer"), "{message}"),
+        other => panic!("expected auth error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn vertex_ocr_rejects_duplicate_authorization_headers_before_upstream() {
+    let mut optional_params = Map::new();
+    optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+    optional_params.insert(
+        "vertex_location".to_string(),
+        Value::String("global".into()),
+    );
+
+    let mut headers = Map::new();
+    headers.insert(
+        "Authorization".to_string(),
+        Value::String("Bearer ya29.first-token".to_string()),
+    );
+    headers.insert(
+        "authorization".to_string(),
+        Value::String("Bearer ya29.second-token".to_string()),
+    );
+
+    let err = ocr(OcrRequest {
+        model: "mistral-ocr-maas",
+        document: json!({
+            "type": "image_url",
+            "image_url": "data:image/png;base64,abc"
+        }),
+        api_key: None,
+        api_base: Some("http://192.0.2.1:9"),
+        custom_llm_provider: "vertex_ai",
+        extra_headers: Some(headers),
+        optional_params,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect_err("duplicate authorization headers are rejected");
+
+    match err {
+        CoreError::Auth(message) => assert!(message.contains("exactly one"), "{message}"),
+        other => panic!("expected auth error, got {other:?}"),
+    }
+}

@@ -28,6 +28,12 @@ pub enum OcrResponseHandling {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OcrAuth {
+    ProviderKey,
+    VertexOauth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrDocumentPreparation {
     None,
     DataUri,
@@ -72,9 +78,17 @@ pub trait OcrProviderConfig: Sync {
 
     fn resolve_api_key(
         &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+        _api_key: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> CoreResult<String> {
+        Err(crate::error::CoreError::Auth(
+            "provider does not use direct api-key auth".to_string(),
+        ))
+    }
+
+    fn ocr_auth(&self) -> OcrAuth {
+        OcrAuth::ProviderKey
+    }
 
     fn auth_strategy(&self) -> OcrAuthStrategy {
         OcrAuthStrategy::Bearer

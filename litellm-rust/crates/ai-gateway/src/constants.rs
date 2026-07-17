@@ -34,4 +34,10 @@ pub(crate) const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 #[cfg(feature = "server")]
 pub(crate) const DEFAULT_PROVIDER: &str = "openai";
 
+pub(crate) const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+
+pub(crate) const VERTEXAI_CREDENTIALS_ENV: &str = "VERTEXAI_CREDENTIALS";
+
+pub(crate) const VERTEX_CREDENTIALS_CACHE_CAPACITY: usize = 64;
+
 pub(crate) const ENV_REFERENCE_PREFIX: &str = "os.environ/";
