@@ -174,3 +174,67 @@ def test_raise_classified_list_failure_routes_auth_to_upstream_auth_error():
     with pytest.raises(MCPServerListError) as fault_info:
         raise_classified_list_failure(RuntimeError("boom"), "srv")
     assert fault_info.value.fault.tag == "internal"
+
+
+def test_causal_auth_behind_unrelated_response_is_still_found():
+    """The auth scan must not end at the first response of any status: a causal 401 sitting deeper
+    in the tree than an unrelated 5xx (retry attempts, multi-stream task groups) must still surface
+    with its challenge, or the client is told upstream_error and never re-authenticates."""
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import upstream_auth_challenge
+
+    deep_auth = httpx.HTTPStatusError(
+        "auth",
+        request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        response=httpx.Response(
+            401,
+            headers={"www-authenticate": "Bearer realm=upstream"},
+            request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        ),
+    )
+    earlier_5xx = httpx.HTTPStatusError(
+        "flaky attempt",
+        request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        response=httpx.Response(500, request=httpx.Request("POST", "https://mcp.example.com/mcp")),
+    )
+    earlier_5xx.__cause__ = deep_auth
+    wrapper = RuntimeError("fetch failed")
+    wrapper.__cause__ = earlier_5xx
+
+    result = upstream_auth_challenge(wrapper)
+    assert result is not None
+    assert result == (401, "Bearer realm=upstream")
+
+
+def test_classification_agrees_with_auth_scan_on_nested_auth():
+    """classify_list_exception derives its auth arm from the same scan as the carrier choice-point,
+    so a nested 401 behind a 5xx classifies auth_required, never upstream_error(500)."""
+    deep_auth = httpx.HTTPStatusError(
+        "auth",
+        request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        response=httpx.Response(401, request=httpx.Request("POST", "https://mcp.example.com/mcp")),
+    )
+    earlier_5xx = httpx.HTTPStatusError(
+        "flaky attempt",
+        request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        response=httpx.Response(500, request=httpx.Request("POST", "https://mcp.example.com/mcp")),
+    )
+    earlier_5xx.__cause__ = deep_auth
+    wrapper = RuntimeError("fetch failed")
+    wrapper.__cause__ = earlier_5xx
+
+    fault = classify_list_exception(wrapper)
+    assert fault.tag == "auth_required"
+    assert fault.status_code == 401
+
+
+def test_pure_non_auth_response_still_classifies_upstream_error():
+    """With no auth response anywhere in the tree, the first response in deliberate order still
+    drives the generic upstream_error classification."""
+    exc = httpx.HTTPStatusError(
+        "boom",
+        request=httpx.Request("POST", "https://mcp.example.com/mcp"),
+        response=httpx.Response(502, request=httpx.Request("POST", "https://mcp.example.com/mcp")),
+    )
+    fault = classify_list_exception(exc)
+    assert fault.tag == "upstream_error"
+    assert fault.status_code == 502
