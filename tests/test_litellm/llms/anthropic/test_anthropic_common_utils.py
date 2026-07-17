@@ -1266,6 +1266,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
             is_anthropic_invalid_thinking_signature_error,
         )
 
+        # Real user-reported Bedrock scenario
         raw = '{"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}'
         assert is_anthropic_invalid_thinking_signature_error(raw) is True
 
@@ -1291,8 +1292,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
             is_anthropic_invalid_thinking_signature_error("invalid_request_error: model not found")
             is False
         )
-        assert is_anthropic_invalid_thinking_signature_error("thinking content is malformed") is False
-        assert is_anthropic_invalid_thinking_signature_error("signature is malformed") is False
+        assert is_anthropic_invalid_thinking_signature_error("thinking signature is malformed") is False
 
     def test_strip_thinking_blocks_from_anthropic_messages(self):
         from litellm.llms.anthropic.common_utils import (

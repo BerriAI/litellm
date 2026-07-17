@@ -916,7 +916,7 @@ def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
     if not error_text:
         return False
     lower = error_text.lower()
-    return "thinking" in lower and "signature" in lower
+    return "thinking" in lower and "signature" in lower and ("invalid" in lower or "valid string" in lower)
 
 
 def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[Any]:
