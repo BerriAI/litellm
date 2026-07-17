@@ -202,11 +202,11 @@ class TestNova2ParameterMapping:
         assert result["reasoningConfig"]["type"] == "enabled"
         assert result["reasoningConfig"]["maxReasoningEffort"] == "low"
 
-    def test_nova_2_regional_variant_apac(self):
-        """Test that APAC regional variant of Nova 2 works correctly."""
+    def test_nova_2_regional_variant_jp(self):
+        """Test that JP geo inference variant of Nova 2 works correctly."""
         config = AmazonConverseConfig()
 
-        model = "apac.amazon.nova-2-lite-v1:0"
+        model = "jp.amazon.nova-2-lite-v1:0"
         non_default_params = {"reasoning_effort": "high"}
         optional_params = {}
 
@@ -295,11 +295,11 @@ class TestNova15SupportedParameters:
         # Verify thinking is NOT in supported params
         assert "thinking" not in supported_params
 
-    def test_nova_2_regional_variant_apac_supported_params(self):
-        """Test that APAC regional variant returns same supported params."""
+    def test_nova_2_regional_variant_jp_supported_params(self):
+        """Test that JP geo inference variant returns same supported params."""
         config = AmazonConverseConfig()
 
-        model = "apac.amazon.nova-2-lite-v1:0"
+        model = "jp.amazon.nova-2-lite-v1:0"
         supported_params = config.get_supported_openai_params(model)
 
         # Verify reasoning_effort is in supported params
@@ -470,6 +470,10 @@ class TestNova2ModelDetection:
             "us.amazon.nova-2-pro-preview-20251202-v1:0",
             "eu.amazon.nova-2-lite-v1:0",
             "apac.amazon.nova-2-pro-preview-20251202-v1:0",
+            "jp.amazon.nova-2-lite-v1:0",
+            "global.amazon.nova-2-lite-v1:0",
+            "bedrock/converse/jp.amazon.nova-2-lite-v1:0",
+            "bedrock/converse/global.amazon.nova-2-lite-v1:0",
             "bedrock/converse/amazon.nova-2-lite-v1:0",
             "bedrock/converse/us.amazon.nova-2-pro-preview-20251202-v1:0",
             "bedrock/amazon.nova-2-lite-v1:0",
