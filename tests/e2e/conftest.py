@@ -15,14 +15,13 @@ shared fixtures build on it.
 
 import functools
 import sys
-from collections.abc import Generator, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 import requests
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
-from e2e_result_reporter import covers_from_item, format_e2e_result_line, result_from_pytest
 from lifecycle import GatewayProvider, ResourceManager
 
 
@@ -38,6 +37,46 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "covers(cell_id, *, exercised_on=()): coverage-registry cell(s) this test covers",
     )
+
+
+def _package_from_nodeid(nodeid: str) -> str:
+    """Top-level suite package under tests/e2e/, or 'root' for top-level files.
+
+    Pytest nodeids are relative to the invocation cwd. Repo-root runs look like
+    `tests/e2e/logging/...`; suite-cwd runs look like `logging/...`. Strip the
+    `tests/e2e` prefix so package is the suite dir either way.
+    """
+    path_part = nodeid.split("::", 1)[0].replace("\\", "/")
+    raw = tuple(p for p in path_part.split("/") if p and p != ".")
+    parts = raw[2:] if len(raw) >= 3 and raw[0] == "tests" and raw[1] == "e2e" else raw
+    if len(parts) <= 1:
+        return "root"
+    return parts[0]
+
+
+def _covers_from_item(item: pytest.Item) -> tuple[str, ...]:
+    """Read @pytest.mark.covers cell ids off a pytest Item, order-preserving."""
+    marker_args: tuple[tuple[object, ...], ...] = tuple(marker.args for marker in item.iter_markers(name="covers"))
+    return tuple(dict.fromkeys(arg for args in marker_args for arg in args if isinstance(arg, str) and arg))
+
+
+def _result_properties(item: pytest.Item) -> tuple[tuple[str, str], ...]:
+    """The only custom signal a standard reporter cannot derive on its own: the
+    normalized suite package and the coverage-registry cell ids this test covers."""
+    return (
+        ("package", _package_from_nodeid(item.nodeid)),
+        ("covers", ",".join(_covers_from_item(item))),
+    )
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Attach package + covers to every item's user_properties so a standard
+    reporter (`--junitxml`) captures them per test, on every outcome including
+    skips and setup errors. Downstream (Loki/Grafana) reads outcome and duration
+    from the standard artifact and these two properties for package rollups and
+    coverage drill-down; no bespoke log line is emitted."""
+    for item in items:
+        item.user_properties.extend(_result_properties(item))
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
@@ -84,30 +123,6 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     if item.get_closest_marker("e2e") is None:
         return
     item.session.stash[_E2E_TEST_RAN] = True
-
-
-@pytest.hookimpl(wrapper=True, tryfirst=True)
-def pytest_runtest_makereport(
-    item: pytest.Item, call: pytest.CallInfo[object]
-) -> Generator[None, pytest.TestReport, pytest.TestReport]:
-    """Emit one structured E2E_RESULT line per finished test for Loki/Grafana.
-
-    Status-history panels should aggregate by package (and optional covers), not
-    scrape pytest progress basenames. See e2e_result_reporter.py.
-    """
-    report = yield
-    result = result_from_pytest(
-        nodeid=str(report.nodeid),
-        when=str(report.when),
-        failed=bool(report.failed),
-        skipped=bool(report.skipped),
-        passed=bool(report.passed),
-        duration_seconds=float(report.duration),
-        covers=covers_from_item(item),
-    )
-    if result is not None:
-        print(format_e2e_result_line(result), flush=True)
-    return report
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
