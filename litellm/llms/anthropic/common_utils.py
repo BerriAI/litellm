@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
@@ -551,7 +552,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.append("code-execution-2025-05-22")
 
         if mcp_server_used:
-            betas.append("mcp-client-2025-04-04")
+            betas.append(ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value)
 
         return list(set(betas))
 
@@ -599,7 +600,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.add("files-api-2025-04-14")
             betas.add("code-execution-2025-05-22")
         if mcp_server_used:
-            betas.add("mcp-client-2025-04-04")
+            betas.add(ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value)
         # Tool search, programmatic tool calling, and input_examples all use the same beta header
         if tool_search_used or programmatic_tool_calling_used or input_examples_used:
             from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
@@ -642,8 +643,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_vertex_request is True:
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
-                from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-
                 headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)

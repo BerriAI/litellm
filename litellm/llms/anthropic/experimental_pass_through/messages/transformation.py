@@ -592,6 +592,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
+        # Check for Anthropic's MCP connector
+        if AnthropicModelInfo().is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers")):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.MCP_CLIENT_2025_04_04.value)
+
         # Check for advisor tool
         tools = optional_params.get("tools")
         if tools:
