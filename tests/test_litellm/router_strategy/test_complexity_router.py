@@ -3119,3 +3119,260 @@ class TestRoutingPlugins:
         assert first.model == "gpt-4o-mini"
         assert second.model == "gpt-4o-mini"
         assert spy.call_count == 2
+
+
+class TestEscalationKeywords:
+    """Test user-triggered escalation: a keyword in the prompt bumps the resolved tier
+    one step higher so a user can force a stronger model when unhappy with results."""
+
+    @staticmethod
+    def _request_kwargs(session_id: str) -> Dict:
+        return {"metadata": {"session_id": session_id}}
+
+    def test_default_escalation_keyword(self, complexity_router):
+        assert complexity_router.escalation_keywords == ["LITELLM ESCALATE"]
+
+    def test_escalation_triggered_is_case_sensitive(self, complexity_router):
+        assert complexity_router._escalation_triggered("please LITELLM ESCALATE now") is True
+        assert complexity_router._escalation_triggered("please litellm escalate now") is False
+        assert complexity_router._escalation_triggered("how do I escalate this ticket") is False
+
+    def test_escalate_tier_bumps_one_step(self, complexity_router):
+        assert complexity_router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.MEDIUM
+        assert complexity_router._escalate_tier(ComplexityTier.MEDIUM) == ComplexityTier.COMPLEX
+        assert complexity_router._escalate_tier(ComplexityTier.COMPLEX) == ComplexityTier.REASONING
+
+    def test_escalate_tier_caps_at_highest_configured(self, complexity_router):
+        assert complexity_router._escalate_tier(ComplexityTier.REASONING) == ComplexityTier.REASONING
+
+    def test_escalate_tier_skips_unconfigured_intermediate(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "o1-preview"}},
+        )
+        assert router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.REASONING
+
+    def test_tier_for_model_returns_most_severe(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "shared", "COMPLEX": "shared", "REASONING": "top"}
+            },
+        )
+        assert router._tier_for_model("shared") == ComplexityTier.COMPLEX
+        assert router._tier_for_model("top") == ComplexityTier.REASONING
+        assert router._tier_for_model("unknown") is None
+
+    @pytest.mark.asyncio
+    async def test_escalation_bumps_classified_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        # Baseline: this prompt classifies SIMPLE.
+        baseline = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "Hello there!"}]
+        )
+        assert baseline.model == "gpt-4o-mini"
+
+        escalated = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE Hello there!"}],
+        )
+        assert escalated.model == "gpt-4o"  # SIMPLE bumped to MEDIUM
+
+    @pytest.mark.asyncio
+    async def test_lowercase_keyword_does_not_escalate(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "litellm escalate Hello there!"}],
+        )
+        assert result.model == "gpt-4o-mini"  # not escalated
+
+    @pytest.mark.asyncio
+    async def test_custom_escalation_keyword(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "escalation_keywords": ["MAKE IT BETTER"]},
+        )
+        # The default keyword no longer triggers once a custom list is supplied.
+        default = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE Hello there!"}],
+        )
+        assert default.model == "gpt-4o-mini"
+
+        custom = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "MAKE IT BETTER Hello there!"}],
+        )
+        assert custom.model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_empty_keyword_list_disables_escalation(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "escalation_keywords": []},
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE Hello there!"}],
+        )
+        assert result.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_escalation_caps_at_highest_tier(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=basic_config,
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {
+                    "role": "user",
+                    "content": "LITELLM ESCALATE Let's think step by step and reason through this carefully.",
+                }
+            ],
+        )
+        assert result.model == "o1-preview"  # already REASONING, stays there
+
+    @pytest.mark.asyncio
+    async def test_escalation_bumps_keyword_tier_override(self, mock_router_instance, basic_config):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "keyword_tier_rules": [{"keywords": ["billing"], "tier": "SIMPLE"}],
+            },
+        )
+        baseline = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "a billing question"}]
+        )
+        assert baseline.model == "gpt-4o-mini"
+
+        escalated = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "LITELLM ESCALATE a billing question"}],
+        )
+        assert escalated.model == "gpt-4o"  # override SIMPLE bumped to MEDIUM
+
+    @pytest.mark.asyncio
+    async def test_escalation_overrides_session_pin_and_persists(self, mock_router_instance, basic_config):
+        """Mid-session escalation bumps relative to the pinned model (never below it) and
+        the bumped model persists for later turns."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "session_affinity": True},
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "Hello!"}]
+        )
+        assert first.model == "gpt-4o-mini"  # pinned SIMPLE
+
+        with patch.object(router, "aclassify", wraps=router.aclassify) as spy_aclassify:
+            escalated = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs=request_kwargs,
+                messages=[{"role": "user", "content": "LITELLM ESCALATE"}],
+            )
+            spy_aclassify.assert_not_called()
+        assert escalated.model == "gpt-4o"  # bumped relative to the SIMPLE pin, not reclassified
+
+        # The bump persists: a later ordinary turn stays on the escalated model.
+        later = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "thanks"}]
+        )
+        assert later.model == "gpt-4o"
+
+        # Escalating again climbs one more tier.
+        again = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "LITELLM ESCALATE still not good"}],
+        )
+        assert again.model == "claude-sonnet-4-20250514"  # MEDIUM bumped to COMPLEX
+
+    def test_blank_escalation_keywords_are_stripped(self):
+        """Blank/whitespace-only phrases are dropped so `"" in message` can't escalate
+        every request; surrounding whitespace on real phrases is trimmed."""
+        assert ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+            escalation_keywords=["", "  "],
+        ).escalation_keywords == []
+        assert ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+            escalation_keywords=["  LITELLM ESCALATE  ", ""],
+        ).escalation_keywords == ["LITELLM ESCALATE"]
+
+    @pytest.mark.asyncio
+    async def test_blank_escalation_keyword_does_not_escalate_everything(
+        self, mock_router_instance, basic_config
+    ):
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "escalation_keywords": [""]},
+        )
+        assert router.escalation_keywords == []
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello there!"}],
+        )
+        assert result.model == "gpt-4o-mini"  # not escalated
+
+    def test_escalated_pin_stays_on_same_model_at_ceiling(self, mock_router_instance):
+        """At the highest configured tier escalation keeps the exact pinned model, even
+        when that tier's pool has peers `get_model_for_tier` could randomly pick instead."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]}
+            },
+        )
+        for pinned in ("o1-a", "o1-b", "o1-c"):
+            assert router._escalated_pin(pinned) == pinned
+
+    @pytest.mark.asyncio
+    async def test_session_escalation_at_ceiling_keeps_multi_model_pin(self, mock_router_instance):
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": ["o1-a", "o1-b", "o1-c"]},
+                "session_affinity": True,
+            },
+        )
+        cache_key = router._get_session_affinity_cache_key("session-top", {})
+        await mock_router_instance.cache.async_set_cache(key=cache_key, value="o1-b")
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=self._request_kwargs("session-top"),
+            messages=[{"role": "user", "content": "LITELLM ESCALATE do better"}],
+        )
+        assert result.model == "o1-b"  # unchanged: no random hop to o1-a / o1-c

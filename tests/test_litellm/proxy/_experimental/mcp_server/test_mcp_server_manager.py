@@ -8496,3 +8496,34 @@ def test_build_mcp_server_table_carries_null_oauth2_flow():
     table = manager._build_mcp_server_table(server)
 
     assert table.oauth2_flow is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_toolset_tool_permissions_single_db_fetch_across_checks():
+    """The server-level and tool-level permission primitives each resolve the
+    key's toolsets during one request; the shared cache must dedupe the DB
+    fetch so the request costs a single toolset query however many checks run"""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    toolset = MagicMock()
+    toolset.tools = [{"server_id": "server-a", "tool_name": "lookup_status"}]
+    list_toolsets_mock = AsyncMock(return_value=[toolset])
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+            list_toolsets_mock,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+    ):
+        first = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+        second = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+
+    assert first == {"server-a": ["lookup_status"]}
+    assert second == first
+    list_toolsets_mock.assert_awaited_once()

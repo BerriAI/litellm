@@ -301,6 +301,187 @@ class TestMCPRequestHandler:
 
         assert result == [SpecialMCPServerNames.no_mcp_servers.value]
 
+    def _toolset_only_object_permission(self, toolset_ids):
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = []
+        key_object_permission.mcp_access_groups = []
+        key_object_permission.mcp_tool_permissions = None
+        key_object_permission.mcp_toolsets = toolset_ids
+        return key_object_permission
+
+    def _mock_manager_with_toolsets(self, toolset_perms):
+        mock_manager = MagicMock()
+        mock_manager.expand_permission_list = MagicMock(side_effect=lambda servers: servers)
+        mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
+        return mock_manager
+
+    async def test_get_allowed_mcp_servers_for_key_includes_toolset_servers(self):
+        """A key granted only mcp_toolsets must reach the toolset's servers on
+        every path (list, call, REST); regression for the list-ok/call-403 bug"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission(["toolset-1"])
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["lookup_status"]})
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
+
+        assert result == ["server-a"]
+        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+
+    async def test_get_allowed_mcp_servers_for_key_skips_toolset_resolution_when_none_granted(self):
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_servers = ["server-direct"]
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
+
+        assert result == ["server-direct"]
+        mock_manager.resolve_toolset_tool_permissions.assert_not_awaited()
+
+    async def test_get_allowed_mcp_servers_toolset_only_key_end_to_end_inheritance(self):
+        """The full get_allowed_mcp_servers flow (key/team inheritance, no team
+        restriction) surfaces toolset-granted servers for a toolset-only key"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission(["toolset-1"])
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["lookup_status"]})
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[])),
+            patch.object(MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == ["server-a"]
+
+    async def test_toolset_servers_stay_capped_by_team_ceiling(self):
+        """Toolset grants expand the KEY's scope, which the team ceiling still
+        intersects; a toolset must never grant a server the team does not allow.
+        Pins that toolset expansion lives in the intersected key scope, not the
+        additive access-group path"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+        key_object_permission = self._toolset_only_object_permission(["toolset-1"])
+        mock_manager = self._mock_manager_with_toolsets(
+            {"server-in-team": ["lookup_status"], "server-outside-team": ["other_tool"]}
+        )
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                AsyncMock(return_value=["server-in-team", "server-unrelated"]),
+            ),
+            patch.object(MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == ["server-in-team"]
+
+    async def test_get_allowed_tools_for_server_unions_toolset_and_direct_tools(self):
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission(["toolset-1"])
+        key_object_permission.mcp_tool_permissions = {"server-a": ["direct_tool"]}
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["lookup_status"]})
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a",
+                user_api_key_auth=user_api_key_auth,
+            )
+
+        assert result is not None
+        assert set(result) == {"direct_tool", "lookup_status"}
+
+    async def test_get_allowed_tools_for_server_toolset_only_key_restricts_to_toolset_tools(self):
+        """A toolset grant must RESTRICT the server's tools, not fall through to
+        the allow-all default; otherwise merging servers alone would over-grant
+        every tool on a toolset-referenced server"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission(["toolset-1"])
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["lookup_status"]})
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a",
+                user_api_key_auth=user_api_key_auth,
+            )
+            is_granted_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="lookup_status",
+                server_id="server-a",
+                user_api_key_auth=user_api_key_auth,
+            )
+            is_other_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="delete_everything",
+                server_id="server-a",
+                user_api_key_auth=user_api_key_auth,
+            )
+
+        assert allowed == ["lookup_status"]
+        assert is_granted_tool_allowed is True
+        assert is_other_tool_allowed is False
+
+    async def test_get_allowed_tools_for_server_without_restrictions_stays_allow_all(self):
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = self._toolset_only_object_permission([])
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a",
+                user_api_key_auth=user_api_key_auth,
+            )
+
+        assert result is None
+
     async def test_permission_inheritance_edge_cases(self):
         """Test edge cases in permission inheritance"""
 
