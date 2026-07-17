@@ -23,8 +23,6 @@ pytestmark = pytest.mark.e2e
 TINY_CAP = 3e-6
 WINDOW = "30s"
 RESET_DEADLINE_SECONDS = 150
-DRIVE_MAX_ATTEMPTS = 12
-DRIVE_SLEEP_SECONDS = 2
 
 
 def _call(client: BudgetClient, key: str):
@@ -34,12 +32,12 @@ def _call(client: BudgetClient, key: str):
 def _drive_to_block(client: BudgetClient, key: str) -> None:
     """Spend until the cap blocks a call, staying under one window so the block
     is observed before the reset job can fire; fail hard if enforcement never trips."""
-    for _ in range(DRIVE_MAX_ATTEMPTS):
+    for _ in range(12):
         result = _call(client, key)
         if is_budget_block(result):
             return
         require_successful_call(result)
-        time.sleep(DRIVE_SLEEP_SECONDS)
+        time.sleep(2)
     pytest.fail("budget never enforced before the window could reset")
 
 
