@@ -10,6 +10,7 @@ from io import IOBase
 from typing import Any, Coroutine, Union, cast
 
 import httpx
+from typing_extensions import Never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -37,63 +38,63 @@ def _ocr_error_response(status_code: int) -> httpx.Response:
     )
 
 
-def _rust_ocr_error_to_public_exception(
+def _raise_rust_ocr_exception(
     err: RustOcrError, model: str, custom_llm_provider: str | None
-) -> Exception:
+) -> Never:
     provider = custom_llm_provider or "mistral"
     status_code = err.status_code
     message = err.message
     match status_code:
         case None:
-            return litellm.APIConnectionError(
+            raise litellm.APIConnectionError(
                 message=message, llm_provider=provider, model=model
             )
         case 400:
-            return litellm.BadRequestError(
+            raise litellm.BadRequestError(
                 message=message, model=model, llm_provider=provider
             )
         case 401:
-            return litellm.AuthenticationError(
+            raise litellm.AuthenticationError(
                 message=message, llm_provider=provider, model=model
             )
         case 403:
-            return litellm.PermissionDeniedError(
+            raise litellm.PermissionDeniedError(
                 message=message,
                 llm_provider=provider,
                 model=model,
                 response=_ocr_error_response(403),
             )
         case 404:
-            return litellm.NotFoundError(
+            raise litellm.NotFoundError(
                 message=message, model=model, llm_provider=provider
             )
         case 408:
-            return litellm.Timeout(message=message, model=model, llm_provider=provider)
+            raise litellm.Timeout(message=message, model=model, llm_provider=provider)
         case 422:
-            return litellm.UnprocessableEntityError(
+            raise litellm.UnprocessableEntityError(
                 message=message,
                 model=model,
                 llm_provider=provider,
                 response=_ocr_error_response(422),
             )
         case 429:
-            return litellm.RateLimitError(
+            raise litellm.RateLimitError(
                 message=message, llm_provider=provider, model=model
             )
         case 500:
-            return litellm.InternalServerError(
+            raise litellm.InternalServerError(
                 message=message, llm_provider=provider, model=model
             )
         case 502:
-            return litellm.BadGatewayError(
+            raise litellm.BadGatewayError(
                 message=message, llm_provider=provider, model=model
             )
         case 503:
-            return litellm.ServiceUnavailableError(
+            raise litellm.ServiceUnavailableError(
                 message=message, llm_provider=provider, model=model
             )
         case _:
-            return litellm.APIError(
+            raise litellm.APIError(
                 status_code=status_code,
                 message=message,
                 llm_provider=provider,
@@ -101,20 +102,20 @@ def _rust_ocr_error_to_public_exception(
             )
 
 
-def _map_ocr_exception(
+def _raise_ocr_exception(
     e: Exception,
     model: str,
     custom_llm_provider: str | None,
     completion_kwargs: dict[str, object],
     kwargs: dict[str, object],
-) -> Exception:
+) -> Never:
     if isinstance(e, RustOcrError):
-        return _rust_ocr_error_to_public_exception(e, model, custom_llm_provider)
+        _raise_rust_ocr_exception(e, model, custom_llm_provider)
     if isinstance(e, _OCRInputError):
-        return litellm.BadRequestError(
+        raise litellm.BadRequestError(
             message=str(e), model=model, llm_provider=custom_llm_provider or "mistral"
         )
-    return litellm.exception_type(
+    raise litellm.exception_type(
         model=model,
         custom_llm_provider=custom_llm_provider,
         original_exception=e,
@@ -455,7 +456,7 @@ async def aocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
-        raise _map_ocr_exception(
+        _raise_ocr_exception(
             e,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -719,7 +720,7 @@ def ocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
-        raise _map_ocr_exception(
+        _raise_ocr_exception(
             e,
             model=model,
             custom_llm_provider=custom_llm_provider,

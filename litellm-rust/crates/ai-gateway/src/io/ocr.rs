@@ -75,7 +75,7 @@ pub struct OcrRequest<'a> {
 pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let model = request.model;
     let config = ocr_provider_config(request.custom_llm_provider, model).ok_or_else(|| {
-        CoreError::NotFound(format!(
+        CoreError::InvalidProvider(format!(
             "no OCR provider '{}' registered for model '{model}'",
             request.custom_llm_provider
         ))
@@ -539,7 +539,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ocr_maps_unregistered_provider_to_not_found() {
+    async fn ocr_maps_unregistered_provider_to_invalid_provider() {
         let err = ocr(OcrRequest {
             model: "some-model",
             document: json!({
@@ -555,7 +555,8 @@ mod tests {
         })
         .await
         .expect_err("unregistered provider surfaces");
-        assert!(matches!(err, CoreError::NotFound(_)));
-        assert_eq!(err.public_status_code(), Some(404));
+        assert!(matches!(err, CoreError::InvalidProvider(_)));
+        assert_eq!(err.public_status_code(), Some(400));
+        assert_eq!(err.public_message(), "Invalid OCR request");
     }
 }

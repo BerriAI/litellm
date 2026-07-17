@@ -27,8 +27,6 @@ pub enum CoreError {
     Network(String),
     #[error("routing error: {0}")]
     Routing(String),
-    #[error("{0}")]
-    NotFound(String),
 }
 
 impl CoreError {
@@ -36,7 +34,6 @@ impl CoreError {
         match self {
             CoreError::Http { status, .. } => Some(*status),
             CoreError::Auth(_) => Some(401),
-            CoreError::NotFound(_) => Some(404),
             CoreError::InvalidType { .. }
             | CoreError::MissingField(_)
             | CoreError::InvalidProvider(_)
@@ -56,12 +53,12 @@ impl CoreError {
             }
             CoreError::Routing(_) => "OCR request could not be routed".to_string(),
             CoreError::Auth(_) => "OCR request failed provider authentication".to_string(),
-            CoreError::InvalidRequest(_) => "Invalid OCR request".to_string(),
-            CoreError::Timeout
-            | CoreError::NotFound(_)
-            | CoreError::InvalidType { .. }
-            | CoreError::MissingField(_)
-            | CoreError::InvalidProvider(_) => self.to_string(),
+            CoreError::InvalidRequest(_) | CoreError::InvalidProvider(_) => {
+                "Invalid OCR request".to_string()
+            }
+            CoreError::Timeout | CoreError::InvalidType { .. } | CoreError::MissingField(_) => {
+                self.to_string()
+            }
         }
     }
 }
@@ -125,8 +122,8 @@ mod tests {
             None
         );
         assert_eq!(
-            CoreError::NotFound("model 'x' not found".to_string()).public_status_code(),
-            Some(404)
+            CoreError::InvalidProvider("mistral".to_string()).public_status_code(),
+            Some(400)
         );
     }
 
@@ -197,14 +194,32 @@ mod tests {
     }
 
     #[test]
-    fn public_message_keeps_caller_facing_detail() {
+    fn public_message_keeps_only_static_detail() {
         assert_eq!(
-            CoreError::NotFound("model 'gpt-8' not found".to_string()).public_message(),
-            "model 'gpt-8' not found"
+            CoreError::MissingField("document.type").public_message(),
+            "missing required field: document.type"
+        );
+        assert_eq!(
+            CoreError::InvalidType {
+                expected: "object",
+                actual: "string"
+            }
+            .public_message(),
+            "expected object, got string"
         );
         assert_eq!(
             CoreError::Routing("model_list parse failed".to_string()).public_message(),
             "OCR request could not be routed"
         );
+    }
+
+    #[test]
+    fn public_message_hides_invalid_provider_detail() {
+        let err = CoreError::InvalidProvider(
+            "no OCR provider 'internal-secret-router' registered for model 'gpt-8'".to_string(),
+        );
+        assert_eq!(err.public_message(), "Invalid OCR request");
+        assert!(!err.public_message().contains("internal-secret-router"));
+        assert_eq!(err.public_status_code(), Some(400));
     }
 }

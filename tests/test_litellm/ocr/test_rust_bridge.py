@@ -3,7 +3,7 @@
 import importlib
 import builtins
 import types
-from unittest.mock import Mock
+from dataclasses import dataclass
 
 import httpx
 import pydantic
@@ -37,6 +37,40 @@ FAKE_OCR_RESPONSE: dict[str, object] = {
 
 class CapturedException(Exception):
     pass
+
+
+@dataclass(slots=True)
+class ExceptionTypeCall:
+    model: str
+    custom_llm_provider: str | None
+    original_exception: Exception
+    completion_kwargs: dict[str, object]
+    extra_kwargs: dict[str, object]
+
+
+class ExceptionTypeSpy:
+    def __init__(self) -> None:
+        self.calls: list[ExceptionTypeCall] = []
+
+    def __call__(
+        self,
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        original_exception: Exception,
+        completion_kwargs: dict[str, object],
+        extra_kwargs: dict[str, object],
+    ) -> CapturedException:
+        self.calls.append(
+            ExceptionTypeCall(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                original_exception=original_exception,
+                completion_kwargs=completion_kwargs,
+                extra_kwargs=extra_kwargs,
+            )
+        )
+        return CapturedException("wrapped")
 
 
 class RecordingBridge:
@@ -439,15 +473,15 @@ def test_ocr_routes_azure_ai_to_rust_by_default(fake_bridge):
 def test_ocr_exception_type_uses_resolved_provider_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exception_type = Mock(return_value=CapturedException("wrapped"))
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", exception_type)
+    spy = ExceptionTypeSpy()
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", spy)
     rust_bridge._set_rust_ocr_bridge(ocr=RaisingBridge())
 
     with pytest.raises(CapturedException):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
-    assert exception_type.call_args.kwargs["model"] == "mistral-ocr-latest"
-    assert exception_type.call_args.kwargs["custom_llm_provider"] == "mistral"
+    assert spy.calls[0].model == "mistral-ocr-latest"
+    assert spy.calls[0].custom_llm_provider == "mistral"
 
 
 @pytest.mark.asyncio
@@ -476,15 +510,15 @@ async def test_aocr_routes_to_async_rust_by_default(fake_async_bridge):
 async def test_aocr_exception_type_uses_resolved_provider_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exception_type = Mock(return_value=CapturedException("wrapped"))
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", exception_type)
+    spy = ExceptionTypeSpy()
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", spy)
     rust_bridge._set_rust_ocr_bridge(aocr=RaisingAsyncBridge())
 
     with pytest.raises(CapturedException):
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
-    assert exception_type.call_args.kwargs["model"] == "mistral-ocr-latest"
-    assert exception_type.call_args.kwargs["custom_llm_provider"] == "mistral"
+    assert spy.calls[0].model == "mistral-ocr-latest"
+    assert spy.calls[0].custom_llm_provider == "mistral"
 
 
 def test_ocr_forwards_timeout_to_rust(fake_bridge):
@@ -535,15 +569,18 @@ RUST_OCR_ERROR_CASES = [
     ("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES
 )
 def test_rust_ocr_error_maps_to_public_exception(
-    status_code, expected_exception, expected_status
-):
-    exc = ocr_main._rust_ocr_error_to_public_exception(
-        RustOcrError("upstream boom", status_code),
-        model="mistral-ocr-latest",
-        custom_llm_provider="mistral",
-    )
+    status_code: int | None,
+    expected_exception: type[Exception],
+    expected_status: int,
+) -> None:
+    with pytest.raises(expected_exception) as exc_info:
+        ocr_main._raise_rust_ocr_exception(
+            RustOcrError("upstream boom", status_code),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+        )
 
-    assert isinstance(exc, expected_exception)
+    exc = exc_info.value
     assert exc.status_code == expected_status
     assert exc.llm_provider == "mistral"
     assert exc.model == "mistral-ocr-latest"
@@ -554,8 +591,10 @@ def test_rust_ocr_error_maps_to_public_exception(
     ("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES
 )
 def test_ocr_raises_typed_exception_from_rust_error(
-    status_code, expected_exception, expected_status
-):
+    status_code: int | None,
+    expected_exception: type[Exception],
+    expected_status: int,
+) -> None:
     rust_bridge._set_rust_ocr_bridge(ocr=RustErrorBridge("upstream boom", status_code))
 
     with pytest.raises(expected_exception) as exc_info:
@@ -570,8 +609,10 @@ def test_ocr_raises_typed_exception_from_rust_error(
 )
 @pytest.mark.asyncio
 async def test_aocr_raises_typed_exception_from_rust_error(
-    status_code, expected_exception, expected_status
-):
+    status_code: int | None,
+    expected_exception: type[Exception],
+    expected_status: int,
+) -> None:
     rust_bridge._set_rust_ocr_bridge(
         aocr=RustErrorAsyncBridge("upstream boom", status_code)
     )
@@ -595,27 +636,30 @@ UNKNOWN_STATUS_CASES = [
 def test_rust_ocr_error_unknown_status_preserves_exact_status(
     status_code: int,
 ) -> None:
-    exc = ocr_main._rust_ocr_error_to_public_exception(
-        RustOcrError("upstream boom", status_code),
-        model="mistral-ocr-latest",
-        custom_llm_provider="mistral",
-    )
+    with pytest.raises(litellm.APIError) as exc_info:
+        ocr_main._raise_rust_ocr_exception(
+            RustOcrError("upstream boom", status_code),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+        )
 
+    exc = exc_info.value
     assert type(exc) is litellm.APIError
     assert exc.status_code == status_code
     assert exc.llm_provider == "mistral"
     assert exc.model == "mistral-ocr-latest"
 
 
-def test_rust_ocr_error_message_is_preserved_bounded():
+def test_rust_ocr_error_message_is_preserved_bounded() -> None:
     bounded = "x" * 256 + "... (truncated)"
-    exc = ocr_main._rust_ocr_error_to_public_exception(
-        RustOcrError(bounded, 500),
-        model="mistral-ocr-latest",
-        custom_llm_provider="mistral",
-    )
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        ocr_main._raise_rust_ocr_exception(
+            RustOcrError(bounded, 500),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+        )
 
-    assert bounded in str(exc)
+    assert bounded in str(exc_info.value)
 
 
 INVALID_OCR_INPUTS = [
@@ -625,7 +669,7 @@ INVALID_OCR_INPUTS = [
 
 
 @pytest.mark.parametrize("document", INVALID_OCR_INPUTS)
-def test_ocr_invalid_input_raises_bad_request(document):
+def test_ocr_invalid_input_raises_bad_request(document: object) -> None:
     with pytest.raises(litellm.BadRequestError) as exc_info:
         litellm.ocr(model=MODEL, document=document, api_key="sk-test")
 
@@ -634,47 +678,47 @@ def test_ocr_invalid_input_raises_bad_request(document):
 
 @pytest.mark.parametrize("document", INVALID_OCR_INPUTS)
 @pytest.mark.asyncio
-async def test_aocr_invalid_input_raises_bad_request(document):
+async def test_aocr_invalid_input_raises_bad_request(document: object) -> None:
     with pytest.raises(litellm.BadRequestError) as exc_info:
         await litellm.aocr(model=MODEL, document=document, api_key="sk-test")
 
     assert exc_info.value.status_code == 400
 
 
-def test_map_ocr_exception_maps_input_error_to_bad_request():
-    result = ocr_main._map_ocr_exception(
-        ocr_main._OCRInputError("Invalid document type: bogus"),
-        model="mistral-ocr-latest",
-        custom_llm_provider="mistral",
-        completion_kwargs={},
-        kwargs={},
-    )
+def test_raise_ocr_exception_maps_input_error_to_bad_request() -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        ocr_main._raise_ocr_exception(
+            ocr_main._OCRInputError("Invalid document type: bogus"),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
 
-    assert isinstance(result, litellm.BadRequestError)
-    assert result.status_code == 400
-    assert "Invalid document type" in str(result)
+    assert exc_info.value.status_code == 400
+    assert "Invalid document type" in str(exc_info.value)
 
 
-def test_map_ocr_exception_keeps_plain_value_error_off_bad_request(
+def test_raise_ocr_exception_keeps_plain_value_error_off_bad_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exception_type = Mock(return_value=CapturedException("wrapped"))
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", exception_type)
+    spy = ExceptionTypeSpy()
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", spy)
 
     internal = ValueError("internal invariant broke")
-    result = ocr_main._map_ocr_exception(
-        internal,
-        model="mistral-ocr-latest",
-        custom_llm_provider="mistral",
-        completion_kwargs={},
-        kwargs={},
-    )
+    with pytest.raises(CapturedException):
+        ocr_main._raise_ocr_exception(
+            internal,
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
 
-    assert isinstance(result, CapturedException)
-    assert exception_type.call_args.kwargs["original_exception"] is internal
+    assert spy.calls[0].original_exception is internal
 
 
-def test_map_ocr_exception_keeps_validation_error_off_bad_request(
+def test_raise_ocr_exception_keeps_validation_error_off_bad_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _Model(pydantic.BaseModel):
@@ -684,18 +728,16 @@ def test_map_ocr_exception_keeps_validation_error_off_bad_request(
     with pytest.raises(pydantic.ValidationError) as validation_info:
         adapter.validate_python({"value": "not-an-int"})
 
-    exception_type = Mock(return_value=CapturedException("wrapped"))
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", exception_type)
+    spy = ExceptionTypeSpy()
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", spy)
 
-    result = ocr_main._map_ocr_exception(
-        validation_info.value,
-        model="mistral-ocr-latest",
-        custom_llm_provider="mistral",
-        completion_kwargs={},
-        kwargs={},
-    )
+    with pytest.raises(CapturedException):
+        ocr_main._raise_ocr_exception(
+            validation_info.value,
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
 
-    assert isinstance(result, CapturedException)
-    assert (
-        exception_type.call_args.kwargs["original_exception"] is validation_info.value
-    )
+    assert spy.calls[0].original_exception is validation_info.value
