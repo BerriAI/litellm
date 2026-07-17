@@ -8,7 +8,10 @@ use litellm_core::CoreResult;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::constants::{DEFAULT_UPLOAD_MIME_TYPE, OCR_UPLOAD_MIME_BY_EXTENSION};
+use crate::constants::{
+    DEFAULT_UPLOAD_MIME_TYPE, GENERIC_UPLOAD_MIME_TYPES, OCR_MULTIPART_UNIQUE_FIELDS,
+    OCR_RESERVED_PARAM_KEYS, OCR_UPLOAD_MIME_BY_EXTENSION,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -54,10 +57,30 @@ pub struct OcrCall {
     pub timeout: Option<Duration>,
 }
 
-fn positive_duration(seconds: Option<f64>) -> Option<Duration> {
-    seconds
-        .filter(|secs| secs.is_finite() && *secs > 0.0)
-        .map(Duration::from_secs_f64)
+fn parse_timeout(seconds: Option<f64>) -> CoreResult<Option<Duration>> {
+    match seconds {
+        None => Ok(None),
+        Some(value) if value.is_finite() && value > 0.0 => Ok(Some(Duration::from_secs_f64(value))),
+        Some(_) => Err(CoreError::InvalidRequest(
+            "'timeout' must be a positive, finite number of seconds".to_string(),
+        )),
+    }
+}
+
+fn reject_reserved_params<'a>(names: impl IntoIterator<Item = &'a str>) -> CoreResult<()> {
+    let reserved = names.into_iter().find_map(|name| {
+        OCR_RESERVED_PARAM_KEYS
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == name)
+    });
+    match reserved {
+        None => Ok(()),
+        Some(reserved) => Err(CoreError::InvalidRequest(format!(
+            "the '{reserved}' parameter is not accepted on an OCR request; deployment \
+             credentials, routing, and headers are server-controlled"
+        ))),
+    }
 }
 
 pub fn parse_json_body(body: &[u8]) -> CoreResult<OcrCall> {
@@ -70,11 +93,12 @@ pub fn parse_json_body(body: &[u8]) -> CoreResult<OcrCall> {
     }
     let request: OcrJsonRequest = serde_json::from_slice(body)
         .map_err(|err| CoreError::InvalidRequest(format!("invalid OCR request body: {err}")))?;
+    reject_reserved_params(request.optional_params.keys().map(String::as_str))?;
     Ok(OcrCall {
         model: request.model,
         document: request.document.into_value()?,
         optional_params: request.optional_params,
-        timeout: positive_duration(request.timeout),
+        timeout: parse_timeout(request.timeout)?,
     })
 }
 
@@ -88,11 +112,17 @@ fn mime_from_filename(filename: &str) -> Option<&'static str> {
         .map(|(_, mime)| *mime)
 }
 
+fn is_generic_upload_mime(value: &str) -> bool {
+    GENERIC_UPLOAD_MIME_TYPES
+        .iter()
+        .any(|generic| value.eq_ignore_ascii_case(generic))
+}
+
 fn resolve_upload_mime(bytes: &[u8], content_type: Option<&str>, filename: Option<&str>) -> String {
     let declared = content_type
         .and_then(|value| value.split(';').next())
         .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != DEFAULT_UPLOAD_MIME_TYPE);
+        .filter(|value| !value.is_empty() && !is_generic_upload_mime(value));
     if let Some(declared) = declared {
         return declared.to_string();
     }
@@ -129,10 +159,26 @@ fn coerce_form_field(value: &str) -> Value {
     serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
 }
 
+fn reject_duplicate_unique_fields(text_fields: &[(String, String)]) -> CoreResult<()> {
+    let duplicate = OCR_MULTIPART_UNIQUE_FIELDS
+        .iter()
+        .copied()
+        .find(|field| text_fields.iter().filter(|(name, _)| name == field).count() > 1);
+    match duplicate {
+        None => Ok(()),
+        Some(field) => Err(CoreError::InvalidRequest(format!(
+            "the '{field}' field must appear at most once in a multipart OCR request"
+        ))),
+    }
+}
+
 pub fn assemble_multipart_call(
     document: Value,
     text_fields: &[(String, String)],
 ) -> CoreResult<OcrCall> {
+    reject_reserved_params(text_fields.iter().map(|(name, _)| name.as_str()))?;
+    reject_duplicate_unique_fields(text_fields)?;
+
     let model = text_fields
         .iter()
         .find(|(name, _)| name == "model")
@@ -144,9 +190,14 @@ pub fn assemble_multipart_call(
         })?;
 
     let timeout = match text_fields.iter().find(|(name, _)| name == "timeout") {
-        Some((_, value)) => positive_duration(Some(value.parse::<f64>().map_err(|_| {
-            CoreError::InvalidRequest(format!("invalid 'timeout' form field: {value:?}"))
-        })?)),
+        Some((_, raw)) => {
+            let seconds = raw.parse::<f64>().map_err(|_| {
+                CoreError::InvalidRequest(
+                    "'timeout' form field must be a number of seconds".to_string(),
+                )
+            })?;
+            parse_timeout(Some(seconds))?
+        }
         None => None,
     };
 
@@ -338,5 +389,140 @@ mod tests {
         let document = json!({"type": "document_url", "document_url": "data:x"});
         let err = assemble_multipart_call(document, &[]).expect_err("model required");
         assert!(matches!(err, CoreError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn json_rejects_reserved_control_params() {
+        for reserved in [
+            "api_key",
+            "api_base",
+            "custom_llm_provider",
+            "extra_headers",
+            "vertex_credentials",
+            "vertex_ai_credentials",
+            "vertex_project",
+            "vertex_ai_project",
+            "vertex_location",
+            "vertex_ai_location",
+        ] {
+            let body = format!(
+                r#"{{"model":"m","document":{{"type":"document_url","document_url":"https://x"}},"{reserved}":"attacker"}}"#
+            );
+            let err = parse_json_body(body.as_bytes())
+                .expect_err("reserved control param must be rejected");
+            match err {
+                CoreError::InvalidRequest(message) => {
+                    assert!(
+                        message.contains(reserved),
+                        "names the rejected key: {message}"
+                    );
+                    assert!(
+                        !message.contains("attacker"),
+                        "must not echo the attacker value: {message}"
+                    );
+                }
+                other => panic!("expected InvalidRequest, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn multipart_rejects_reserved_control_params() {
+        let document = json!({"type": "document_url", "document_url": "data:x"});
+        let fields = vec![
+            ("model".to_string(), "m".to_string()),
+            (
+                "vertex_credentials".to_string(),
+                "/etc/gcp/service-account.json".to_string(),
+            ),
+        ];
+        let err = assemble_multipart_call(document, &fields).expect_err("reserved param rejected");
+        match err {
+            CoreError::InvalidRequest(message) => {
+                assert!(message.contains("vertex_credentials"));
+                assert!(
+                    !message.contains("service-account"),
+                    "must not echo the attacker value: {message}"
+                );
+            }
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn json_rejects_non_positive_timeout() {
+        for timeout in ["0", "-1", "-0.5"] {
+            let body = format!(
+                r#"{{"model":"m","document":{{"type":"document_url","document_url":"https://x"}},"timeout":{timeout}}}"#
+            );
+            assert!(
+                matches!(
+                    parse_json_body(body.as_bytes()),
+                    Err(CoreError::InvalidRequest(_))
+                ),
+                "timeout {timeout} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn multipart_rejects_non_positive_and_non_finite_timeout() {
+        let document = json!({"type": "document_url", "document_url": "data:x"});
+        for timeout in ["0", "-3", "inf", "-inf", "NaN"] {
+            let fields = vec![
+                ("model".to_string(), "m".to_string()),
+                ("timeout".to_string(), timeout.to_string()),
+            ];
+            assert!(
+                matches!(
+                    assemble_multipart_call(document.clone(), &fields),
+                    Err(CoreError::InvalidRequest(_))
+                ),
+                "timeout {timeout} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn multipart_rejects_non_numeric_timeout_without_echoing_value() {
+        let document = json!({"type": "document_url", "document_url": "data:x"});
+        let fields = vec![
+            ("model".to_string(), "m".to_string()),
+            ("timeout".to_string(), "not-a-number".to_string()),
+        ];
+        let err =
+            assemble_multipart_call(document, &fields).expect_err("non-numeric timeout rejected");
+        match err {
+            CoreError::InvalidRequest(message) => assert!(
+                !message.contains("not-a-number"),
+                "must not echo the attacker value: {message}"
+            ),
+            other => panic!("expected InvalidRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multipart_rejects_duplicate_model_field() {
+        let document = json!({"type": "document_url", "document_url": "data:x"});
+        let fields = vec![
+            ("model".to_string(), "first".to_string()),
+            ("model".to_string(), "second".to_string()),
+        ];
+        let err = assemble_multipart_call(document, &fields).expect_err("duplicate model rejected");
+        assert!(matches!(err, CoreError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn upload_treats_binary_octet_stream_as_generic() {
+        let document = build_upload_document(
+            b"%PDF-1.7 minimal".to_vec(),
+            None,
+            Some("Binary/Octet-Stream"),
+        )
+        .expect("builds document");
+        assert!(document["document_url"]
+            .as_str()
+            .expect("data uri")
+            .starts_with("data:application/pdf;base64,"));
     }
 }

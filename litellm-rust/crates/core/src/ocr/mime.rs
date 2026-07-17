@@ -4,7 +4,7 @@ use crate::constants::{
 };
 
 pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(b"%PDF") {
+    if bytes.starts_with(b"%PDF-") {
         return Some(MIME_APPLICATION_PDF);
     }
     if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
@@ -39,6 +39,11 @@ mod tests {
     }
 
     #[test]
+    fn does_not_sniff_pdf_without_version_marker() {
+        assert_eq!(sniff_mime(b"%PDFxx"), None);
+    }
+
+    #[test]
     fn sniffs_png() {
         assert_eq!(
             sniff_mime(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00]),
@@ -59,18 +64,15 @@ mod tests {
 
     #[test]
     fn sniffs_webp() {
-        let mut bytes = b"RIFF".to_vec();
-        bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-        bytes.extend_from_slice(b"WEBP");
-        assert_eq!(sniff_mime(&bytes), Some(MIME_IMAGE_WEBP));
+        assert_eq!(
+            sniff_mime(b"RIFF\x00\x00\x00\x00WEBP"),
+            Some(MIME_IMAGE_WEBP)
+        );
     }
 
     #[test]
     fn does_not_sniff_riff_without_webp() {
-        let mut bytes = b"RIFF".to_vec();
-        bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-        bytes.extend_from_slice(b"WAVE");
-        assert_eq!(sniff_mime(&bytes), None);
+        assert_eq!(sniff_mime(b"RIFF\x00\x00\x00\x00WAVE"), None);
     }
 
     #[test]

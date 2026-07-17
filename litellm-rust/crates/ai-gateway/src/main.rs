@@ -37,7 +37,7 @@ async fn main() {
         .map(Arc::from);
     if master_key.is_none() {
         eprintln!(
-            "warning: LITELLM_MASTER_KEY is not set; /v1/realtime will reject all requests (fail closed)"
+            "warning: LITELLM_MASTER_KEY is not set; /v1/realtime, /v1/ocr and /ocr will reject all requests (fail closed)"
         );
     }
 
