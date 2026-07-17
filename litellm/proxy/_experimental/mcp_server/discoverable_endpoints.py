@@ -1215,6 +1215,18 @@ async def _persist_dcr_client_registration(
         return "failed"
 
 
+def _client_supplied_redirect_uris(value: object) -> list[str] | None:
+    """RFC 7591 redirect_uris must be a non-empty array of URI strings. Any other shape (not a list,
+    an empty list, or a list holding a non-string or empty-string element) yields None so every
+    register arm falls back to the gateway callback instead of echoing a malformed value back to the
+    client as its redirect_uris. The redirect actually used is trust-validated later at /authorize by
+    validate_trusted_redirect_uri; this guard only keeps the client-facing echo well-typed."""
+    if not isinstance(value, list) or not value:
+        return None
+    uris = [uri for uri in value if isinstance(uri, str) and uri]
+    return uris if len(uris) == len(value) else None
+
+
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1224,15 +1236,16 @@ async def register_client_with_server(
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
     persist_credentials: bool = False,
-    client_redirect_uris: Optional[list] = None,
+    client_redirect_uris: list[str] | None = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
     current_redirect_uri = f"{request_base_url}/callback"
+    client_facing_redirect_uris = client_redirect_uris or [current_redirect_uri]
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
         "client_secret": "dummy",
-        "redirect_uris": [current_redirect_uri],
+        "redirect_uris": client_facing_redirect_uris,
     }
 
     if mcp_server.client_id and not (
@@ -1299,6 +1312,9 @@ async def register_client_with_server(
         persistence_result = await _persist_dcr_client_registration(mcp_server, token_response, current_redirect_uri)
         if persistence_result == "reused":
             return dummy_return
+
+    if client_redirect_uris and not bridge_relay and isinstance(token_response, dict):
+        token_response = {**token_response, "redirect_uris": client_facing_redirect_uris}
 
     return JSONResponse(token_response)
 
@@ -2121,11 +2137,12 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
 
     request_data = await _read_request_body(request=request)
     data: dict = {**request_data}
+    client_redirect_uris = _client_supplied_redirect_uris(data.get("redirect_uris"))
 
     dummy_return = {
         "client_id": mcp_server_name or "dummy_client",
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": client_redirect_uris or [f"{request_base_url}/callback"],
     }
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:
@@ -2139,7 +2156,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=resolved.server_name or resolved.name,
-                client_redirect_uris=data.get("redirect_uris"),
+                client_redirect_uris=client_redirect_uris,
             )
         return dummy_return
 
@@ -2154,5 +2171,5 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         response_types=data.get("response_types", []),
         token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
         fallback_client_id=mcp_server_name,
-        client_redirect_uris=data.get("redirect_uris"),
+        client_redirect_uris=client_redirect_uris,
     )
