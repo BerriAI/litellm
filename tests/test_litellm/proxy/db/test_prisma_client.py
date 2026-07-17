@@ -276,3 +276,38 @@ async def test_kill_engine_process_skips_reap_for_invalid_pid(mock_prisma_binary
     with patch("os.waitpid") as mock_waitpid:
         await PrismaWrapper._kill_engine_process(0)
     mock_waitpid.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_kill_engine_process_no_reap_on_windows(mock_prisma_binary):
+    """Windows has no POSIX zombies and no os.WNOHANG, so the reap is a no-op.
+
+    The kill still happens (best-effort), but waitpid must not be attempted —
+    calling it without WNOHANG would be meaningless here.
+    """
+    import litellm.proxy.db.prisma_client as pc
+
+    with (
+        patch("os.kill"),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch.object(pc.os, "WNOHANG", None, create=False),
+        patch("os.waitpid") as mock_waitpid,
+    ):
+        await PrismaWrapper._kill_engine_process(4242)
+
+    mock_waitpid.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_kill_engine_process_swallows_oserror_from_waitpid(mock_prisma_binary):
+    """A non-ECHILD OSError from waitpid (e.g. EINVAL) must not escape.
+
+    This runs inside the reconnect path; any exception here would abort the
+    reconnect that the kill was clearing the way for.
+    """
+    with (
+        patch("os.kill"),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("os.waitpid", side_effect=OSError("EINVAL")),
+    ):
+        await PrismaWrapper._kill_engine_process(4242)  # must not raise
