@@ -11,7 +11,7 @@ import os
 import pytest
 
 from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds
-from datadog_sink import DdSinkReader, build_dd_sink_reader
+from datadog_reader import DdLogsReader, build_dd_logs_reader
 from otel_client import OtelReader, build_otel_reader
 
 
@@ -37,9 +37,10 @@ def otel_reader() -> OtelReader:
 
 
 @pytest.fixture(scope="session")
-def dd_sink() -> DdSinkReader:
-    """Read-back client for the compose stack's DataDog logs-intake sink."""
-    return build_dd_sink_reader()
+def dd_logs() -> DdLogsReader:
+    """Read-back client for the real DataDog Logs Search API (keys from the
+    secret manager on the cluster, tests/e2e/.env locally)."""
+    return build_dd_logs_reader()
 
 
 @pytest.fixture
