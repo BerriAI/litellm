@@ -33,6 +33,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TypeVar,
     Union,
     cast,
 )
@@ -86,7 +87,11 @@ from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
-from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+from litellm.router_strategy.tag_based_routing import (
+    _get_tags_from_request_kwargs,
+    get_deployments_for_tag,
+    is_valid_deployment_tag,
+)
 from litellm.router_utils.add_retry_fallback_headers import (
     _HiddenParamsHost,
     add_fallback_headers_to_response,
@@ -175,6 +180,7 @@ from litellm.types.router import (
     MockRouterTestingParams,
     ModelGroupInfo,
     OptionalPreCallChecks,
+    PreRoutingStrategy,
     RetryPolicy,
     RouterCacheEnum,
     RouterGeneralSettings,
@@ -186,6 +192,7 @@ from litellm.types.router import (
     RoutingPlugin,
     RoutingStrategy,
     SearchToolTypedDict,
+    TaggedPreRoutingStrategy,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -258,6 +265,9 @@ def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+_PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 
 class RoutingArgs(enum.Enum):
@@ -487,10 +497,10 @@ class Router:
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
-        self.auto_routers: Dict[str, "AutoRouter"] = {}
-        self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
-        self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
-        self.quality_routers: Dict[str, "QualityRouter"] = {}
+        self.auto_routers: dict[str, list[TaggedPreRoutingStrategy["AutoRouter"]]] = {}
+        self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy["ComplexityRouter"]]] = {}
+        self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy["AdaptiveRouter"]]] = {}
+        self.quality_routers: dict[str, list[TaggedPreRoutingStrategy["QualityRouter"]]] = {}
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
@@ -7568,6 +7578,11 @@ class Router:
             return True
         return False
 
+    @staticmethod
+    def _deployment_tags(deployment: Deployment) -> tuple[str, ...]:
+        """Deployment tags used to disambiguate strategy registries keyed by model_name."""
+        return tuple(deployment.litellm_params.tags or ())
+
     def init_auto_router_deployment(self, deployment: Deployment):
         """
         Initialize the auto-router deployment.
@@ -7603,11 +7618,12 @@ class Router:
             embedding_model=embedding_model,
             litellm_router_instance=self,
         )
-        if deployment.model_name in self.auto_routers:
-            raise ValueError(
-                f"Auto-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-        self.auto_routers[deployment.model_name] = autor_router
+        self._register_pre_routing_strategy(
+            registry=self.auto_routers,
+            deployment=deployment,
+            strategy=autor_router,
+            strategy_label="Auto-router",
+        )
 
     def _is_complexity_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
@@ -7658,20 +7674,54 @@ class Router:
             litellm_router_instance=self,
             complexity_router_config=complexity_router_config,
         )
-        if deployment.model_name in self.complexity_routers:
-            raise ValueError(
-                f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-        self.complexity_routers[deployment.model_name] = complexity_router
+        self._register_pre_routing_strategy(
+            registry=self.complexity_routers,
+            deployment=deployment,
+            strategy=complexity_router,
+            strategy_label="Complexity-router",
+        )
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
         return litellm_params.model.startswith("auto_router/adaptive_router")
 
+    @staticmethod
+    def _has_registered_strategy(
+        registry: dict[str, list[TaggedPreRoutingStrategy[_PreRoutingStrategyT]]],
+        model_name: str,
+        tags: tuple[str, ...],
+    ) -> bool:
+        """True when a strategy for this (model_name, tags) pair is already registered."""
+        return any(existing.tags == tags for existing in registry.get(model_name, []))
+
+    def _register_pre_routing_strategy(
+        self,
+        registry: dict[str, list[TaggedPreRoutingStrategy[_PreRoutingStrategyT]]],
+        deployment: Deployment,
+        strategy: _PreRoutingStrategyT,
+        strategy_label: str,
+    ) -> None:
+        """
+        Register `strategy` under `deployment.model_name`, scoped by its tags.
+        Reusing a `model_name` is allowed when tags differ; a repeat of the same
+        (model_name, tags) pair is a misconfiguration and is rejected.
+        """
+        tags = self._deployment_tags(deployment)
+        if self._has_registered_strategy(registry, deployment.model_name, tags):
+            raise ValueError(
+                f"{strategy_label} deployment {deployment.model_name} with tags {list(tags)} already exists. "
+                "Please use a different model name or set different tags."
+            )
+        registry[deployment.model_name] = [
+            *registry.get(deployment.model_name, []),
+            TaggedPreRoutingStrategy(tags=tags, strategy=strategy),
+        ]
+
     def _finalize_adaptive_router_if_configured(self) -> None:
         """Locate every adaptive-router deployment in the finalized model_list and
         build an AdaptiveRouter for each. Safe no-op when none are configured.
-        Idempotent: skips any deployment whose model_name is already initialized."""
+        Idempotent: skips any deployment whose (model_name, tags) pair is already
+        initialized, so hot-reloads don't rebuild routers that would lose state."""
         # Drop any adaptive-router hooks left over from a previous Router
         # instance (e.g. after `/config/reload` replaced `llm_router`). Without
         # this, stale AdaptiveRouterPostCallHook callbacks from the old Router
@@ -7694,23 +7744,31 @@ class Router:
                 litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)),
                 model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
             )
-            if model_name in self.adaptive_routers:
+            if self._has_registered_strategy(self.adaptive_routers, model_name, self._deployment_tags(deployment)):
                 continue
             self.init_adaptive_router_deployment(deployment=deployment)
 
-        for model_name, complexity_router in self.complexity_routers.items():
-            if not complexity_router.config.adaptive or model_name in self.adaptive_routers:
-                continue
-            adaptive_router = complexity_router._ensure_adaptive_router()
-            if adaptive_router is not None:
-                self.adaptive_routers[model_name] = adaptive_router
+        for model_name, tagged_complexity_routers in self.complexity_routers.items():
+            for tagged in tagged_complexity_routers:
+                complexity_router = tagged.strategy
+                if not complexity_router.config.adaptive:
+                    continue
+                if self._has_registered_strategy(self.adaptive_routers, model_name, tagged.tags):
+                    continue
+                adaptive_router = complexity_router._ensure_adaptive_router()
+                if adaptive_router is not None:
+                    self.adaptive_routers[model_name] = [
+                        *self.adaptive_routers.get(model_name, []),
+                        TaggedPreRoutingStrategy(tags=tagged.tags, strategy=adaptive_router),
+                    ]
 
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
             litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
-        for adaptive_router in self.adaptive_routers.values():
-            litellm.logging_callback_manager.add_litellm_callback(
-                AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
-            )
+        for tagged_adaptive_routers in self.adaptive_routers.values():
+            for tagged in tagged_adaptive_routers:
+                litellm.logging_callback_manager.add_litellm_callback(
+                    AdaptiveRouterPostCallHook(adaptive_router=tagged.strategy)
+                )
 
     def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
         """
@@ -7763,18 +7821,18 @@ class Router:
             if cost is not None:
                 model_to_cost[name] = float(cost)
 
-        if deployment.model_name in self.adaptive_routers:
-            raise ValueError(
-                f"Adaptive-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-
         adaptive_router = AdaptiveRouter(
             router_name=deployment.model_name,
             config=config,
             model_to_prefs=model_to_prefs,
             model_to_cost=model_to_cost,
         )
-        self.adaptive_routers[deployment.model_name] = adaptive_router
+        self._register_pre_routing_strategy(
+            registry=self.adaptive_routers,
+            deployment=deployment,
+            strategy=adaptive_router,
+            strategy_label="Adaptive-router",
+        )
         litellm.logging_callback_manager.add_litellm_callback(
             AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
         )
@@ -7826,11 +7884,12 @@ class Router:
             litellm_router_instance=self,
             quality_router_config=quality_router_config,
         )
-        if deployment.model_name in self.quality_routers:
-            raise ValueError(
-                f"Quality-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-        self.quality_routers[deployment.model_name] = quality_router
+        self._register_pre_routing_strategy(
+            registry=self.quality_routers,
+            deployment=deployment,
+            strategy=quality_router,
+            strategy_label="Quality-router",
+        )
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
@@ -10810,6 +10869,35 @@ class Router:
 
         return filtered
 
+    def _select_pre_routing_strategy(self, model: str, request_kwargs: Dict) -> "PreRoutingStrategy | None":
+        """
+        Resolve the pre-routing strategy for `model`, disambiguating deployments
+        that share a `model_name` by matching the request's tags against each
+        registered strategy's tags before falling back to the first registered.
+        """
+        candidates: list[TaggedPreRoutingStrategy[PreRoutingStrategy]] = [
+            *self.auto_routers.get(model, []),
+            *self.complexity_routers.get(model, []),
+            *self.adaptive_routers.get(model, []),
+            *self.quality_routers.get(model, []),
+        ]
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0].strategy
+
+        request_tags = _get_tags_from_request_kwargs(request_kwargs)
+        if request_tags:
+            for tagged in candidates:
+                if tagged.tags and is_valid_deployment_tag(
+                    list(tagged.tags), request_tags, self.tag_filtering_match_any
+                ):
+                    return tagged.strategy
+        for tagged in candidates:
+            if "default" in tagged.tags:
+                return tagged.strategy
+        return candidates[0].strategy
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -10832,12 +10920,7 @@ class Router:
         if self.routing_plugins:
             await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
 
-        router_strategy = (
-            self.auto_routers.get(model)
-            or self.complexity_routers.get(model)
-            or self.adaptive_routers.get(model)
-            or self.quality_routers.get(model)
-        )
+        router_strategy = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
         if router_strategy is None:
             return None
 

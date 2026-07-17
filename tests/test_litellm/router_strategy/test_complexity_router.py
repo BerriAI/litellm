@@ -953,13 +953,80 @@ class TestRouterComplexityDeploymentMethods:
             ]
         )
 
-        adaptive = router.adaptive_routers["hybrid"]
+        adaptive = router.adaptive_routers["hybrid"][0].strategy
         assert adaptive.model_to_cost == {
             "cheap": pytest.approx(0.00000015),
             "premium": pytest.approx(0.000005),
         }
         assert adaptive.model_to_prefs["cheap"].quality_tier == 1
         assert adaptive.model_to_prefs["premium"].quality_tier == 3
+
+
+class TestComplexityRouterTagBasedRouting:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/33655.
+
+    Two complexity-router deployments can share a public model_name while
+    carrying different tags. Both must register, and the request's tags must
+    pick the matching config before classification (previously the second
+    deployment was rejected and every request used the first config)."""
+
+    @staticmethod
+    def _tagged_config(routed_model: str, tags: list) -> dict:
+        return {
+            "model_name": "smart",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": routed_model,
+                "complexity_router_config": {
+                    "tiers": {
+                        "SIMPLE": [routed_model],
+                        "MEDIUM": [routed_model],
+                        "COMPLEX": [routed_model],
+                        "REASONING": [routed_model],
+                    }
+                },
+                "tags": tags,
+            },
+        }
+
+    def _router(self) -> Router:
+        return Router(
+            model_list=[
+                self._tagged_config("gpt-cn", ["cn"]),
+                self._tagged_config("gpt-us", ["us"]),
+            ]
+        )
+
+    def test_both_tagged_configs_register_under_same_model_name(self):
+        router = self._router()
+        registered = router.complexity_routers["smart"]
+        assert len(registered) == 2
+        assert {entry.tags for entry in registered} == {("cn",), ("us",)}
+
+    def test_duplicate_model_name_with_same_tags_still_rejected(self):
+        with pytest.raises(ValueError, match="already exists"):
+            Router(
+                model_list=[
+                    self._tagged_config("gpt-cn", ["cn"]),
+                    self._tagged_config("gpt-cn-2", ["cn"]),
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_request_tags_select_matching_complexity_config(self):
+        router = self._router()
+        cn = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs={"metadata": {"tags": ["cn"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        us = await router.async_pre_routing_hook(
+            model="smart",
+            request_kwargs={"metadata": {"tags": ["us"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert cn is not None and cn.model == "gpt-cn"
+        assert us is not None and us.model == "gpt-us"
 
 
 class TestAsyncPreRoutingHookMultiFormat:
