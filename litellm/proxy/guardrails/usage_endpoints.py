@@ -137,10 +137,26 @@ def _chart_from_metrics(metrics: Any) -> List[Dict[str, Any]]:
     return [{"date": d, "passed": v["passed"], "blocked": v["blocked"]} for d, v in sorted(chart_by_date.items())]
 
 
+def _get_guardrail_field(g: Any, field: str) -> Any:
+    """Read `field` off a guardrail whether it's a Prisma row (attr) or a dict/TypedDict (key)."""
+    if isinstance(g, dict):
+        return g.get(field)
+    return getattr(g, field, None)
+
+
+def _to_dict(value: Any) -> dict[str, Any]:
+    """Coerce a pydantic model (e.g. LitellmParams) / dict value into a plain dict."""
+    if isinstance(value, BaseModel):
+        return value.model_dump(exclude_none=True)
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
 def _get_guardrail_attrs(g: Any) -> tuple[Any, str]:
     """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
-    gid = getattr(g, "guardrail_id", None) or (g.get("guardrail_id") if isinstance(g, dict) else None)
-    name = getattr(g, "guardrail_name", None) or (g.get("guardrail_name") if isinstance(g, dict) else None)
+    gid = _get_guardrail_field(g, "guardrail_id")
+    name = _get_guardrail_field(g, "guardrail_name")
     return gid, (name or gid or "")
 
 
@@ -163,9 +179,9 @@ def _guardrail_overview_rows(
                 break
         req, blocked = a["requests"], a["blocked"]
         fail_rate = (100.0 * blocked / req) if req else 0.0
-        litellm_params = (g.litellm_params or {}) if isinstance(g.litellm_params, dict) else {}
+        litellm_params = _to_dict(_get_guardrail_field(g, "litellm_params"))
         provider = str(litellm_params.get("guardrail", "Unknown"))
-        guardrail_info = (g.guardrail_info or {}) if isinstance(g.guardrail_info, dict) else {}
+        guardrail_info = _to_dict(_get_guardrail_field(g, "guardrail_info"))
         gtype = str(guardrail_info.get("type", "Guardrail"))
         prev_fail = 0.0
         for k in lookup_keys:
@@ -262,9 +278,15 @@ async def guardrails_usage_overview(
     end = end_date or now.strftime("%Y-%m-%d")
     start = start_date or (now - timedelta(days=7)).strftime("%Y-%m-%d")
 
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
     try:
-        # Guardrails from DB
-        guardrails = await GuardrailsRepository(prisma_client).table.find_many()
+        db_guardrails = await GuardrailsRepository(prisma_client).table.find_many()
+        seen_ids = {gid for g in db_guardrails if (gid := _get_guardrail_field(g, "guardrail_id")) is not None}
+        config_guardrails = [
+            g for g in IN_MEMORY_GUARDRAIL_HANDLER.list_config_guardrails() if g.get("guardrail_id") not in seen_ids
+        ]
+        guardrails: list[Any] = [*db_guardrails, *config_guardrails]
 
         # Daily metrics in range
         metrics = await DailyGuardrailMetricsRepository(prisma_client).table.find_many(
@@ -321,16 +343,18 @@ async def guardrails_usage_detail(
     end = end_date or now.strftime("%Y-%m-%d")
     start = start_date or (now - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    guardrail = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
-    if not guardrail:
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    guardrail: Any = await GuardrailsRepository(prisma_client).table.find_unique(where={"guardrail_id": guardrail_id})
+    if guardrail is None:
+        guardrail = IN_MEMORY_GUARDRAIL_HANDLER.get_config_guardrail_by_id(guardrail_id=guardrail_id)
+    if guardrail is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="Guardrail not found")
 
     # Metrics are keyed by logical name (from spend log metadata), not UUID
-    logical_id = getattr(guardrail, "guardrail_name", None) or (
-        guardrail.get("guardrail_name") if isinstance(guardrail, dict) else None
-    )
+    logical_id = _get_guardrail_field(guardrail, "guardrail_name")
     metric_ids = [i for i in (logical_id, guardrail_id) if i]
 
     metrics = await DailyGuardrailMetricsRepository(prisma_client).table.find_many(
@@ -367,17 +391,9 @@ async def guardrails_usage_detail(
         {"date": d, "passed": v["passed"], "blocked": v["blocked"], "score": None}
         for d, v in sorted(ts_by_date.items())
     ]
-    _litellm_params = getattr(guardrail, "litellm_params", None) or (
-        guardrail.get("litellm_params") if isinstance(guardrail, dict) else None
-    )
-    litellm_params = _litellm_params if isinstance(_litellm_params, dict) else {}
-    _guardrail_info = getattr(guardrail, "guardrail_info", None) or (
-        guardrail.get("guardrail_info") if isinstance(guardrail, dict) else None
-    )
-    guardrail_info = _guardrail_info if isinstance(_guardrail_info, dict) else {}
-    _guardrail_name = getattr(guardrail, "guardrail_name", None) or (
-        guardrail.get("guardrail_name") if isinstance(guardrail, dict) else None
-    )
+    litellm_params = _to_dict(_get_guardrail_field(guardrail, "litellm_params"))
+    guardrail_info = _to_dict(_get_guardrail_field(guardrail, "guardrail_info"))
+    _guardrail_name = _get_guardrail_field(guardrail, "guardrail_name")
 
     return UsageDetailResponse(
         guardrail_id=guardrail_id,
@@ -548,11 +564,15 @@ async def guardrails_usage_logs(
         # Query by both so we match regardless of which was written.
         effective_guardrail_ids: List[str] = [guardrail_id] if guardrail_id else []
         if guardrail_id:
-            guardrail = await GuardrailsRepository(prisma_client).table.find_unique(
+            from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+            guardrail: Any = await GuardrailsRepository(prisma_client).table.find_unique(
                 where={"guardrail_id": guardrail_id}
             )
+            if guardrail is None:
+                guardrail = IN_MEMORY_GUARDRAIL_HANDLER.get_config_guardrail_by_id(guardrail_id=guardrail_id)
             if guardrail:
-                logical_name = getattr(guardrail, "guardrail_name", None)
+                logical_name = _get_guardrail_field(guardrail, "guardrail_name")
                 if logical_name and logical_name not in effective_guardrail_ids:
                     effective_guardrail_ids.append(logical_name)
 

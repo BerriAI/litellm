@@ -7437,3 +7437,139 @@ async def test_call_mcp_tool_skips_failure_hook_for_upstream_auth_error():
             )
 
     proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
+
+
+def _make_oauth2_server(
+    alias: str,
+    *,
+    oauth2_flow=None,
+    delegate_auth_to_upstream: bool = False,
+    client_id=None,
+    client_secret=None,
+    token_url=None,
+) -> MCPServer:
+    """An auth_type=oauth2 MCP server in one of its sub-modes. oauth2_flow
+    'client_credentials' is M2M; delegate_auth_to_upstream toggles the
+    upstream-PKCE delegate mode; the default is gateway-managed interactive
+    (authorization_code). client_id/client_secret/token_url set the M2M shape
+    that effective_oauth2_flow infers as client_credentials when oauth2_flow is
+    left unstamped (null)."""
+    return MCPServer(
+        server_id=f"id-{alias}",
+        name=alias,
+        alias=alias,
+        server_name=alias,
+        url=f"https://{alias}.test/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow=oauth2_flow,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_url=token_url,
+        mcp_info={"server_name": alias},
+    )
+
+
+class TestPreemptive401ModeAware:
+    """The preemptive-401 challenge for auth_type=oauth2 servers is decided by
+    the server's sub-mode, not by whether an Authorization header is present.
+
+    Regression guard for the bug where a LiteLLM virtual key presented as
+    ``Authorization: Bearer sk-...`` (indistinguishable at header-parse time
+    from an upstream OAuth bearer, so it lands in oauth2_headers) suppressed
+    the challenge on a gateway-managed authorization_code server, opening a
+    session with no upstream token whose tools/list masks as 200 + empty.
+    """
+
+    LITELLM_KEY_HEADERS = {"Authorization": "Bearer sk-litellm-virtual-key"}
+
+    def _scope(self, alias: str):
+        return {"type": "http", "method": "POST", "path": f"/mcp/{alias}", "headers": []}
+
+    async def _run(self, server, oauth2_headers, has_stored_token: bool):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        with (
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "get_mcp_server_by_name",
+                return_value=server,
+            ),
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "has_user_oauth_token",
+                new_callable=AsyncMock,
+                return_value=has_stored_token,
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope=self._scope(server.alias),
+                mcp_servers=[server.alias],
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+                client_ip=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_gateway_managed_interactive_no_token_challenges_with_x_litellm_api_key(self):
+        """No stored token, key in x-litellm-api-key (oauth2_headers empty): 401."""
+        with pytest.raises(HTTPException) as exc:
+            await self._run(_make_oauth2_server("interactive"), None, has_stored_token=False)
+        assert exc.value.status_code == 401
+        assert "www-authenticate" in {k.lower() for k in exc.value.headers}
+
+    @pytest.mark.asyncio
+    async def test_gateway_managed_interactive_no_token_challenges_with_authorization_bearer(self):
+        """The bug fix: no stored token, key in Authorization (oauth2_headers
+        populated) must still get the 401 challenge, not a suppressed session."""
+        with pytest.raises(HTTPException) as exc:
+            await self._run(
+                _make_oauth2_server("interactive"),
+                self.LITELLM_KEY_HEADERS,
+                has_stored_token=False,
+            )
+        assert exc.value.status_code == 401
+        assert "www-authenticate" in {k.lower() for k in exc.value.headers}
+
+    @pytest.mark.asyncio
+    async def test_gateway_managed_interactive_with_stored_token_does_not_challenge(self):
+        """A stored per-user token exists: no challenge, under either header."""
+        await self._run(_make_oauth2_server("interactive"), None, has_stored_token=True)
+        await self._run(_make_oauth2_server("interactive"), self.LITELLM_KEY_HEADERS, has_stored_token=True)
+
+    @pytest.mark.asyncio
+    async def test_m2m_never_challenges(self):
+        """client_credentials (M2M): the gateway mints its own token, so no
+        challenge regardless of header or stored-token state."""
+        m2m = _make_oauth2_server("m2m", oauth2_flow="client_credentials")
+        await self._run(m2m, None, has_stored_token=False)
+        await self._run(m2m, self.LITELLM_KEY_HEADERS, has_stored_token=False)
+
+    @pytest.mark.asyncio
+    async def test_unstamped_m2m_shape_never_challenges(self):
+        """A legacy row with oauth2_flow left null but the M2M shape
+        (client_id + client_secret + token_url) resolves to client_credentials
+        via effective_oauth2_flow exactly as egress does, so it is treated as
+        M2M and never challenged. The bare oauth2_flow column would misread it
+        as interactive and raise a spurious 401."""
+        unstamped = _make_oauth2_server(
+            "unstampedm2m",
+            oauth2_flow=None,
+            client_id="cid",
+            client_secret="csecret",
+            token_url="https://idp.test/token",
+        )
+        await self._run(unstamped, None, has_stored_token=False)
+        await self._run(unstamped, self.LITELLM_KEY_HEADERS, has_stored_token=False)
+
+    @pytest.mark.asyncio
+    async def test_delegate_challenges_only_when_bearer_absent(self):
+        """delegate_auth_to_upstream: a present bearer IS the upstream token,
+        so challenge only when it is absent."""
+        delegate = _make_oauth2_server("delegate", delegate_auth_to_upstream=True)
+        with pytest.raises(HTTPException) as exc:
+            await self._run(delegate, None, has_stored_token=False)
+        assert exc.value.status_code == 401
+        await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)

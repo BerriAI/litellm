@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
 from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
@@ -495,6 +496,7 @@ class ProxyInitializationHelpers:
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
 
+        start_query_engine_reaper()
         StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
     @staticmethod
@@ -1261,6 +1263,8 @@ def run_server(
             if reload:
                 ProxyInitializationHelpers._configure_dev_reload(uvicorn_args, config)
 
+            if num_workers > 1:
+                start_query_engine_reaper()
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,

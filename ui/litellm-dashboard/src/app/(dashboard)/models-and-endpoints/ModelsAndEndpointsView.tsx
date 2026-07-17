@@ -26,7 +26,7 @@ import HealthCheckComponent from "../../../components/model_dashboard/HealthChec
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
 import ModelInfoView from "../../../components/model_info_view";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
-import PassThroughSettings from "../../../components/pass_through_settings";
+import PassThroughSettings from "../../../components/PassThroughSettings/PassThroughSettings";
 import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
 
@@ -396,7 +396,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                           accessToken={accessToken}
                           userRole={userRole}
                           userID={userID}
-                          modelData={processedModelData}
                           premiumUser={premiumUser}
                         />
                       </TabPanel>

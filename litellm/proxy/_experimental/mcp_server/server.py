@@ -3582,48 +3582,70 @@ if MCP_AVAILABLE:
                 # preemptive challenge and let downstream authorization
                 # return 403.
                 continue
-            if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                # For per-user OAuth servers, only skip the pre-emptive 401 when
-                # a stored token actually exists for this user+server pair.
-                # If no stored token exists, fail fast with 401 so clients can
-                # kick off PKCE/interactive OAuth flow immediately.
-                if server.needs_user_oauth_token:
-                    if getattr(server, "delegate_auth_to_upstream", False) is True:
-                        # Delegate-auth servers run upstream PKCE: challenge with
-                        # the proxied resource_metadata (RFC 9728), not the
-                        # gateway authorization_uri below which would authorize
-                        # against the gateway instead of the upstream IdP.
-                        www_authenticate = _get_passthrough_www_authenticate(
-                            scope=scope,
-                            server_name=server_name,
-                        )
-                        raise HTTPException(
-                            status_code=401,
-                            detail="Unauthorized",
-                            headers={"www-authenticate": www_authenticate},
-                        )
-                    # The v2 resolver owns the existence check, so every authorization_code
-                    # resolution (egress and this discovery challenge) runs through it.
+            if server and server.auth_type == MCPAuth.oauth2:
+                # The challenge decision is per oauth2 sub-mode, not per header:
+                # gateway-managed modes (M2M and interactive authorization_code)
+                # never receive a client-supplied upstream token, so a bearer in
+                # Authorization is a LiteLLM key (surfaced here as oauth2_headers)
+                # and must not suppress the challenge. Only the delegate mode
+                # treats a present bearer as the upstream token. The sub-mode is
+                # resolved the same way egress resolves it, via
+                # effective_oauth2_flow: an unstamped (null oauth2_flow) row with
+                # the M2M shape resolves to client_credentials, so the bare
+                # has_client_credentials column is never trusted here.
+                if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
+                    # M2M: the gateway mints its own token at egress from the
+                    # stored client credentials, so there is nothing to challenge.
+                    continue
+
+                if getattr(server, "delegate_auth_to_upstream", False) is not True:
+                    # Gateway-managed interactive (authorization_code): the only
+                    # thing that authorizes egress is a stored per-user token, so
+                    # challenge whenever one is absent, regardless of any bearer.
+                    # The v2 resolver owns the existence check, so every
+                    # authorization_code resolution (egress and this discovery
+                    # challenge) runs through it.
                     if await global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
                         continue
 
-                request = StarletteRequest(scope)
-                base_url = get_request_base_url(request)
-                _path = scope.get("_original_path") or scope.get("path", "") or ""
+                    request = StarletteRequest(scope)
+                    base_url = get_request_base_url(request)
+                    _path = scope.get("_original_path") or scope.get("path", "") or ""
 
-                # Pick the well-known AS-metadata form that matches the inbound route
-                # so strict RFC 9728 §3.2 clients can resolve it correctly.
-                if _path.startswith(f"/mcp/{server_name}"):
-                    _as_url = f"{base_url}/.well-known/oauth-authorization-server/mcp/{server_name}"
-                else:
-                    _as_url = f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
-                authorization_uri = f'Bearer authorization_uri="{_as_url}"'
+                    # Pick the well-known AS-metadata form that matches the inbound route
+                    # so strict RFC 9728 §3.2 clients can resolve it correctly.
+                    if _path.startswith(f"/mcp/{server_name}"):
+                        _as_url = f"{base_url}/.well-known/oauth-authorization-server/mcp/{server_name}"
+                    else:
+                        _as_url = f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                    authorization_uri = f'Bearer authorization_uri="{_as_url}"'
 
-                raise HTTPException(
-                    status_code=401,
-                    detail="Unauthorized",
-                    headers={"www-authenticate": authorization_uri},
-                )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": authorization_uri},
+                    )
+
+                if not oauth2_headers:
+                    # Delegate-auth servers run upstream PKCE: a present bearer is
+                    # the upstream token, so only challenge when it is absent, with
+                    # the proxied resource_metadata (RFC 9728), not the gateway
+                    # authorization_uri above which would authorize against the
+                    # gateway instead of the upstream IdP.
+                    www_authenticate = _get_passthrough_www_authenticate(
+                        scope=scope,
+                        server_name=server_name,
+                    )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Unauthorized",
+                        headers={"www-authenticate": www_authenticate},
+                    )
+                # Delegate server with a bearer present: it is the upstream token,
+                # so admit the session and move to the next target. Every oauth2
+                # sub-mode is terminal here (continue or raise) so no oauth2 server
+                # reaches the token_exchange / pass-through blocks below.
+                continue
 
             # token_exchange (OBO): the caller supplied no subject token. Challenge at connect
             # (transport level, where WWW-Authenticate survives) with the RFC 9728 resource_metadata

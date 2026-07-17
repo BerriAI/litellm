@@ -522,6 +522,49 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
     assert mock_prisma_client.get_data.await_count == 1
 
 
+def _fake_redis_cache():
+    fake_redis = MagicMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_set_cache = AsyncMock()
+    fake_redis.async_set_cache_pipeline = AsyncMock()
+    fake_redis.async_delete_cache = AsyncMock()
+    return fake_redis
+
+
+class TestAuthCacheRedisWritePolicy:
+    """Redis auth-cache entries may only be written from fresh DB loads.
+
+    With ``enable_redis_auth_cache`` and multiple replicas, a pod that re-publishes
+    a cache-derived key object to Redis can resurrect a stale auth blob after
+    ``/key/update`` or ``/key/delete`` already deleted it, so limit changes never
+    propagate fleet-wide while traffic keeps refreshing the stale entry's TTL.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_key_object_db_load_publishes_to_redis(self):
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.get_data = AsyncMock(
+            return_value=UserAPIKeyAuth(token="hashed-token-db")
+        )
+
+        fake_redis = _fake_redis_cache()
+        cache = UserApiKeyCache()
+        cache.redis_cache = fake_redis
+
+        key_obj = await get_key_object(
+            hashed_token="hashed-token-db",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
+
+        assert key_obj.token == "hashed-token-db"
+        fake_redis.async_set_cache.assert_awaited_once()
+        assert (
+            fake_redis.async_set_cache.await_args.kwargs.get("key")
+            or fake_redis.async_set_cache.await_args.args[0]
+        ) == "hashed-token-db"
+
+
 def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
     """Test generating CLI JWT token with default 24-hour expiration"""
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
@@ -2634,6 +2677,8 @@ async def test_virtual_key_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "key"
+        assert exc_info.value.entity_id == "test-hashed-token"
 
 
 @pytest.mark.asyncio
@@ -2861,6 +2906,8 @@ async def test_team_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.entity_type == "team"
+        assert exc_info.value.entity_id == "test-team"
 
 
 @pytest.mark.asyncio
@@ -2888,6 +2935,8 @@ async def test_end_user_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "end_user"
+        assert exc_info.value.entity_id == "customer-1"
 
 
 @pytest.mark.asyncio
@@ -2926,6 +2975,8 @@ async def test_tag_budget_check_reads_from_spend_counter():
             )
         assert exc_info.value.current_cost == 1.5
         assert exc_info.value.max_budget == 1.0
+        assert exc_info.value.entity_type == "tag"
+        assert exc_info.value.entity_id == "paid-tag"
 
 
 @pytest.mark.asyncio
@@ -2976,6 +3027,8 @@ async def test_team_member_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.entity_type == "team_member"
+        assert exc_info.value.entity_id == "test-user:test-team"
 
 
 class TestGuardrailModificationCheck:
