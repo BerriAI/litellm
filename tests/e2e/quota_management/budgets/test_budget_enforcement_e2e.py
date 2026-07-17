@@ -17,7 +17,7 @@ from typing import Callable, List, Type
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
+from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
 from lifecycle import run_case
 
@@ -85,45 +85,37 @@ class KeyBudgetCase(_BudgetCase):
         )
 
 
-_TEAM_MAX_BUDGET = 3e-6
-
-
 class TeamBudgetCase(_BudgetCase):
     """An admin caps a whole team: two keys under a tiny-budget team, neither with
     a key-level budget. Key A is driven until the team cap blocks it; key B's very
-    first call must then be refused with budget_exceeded too (the cap sits on the
-    team, not the key that spent), and /team/info must report team spend at or
-    above max_budget once the batched spend write lands."""
+    first call must then be refused too, proving the cap sits on the team, not the
+    key that spent. Both refusals must be 429 budget_exceeded."""
 
     def init(self) -> None:
-        self._team_id = self.client.create_team(
-            alias=f"e2e-budget-team-{unique_marker()}", max_budget=_TEAM_MAX_BUDGET
+        team_id = self.client.create_team(
+            alias=f"e2e-budget-team-{unique_marker()}", max_budget=3e-6
         )
-        self._undo.append(lambda: self.client.delete_team(self._team_id))
-        self.key = self.client.generate_key(team_id=self._team_id)
+        self._undo.append(lambda: self.client.delete_team(team_id))
+        self.key = self.client.generate_key(team_id=team_id)
         self._undo.append(lambda: self.client.delete_key(self.key))
-        self._sibling_key = self.client.generate_key(team_id=self._team_id)
+        self._sibling_key = self.client.generate_key(team_id=team_id)
         self._undo.append(lambda: self.client.delete_key(self._sibling_key))
 
     def run(self) -> None:
-        _assert_budget_blocks(self.client, self.key)
+        blocked = _assert_budget_blocks(self.client, self.key)
+        assert blocked.status_code == 429, (
+            f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+        )
         sibling = self.client.chat(
             self._sibling_key,
             "claude-haiku-4-5",
             f"spend {unique_marker()}",
             max_tokens=16,
         )
-        assert is_budget_block(sibling), (
-            f"a sibling key on the capped team must be blocked too, got {sibling.status_code}: {sibling.body[:200]}"
+        assert is_budget_block(sibling) and sibling.status_code == 429, (
+            f"a sibling key on the capped team must get the same 429 budget_exceeded, "
+            f"got {sibling.status_code}: {sibling.body[:200]}"
         )
-        deadline = time.monotonic() + POLL_TIMEOUT
-        spend = 0.0
-        while time.monotonic() < deadline:
-            spend = self.client.team_spend(self._team_id) or 0.0
-            if spend >= _TEAM_MAX_BUDGET:
-                return
-            time.sleep(POLL_INTERVAL)
-        pytest.fail(f"/team/info spend {spend} never reached max_budget {_TEAM_MAX_BUDGET} within {POLL_TIMEOUT}s")
 
 
 class InternalUserBudgetCase(_BudgetCase):

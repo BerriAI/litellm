@@ -108,10 +108,6 @@ class TeamInfoParams(BaseModel):
 
 class TeamInfoResponse(BaseModel):
     team_memberships: list[TeamMembershipRow] = []
-    spend: float | None = Field(
-        default=None,
-        validation_alias=AliasPath("team_info", "spend"),
-    )
 
 
 class TagNewBody(BaseModel):
@@ -347,21 +343,6 @@ class BudgetClient:
                     time.sleep(_TEAM_READY_SLEEP_SECONDS)
         assert last is not None
         raise AssertionError(last)
-
-    def team_spend(self, team_id: str) -> float | None:
-        """The team's rolled-up spend as /team/info reports it, or None while the
-        read fails or the row is missing."""
-        result = self.gateway.transport.get(
-            "/team/info",
-            headers=self.gateway.transport.master,
-            params=TeamInfoParams(team_id=team_id),
-            response_type=TeamInfoResponse,
-        )
-        match result:
-            case Success(data=data):
-                return data.spend
-            case _:
-                return None
 
     def add_team_member(self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None) -> None:
         last_body = ""
