@@ -5,7 +5,11 @@
     "author": "Jean Nuñez",
     "repo": "https://github.com/jeann2013/language-detector",
     "commit": "9e712819269173fc25a16f59ca3e9890f7864ac1",
+    "version": "1.0.0",
+    "pypi": null,
     "litellm_version": ">=1.94.0",
+    "entrypoint": "litellm_plugin_language_detector.plugin.language_detector_plugin",
+    "license": "MIT",
     "tags": ["language", "classification", "routing"]
   }
 ]
