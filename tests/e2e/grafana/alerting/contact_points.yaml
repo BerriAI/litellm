@@ -1,0 +1,31 @@
+# Grafana Alerting contact point: Slack channel where Devin listens.
+#
+# Grafana provisioning (apiVersion 1). Import this alongside alert_rules.yaml.
+# Provisioning here is additive per-name: it creates or updates the
+# "devin-e2e-remediation" contact point without touching other receivers.
+#
+# The Slack webhook is a secret and must not live in git. Grafana expands
+# $__env{VAR} in provisioning files at load time, so supply it through the
+# environment (SLACK_E2E_WEBHOOK_URL). If your Grafana predates env expansion,
+# substitute the literal incoming-webhook URL at apply time instead.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: devin-e2e-remediation
+    receivers:
+      - uid: devin-e2e-slack
+        type: slack
+        # Only firing alerts (an actual red suite) reach the channel Devin acts
+        # on; resolved notifications are suppressed so Devin never opens work off
+        # a recovery message.
+        disableResolveMessage: true
+        settings:
+          url: $__env{SLACK_E2E_WEBHOOK_URL}
+          title: 'LiteLLM e2e failures ({{ len .Alerts.Firing }} firing)'
+          text: |
+            {{ len .Alerts.Firing }} LiteLLM e2e package(s) with failing tests:
+            {{ range .Alerts.Firing }}
+            - *{{ .Labels.package }}*: {{ .Annotations.summary }}
+              drill-down (Loki): {{ .Annotations.drilldown_query }}
+            {{ end }}
