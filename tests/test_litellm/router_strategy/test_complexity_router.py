@@ -962,6 +962,144 @@ class TestRouterComplexityDeploymentMethods:
         assert adaptive.model_to_prefs["premium"].quality_tier == 3
 
 
+class TestComplexityRouterRegistryLifecycle:
+    """Regression tests for issue #33168.
+
+    DB-stored complexity-router models silently disappear from `/v1/models` on
+    `PATCH /model/{id}/update` and keep routing as a ghost on `/model/delete`,
+    because `upsert_deployment` / `delete_deployment` clean `model_list` but never
+    the `complexity_routers` registry. These exercise the router-level lifecycle
+    the proxy DB-sync uses.
+    """
+
+    def _make_deployment(self, model_id: str, simple_model: str):
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        return Deployment(
+            model_name="auto_router/complexity_router/my-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router/my-router",
+                complexity_router_default_model=simple_model,
+                complexity_router_config={"tiers": {"SIMPLE": simple_model, "MEDIUM": "gpt-4o"}},
+            ),
+            model_info={"id": model_id},
+        )
+
+    def _router(self, simple_model: str = "gpt-4o-mini"):
+        # ignore_invalid_deployments mirrors the proxy default, under which the
+        # pre-fix "...already exists" error was swallowed and the deployment
+        # silently dropped from model_list.
+        return Router(
+            model_list=[self._make_deployment("cr-1", simple_model).to_json(exclude_none=True)],
+            ignore_invalid_deployments=True,
+        )
+
+    def test_upsert_reregisters_and_keeps_model_listed(self):
+        router = self._router(simple_model="gpt-4o-mini")
+        name = "auto_router/complexity_router/my-router"
+        assert name in router.complexity_routers
+        assert router.get_deployment(model_id="cr-1") is not None
+
+        updated = self._make_deployment("cr-1", simple_model="gpt-4o")
+        router.upsert_deployment(deployment=updated)
+
+        # Deployment must remain visible in model_list (feeds /v1/models & /model/info).
+        assert router.get_deployment(model_id="cr-1") is not None
+        assert name in router.model_name_to_deployment_indices
+        # Registry must be rebuilt with the patched config, not left stale.
+        assert name in router.complexity_routers
+        assert router.complexity_routers[name].config.default_model == "gpt-4o"
+
+    def test_delete_removes_registry_no_ghost(self):
+        router = self._router()
+        name = "auto_router/complexity_router/my-router"
+        assert name in router.complexity_routers
+
+        router.delete_deployment(id="cr-1")
+
+        assert router.get_deployment(model_id="cr-1") is None
+        assert name not in router.complexity_routers
+        assert name not in router.model_name_to_deployment_indices
+
+    def test_remove_strategy_router_registrations_drops_complexity_entry(self):
+        router = self._router()
+        name = "auto_router/complexity_router/my-router"
+        assert name in router.complexity_routers
+
+        router._remove_strategy_router_registrations(
+            model_name=name,
+            litellm_params=router.get_deployment(model_id="cr-1").litellm_params,
+        )
+
+        assert name not in router.complexity_routers
+
+    def test_remove_adaptive_router_registration_is_noop_when_absent(self):
+        router = self._router()
+
+        # No adaptive router registered under this name, so this is a safe no-op.
+        router._remove_adaptive_router_registration(model_name="does-not-exist")
+
+        assert "does-not-exist" not in router.adaptive_routers
+
+    def test_remove_strategy_router_registrations_covers_auto_and_quality(self):
+        from litellm.types.router import LiteLLM_Params
+
+        router = self._router()
+        router.auto_routers["auto-x"] = object()  # stand-in AutoRouter registration
+        router.quality_routers["quality-x"] = object()  # stand-in QualityRouter registration
+
+        router._remove_strategy_router_registrations(
+            model_name="auto-x",
+            litellm_params=LiteLLM_Params(model="auto_router/auto-x"),
+        )
+        router._remove_strategy_router_registrations(
+            model_name="quality-x",
+            litellm_params=LiteLLM_Params(model="auto_router/quality_router/quality-x"),
+        )
+
+        assert "auto-x" not in router.auto_routers
+        assert "quality-x" not in router.quality_routers
+
+    def test_delete_hybrid_adaptive_deployment_unregisters_hook(self):
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        name = "auto_router/complexity_router/hybrid"
+        router = Router(
+            model_list=[
+                Deployment(
+                    model_name=name,
+                    litellm_params=LiteLLM_Params(
+                        model=name,
+                        complexity_router_default_model="cheap",
+                        complexity_router_config={
+                            "adaptive": True,
+                            "tiers": {"SIMPLE": ["cheap"], "MEDIUM": ["cheap", "premium"]},
+                        },
+                    ),
+                    model_info={"id": "hybrid-1"},
+                ).to_json(exclude_none=True),
+                {"model_name": "cheap", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {"model_name": "premium", "litellm_params": {"model": "openai/gpt-4o"}},
+            ],
+            ignore_invalid_deployments=True,
+        )
+        assert name in router.adaptive_routers
+        registered = router.adaptive_routers[name]
+        hooks = litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert any(isinstance(h, AdaptiveRouterPostCallHook) and h.adaptive_router is registered for h in hooks)
+
+        router.delete_deployment(id="hybrid-1")
+
+        assert name not in router.adaptive_routers
+        hooks_after = litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert not any(
+            isinstance(h, AdaptiveRouterPostCallHook) and h.adaptive_router is registered for h in hooks_after
+        )
+
+
 class TestAsyncPreRoutingHookMultiFormat:
     """Test async_pre_routing_hook with multiple input formats."""
 
