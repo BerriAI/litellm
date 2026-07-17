@@ -3723,13 +3723,33 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     allowed_models: Optional[List[str]] = None
 
 
+BULK_TEAM_MEMBER_UPDATE_MAX_USER_IDS = 500
+BULK_TEAM_MEMBER_UPDATE_MAX_ALLOWED_MODELS = 500
+BULK_TEAM_MEMBER_UPDATE_MAX_STRING_LENGTH = 256
+BULK_TEAM_MEMBER_UPDATE_MAX_BUDGET_DURATION_LENGTH = 32
+
+
 class TeamMemberBulkUpdateFields(LiteLLMPydanticObjectBase):
     max_budget_in_team: float | None = None
     role: Literal["admin", "user"] | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
-    budget_duration: str | None = None
-    allowed_models: list[str] | None = None
+    budget_duration: str | None = Field(default=None, max_length=BULK_TEAM_MEMBER_UPDATE_MAX_BUDGET_DURATION_LENGTH)
+    allowed_models: list[str] | None = Field(default=None, max_length=BULK_TEAM_MEMBER_UPDATE_MAX_ALLOWED_MODELS)
+
+    @field_validator("allowed_models")
+    @classmethod
+    def bound_allowed_model_strings(cls, models: list[str] | None) -> list[str] | None:
+        if models is None:
+            return None
+        for model in models:
+            if len(model) > BULK_TEAM_MEMBER_UPDATE_MAX_STRING_LENGTH:
+                raise ValueError(
+                    "allowed_models entries must be at most {} characters".format(
+                        BULK_TEAM_MEMBER_UPDATE_MAX_STRING_LENGTH
+                    )
+                )
+        return models
 
     @model_validator(mode="after")
     def require_at_least_one_field(self):
@@ -3739,9 +3759,21 @@ class TeamMemberBulkUpdateFields(LiteLLMPydanticObjectBase):
 
 
 class BulkTeamMemberUpdateRequest(LiteLLMPydanticObjectBase):
-    user_ids: list[str] | None = None
+    user_ids: list[str] | None = Field(default=None, max_length=BULK_TEAM_MEMBER_UPDATE_MAX_USER_IDS)
     all_members_in_team: bool = False
     update_fields: TeamMemberBulkUpdateFields
+
+    @field_validator("user_ids")
+    @classmethod
+    def bound_user_id_strings(cls, user_ids: list[str] | None) -> list[str] | None:
+        if user_ids is None:
+            return None
+        for user_id in user_ids:
+            if len(user_id) > BULK_TEAM_MEMBER_UPDATE_MAX_STRING_LENGTH:
+                raise ValueError(
+                    "user_ids entries must be at most {} characters".format(BULK_TEAM_MEMBER_UPDATE_MAX_STRING_LENGTH)
+                )
+        return user_ids
 
     @model_validator(mode="after")
     def validate_selection(self):

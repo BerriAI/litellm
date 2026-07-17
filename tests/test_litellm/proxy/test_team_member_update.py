@@ -549,3 +549,46 @@ def test_bulk_team_member_update_requires_exactly_one_member_selector():
             all_members_in_team=True,
             update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
         )
+
+
+def test_bulk_team_member_update_rejects_raw_user_ids_over_cap():
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import BULK_TEAM_MEMBER_UPDATE_MAX_USER_IDS
+
+    with pytest.raises(ValidationError):
+        BulkTeamMemberUpdateRequest(
+            user_ids=[f"user-{i}" for i in range(BULK_TEAM_MEMBER_UPDATE_MAX_USER_IDS + 1)],
+            update_fields=TeamMemberBulkUpdateFields(role="user"),
+        )
+
+
+def test_bulk_team_member_update_rejects_oversized_allowed_models_payload():
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import (
+        BULK_TEAM_MEMBER_UPDATE_MAX_ALLOWED_MODELS,
+        BULK_TEAM_MEMBER_UPDATE_MAX_STRING_LENGTH,
+    )
+
+    with pytest.raises(ValidationError):
+        BulkTeamMemberUpdateRequest(
+            user_ids=["user-1"],
+            update_fields=TeamMemberBulkUpdateFields(
+                allowed_models=[f"model-{i}" for i in range(BULK_TEAM_MEMBER_UPDATE_MAX_ALLOWED_MODELS + 1)]
+            ),
+        )
+
+    with pytest.raises(ValidationError):
+        BulkTeamMemberUpdateRequest(
+            user_ids=["user-1"],
+            update_fields=TeamMemberBulkUpdateFields(
+                allowed_models=["m" * (BULK_TEAM_MEMBER_UPDATE_MAX_STRING_LENGTH + 1)]
+            ),
+        )
+
+    with pytest.raises(ValidationError):
+        BulkTeamMemberUpdateRequest(
+            user_ids=["u" * (BULK_TEAM_MEMBER_UPDATE_MAX_STRING_LENGTH + 1)],
+            update_fields=TeamMemberBulkUpdateFields(role="user"),
+        )

@@ -27,6 +27,7 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
+    BULK_TEAM_MEMBER_UPDATE_MAX_USER_IDS,
     BlockTeamRequest,
     BulkTeamMemberUpdateRequest,
     BulkTeamMemberUpdateResponse,
@@ -3148,13 +3149,12 @@ async def bulk_update_team_members(
     else:
         user_ids = list(dict.fromkeys(data.user_ids or []))
 
-    max_batch_size = 500
-    if len(user_ids) > max_batch_size:
+    if len(user_ids) > BULK_TEAM_MEMBER_UPDATE_MAX_USER_IDS:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "Maximum {} team members can be updated at once. Found {} user_ids.".format(
-                    max_batch_size, len(user_ids)
+                    BULK_TEAM_MEMBER_UPDATE_MAX_USER_IDS, len(user_ids)
                 )
             },
         )
