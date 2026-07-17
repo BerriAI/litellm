@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import PublicModelHub, { publicMCPHubColumns, MCPServerData } from "./public_model_hub";
+import PublicModelHub from "./public_model_hub";
+import { getPublicMCPHubColumns, MCPServerData } from "./PublicModelHubTableColumns";
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
@@ -113,63 +114,23 @@ describe("PublicModelHub", () => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
     });
 
-    // Check that health status is displayed for healthy model (gpt-4)
-    // Find the row containing "gpt-4" and verify it has "healthy" status
+    // Check the health status badge in each model's row
     await waitFor(() => {
-      const gpt4Cell = screen.getByText("gpt-4");
-      const gpt4Row = gpt4Cell.closest("tr");
+      const gpt4Row = screen.getByText("gpt-4").closest("tr");
       expect(gpt4Row).toBeInTheDocument();
-
-      // Find all cells in the row
-      const cells = gpt4Row?.querySelectorAll("td");
-      expect(cells).toBeTruthy();
-
-      // Find the cell containing "healthy" text (health status column)
-      // The health status is in a Tag component, so look for a Tag containing "healthy"
-      const healthyStatus = Array.from(cells || []).find((cell) => {
-        const tag = cell.querySelector('[class*="ant-tag"]');
-        const text = tag?.textContent?.toLowerCase();
-        return text === "healthy";
-      });
-      expect(healthyStatus).toBeInTheDocument();
+      expect(within(gpt4Row as HTMLElement).getByText("healthy")).toBeInTheDocument();
     });
 
-    // Check that health status is displayed for unhealthy model (claude-3)
     await waitFor(() => {
-      const claude3Cell = screen.getByText("claude-3");
-      const claude3Row = claude3Cell.closest("tr");
+      const claude3Row = screen.getByText("claude-3").closest("tr");
       expect(claude3Row).toBeInTheDocument();
-
-      // Find all cells in the row
-      const cells = claude3Row?.querySelectorAll("td");
-      expect(cells).toBeTruthy();
-
-      // Find the cell containing "unhealthy" text (health status column)
-      const unhealthyStatus = Array.from(cells || []).find((cell) => {
-        const tag = cell.querySelector('[class*="ant-tag"]');
-        const text = tag?.textContent?.toLowerCase();
-        return text === "unhealthy";
-      });
-      expect(unhealthyStatus).toBeInTheDocument();
+      expect(within(claude3Row as HTMLElement).getByText("unhealthy")).toBeInTheDocument();
     });
 
-    // Check that "Unknown" is displayed for model without health status (gpt-3.5-turbo)
     await waitFor(() => {
-      const gpt35Cell = screen.getByText("gpt-3.5-turbo");
-      const gpt35Row = gpt35Cell.closest("tr");
+      const gpt35Row = screen.getByText("gpt-3.5-turbo").closest("tr");
       expect(gpt35Row).toBeInTheDocument();
-
-      // Find all cells in the row
-      const cells = gpt35Row?.querySelectorAll("td");
-      expect(cells).toBeTruthy();
-
-      // Find the cell containing "Unknown" text (health status column)
-      const unknownStatus = Array.from(cells || []).find((cell) => {
-        const tag = cell.querySelector('[class*="ant-tag"]');
-        const text = tag?.textContent;
-        return text === "Unknown";
-      });
-      expect(unknownStatus).toBeInTheDocument();
+      expect(within(gpt35Row as HTMLElement).getByText("Unknown")).toBeInTheDocument();
     });
   });
   it("handles non-array response gracefully (regression test for e.filter crash)", async () => {
@@ -201,7 +162,7 @@ const mockMcpServer: MCPServerData = {
 };
 
 function PublicMcpTestTable({ data }: { data: MCPServerData[] }) {
-  const columns = publicMCPHubColumns(vi.fn());
+  const columns = getPublicMCPHubColumns({ onServerClick: vi.fn() });
   const table = useReactTable({ data, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
@@ -239,7 +200,8 @@ describe("publicMCPHubColumns", () => {
   it("does not expose a URL column header", () => {
     render(<PublicMcpTestTable data={[mockMcpServer]} />);
     expect(screen.queryByText("URL")).not.toBeInTheDocument();
-    expect(publicMCPHubColumns(vi.fn()).some((c) => c.header === "URL")).toBe(false);
+    const columns = getPublicMCPHubColumns({ onServerClick: vi.fn() });
+    expect(columns.some((c) => c.header === "URL" || c.meta?.title === "URL")).toBe(false);
   });
 
   it("does not render the server url anywhere in the table", () => {
