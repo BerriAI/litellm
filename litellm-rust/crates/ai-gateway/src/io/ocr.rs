@@ -17,8 +17,8 @@ use serde_json::{Map, Value};
 mod common_utils;
 
 use common_utils::{
-    convert_document_url_to_data_uri, has_header, ocr_provider_config, poll_document_intelligence,
-    string_headers, truncate_error_body, upload_reducto_document,
+    classify_reqwest_error, convert_document_url_to_data_uri, has_header, ocr_provider_config,
+    poll_document_intelligence, string_headers, truncate_error_body, upload_reducto_document,
 };
 
 /// OCR over large documents can take a while; bound it generously rather than
@@ -74,8 +74,12 @@ pub struct OcrRequest<'a> {
 /// Async: intended to be awaited directly by the Python bridge's async entrypoint.
 pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let model = request.model;
-    let config = ocr_provider_config(request.custom_llm_provider, model)
-        .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.to_string()))?;
+    let config = ocr_provider_config(request.custom_llm_provider, model).ok_or_else(|| {
+        CoreError::InvalidProvider(format!(
+            "no OCR provider '{}' registered for model '{model}'",
+            request.custom_llm_provider
+        ))
+    })?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let headers = string_headers(request.extra_headers)?;
@@ -116,7 +120,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let response = request_builder
         .send()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(classify_reqwest_error)?;
 
     let status = response.status();
     if config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
@@ -141,16 +145,19 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
             .into_json());
     }
 
-    let text = response
-        .text()
-        .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+    let text = response.text().await.map_err(classify_reqwest_error)?;
 
     if !status.is_success() {
         return Err(CoreError::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
         });
+    }
+
+    if text.trim().is_empty() {
+        return Err(CoreError::InvalidResponse(
+            "OCR provider returned an empty success response".to_string(),
+        ));
     }
 
     let response_json: Value = serde_json::from_str(&text)

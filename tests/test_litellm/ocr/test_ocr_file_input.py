@@ -200,11 +200,13 @@ class TestConvertFileDocumentToUrlDocument:
             convert_file_document_to_url_document({"type": "file"})
 
     def test_should_raise_error_for_nonexistent_pathlib_path(self):
-        """Non-existent pathlib.Path should raise FileNotFoundError."""
-        with pytest.raises(FileNotFoundError, match="File not found"):
+        """Non-existent pathlib.Path should raise a path-free input error."""
+        with pytest.raises(ValueError, match="does not exist") as exc_info:
             convert_file_document_to_url_document(
                 {"type": "file", "file": Path("/nonexistent/path/to/file.pdf")}
             )
+
+        assert "/nonexistent/path/to/file.pdf" not in str(exc_info.value)
 
     def test_should_raise_error_for_empty_file(self):
         """Empty file should raise ValueError."""

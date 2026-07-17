@@ -369,3 +369,143 @@ fn string_headers_rejects_non_string_values() {
         )
     );
 }
+
+async fn respond_once(status_line: &'static str, body: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts one request");
+        let _ = read_http_headers(&mut socket).await;
+        let response = format!(
+            "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+    });
+    format!("http://{addr}")
+}
+
+async fn run_mistral_ocr(api_base: String, timeout: Duration) -> CoreResult<Value> {
+    ocr(OcrRequest {
+        model: "mistral-ocr-latest",
+        document: json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        }),
+        api_key: Some("sk-test"),
+        api_base: Some(&api_base),
+        custom_llm_provider: "mistral",
+        extra_headers: None,
+        optional_params: Map::new(),
+        timeout: Some(timeout),
+    })
+    .await
+}
+
+#[tokio::test]
+async fn ocr_preserves_upstream_error_status() {
+    for status in [
+        "401 Unauthorized",
+        "404 Not Found",
+        "500 Internal Server Error",
+    ] {
+        let base = respond_once(status, r#"{"error":"nope"}"#.to_string()).await;
+        let err = run_mistral_ocr(base, Duration::from_secs(5))
+            .await
+            .expect_err("upstream error surfaces");
+        let expected = status[..3].parse::<u16>().expect("status prefix parses");
+        match err {
+            CoreError::Http { status: got, .. } => assert_eq!(got, expected),
+            other => panic!("expected Http error, got {other:?}"),
+        }
+        assert_eq!(err.public_status_code(), Some(expected));
+    }
+}
+
+#[tokio::test]
+async fn ocr_bounds_oversized_error_body() {
+    let base = respond_once("500 Internal Server Error", "x".repeat(6000)).await;
+    let err = run_mistral_ocr(base, Duration::from_secs(5))
+        .await
+        .expect_err("oversized error surfaces");
+    match err {
+        CoreError::Http { body, .. } => {
+            assert!(body.ends_with("... (truncated)"));
+            assert!(
+                body.chars().count() < 300,
+                "body not bounded: {} chars",
+                body.chars().count()
+            );
+        }
+        other => panic!("expected Http error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn ocr_rejects_invalid_json_success_body() {
+    let base = respond_once("200 OK", "not json".to_string()).await;
+    let err = run_mistral_ocr(base, Duration::from_secs(5))
+        .await
+        .expect_err("invalid JSON surfaces");
+    assert!(matches!(err, CoreError::InvalidResponse(_)));
+    assert_eq!(err.public_status_code(), Some(500));
+}
+
+#[tokio::test]
+async fn ocr_rejects_empty_success_body() {
+    let base = respond_once("200 OK", "   ".to_string()).await;
+    let err = run_mistral_ocr(base, Duration::from_secs(5))
+        .await
+        .expect_err("empty success surfaces");
+    match err {
+        CoreError::InvalidResponse(message) => assert!(message.contains("empty")),
+        other => panic!("expected InvalidResponse, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn ocr_classifies_per_request_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts one request");
+        let _ = read_http_headers(&mut socket).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let _ = socket.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
+    });
+    let err = run_mistral_ocr(format!("http://{addr}"), Duration::from_millis(200))
+        .await
+        .expect_err("timeout surfaces");
+    assert_eq!(err, CoreError::Timeout);
+    assert_eq!(err.public_status_code(), Some(408));
+}
+
+#[tokio::test]
+async fn ocr_maps_unregistered_provider_to_invalid_provider() {
+    let err = ocr(OcrRequest {
+        model: "some-model",
+        document: json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        }),
+        api_key: Some("sk-test"),
+        api_base: None,
+        custom_llm_provider: "definitely-not-a-provider",
+        extra_headers: None,
+        optional_params: Map::new(),
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect_err("unregistered provider surfaces");
+    assert!(matches!(err, CoreError::InvalidProvider(_)));
+    assert_eq!(err.public_status_code(), Some(400));
+    assert_eq!(err.public_message(), "Invalid OCR request");
+}
