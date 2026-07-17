@@ -105,12 +105,18 @@ async def test_mcp_server_manager_https_server():
         assert tools[0].name == f"{expected_prefix}-gmail_send_email"
 
         # Manually set up the tool mapping for the call_tool test
-        mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            expected_prefix
+        zapier_server_ids = frozenset(
+            server_id
+            for server_id, server in mcp_server_manager.get_registry().items()
+            if server.server_name == "zapier_mcp_server"
         )
-        mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+        assert len(zapier_server_ids) == 1, "Expected exactly one configured zapier server"
+        mcp_server_manager.tool_name_to_mcp_server_ids_mapping["gmail_send_email"] = (
+            zapier_server_ids
+        )
+        mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
             f"{expected_prefix}-gmail_send_email"
-        ] = expected_prefix
+        ] = zapier_server_ids
 
         result = await mcp_server_manager.call_tool(
             server_name="zapier_mcp_server",
@@ -221,16 +227,16 @@ async def test_mcp_http_transport_list_tools_mock():
         # Verify tool mapping was updated
         expected_prefix = "test_http_server"
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping[
+            test_manager.tool_name_to_mcp_server_ids_mapping[
                 f"{expected_prefix}-gmail_send_email"
             ]
-            == expected_prefix
+            == frozenset(allowed_server_ids)
         )
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping[
+            test_manager.tool_name_to_mcp_server_ids_mapping[
                 f"{expected_prefix}-calendar_create_event"
             ]
-            == expected_prefix
+            == frozenset(allowed_server_ids)
         )
 
 
@@ -275,8 +281,8 @@ async def test_mcp_http_transport_call_tool_mock():
         )
 
         # Manually set up tool mapping (normally done by list_tools)
-        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            "test_http_server"
+        test_manager.tool_name_to_mcp_server_ids_mapping["gmail_send_email"] = frozenset(
+            test_manager.get_registry().keys()
         )
 
         # Call the tool
@@ -341,8 +347,8 @@ async def test_mcp_http_transport_call_tool_error_mock():
         )
 
         # Manually set up tool mapping
-        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-            "test_http_server"
+        test_manager.tool_name_to_mcp_server_ids_mapping["gmail_send_email"] = frozenset(
+            test_manager.get_registry().keys()
         )
 
         # Call the tool with invalid data
@@ -383,8 +389,8 @@ async def test_mcp_http_transport_tool_not_found():
     )
 
     # Mapping populated for this server but not for the requested tool
-    test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
-        "test_http_server"
+    test_manager.tool_name_to_mcp_server_ids_mapping["gmail_send_email"] = frozenset(
+        test_manager.get_registry().keys()
     )
 
     # Try to call a tool that doesn't exist in mapping
@@ -1395,12 +1401,12 @@ async def test_mcp_server_manager_alias_tool_prefixing():
 
         # Verify mapping is updated correctly
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping["send_email"]
-            == "my_alias"
+            test_manager.tool_name_to_mcp_server_ids_mapping["send_email"]
+            == frozenset({"test-server-123"})
         )
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping["my_alias-send_email"]
-            == "my_alias"
+            test_manager.tool_name_to_mcp_server_ids_mapping["my_alias-send_email"]
+            == frozenset({"test-server-123"})
         )
 
 
@@ -1455,12 +1461,12 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
 
         # Verify mapping is updated correctly
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping["send_email"]
-            == "Test Server"
+            test_manager.tool_name_to_mcp_server_ids_mapping["send_email"]
+            == frozenset({"test-server-123"})
         )
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping["Test_Server-send_email"]
-            == "Test Server"
+            test_manager.tool_name_to_mcp_server_ids_mapping["Test_Server-send_email"]
+            == frozenset({"test-server-123"})
         )
 
 
@@ -1515,14 +1521,14 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
 
         # Verify mapping is updated correctly
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping["send_email"]
-            == "test-server-123"
+            test_manager.tool_name_to_mcp_server_ids_mapping["send_email"]
+            == frozenset({"test-server-123"})
         )
         assert (
-            test_manager.tool_name_to_mcp_server_name_mapping[
+            test_manager.tool_name_to_mcp_server_ids_mapping[
                 "test-server-123-send_email"
             ]
-            == "test-server-123"
+            == frozenset({"test-server-123"})
         )
 
 

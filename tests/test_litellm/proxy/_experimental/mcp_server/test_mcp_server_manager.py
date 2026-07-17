@@ -3005,7 +3005,7 @@ class TestMCPServerManager:
         assert minimal_spec.config.profile == "rfc8693"
 
     @pytest.mark.asyncio
-    async def test_config_oauth_initialize_tool_name_to_mcp_server_name_mapping(self):
+    async def test_config_oauth_initialize_tool_name_to_mcp_server_ids_mapping(self):
         manager = MCPServerManager()
 
         config = {
@@ -3022,8 +3022,8 @@ class TestMCPServerManager:
         await manager.load_servers_from_config(config)
 
         # Initialize the tool mapping
-        await manager._initialize_tool_name_to_mcp_server_name_mapping()
-        assert manager.tool_name_to_mcp_server_name_mapping == {}
+        await manager._initialize_tool_name_to_mcp_server_ids_mapping()
+        assert manager.tool_name_to_mcp_server_ids_mapping == {}
 
     @pytest.mark.asyncio
     async def test_list_tools_handles_missing_server_alias(self):
@@ -3869,8 +3869,8 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
         )
         manager.registry = {"jira": server}
-        manager.tool_name_to_mcp_server_name_mapping["jira-search_issues"] = "jira"
-        manager.tool_name_to_mcp_server_name_mapping["search_issues"] = "jira"
+        manager.tool_name_to_mcp_server_ids_mapping["jira-search_issues"] = frozenset({"jira"})
+        manager.tool_name_to_mcp_server_ids_mapping["search_issues"] = frozenset({"jira"})
 
         resolved = manager._resolve_mcp_server_for_tool_call("jira", "search_issues")
         assert resolved is server
@@ -3885,10 +3885,112 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
         )
         manager.registry = {"srv-uuid-123": server}
-        manager.tool_name_to_mcp_server_name_mapping["create_zap"] = "zapier"
+        manager.tool_name_to_mcp_server_ids_mapping["create_zap"] = frozenset({"srv-uuid-123"})
 
         resolved = manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
         assert resolved is server
+
+    def test_register_tool_route_accumulates_owners_across_servers(self):
+        """Two servers exposing one tool name are both recorded, not last-writer-wins."""
+        manager = MCPServerManager()
+        manager._register_tool_route("echo", "id-alpha")
+        manager._register_tool_route("echo", "id-zulu")
+
+        assert manager.tool_name_to_mcp_server_ids_mapping["echo"] == frozenset({"id-alpha", "id-zulu"})
+
+    def test_register_tool_route_is_idempotent_for_one_server(self):
+        """Re-listing the same server must not make its own tool look ambiguous."""
+        manager = MCPServerManager()
+        manager._register_tool_route("echo", "id-alpha")
+        manager._register_tool_route("echo", "id-alpha")
+
+        assert manager.tool_name_to_mcp_server_ids_mapping["echo"] == frozenset({"id-alpha"})
+
+    def test_get_mcp_server_from_tool_name_refuses_ambiguous_unprefixed_name(self):
+        """An unprefixed name owned by several servers resolves to nothing, never to one of them."""
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        zulu = MCPServer(server_id="id-zulu", name="echo_zulu", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha, "id-zulu": zulu}
+        manager._register_tool_route("echo", "id-alpha")
+        manager._register_tool_route("echo", "id-zulu")
+
+        assert manager._get_mcp_server_from_tool_name("echo") is None
+
+    def test_get_mcp_server_from_tool_name_resolves_sole_owner_by_id(self):
+        """A tool name owned by exactly one server still resolves, addressed by server_id."""
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha}
+        manager._register_tool_route("echo", "id-alpha")
+
+        assert manager._get_mcp_server_from_tool_name("echo") is alpha
+
+    def test_get_mcp_server_from_tool_name_refuses_prefixed_name_of_duplicate_named_servers(self):
+        """server_name is not unique, so a prefix shared by two servers must not silently pick one."""
+        manager = MCPServerManager()
+        first = MCPServer(server_id="id-first", name="shared", transport=MCPTransport.http)
+        second = MCPServer(server_id="id-second", name="shared", transport=MCPTransport.http)
+        manager.registry = {"id-first": first, "id-second": second}
+        manager._register_tool_route("shared-echo", "id-first")
+        manager._register_tool_route("shared-echo", "id-second")
+
+        assert manager._get_mcp_server_from_tool_name("shared-echo") is None
+
+    def test_resolve_tool_route_names_every_ambiguous_owner(self):
+        """The ambiguous route carries all owners so callers can report the real candidates."""
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        zulu = MCPServer(server_id="id-zulu", name="echo_zulu", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha, "id-zulu": zulu}
+        manager._register_tool_route("echo", "id-alpha")
+        manager._register_tool_route("echo", "id-zulu")
+
+        route = manager.resolve_tool_route("echo")
+
+        assert type(route).__name__ == "MCPToolRouteAmbiguous"
+        assert route.server_ids == frozenset({"id-alpha", "id-zulu"})
+
+    def test_resolve_tool_route_resolves_sole_owner(self):
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha}
+        manager._register_tool_route("echo", "id-alpha")
+
+        route = manager.resolve_tool_route("echo")
+
+        assert type(route).__name__ == "MCPToolRouteResolved"
+        assert route.server is alpha
+
+    def test_resolve_tool_route_reports_unknown_tool(self):
+        manager = MCPServerManager()
+
+        assert type(manager.resolve_tool_route("nothing_serves_this")).__name__ == "MCPToolRouteNotFound"
+
+    def test_cleanup_withdraws_only_departing_server_from_shared_tool_name(self):
+        """Removing one server must leave a co-owned tool name routable to the survivor."""
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        zulu = MCPServer(server_id="id-zulu", name="echo_zulu", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha, "id-zulu": zulu}
+        manager._register_tool_route("echo", "id-alpha")
+        manager._register_tool_route("echo", "id-zulu")
+
+        manager._cleanup_server_tool_routing_artifacts(zulu)
+        del manager.registry["id-zulu"]
+
+        assert manager.tool_name_to_mcp_server_ids_mapping["echo"] == frozenset({"id-alpha"})
+        assert manager._get_mcp_server_from_tool_name("echo") is alpha
+
+    def test_cleanup_drops_the_route_when_its_last_owner_leaves(self):
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha}
+        manager._register_tool_route("echo", "id-alpha")
+
+        manager._cleanup_server_tool_routing_artifacts(alpha)
+
+        assert "echo" not in manager.tool_name_to_mcp_server_ids_mapping
 
     def test_resolve_mcp_server_for_tool_call_unknown_tool_with_empty_mapping(self):
         """Server-name match alone must not let unknown tools through when the
@@ -3916,7 +4018,7 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
         )
         manager.registry = {"linear": server}
-        manager.tool_name_to_mcp_server_name_mapping["create_issue"] = "linear"
+        manager.tool_name_to_mcp_server_ids_mapping["create_issue"] = frozenset({"linear"})
 
         # server_name is empty so the fallback unprefixed lookup runs and matches.
         resolved = manager._resolve_mcp_server_for_tool_call("", "create_issue")
@@ -3943,8 +4045,8 @@ class TestMCPServerManager:
         )
         manager.registry = {"github": server}
         # Mapping has *some* tools for github but not "missing_tool".
-        manager.tool_name_to_mcp_server_name_mapping["github-list_repos"] = "github"
-        manager.tool_name_to_mcp_server_name_mapping["list_repos"] = "github"
+        manager.tool_name_to_mcp_server_ids_mapping["github-list_repos"] = frozenset({"github"})
+        manager.tool_name_to_mcp_server_ids_mapping["list_repos"] = frozenset({"github"})
 
         with pytest.raises(ValueError, match="Tool missing_tool not found"):
             manager._resolve_mcp_server_for_tool_call("github", "missing_tool")
@@ -4254,10 +4356,10 @@ class TestMCPServerManager:
         assert names == ["close_issue", "create_issue"]
 
         # Mapping should include both original and prefixed names -> resolves calls either way
-        assert manager.tool_name_to_mcp_server_name_mapping["create_issue"] == "jira"
-        assert manager.tool_name_to_mcp_server_name_mapping["jira-create_issue"] == "jira"
-        assert manager.tool_name_to_mcp_server_name_mapping["close_issue"] == "jira"
-        assert manager.tool_name_to_mcp_server_name_mapping["jira-close_issue"] == "jira"
+        assert manager.tool_name_to_mcp_server_ids_mapping["create_issue"] == frozenset({"jira"})
+        assert manager.tool_name_to_mcp_server_ids_mapping["jira-create_issue"] == frozenset({"jira"})
+        assert manager.tool_name_to_mcp_server_ids_mapping["close_issue"] == frozenset({"jira"})
+        assert manager.tool_name_to_mcp_server_ids_mapping["jira-close_issue"] == frozenset({"jira"})
 
     def test_get_mcp_server_from_tool_name_with_prefixed_and_unprefixed(self):
         """After mapping is populated, manager resolves both prefixed and unprefixed tool names to the same server."""
@@ -4746,8 +4848,8 @@ class TestMCPServerManager:
 
         # Register the server and map a tool to it
         manager.registry = {"test-server": server}
-        manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
-        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
+        manager.tool_name_to_mcp_server_ids_mapping["test_tool"] = frozenset({"test-server"})
+        manager.tool_name_to_mcp_server_ids_mapping["test-server-test_tool"] = frozenset({"test-server"})
 
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
@@ -5198,8 +5300,8 @@ class TestMCPServerManager:
         prefixed_tool_name = add_server_prefix_to_name(tool_name, "test_server")
 
         # Populate the mapping with the original tool name
-        manager.tool_name_to_mcp_server_name_mapping[tool_name] = "test_server"
-        manager.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = "test_server"
+        manager.tool_name_to_mcp_server_ids_mapping[tool_name] = frozenset({server.server_id})
+        manager.tool_name_to_mcp_server_ids_mapping[prefixed_tool_name] = frozenset({server.server_id})
 
         # Test: _get_mcp_server_from_tool_name should find the server using server.server_name
         # even when server.name is different
@@ -7250,15 +7352,15 @@ class TestApprovalStatusGate:
             input_schema={"type": "object"},
             handler=_noop_handler,
         )
-        manager.tool_name_to_mcp_server_name_mapping["demo_tool"] = prefix
-        manager.tool_name_to_mcp_server_name_mapping[prefixed] = prefix
+        manager.tool_name_to_mcp_server_ids_mapping["demo_tool"] = frozenset({server.server_id})
+        manager.tool_name_to_mcp_server_ids_mapping[prefixed] = frozenset({server.server_id})
 
         await manager.update_server(self._make_server("evict-openapi", MCPApprovalStatus.rejected))
 
         assert "evict-openapi" not in manager.registry
         assert prefixed not in global_mcp_tool_registry.tools
-        assert "demo_tool" not in manager.tool_name_to_mcp_server_name_mapping
-        assert prefixed not in manager.tool_name_to_mcp_server_name_mapping
+        assert "demo_tool" not in manager.tool_name_to_mcp_server_ids_mapping
+        assert prefixed not in manager.tool_name_to_mcp_server_ids_mapping
 
     async def test_update_server_noop_for_unregistered_pending(self):
         # update_server called with a pending row that was never registered

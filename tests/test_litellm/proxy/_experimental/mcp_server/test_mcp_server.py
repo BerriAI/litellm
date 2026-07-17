@@ -39,11 +39,11 @@ def cleanup_mcp_global_state():
 
         # Clear before test
         global_mcp_server_manager.registry.clear()
-        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping.clear()
         yield
         # Clear after test
         global_mcp_server_manager.registry.clear()
-        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping.clear()
     except ImportError:
         # MCP not available, skip cleanup
         yield
@@ -5957,8 +5957,8 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
 
     with (
         patch.dict(
-            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
-            {"echo": oauth_server.name},
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
+            {"echo": frozenset({oauth_server.server_id})},
         ),
         patch.object(
             mcp_module.global_mcp_server_manager,
@@ -6044,8 +6044,8 @@ async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credenti
 
     with (
         patch.dict(
-            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
-            {"echo": collision_server.name},
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
+            {"echo": frozenset({collision_server.server_id})},
         ),
         patch.object(
             mcp_module.global_mcp_server_manager,
@@ -6085,6 +6085,309 @@ async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credenti
     assert routed.auth_type == MCPAuth.api_key
     assert routed.authentication_token == "requested-secret"
     assert routed.authentication_token != collision_server.authentication_token
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_jsonrpc_unprefixed_ambiguous_tool_is_rejected():
+    """MCP JSON-RPC carries no server_id, so an unprefixed name owned by two servers must 409.
+
+    The REST path disambiguates with requested_server_id, but the MCP protocol has no such
+    field. Without this the call silently dispatched to whichever server registered the tool
+    name last, sending that server's upstream credentials.
+    """
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    alpha = MCPServer(
+        server_id="alpha-server-id",
+        name="echo_alpha",
+        server_name="echo_alpha",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="alpha-secret",
+    )
+    zulu = MCPServer(
+        server_id="zulu-server-id",
+        name="echo_zulu",
+        server_name="echo_zulu",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="zulu-secret",
+    )
+
+    injected: dict = {}
+
+    async def fake_create_mcp_client(server, **kwargs):
+        injected["server"] = server
+        raise AssertionError("upstream must not be called for an ambiguous tool name")
+
+    with (
+        patch.dict(
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
+            {"echo": frozenset({alpha.server_id, zulu.server_id})},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={alpha.server_id: alpha, zulu.server_id: zulu},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_create_mcp_client",
+            new=fake_create_mcp_client,
+        ),
+        patch.object(mcp_module.MCPRequestHandler, "is_tool_allowed", return_value=True),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=None),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[alpha, zulu],
+            start_time=datetime.now(),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"] == "ambiguous_tool_name"
+    assert "echo_alpha" in exc_info.value.detail["message"]
+    assert "echo_zulu" in exc_info.value.detail["message"]
+    assert "server" not in injected
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_jsonrpc_unprefixed_resolves_when_caller_reaches_one_server():
+    """A caller scoped to one server is served unprefixed names and must still route.
+
+    Ambiguity is relative to what the caller can reach. Judging it against the whole
+    registry would reject an x-mcp-servers scoped session, whose unprefixed tool names
+    only ever had one candidate.
+    """
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    alpha = MCPServer(
+        server_id="alpha-server-id",
+        name="echo_alpha",
+        server_name="echo_alpha",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="alpha-secret",
+    )
+    zulu = MCPServer(
+        server_id="zulu-server-id",
+        name="echo_zulu",
+        server_name="echo_zulu",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="zulu-secret",
+    )
+
+    fake_client = MagicMock()
+    fake_client._last_initialize_instructions = None
+    fake_client.call_tool = AsyncMock(
+        return_value=mcp_module.CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            isError=False,
+        )
+    )
+
+    injected: dict = {}
+
+    async def fake_create_mcp_client(server, **kwargs):
+        injected["server"] = server
+        return fake_client
+
+    with (
+        patch.dict(
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
+            {"echo": frozenset({alpha.server_id, zulu.server_id})},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={alpha.server_id: alpha, zulu.server_id: zulu},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_create_mcp_client",
+            new=fake_create_mcp_client,
+        ),
+        patch.object(mcp_module.MCPRequestHandler, "is_tool_allowed", return_value=True),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=None),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[zulu],
+            start_time=datetime.now(),
+        )
+
+    routed = injected["server"]
+    assert routed.server_id == zulu.server_id
+    assert routed.authentication_token == "zulu-secret"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_dispatches_resolved_server_not_a_name_lookup():
+    """The server execute_mcp_tool resolved must be the server dispatched to.
+
+    server_name is not unique, so re-deriving the server from it inside call_tool picks the
+    first registry entry with that name, which defeats server_id resolution when two servers
+    share a name.
+    """
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    first_named_shared = MCPServer(
+        server_id="first-id",
+        name="shared",
+        server_name="shared",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="first-secret",
+    )
+    second_named_shared = MCPServer(
+        server_id="second-id",
+        name="shared",
+        server_name="shared",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="second-secret",
+    )
+
+    fake_client = MagicMock()
+    fake_client._last_initialize_instructions = None
+    fake_client.call_tool = AsyncMock(
+        return_value=mcp_module.CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            isError=False,
+        )
+    )
+
+    injected: dict = {}
+
+    async def fake_create_mcp_client(server, **kwargs):
+        injected["server"] = server
+        return fake_client
+
+    with (
+        patch.dict(
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
+            {"echo": frozenset({second_named_shared.server_id})},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={
+                first_named_shared.server_id: first_named_shared,
+                second_named_shared.server_id: second_named_shared,
+            },
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_create_mcp_client",
+            new=fake_create_mcp_client,
+        ),
+        patch.object(mcp_module.MCPRequestHandler, "is_tool_allowed", return_value=True),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=None),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[first_named_shared, second_named_shared],
+            start_time=datetime.now(),
+            requested_server_id=second_named_shared.server_id,
+        )
+
+    routed = injected["server"]
+    assert routed.server_id == second_named_shared.server_id
+    assert routed.authentication_token == "second-secret"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_jsonrpc_prefixed_tool_routes_to_its_own_server():
+    """The prefixed name stays unambiguous and must still reach exactly its own server."""
+    from mcp.types import TextContent
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    alpha = MCPServer(
+        server_id="alpha-server-id",
+        name="echo_alpha",
+        server_name="echo_alpha",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="alpha-secret",
+    )
+    zulu = MCPServer(
+        server_id="zulu-server-id",
+        name="echo_zulu",
+        server_name="echo_zulu",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="zulu-secret",
+    )
+
+    fake_client = MagicMock()
+    fake_client._last_initialize_instructions = None
+    fake_client.call_tool = AsyncMock(
+        return_value=mcp_module.CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            isError=False,
+        )
+    )
+
+    injected: dict = {}
+
+    async def fake_create_mcp_client(server, **kwargs):
+        injected["server"] = server
+        return fake_client
+
+    with (
+        patch.dict(
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
+            {
+                "echo": frozenset({alpha.server_id, zulu.server_id}),
+                "echo_alpha-echo": frozenset({alpha.server_id}),
+                "echo_zulu-echo": frozenset({zulu.server_id}),
+            },
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={alpha.server_id: alpha, zulu.server_id: zulu},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_create_mcp_client",
+            new=fake_create_mcp_client,
+        ),
+        patch.object(mcp_module.MCPRequestHandler, "is_tool_allowed", return_value=True),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=None),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="echo_zulu-echo",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[alpha, zulu],
+            start_time=datetime.now(),
+        )
+
+    routed = injected["server"]
+    assert routed.server_id == zulu.server_id
+    assert routed.authentication_token == "zulu-secret"
 
 
 @pytest.mark.asyncio

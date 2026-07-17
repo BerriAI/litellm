@@ -104,7 +104,7 @@ async def test_mcp_cost_tracking():
         litellm.callbacks = [test_logger]
 
         # Initialize the tool mapping
-        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
+        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_ids_mapping()
 
         # Patch the global manager in both modules where it's used
         with (
@@ -121,17 +121,18 @@ async def test_mcp_cost_tracking():
             _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print(
-                "tool_name_to_mcp_server_name_mapping",
-                local_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+                "tool_name_to_mcp_server_ids_mapping",
+                local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
             )
 
             # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-            local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            zapier_server_ids = frozenset(local_mcp_server_manager.get_all_mcp_server_ids())
+            local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
                 "add_tools"
-            ] = "zapier_gmail_server"
-            local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            ] = zapier_server_ids
+            local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
                 "zapier_gmail_server-add_tools"
-            ] = "zapier_gmail_server"
+            ] = zapier_server_ids
 
             # Call mcp tool
             response = await mcp_server_tool_call(
@@ -237,21 +238,22 @@ async def test_mcp_cost_tracking_per_tool():
         litellm.callbacks = [test_logger]
 
         # Initialize the tool mapping
-        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
+        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_ids_mapping()
 
         # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+        test_server_ids = frozenset(local_mcp_server_manager.get_all_mcp_server_ids())
+        local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
             "expensive_tool"
-        ] = "test_server"
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+        ] = test_server_ids
+        local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
             "test_server-expensive_tool"
-        ] = "test_server"
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["cheap_tool"] = (
-            "test_server"
+        ] = test_server_ids
+        local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping["cheap_tool"] = (
+            test_server_ids
         )
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+        local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
             "test_server-cheap_tool"
-        ] = "test_server"
+        ] = test_server_ids
 
         # Patch the global manager in both modules where it's used
         with (
@@ -268,8 +270,8 @@ async def test_mcp_cost_tracking_per_tool():
             _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print(
-                "tool_name_to_mcp_server_name_mapping",
-                local_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+                "tool_name_to_mcp_server_ids_mapping",
+                local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
             )
 
             # Test 1: Call expensive_tool - should cost 5.0
@@ -401,15 +403,16 @@ async def test_mcp_tool_call_hook():
         litellm.callbacks = [test_logger]
 
         # Initialize the tool mapping
-        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
+        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_ids_mapping()
 
         # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping["add_tools"] = (
-            "zapier_gmail_server"
+        zapier_server_ids = frozenset(local_mcp_server_manager.get_all_mcp_server_ids())
+        local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping["add_tools"] = (
+            zapier_server_ids
         )
-        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+        local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
             "zapier_gmail_server-add_tools"
-        ] = "zapier_gmail_server"
+        ] = zapier_server_ids
 
         # Patch the global manager in both modules where it's used
         with (
@@ -426,8 +429,8 @@ async def test_mcp_tool_call_hook():
             _set_authorized_user(local_mcp_server_manager.get_all_mcp_server_ids())
 
             print(
-                "tool_name_to_mcp_server_name_mapping",
-                local_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+                "tool_name_to_mcp_server_ids_mapping",
+                local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
             )
 
             # Call mcp tool using the correct separator format (- not /)

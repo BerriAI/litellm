@@ -779,6 +779,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
+                    resolved_server=mcp_server,
                 )
 
                 if litellm_logging_obj:
