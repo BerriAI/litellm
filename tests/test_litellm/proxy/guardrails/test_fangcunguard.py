@@ -415,3 +415,35 @@ async def test_post_call_hook_blocks_tool_call_arguments(unsafe_request_data, us
                 response=response,
             )
     assert excinfo.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_scan_texts_fan_out_bound_fail_closed(fangcun_guardrail_instance):
+    """Too many texts in one request fails closed instead of fanning out."""
+    from litellm.proxy.guardrails.guardrail_hooks.fangcunguard.fangcunguard import (
+        MAX_TEXTS_PER_REQUEST,
+    )
+
+    too_many = ["hi"] * (MAX_TEXTS_PER_REQUEST + 1)
+    with pytest.raises(HTTPException) as excinfo:
+        await fangcun_guardrail_instance._scan_texts(too_many, request_data={})
+    assert excinfo.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_scan_texts_fan_out_bound_fail_open():
+    """With fail_open, exceeding the fan-out bound allows the request."""
+    from litellm.proxy.guardrails.guardrail_hooks.fangcunguard.fangcunguard import (
+        MAX_TEXTS_PER_REQUEST,
+    )
+
+    guardrail = FangcunGuardrail(
+        guardrail_name="fc-fanout-open",
+        api_key="test-fangcun-key",
+        fail_open=True,
+        event_hook="pre_call",
+        default_on=True,
+    )
+    too_many = ["hi"] * (MAX_TEXTS_PER_REQUEST + 1)
+    # Should not raise (fail_open swallows the unavailable condition).
+    await guardrail._scan_texts(too_many, request_data={})

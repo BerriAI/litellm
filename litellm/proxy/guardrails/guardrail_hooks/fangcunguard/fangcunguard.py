@@ -31,6 +31,12 @@ if TYPE_CHECKING:
 GUARDRAIL_NAME = "fangcunguard"
 DEFAULT_API_BASE = "https://api.fangcunleap.com"
 
+# Bounds to keep one request from exhausting the HTTP pool / guardrail quota
+# (fan-out) or process memory (streaming buffer).
+MAX_TEXTS_PER_REQUEST = 100
+MAX_CONCURRENT_CHECKS = 10
+MAX_STREAM_CHUNKS = 5000
+
 
 class FangcunGuardMissingSecrets(Exception):
     """Raised when no FangcunGuard API key is configured."""
@@ -167,7 +173,19 @@ class FangcunGuardrail(CustomGuardrail):
         )
 
     async def _scan_texts(self, texts: list[str], request_data: dict) -> None:
-        await asyncio.gather(*[self._check_text(text, request_data) for text in texts])
+        if len(texts) > MAX_TEXTS_PER_REQUEST:
+            # Too many texts to scan authoritatively; treat like an outage so
+            # the fail_open policy decides (fail closed by default).
+            self._handle_unavailable(f"too many texts to scan ({len(texts)} > {MAX_TEXTS_PER_REQUEST})")
+            return
+
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
+
+        async def _bounded(text: str) -> None:
+            async with semaphore:
+                await self._check_text(text, request_data)
+
+        await asyncio.gather(*[_bounded(text) for text in texts])
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -340,8 +358,29 @@ class FangcunGuardrail(CustomGuardrail):
             return
 
         all_chunks = []
+        exceeded = False
         async for chunk in response:
             all_chunks.append(chunk)
+            if len(all_chunks) > MAX_STREAM_CHUNKS:
+                exceeded = True
+                break
+
+        if exceeded:
+            # Too large to buffer/scan authoritatively. Fail closed by default;
+            # if fail_open, release what we have and pass the rest through
+            # un-scanned rather than holding it all in memory.
+            if not self.fail_open:
+                yield f"data: {json.dumps({'error': {'message': 'FangcunGuard: streaming response too large to scan', 'code': '500'}})}\n\n"
+                return
+            verbose_proxy_logger.warning(
+                "FangcunGuard: stream exceeded %s chunks; fail_open=True, passing through",
+                MAX_STREAM_CHUNKS,
+            )
+            for chunk in all_chunks:
+                yield chunk
+            async for chunk in response:
+                yield chunk
+            return
 
         assembled = stream_chunk_builder(chunks=all_chunks)
         response_texts = self._extract_response_texts(assembled) if assembled else []
