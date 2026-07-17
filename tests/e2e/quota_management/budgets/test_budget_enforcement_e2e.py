@@ -17,17 +17,18 @@ from typing import Callable, List, Type
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
-from e2e_http import require_successful_call
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
+from e2e_http import StreamingResponse, require_successful_call
 from lifecycle import run_case
 
 pytestmark = pytest.mark.e2e
 
-def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> None:
-    """Send paid calls until the entity's budget blocks one. Key/user/org/member
-    block within a couple calls off real-time reservation counters; the end-user
-    budget enforces off table spend that lands on the batch write, so it takes a
-    few more. A non-budget error fails hard (never a skip)."""
+def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> StreamingResponse:
+    """Send paid calls until the entity's budget blocks one; return the blocked
+    response so callers can assert on its shape. Key/user/org/member block within
+    a couple calls off real-time reservation counters; the end-user budget
+    enforces off table spend that lands on the batch write, so it takes a few
+    more. A non-budget error fails hard (never a skip)."""
     for _ in range(40):
         result = client.chat(
             key,
@@ -37,7 +38,7 @@ def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> 
             user=user or None,
         )
         if is_budget_block(result):
-            return
+            return result
         require_successful_call(result)
         time.sleep(2)
     pytest.fail("budget never enforced within the call budget")
@@ -68,10 +69,33 @@ class _BudgetCase:
             undo()
 
 
+_KEY_MAX_BUDGET = 3e-6
+
+
 class KeyBudgetCase(_BudgetCase):
+    """A bare key (no team_id / user_id) carrying its own max_budget, so only the
+    key-level budget can be the thing that blocks. The refusal must be a 429
+    budget_exceeded (any other error already fails via _assert_budget_blocks),
+    and /key/info must report spend at or above the cap once the batched spend
+    write lands (proxy_batch_write_at, hence the poll)."""
+
     def init(self) -> None:
-        self.key = self.client.generate_key(max_budget=3e-6)
+        self.key = self.client.generate_key(max_budget=_KEY_MAX_BUDGET)
         self._undo.append(lambda: self.client.delete_key(self.key))
+
+    def run(self) -> None:
+        blocked = _assert_budget_blocks(self.client, self.key)
+        assert blocked.status_code == 429, (
+            f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+        )
+        deadline = time.monotonic() + POLL_TIMEOUT
+        spend = 0.0
+        while time.monotonic() < deadline:
+            spend = self.client.gateway.key_info(self.key).spend or 0.0
+            if spend >= _KEY_MAX_BUDGET:
+                return
+            time.sleep(POLL_INTERVAL)
+        pytest.fail(f"/key/info spend {spend} never reached max_budget {_KEY_MAX_BUDGET} within {POLL_TIMEOUT}s")
 
 
 class InternalUserBudgetCase(_BudgetCase):
