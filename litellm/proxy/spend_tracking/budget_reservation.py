@@ -1177,12 +1177,19 @@ def _estimate_input_tokens(
 ) -> Optional[int]:
     try:
         if "messages" in request_body:
-            return litellm.token_counter(
-                model=model,
-                messages=request_body.get("messages") or [],
-                tools=request_body.get("tools"),
-                tool_choice=request_body.get("tool_choice"),
-            )
+            messages = request_body.get("messages") or []
+            # A `file` content block's real token cost is the provider's
+            # server-side extraction of the referenced document and cannot be
+            # derived client-side — token_counter only counts its filename/id
+            # fields, which would under-reserve arbitrarily large uploads.
+            # Fall through to the conservative max_input_tokens reservation.
+            if not _messages_contain_file_content_blocks(messages):
+                return litellm.token_counter(
+                    model=model,
+                    messages=messages,
+                    tools=request_body.get("tools"),
+                    tool_choice=request_body.get("tool_choice"),
+                )
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
@@ -1202,6 +1209,19 @@ def _estimate_input_tokens(
         return max_input_tokens
 
     return None
+
+
+def _messages_contain_file_content_blocks(messages: object) -> bool:
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for content_item in content:
+            if isinstance(content_item, dict) and content_item.get("type") == "file":
+                return True
+    return False
 
 
 DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK = 16384

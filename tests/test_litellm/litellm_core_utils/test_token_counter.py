@@ -1114,6 +1114,7 @@ def test_count_content_list_rejects_unknown_type():
     message = str(exc_info.value)
     assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
+    assert "file" in message
 
 
 def test_token_counter_with_file_content_block():
