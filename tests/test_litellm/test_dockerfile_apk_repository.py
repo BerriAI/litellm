@@ -43,7 +43,10 @@ def test_runtime_stage_adds_public_wolfi_repo():
 
     runtime_stage = _runtime_stage(contents)
 
-    assert "packages.wolfi.dev/os" in runtime_stage, (
+    assert re.search(
+        r'echo\s+"https://packages\.wolfi\.dev/os"\s*>>\s*/etc/apk/repositories',
+        runtime_stage,
+    ), (
         "Dockerfile's runtime stage doesn't add the public Wolfi apk repo "
         "(https://packages.wolfi.dev/os) to /etc/apk/repositories. Without it, "
         "`apk add` inside the published image only has the authenticated "
