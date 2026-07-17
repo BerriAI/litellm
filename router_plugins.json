@@ -1,3 +1,8 @@
 {
-  "language-detector": "https://github.com/jeann2013/language-detector"
+  "language-detector": {
+    "name": "litellm-plugin-language-detector",
+    "github_package": "https://github.com/jeann2013/language-detector",
+    "author": "jeann2013",
+    "description": "LiteLLM routing plugin for detecting the user's language."
+  }
 }
