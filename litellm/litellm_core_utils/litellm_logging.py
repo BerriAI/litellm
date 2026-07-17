@@ -5322,7 +5322,8 @@ def get_standard_logging_object_payload(
         # This ensures Bedrock models like "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
         # are logged as "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
         custom_llm_provider = cast(Optional[str], kwargs.get("custom_llm_provider"))
-        model_name = reconstruct_model_name(kwargs.get("model", "") or "", custom_llm_provider, metadata)
+        stable_model = litellm_params.get("model") or kwargs.get("model", "") or ""
+        model_name = reconstruct_model_name(stable_model, custom_llm_provider, metadata)
         response_model_name: Optional[str] = None
         if isinstance(final_response_obj, dict):
             response_model_name = final_response_obj.get("model")
