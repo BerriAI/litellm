@@ -93,8 +93,12 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 USER root
 
-# node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
+# nodejs + npm so the prisma CLI uses Wolfi's Node/npm at runtime. `prisma
+# migrate deploy` against a fresh database bootstraps the prisma npm CLI, and
+# without npm on PATH prisma-python falls back to nodeenv, which downloads a
+# Node build whose dynamic deps (e.g. libatomic.so.1) aren't in the Wolfi
+# runtime image and crashes the migration (see #33650, #24554).
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}"
