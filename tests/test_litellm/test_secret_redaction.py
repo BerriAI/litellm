@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 from io import StringIO
 from unittest.mock import patch
 
@@ -381,3 +382,40 @@ def test_non_pem_private_key_value_redacted():
 def test_normal_vertex_log_not_redacted():
     msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
     assert redact_string(msg) == msg
+
+
+def test_connection_string_pattern_does_not_backtrack_on_colon_heavy_url():
+    """Regression test for #32353: redact_string must stay linear on colon-heavy URLs.
+
+    The connection-string pattern matched userinfo as `[^\\s'\"]*`, which permits ':',
+    '/' and '@'. On a `scheme://` URL followed by a long colon-heavy run containing no
+    '@', the engine retried the username/password split at every colon, giving O(n^2)
+    behaviour: this 80k payload took roughly 14s before the fix and a multi-MB provider
+    error string took minutes. Since redact_string runs synchronously on the event loop
+    when exception_type() stringifies a failed request, that is client-triggerable.
+
+    URL userinfo cannot contain ':' (the delimiter), '/' or '@', so excluding them makes
+    the split unambiguous and the scan linear.
+    """
+    payload = "postgres://" + "seg:" * 20000
+
+    start = time.perf_counter()
+    redact_string(payload)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 2.0, (
+        f"redact_string took {elapsed:.1f}s on an 80k colon-heavy URL; "
+        "the connection-string pattern is backtracking again"
+    )
+
+
+def test_connection_string_credentials_still_redacted():
+    """The linear pattern must still redact the credentials it is there to catch."""
+    for url, secret in (
+        ("postgresql://admin:s3cretpass@db.example.com:5432/mydb", "s3cretpass"),
+        ("redis://:secretpw@cache:6379", "secretpw"),
+        ("mysql://root:hunter2@10.0.0.1:3306/x", "hunter2"),
+    ):
+        result = redact_string("connecting to " + url)
+        assert secret not in result, f"{url!r} credentials were not redacted"
+        assert "REDACTED" in result

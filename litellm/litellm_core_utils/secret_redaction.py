@@ -49,7 +49,9 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"(?:^|(?<=\W))\w*(?:password|passwd|client_secret|secret_key|_secret)"
         r"['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+",
         # Database connection string credentials (scheme://user:pass@host)
-        r"(?<=://)[^\s'\"]*:[^\s'\"@]+(?=@)",
+        # Userinfo cannot contain ':' (the delimiter), '/' or '@'; excluding them keeps
+        # this linear instead of O(n^2) backtracking on colon-heavy URLs with no '@'.
+        r"(?<=://)[^\s'\"/@:]*:[^\s'\"/@]+(?=@)",
         # Databricks personal access tokens
         r"dapi[0-9a-f]{32}",
         # Module-level provider keys logged as litellm.<provider>_key=<value>
