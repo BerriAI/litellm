@@ -17,6 +17,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
     _await_llm_call_cancelling_on_disconnect,
+    _bill_partial_streamed_spend_on_disconnect,
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
@@ -5019,3 +5020,69 @@ class TestStreamingClientDisconnectBilling:
         assert len(recorder.success_events) == 1
         standard_logging_object = recorder.success_events[0]["kwargs"]["standard_logging_object"]
         assert standard_logging_object["total_tokens"] > 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_does_not_double_release_slot(self):
+        """
+        The disconnect billing fires a success event whose limiter callback
+        already releases the max_parallel_requests slot. The shielded cleanup
+        must therefore NOT also release the slot explicitly; two releases of
+        the same acquisition race and double-decrement under the limiter's
+        in-memory fallback.
+        """
+        import types
+
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [_RecordingSuccessLogger()]
+        try:
+            response = await self._start_partial_stream()
+            proxy_logging_obj = types.SimpleNamespace(
+                _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+            )
+
+            billed = await _bill_partial_streamed_spend_on_disconnect(
+                {"litellm_logging_obj": response.logging_obj}, response
+            )
+            assert billed is True
+
+            await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_logging_obj": response.logging_obj},
+                response=response,
+                stream_completed=False,
+                client_disconnected=True,
+                user_api_key_dict=MagicMock(),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        finally:
+            litellm.callbacks = original_callbacks
+
+        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_without_billable_chunks_releases_slot(self):
+        """
+        When there is nothing to bill (no chunks streamed), no success event
+        fires, so the slot would leak unless the cleanup releases it
+        explicitly. The explicit release must run exactly once in that case.
+        """
+        import types
+
+        response = await self._start_partial_stream()
+        # No chunks to assemble -> billing dispatches no success event.
+        empty_response = types.SimpleNamespace(chunks=[], messages=None)
+        proxy_logging_obj = types.SimpleNamespace(
+            _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+        )
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={"litellm_logging_obj": response.logging_obj},
+            response=empty_response,
+            stream_completed=False,
+            client_disconnected=True,
+            user_api_key_dict=MagicMock(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()

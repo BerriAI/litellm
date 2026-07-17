@@ -7376,12 +7376,13 @@ async def async_data_generator(
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
         # BaseException, so they bypass the success/failure logging callbacks
-        # that normally release the pre-call max_parallel_requests +1; release
-        # it here. This is the outermost generator Starlette closes on
+        # that normally release the pre-call max_parallel_requests +1. Flag the
+        # disconnect; the shielded cleanup in `finally` owns the slot release
+        # so it can coordinate with disconnect-time success billing and release
+        # exactly once. This is the outermost generator Starlette closes on
         # disconnect, so it fires reliably regardless of needs_iterator_wrap
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
             client_disconnected = True
         raise
     except Exception as e:
@@ -7427,6 +7428,8 @@ async def async_data_generator(
             response=response,
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
 
