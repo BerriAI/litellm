@@ -126,7 +126,9 @@ async def test_mcp_cost_tracking():
             )
 
             # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-            zapier_server_ids = frozenset(local_mcp_server_manager.get_all_mcp_server_ids())
+            zapier_server = local_mcp_server_manager.get_mcp_server_by_name("zapier_gmail_server")
+            assert zapier_server is not None
+            zapier_server_ids = frozenset({zapier_server.server_id})
             local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
                 "add_tools"
             ] = zapier_server_ids
@@ -241,7 +243,9 @@ async def test_mcp_cost_tracking_per_tool():
         await local_mcp_server_manager._initialize_tool_name_to_mcp_server_ids_mapping()
 
         # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-        test_server_ids = frozenset(local_mcp_server_manager.get_all_mcp_server_ids())
+        test_server = local_mcp_server_manager.get_mcp_server_by_name("test_server")
+        assert test_server is not None
+        test_server_ids = frozenset({test_server.server_id})
         local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping[
             "expensive_tool"
         ] = test_server_ids
@@ -406,7 +410,9 @@ async def test_mcp_tool_call_hook():
         await local_mcp_server_manager._initialize_tool_name_to_mcp_server_ids_mapping()
 
         # Manually add the tool mapping to ensure it's available (since mocking might not capture it properly)
-        zapier_server_ids = frozenset(local_mcp_server_manager.get_all_mcp_server_ids())
+        zapier_server = local_mcp_server_manager.get_mcp_server_by_name("zapier_gmail_server")
+        assert zapier_server is not None
+        zapier_server_ids = frozenset({zapier_server.server_id})
         local_mcp_server_manager.tool_name_to_mcp_server_ids_mapping["add_tools"] = (
             zapier_server_ids
         )

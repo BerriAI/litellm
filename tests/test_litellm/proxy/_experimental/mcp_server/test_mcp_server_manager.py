@@ -3937,6 +3937,23 @@ class TestMCPServerManager:
 
         assert manager._get_mcp_server_from_tool_name("shared-echo") is None
 
+    def test_resolve_tool_route_is_not_found_when_no_owner_is_in_scope(self):
+        """A tool whose only owner is outside the caller's scope must fail closed.
+
+        Falling through to the scope-blind lookup would hand back a server the caller
+        cannot reach, and the downstream name-based permission check would misroute it
+        to a reachable same-named server.
+        """
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        zulu = MCPServer(server_id="id-zulu", name="echo_zulu", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha, "id-zulu": zulu}
+        manager._register_tool_route("secret_tool", "id-zulu")
+
+        route = manager.resolve_tool_route("secret_tool", allowed_server_ids=frozenset({"id-alpha"}))
+
+        assert route.kind == "not_found"
+
     def test_resolve_tool_route_names_every_ambiguous_owner(self):
         """The ambiguous route carries all owners so callers can report the real candidates."""
         manager = MCPServerManager()

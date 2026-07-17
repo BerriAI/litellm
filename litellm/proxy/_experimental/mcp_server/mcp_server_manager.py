@@ -4883,6 +4883,10 @@ class MCPServerManager:
                 scoped_server = self.get_mcp_server_by_id(next(iter(in_scope)))
                 if scoped_server is not None:
                     return MCPToolRouteResolved(server=scoped_server)
+            # The tool exists but no owner is reachable by this caller. Fail closed
+            # rather than fall through to a scope-blind lookup that could hand back a
+            # server outside the caller's scope.
+            return MCPToolRouteNotFound(tool_name=tool_name)
         server = self._get_mcp_server_from_tool_name(tool_name)
         if server is None:
             return MCPToolRouteNotFound(tool_name=tool_name)
