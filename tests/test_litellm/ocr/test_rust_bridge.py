@@ -859,3 +859,50 @@ def test_raise_ocr_exception_keeps_validation_error_off_bad_request(
         )
 
     assert spy.calls[0].original_exception is validation_info.value
+
+
+def test_ocr_forwards_os_environ_api_key_reference_to_rust(
+    fake_bridge: RecordingBridge,
+) -> None:
+    litellm.ocr(
+        model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY"
+    )
+
+    assert fake_bridge.calls[0]["api_key"] == "os.environ/MISTRAL_OCR_TEST_KEY"
+
+
+def test_ocr_forwards_provider_derived_os_environ_references_to_rust(
+    fake_bridge: RecordingBridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_get_llm_provider(
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str, str, str]:
+        return (
+            "mistral-ocr-latest",
+            "mistral",
+            "os.environ/MISTRAL_PROVIDER_KEY",
+            "os.environ/MISTRAL_PROVIDER_BASE",
+        )
+
+    monkeypatch.setattr(ocr_main.litellm, "get_llm_provider", fake_get_llm_provider)
+
+    litellm.ocr(model=MODEL, document=DOCUMENT)
+
+    call = fake_bridge.calls[0]
+    assert call["api_key"] == "os.environ/MISTRAL_PROVIDER_KEY"
+    assert call["api_base"] == "os.environ/MISTRAL_PROVIDER_BASE"
+
+
+@pytest.mark.asyncio
+async def test_aocr_forwards_os_environ_api_key_reference_to_rust(
+    fake_async_bridge: RecordingAsyncBridge,
+) -> None:
+    await litellm.aocr(
+        model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY"
+    )
+
+    assert fake_async_bridge.calls[0]["api_key"] == "os.environ/MISTRAL_OCR_TEST_KEY"
