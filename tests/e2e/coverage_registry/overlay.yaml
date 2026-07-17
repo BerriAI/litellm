@@ -1,0 +1,408 @@
+# Curated human overlay for the coverage denominator, keyed by cell id.
+# The denominator (the set of cells) is generated in product_surface.py; the ids that
+# generation does not yet produce are also enumerated here. This file only carries the
+# human judgement for a cell: its tier, where it came from (source), why it matters
+# (rationale), whether a fail-before-fix was proven, and whether the product supports it.
+# Ordinary test PRs never edit this file; it is owner-gated. Adding coverage means adding
+# a @pytest.mark.covers marker to a test, not a row here.
+
+
+# ---- guardrail ----
+guardrail.presidio.pre_call.masks: {tier: P0, source: guardrail_hooks/presidio.py, rationale: PII masking pre-call; data-leak blast radius}
+guardrail.presidio.post_call.masks: {tier: P0, source: guardrail_hooks/presidio.py, rationale: Mask PII in model output}
+guardrail.presidio.logging_only.masks: {tier: P0, source: guardrail_hooks/presidio.py, rationale: Redact in logs without blocking}
+guardrail.bedrock.pre_call.blocks: {tier: P0, source: guardrail_hooks/bedrock_guardrails.py, rationale: AWS content guardrail blocks harmful input}
+guardrail.bedrock.during.blocks: {tier: P0, source: guardrail_hooks/bedrock_guardrails.py, rationale: During-call moderation for streaming}
+guardrail.bedrock.post_call.blocks: {tier: P0, source: guardrail_hooks/bedrock_guardrails.py, rationale: Block harmful output}
+guardrail.lakera.pre_call.blocks: {tier: P0, source: guardrail_hooks/lakera_ai_v2.py, rationale: Prompt-injection block pre-execution}
+guardrail.lakera.post_call.blocks: {tier: P0, source: guardrail_hooks/lakera_ai_v2.py, rationale: Post-call injection on multi-turn chains}
+guardrail.openai_moderations.pre_call.blocks: {tier: P0, source: guardrail_hooks/openai/moderations.py, rationale: Content policy for regulated industries}
+guardrail.aim.pre_call.blocks: {tier: P1, source: guardrail_hooks/aim/aim.py, rationale: Security guardrail malicious-input}
+guardrail.aim.post_call.blocks: {tier: P1, source: guardrail_hooks/aim/aim.py, rationale: Output security check}
+guardrail.ibm_guardrails.pre_call.blocks: {tier: P1, source: guardrail_hooks/ibm_guardrails/ibm_detector.py, rationale: Enterprise multi-policy}
+guardrail.ibm_guardrails.post_call.blocks: {tier: P1, source: guardrail_hooks/ibm_guardrails/ibm_detector.py, rationale: Output policy validation}
+guardrail.semantic_guard.pre_call.blocks: {tier: P1, source: guardrail_hooks/semantic_guard, rationale: Semantic policy compliance}
+guardrail.block_code_execution.pre_call.blocks: {tier: P1, source: guardrail_hooks/block_code_execution, rationale: Code-injection prevention}
+guardrail.tool_permission.pre_call.allows: {tier: P1, source: guardrail_hooks/tool_permission.py, rationale: Grant allowed tools}
+guardrail.tool_permission.pre_call.blocks: {tier: P1, source: guardrail_hooks/tool_permission.py, rationale: Block unauthorized tools}
+guardrail.microsoft_purview.pre_call.blocks: {tier: P1, source: guardrail_hooks/microsoft_purview/purview_dlp.py, rationale: DLP sensitive-data disclosure}
+guardrail.headroom.pre_call.blocks: {tier: P1, source: guardrail_hooks/headroom/headroom.py, rationale: Anomaly detection threshold}
+guardrail.generic_guardrail_api.pre_call.blocks: {tier: P1, source: guardrail_hooks/generic_guardrail_api/generic_guardrail_api.py, rationale: Vendor-agnostic custom API}
+guardrail.pangea.pre_call.blocks: {tier: P1, source: guardrail_hooks/pangea/pangea.py, rationale: API security + DLP}
+guardrail.niche_providers.pre_call.blocks: {tier: P2, source: grammar, rationale: 'SMOKE cohort: lasso/hiddenlayer/model_armor/qualifire/guardrails_ai/cato/cisco/akto/prompt_security/promptguard/zscaler/vigil/etc'}
+guardrail.niche_providers.post_call.blocks: {tier: P2, source: grammar, rationale: SMOKE niche output filtering}
+guardrail.niche_providers.pre_call.allows: {tier: P2, source: grammar, rationale: SMOKE niche allow-path passthrough}
+guardrail.tool_policy.pre_call.blocks: {tier: P2, source: guardrail_hooks/tool_policy/tool_policy_guardrail.py, rationale: Tool-use policy enforcement}
+guardrail.mcp_security.pre_call.blocks: {tier: P2, source: guardrail_hooks/mcp_security, rationale: MCP protocol security}
+guardrail.llm_as_a_judge.pre_call.blocks: {tier: P2, source: guardrail_hooks/llm_as_a_judge, rationale: LLM-based judgment guardrail}
+
+# ---- llm ----
+llm.messages.azure_foundry.basic.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Basic messaging over Azure AI Foundry Anthropic deployments}
+llm.messages.bedrock_converse.basic.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Basic messaging over Bedrock Converse Anthropic}
+llm.messages.bedrock_invoke.basic.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Basic messaging over Bedrock Invoke Anthropic}
+llm.messages.vertex.basic.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Basic messaging over Vertex AI Anthropic}
+llm.messages.azure_foundry.basic.stream.works: {tier: P1, source: claude_code compat matrix, rationale: Basic streaming over Azure AI Foundry}
+llm.messages.bedrock_converse.basic.stream.works: {tier: P1, source: claude_code compat matrix, rationale: Basic streaming over Bedrock Converse}
+llm.messages.bedrock_invoke.basic.stream.works: {tier: P1, source: claude_code compat matrix, rationale: Basic streaming over Bedrock Invoke}
+llm.messages.vertex.basic.stream.works: {tier: P1, source: claude_code compat matrix, rationale: Basic streaming over Vertex AI}
+llm.messages.azure_foundry.tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Tool use over Azure AI Foundry}
+llm.messages.bedrock_converse.tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Tool use over Bedrock Converse}
+llm.messages.bedrock_invoke.tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Tool use over Bedrock Invoke}
+llm.messages.vertex.tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Tool use over Vertex AI}
+llm.messages.azure_foundry.tool_use.stream.works: {tier: P1, source: claude_code compat matrix, rationale: Streaming tool use over Azure AI Foundry}
+llm.messages.bedrock_converse.tool_use.stream.works: {tier: P1, source: claude_code compat matrix, rationale: Streaming tool use over Bedrock Converse}
+llm.messages.bedrock_invoke.tool_use.stream.works: {tier: P1, source: claude_code compat matrix, rationale: Streaming tool use over Bedrock Invoke}
+llm.messages.vertex.tool_use.stream.works: {tier: P1, source: claude_code compat matrix, rationale: Streaming tool use over Vertex AI}
+llm.messages.azure_foundry.vision.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Vision over Azure AI Foundry}
+llm.messages.bedrock_converse.vision.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Vision over Bedrock Converse}
+llm.messages.bedrock_invoke.vision.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Vision over Bedrock Invoke}
+llm.messages.vertex.vision.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Vision over Vertex AI}
+llm.messages.azure_foundry.thinking.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Extended thinking over Azure AI Foundry}
+llm.messages.bedrock_converse.thinking.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Extended thinking over Bedrock Converse}
+llm.messages.bedrock_invoke.thinking.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Extended thinking over Bedrock Invoke}
+llm.messages.vertex.thinking.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Extended thinking over Vertex AI}
+llm.messages.azure_foundry.prompt_cache_5m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 5m prompt cache over Azure AI Foundry}
+llm.messages.bedrock_converse.prompt_cache_5m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 5m prompt cache over Bedrock Converse}
+llm.messages.bedrock_invoke.prompt_cache_5m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 5m prompt cache over Bedrock Invoke}
+llm.messages.vertex.prompt_cache_5m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 5m prompt cache over Vertex AI}
+llm.messages.anthropic.prompt_cache_1h.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1h prompt cache over Anthropic direct}
+llm.messages.azure_foundry.prompt_cache_1h.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1h prompt cache over Azure AI Foundry}
+llm.messages.bedrock_converse.prompt_cache_1h.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1h prompt cache over Bedrock Converse}
+llm.messages.bedrock_invoke.prompt_cache_1h.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1h prompt cache over Bedrock Invoke}
+llm.messages.vertex.prompt_cache_1h.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1h prompt cache over Vertex AI}
+llm.messages.anthropic.structured_output.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Structured outputs (--json-schema) over Anthropic direct}
+llm.messages.azure_foundry.structured_output.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Structured outputs over Azure AI Foundry}
+llm.messages.bedrock_converse.structured_output.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Structured outputs over Bedrock Converse}
+llm.messages.bedrock_invoke.structured_output.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Structured outputs over Bedrock Invoke}
+llm.messages.vertex.structured_output.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Structured outputs over Vertex AI}
+llm.messages.anthropic.pdf_input.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: PDF document input over Anthropic direct}
+llm.messages.azure_foundry.pdf_input.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: PDF document input over Azure AI Foundry}
+llm.messages.bedrock_converse.pdf_input.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: PDF document input over Bedrock Converse}
+llm.messages.bedrock_invoke.pdf_input.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: PDF document input over Bedrock Invoke}
+llm.messages.vertex.pdf_input.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: PDF document input over Vertex AI}
+llm.messages.anthropic.long_context_1m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1M context beta over Anthropic direct}
+llm.messages.azure_foundry.long_context_1m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1M context beta over Azure AI Foundry}
+llm.messages.bedrock_converse.long_context_1m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1M context beta over Bedrock Converse}
+llm.messages.bedrock_invoke.long_context_1m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1M context beta over Bedrock Invoke}
+llm.messages.vertex.long_context_1m.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: 1M context beta over Vertex AI}
+llm.messages.anthropic.thinking_with_tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Thinking + tool_use interleaved over Anthropic direct}
+llm.messages.azure_foundry.thinking_with_tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Thinking + tool_use interleaved over Azure AI Foundry}
+llm.messages.bedrock_converse.thinking_with_tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Thinking + tool_use interleaved over Bedrock Converse}
+llm.messages.bedrock_invoke.thinking_with_tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Thinking + tool_use interleaved over Bedrock Invoke}
+llm.messages.vertex.thinking_with_tool_use.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Thinking + tool_use interleaved over Vertex AI}
+llm.messages.anthropic.tool_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: tool_search_tool_regex_20251119 discovery tool over Anthropic direct}
+llm.messages.azure_foundry.tool_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: tool_search discovery tool over Azure AI Foundry}
+llm.messages.bedrock_converse.tool_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: tool_search discovery tool over Bedrock Converse}
+llm.messages.bedrock_invoke.tool_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: tool_search discovery tool over Bedrock Invoke}
+llm.messages.vertex.tool_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: tool_search discovery tool over Vertex AI}
+llm.messages.anthropic.count_tokens.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: /v1/messages/count_tokens over Anthropic direct}
+llm.messages.azure_foundry.count_tokens.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: /v1/messages/count_tokens over Azure AI Foundry}
+llm.messages.bedrock_converse.count_tokens.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: /v1/messages/count_tokens over Bedrock Converse}
+llm.messages.bedrock_invoke.count_tokens.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: /v1/messages/count_tokens over Bedrock Invoke}
+llm.messages.vertex.count_tokens.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: /v1/messages/count_tokens over Vertex AI}
+llm.messages.anthropic.web_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Web search server tool over Anthropic direct}
+llm.messages.azure_foundry.web_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Web search server tool over Azure AI Foundry}
+llm.messages.bedrock_converse.web_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Web search server tool over Bedrock Converse}
+llm.messages.bedrock_invoke.web_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Web search server tool over Bedrock Invoke}
+llm.messages.vertex.web_search.nonstream.works: {tier: P1, source: claude_code compat matrix, rationale: Web search server tool over Vertex AI}
+llm.chat_completions.openai.basic.nonstream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: Core endpoint/route/capability}
+llm.chat_completions.openai.basic.stream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: Core streaming}
+llm.chat_completions.openai.basic.nonstream.cost_logged: {tier: P0, source: 'proxy_server.py:8455', rationale: Cost logging regression catch}
+llm.chat_completions.openai.tool_use.nonstream.works: {tier: P0, source: model_prices json, rationale: OpenAI function_calling; high usage}
+llm.chat_completions.openai.tool_use.stream.works: {tier: P0, source: model_prices json, rationale: Tool calls over streaming}
+llm.chat_completions.openai.vision.nonstream.works: {tier: P0, source: model_prices json, rationale: gpt-4o vision; high usage}
+llm.chat_completions.openai.prompt_cache_5m.nonstream.works: {tier: P0, source: model_prices json, rationale: Prompt caching cost optimization}
+llm.chat_completions.openai.service_tier.nonstream.works: {tier: P1, source: OpenAI service_tier param, rationale: OpenAI scale-tier request option is forwarded and echoed}
+llm.chat_completions.openai.thinking.nonstream.works: {tier: P1, source: model_prices json, rationale: o-series reasoning; emerging}
+llm.chat_completions.openai.structured_output.nonstream.works: {tier: P1, source: model_prices json, rationale: response_schema extraction}
+llm.chat_completions.anthropic.basic.nonstream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: P0 route translated to Anthropic}
+llm.chat_completions.anthropic.basic.stream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: Streaming translation}
+llm.chat_completions.anthropic.tool_use.nonstream.works: {tier: P0, source: model_prices json, rationale: Claude tool_use; high usage}
+llm.chat_completions.anthropic.tool_use.stream.works: {tier: P0, source: model_prices json, rationale: Streaming tool calls}
+llm.chat_completions.anthropic.vision.nonstream.works: {tier: P0, source: model_prices json, rationale: Claude vision; high usage}
+llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works: {tier: P0, source: model_prices json, rationale: Claude prompt caching}
+llm.chat_completions.anthropic.thinking.nonstream.works: {tier: P1, source: model_prices json, rationale: Claude extended thinking}
+llm.chat_completions.anthropic.structured_output.nonstream.works: {tier: P1, source: model_prices json, rationale: Claude response_schema}
+llm.chat_completions.bedrock_converse.basic.nonstream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: P0 route; Bedrock Converse unified}
+llm.chat_completions.bedrock_converse.basic.stream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: Streaming over Converse}
+llm.chat_completions.bedrock_converse.tool_use.nonstream.works: {tier: P0, source: model_prices json, rationale: Converse function_calling; AWS adoption}
+llm.chat_completions.bedrock_converse.vision.nonstream.works: {tier: P0, source: model_prices json, rationale: Bedrock vision (Anthropic/Nova)}
+llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.works: {tier: P1, source: model_prices json, rationale: Anthropic-on-Bedrock caching}
+llm.chat_completions.bedrock_converse.thinking.nonstream.works: {tier: P1, source: model_prices json, rationale: Anthropic thinking on Bedrock}
+llm.chat_completions.vertex.basic.nonstream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: P0 route; Vertex AI}
+llm.chat_completions.vertex.basic.stream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: Streaming over Vertex}
+llm.chat_completions.vertex.tool_use.nonstream.works: {tier: P0, source: model_prices json, rationale: Vertex Gemini function_calling}
+llm.chat_completions.vertex.vision.nonstream.works: {tier: P0, source: model_prices json, rationale: Gemini vision}
+llm.chat_completions.vertex.prompt_cache_5m.nonstream.works: {tier: P1, source: model_prices json, rationale: Vertex Gemini prompt caching}
+llm.chat_completions.azure_openai.basic.nonstream.works: {tier: P0, source: 'proxy_server.py:8455', rationale: P0 route; Azure OpenAI deployments}
+llm.chat_completions.azure_openai.tool_use.nonstream.works: {tier: P0, source: model_prices json, rationale: Azure OpenAI function_calling}
+llm.chat_completions.azure_foundry.basic.nonstream.works: {tier: P1, source: 'proxy_server.py:8455', rationale: 'Azure Foundry (azure_ai); newer, smoke'}
+llm.messages.anthropic.basic.nonstream.works: {tier: P0, source: 'anthropic_endpoints/endpoints.py:64', rationale: Core endpoint; Anthropic Messages native}
+llm.messages.anthropic.basic.stream.works: {tier: P0, source: 'anthropic_endpoints/endpoints.py:64', rationale: Streaming Messages API}
+llm.messages.anthropic.basic.nonstream.cost_logged: {tier: P0, source: 'anthropic_endpoints/endpoints.py:64', rationale: Cost logged on passthrough}
+llm.messages.anthropic.tool_use.nonstream.works: {tier: P0, source: model_prices json, rationale: Tool calls via Messages API}
+llm.messages.anthropic.tool_use.stream.works: {tier: P0, source: model_prices json, rationale: Streaming tool calls}
+llm.messages.anthropic.vision.nonstream.works: {tier: P0, source: model_prices json, rationale: Vision via Messages API}
+llm.messages.anthropic.prompt_cache_5m.nonstream.works: {tier: P0, source: model_prices json, rationale: Prompt caching via Messages API}
+llm.messages.anthropic.thinking.nonstream.works: {tier: P1, source: model_prices json, rationale: Extended thinking via Messages API}
+llm.messages.bedrock_invoke.mid_conversation_system.nonstream.cache_hit: {tier: P0, source: llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py, rationale: Flagged Claude 4.8+/5 must keep mid-conversation system reminders in messages; hoisting mutates the system prefix and collapses the prompt cache (#32578/#32831/#32882), fail_before_fix: proven}
+llm.messages.bedrock_invoke.mid_conversation_system.nonstream.works: {tier: P0, source: llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py, rationale: Claude <= 4.7 rejects role system inside messages; unflagged models must hoist reminders into top-level system or every Claude Code session 400s (#32831), fail_before_fix: proven}
+llm.responses.openai.basic.nonstream.works: {tier: P0, source: 'response_api_endpoints/endpoints.py:26', rationale: Core endpoint; OpenAI Responses native}
+llm.responses.openai.basic.stream.works: {tier: P0, source: 'response_api_endpoints/endpoints.py:26', rationale: Streaming via /v1/responses}
+llm.responses.openai.basic.nonstream.cost_logged: {tier: P0, source: 'response_api_endpoints/endpoints.py:26', rationale: Cost logged on responses}
+llm.responses.openai.tool_use.nonstream.works: {tier: P0, source: model_prices json, rationale: Tool calls via Responses API}
+llm.responses.openai.vision.nonstream.works: {tier: P0, source: model_prices json, rationale: Vision via Responses API}
+llm.responses.anthropic.basic.nonstream.works: {tier: P1, source: 'response_api_endpoints/endpoints.py:26', rationale: Responses w/ Anthropic translation (smoke)}
+llm.responses.anthropic.tool_use.nonstream.works: {tier: P1, source: model_prices json, rationale: Responses tool calls w/ Anthropic}
+llm.responses.bedrock_converse.basic.nonstream.works: {tier: P1, source: 'response_api_endpoints/endpoints.py:26', rationale: Responses w/ Bedrock Converse (smoke)}
+llm.responses.bedrock_converse.tool_use.nonstream.works: {tier: P1, source: model_prices json, rationale: Responses tool calls w/ Converse}
+llm.responses.vertex.basic.nonstream.works: {tier: P1, source: 'response_api_endpoints/endpoints.py:26', rationale: Responses w/ Vertex (smoke)}
+llm.responses.vertex.tool_use.nonstream.works: {tier: P1, source: model_prices json, rationale: Responses tool calls w/ Vertex}
+llm.responses.azure_openai.basic.nonstream.works: {tier: P1, source: 'response_api_endpoints/endpoints.py:26', rationale: Responses w/ Azure OpenAI (smoke)}
+llm.responses.azure_openai.tool_use.nonstream.works: {tier: P1, source: model_prices json, rationale: Responses tool calls w/ Azure OpenAI}
+llm.embeddings.openai.basic.nonstream.works: {tier: P0, source: 'test_embeddings_endpoint_e2e.py:23', rationale: 'Core endpoint, live vector response'}
+llm.embeddings.openai.basic.nonstream.cost_logged: {tier: P0, source: 'SPEND_TRACKING_COVERAGE_MATRIX.md:34', rationale: Cost tracking on embeddings}
+llm.embeddings.azure_openai.basic.nonstream.works: {tier: P0, source: llms/azure/azure.py, rationale: Azure embeddings via translation}
+llm.embeddings.bedrock.basic.nonstream.works: {tier: P1, source: llms/bedrock/embed/embedding.py, rationale: Bedrock Titan embeddings}
+llm.embeddings.vertex.basic.nonstream.works: {tier: P1, source: vertex_embeddings/embedding_handler.py, rationale: Vertex embeddings}
+llm.embeddings.cohere.basic.nonstream.works: {tier: P1, source: llms/cohere/embed/handler.py, rationale: Cohere embeddings}
+llm.embeddings.anthropic.basic.nonstream.works: {tier: P1, source: llms/anthropic/chat/handler.py, rationale: Anthropic vector API (verify support)}
+llm.batches.openai.create.nonstream.works: {tier: P0, source: test_batches_e2e.py, rationale: Core batch create}
+llm.batches.openai.retrieve.nonstream.works: {tier: P0, source: test_batches_e2e.py, rationale: 'Batch retrieve, id round-trip + status'}
+llm.batches.openai.cancel.nonstream.works: {tier: P0, source: test_batches_e2e.py, rationale: Batch cancel}
+llm.batches.openai.list.nonstream.works: {tier: P0, source: test_batches_e2e.py, rationale: Batch list envelope}
+llm.batches.openai.file_lifecycle.nonstream.works: {tier: P0, source: test_batches_e2e.py, rationale: File upload/retrieve/delete for batch flow}
+llm.batches.openai_encoded.basic.nonstream.works: {tier: P0, source: batches/capabilities.py, rationale: Encoded scenario lifecycle}
+llm.batches.openai_unified.basic.nonstream.works: {tier: P0, source: batches/capabilities.py, rationale: Unified/managed-id scenario}
+llm.batches.openai_model_param.basic.nonstream.works: {tier: P0, source: batches/capabilities.py, rationale: Model-param scenario}
+llm.batches.openai_provider_fallback.basic.nonstream.works: {tier: P0, source: batches/capabilities.py, rationale: Provider-fallback raw-id scenario}
+llm.batches.azure_openai.basic.nonstream.works: {tier: P0, source: 'batches/capabilities.py:98', rationale: Azure batches all scenarios}
+llm.batches.vertex.basic.nonstream.works: {tier: P0, source: 'batches/capabilities.py:98', rationale: Vertex batches}
+llm.batches.bedrock.basic.nonstream.works: {tier: P0, source: 'batches/capabilities.py:98', rationale: Bedrock batches (encoded/unified only)}
+llm.batches.openai.key_model_access_denied.nonstream.works: {tier: P0, source: test_batches_e2e.py, rationale: Key model restriction 403 on upload/create}
+llm.files.openai.upload.nonstream.works: {tier: P0, source: 'openai_files_endpoints/files_endpoints.py:46', rationale: File upload returns OpenAIFileObject}
+llm.files.openai.retrieve.nonstream.works: {tier: P0, source: files_endpoints.py, rationale: File retrieve by id}
+llm.files.openai.delete.nonstream.works: {tier: P0, source: files_endpoints.py, rationale: File delete returns deleted=true}
+llm.files.openai.list.nonstream.works: {tier: P0, source: files_endpoints.py, rationale: File list paginated}
+llm.files.azure_openai.upload.nonstream.works: {tier: P0, source: 'batches/capabilities.py:45', rationale: Azure file upload managed backend}
+llm.files.vertex.upload.nonstream.works: {tier: P0, source: 'batches/capabilities.py:52', rationale: Vertex file upload to GCS}
+llm.files.bedrock.upload.nonstream.works: {tier: P0, source: 'batches/capabilities.py:59', rationale: Bedrock file upload to S3}
+llm.rerank.cohere.basic.nonstream.works: {tier: P1, source: 'test_rerank_e2e.py:29', rationale: 'Cohere rerank, top_n + relevance_score'}
+llm.rerank.bedrock.basic.nonstream.works: {tier: P1, source: llms/bedrock/rerank/handler.py, rationale: Bedrock rerank}
+llm.rerank.together_ai.basic.nonstream.works: {tier: P1, source: llms/together_ai/rerank/handler.py, rationale: Together rerank}
+llm.images_generations.openai.basic.nonstream.works: {tier: P1, source: 'test_image_generation_e2e.py:22', rationale: 'OpenAI image gen, b64/url'}
+llm.images_generations.azure_openai.basic.nonstream.works: {tier: P1, source: llms/azure/azure.py, rationale: Azure DALL-E}
+llm.images_generations.vertex.basic.nonstream.works: {tier: P1, source: vertex_ai/image_generation/image_generation_handler.py, rationale: Vertex Imagen}
+llm.images_generations.bedrock.basic.nonstream.works: {tier: P1, source: bedrock/image_generation/image_handler.py, rationale: Bedrock Titan Image}
+llm.images_generations.black_forest_labs.basic.nonstream.works: {tier: P1, source: black_forest_labs/image_generation/handler.py, rationale: BFL Flux via OpenAI-compat}
+llm.audio_speech.openai.basic.nonstream.works: {tier: P1, source: 'test_audio_speech_e2e.py:22', rationale: OpenAI TTS binary audio}
+llm.audio_speech.openai.basic.stream.works: {tier: P1, source: 'proxy_server.py:9043', rationale: TTS streaming chunk generator}
+llm.audio_speech.azure_openai.basic.nonstream.works: {tier: P1, source: llms/azure/azure.py, rationale: Azure TTS}
+llm.audio_speech.vertex.basic.nonstream.works: {tier: P1, source: vertex_ai/text_to_speech/text_to_speech_handler.py, rationale: Vertex TTS}
+llm.audio_transcriptions.openai.basic.nonstream.works: {tier: P1, source: openai/transcriptions/handler.py, rationale: OpenAI Whisper}
+llm.audio_transcriptions.azure_openai.basic.nonstream.works: {tier: P1, source: azure/audio_transcriptions.py, rationale: Azure STT}
+llm.audio_transcriptions.soniox.basic.nonstream.works: {tier: P2, source: soniox/audio_transcription/handler.py, rationale: Soniox via OpenAI-compat (smoke)}
+llm.audio_transcriptions.nvidia_riva.basic.nonstream.works: {tier: P2, source: nvidia_riva/audio_transcription/handler.py, rationale: NVIDIA Riva (smoke)}
+llm.moderations.openai.basic.nonstream.works: {tier: P1, source: proxy_server.py, rationale: OpenAI moderations (only provider)}
+
+# ---- logging ----
+logging.s3.success.writes_object: {tier: P0, source: integrations/s3_v2.py, rationale: Primary audit trail; batch flush no-drop}
+logging.s3.failure.writes_object: {tier: P0, source: integrations/s3_v2.py, rationale: Failed calls persisted for compliance}
+logging.gcs_bucket.success.writes_object: {tier: P0, source: integrations/gcs_bucket/gcs_bucket.py, rationale: GCS parallel to S3}
+logging.datadog.success.exports_metric: {tier: P0, source: integrations/datadog/datadog.py, rationale: Powers dashboards/alerts; cardinality regressions common}
+logging.datadog.stream.exports_metric: {tier: P0, source: integrations/datadog/datadog.py, rationale: Streaming aggregates usage after the last chunk; delivery and cost must survive that path}
+logging.datadog.failure.exports_metric: {tier: P0, source: integrations/datadog/datadog.py, rationale: Failure metrics for alerting/SLO}
+logging.prometheus.success.exports_metric: {tier: P0, source: integrations/prometheus.py, rationale: Standard OSS metrics; per-key cardinality (existing e2e)}
+logging.otel.success.exports_metric: {tier: P0, source: integrations/otel/logger.py, rationale: OTEL spans on every call path}
+logging.otel.stream.exports_metric: {tier: P0, source: integrations/otel/logger.py, rationale: Streaming closes the LLM span from the stream path; historically prone to duplicate/orphaned spans}
+logging.otel.stream.records_ttft: {tier: P1, source: integrations/otel/mappers/genai.py, rationale: TTFT is the streaming latency SLI; a zero or span-length value silently corrupts dashboards}
+logging.otel.failure.exports_metric: {tier: P0, source: integrations/otel/logger.py, rationale: Error spans for observability continuity}
+logging.braintrust.success.logs_spend: {tier: P1, source: integrations/braintrust_logging.py, rationale: Evals platform spend}
+logging.langsmith.success.logs_spend: {tier: P1, source: integrations/langsmith.py, rationale: LangChain ecosystem}
+logging.arize.success.logs_spend: {tier: P1, source: integrations/arize/arize.py, rationale: ML-ops observability}
+logging.mlflow.success.logs_spend: {tier: P1, source: integrations/mlflow.py, rationale: Experiment tracking cost/run}
+logging.opik.success.logs_spend: {tier: P1, source: integrations/opik/opik.py, rationale: Eval platform spend/case}
+logging.openmeter.success.exports_metric: {tier: P1, source: integrations/openmeter.py, rationale: Usage metering for billing}
+logging.literal_ai.success.logs_spend: {tier: P1, source: integrations/literal_ai.py, rationale: Tracing platform spend}
+logging.posthog.success.exports_metric: {tier: P1, source: integrations/posthog.py, rationale: Product analytics batching}
+logging.azure_storage.success.writes_object: {tier: P1, source: integrations/azure_storage/azure_storage.py, rationale: Azure blob for enterprise}
+logging.cloudzero.success.logs_spend: {tier: P1, source: integrations/cloudzero/cloudzero.py, rationale: Cost ops correlation}
+logging.focus.success.writes_object: {tier: P1, source: integrations/focus/focus_logger.py, rationale: Cost mgmt multi-destination export}
+logging.niche_integrations.success.logs_spend: {tier: P2, source: grammar, rationale: 'SMOKE cohort: athina/galileo/deepeval/langtrace/weave/lunary/humanloop/traceloop/helicone/argilla/newrelic/sqs/supabase/dynamodb/agentops/lago/etc'}
+logging.niche_integrations.failure.logs_spend: {tier: P2, source: grammar, rationale: SMOKE niche failure path}
+
+# ---- mcp ----
+mcp.list_tools.api_key.succeeds: {tier: P0, source: 'server.py:637', rationale: Core operation; most common auth path; high usage}
+mcp.list_tools.api_key.denied_without_permission: {tier: P0, source: 'mcp_server_manager.py:1409', rationale: Permission guard is high blast-radius; multi-tenant safety}
+mcp.call_tool.api_key.succeeds: {tier: P0, source: 'server.py:849', rationale: Primary operation; customer-critical; high usage}
+mcp.call_tool.api_key.denied_without_permission: {tier: P0, source: 'rest_endpoints.py:305-386', rationale: Tool-level permission guard; multi-tenant safety}
+mcp.list_tools.bearer.succeeds: {tier: P1, source: 'server.py:662', rationale: OAuth/bearer token flow; upstream delegation}
+mcp.call_tool.bearer.succeeds: {tier: P1, source: 'server.py:886', rationale: Bearer token forwarding for tool invocation}
+mcp.list_tools.oauth.succeeds: {tier: P1, source: 'rest_endpoints.py:138-188', rationale: Interactive OAuth2 flow; live token management}
+mcp.call_tool.oauth.succeeds: {tier: P1, source: db.py user_oauth_credential lookup, rationale: OAuth2 token passthrough; per-user credential storage}
+mcp.list_tools.none.succeeds: {tier: P1, source: 'mcp_server_manager.py:1485-1492', rationale: Public/anonymous servers; delegate_auth_to_upstream}
+mcp.call_tool.none.succeeds: {tier: P1, source: 'rest_endpoints.py:305-334', rationale: No upstream auth required; demo servers}
+mcp.get_prompt.api_key.succeeds: {tier: P1, source: 'server.py:1042', rationale: Prompt op; same auth stack as tools}
+mcp.read_resource.api_key.succeeds: {tier: P1, source: 'server.py:1177', rationale: Resource op; same permission model as tools}
+mcp.list_prompts.api_key.succeeds: {tier: P2, source: 'server.py:993', rationale: Smoke-level; same auth stack as list_tools}
+mcp.list_resources.api_key.succeeds: {tier: P2, source: 'server.py:1089', rationale: Smoke; rarely used; same auth model as tools}
+
+# ---- mgmt ----
+mgmt.key.generate.persists: {tier: P0, source: 'key_management_endpoints.py:1444', rationale: API key survives DB roundtrip}
+mgmt.key.generate.admin_only: {tier: P0, source: 'key_management_endpoints.py:1444', rationale: Only master/team-admin creates keys}
+mgmt.key.generate.happy_path: {tier: P0, source: 'ui_sso.py:420', rationale: SSO-driven key gen (UI path)}
+mgmt.key.update.persists: {tier: P0, source: 'key_management_endpoints.py:2462', rationale: Budget/model changes persist}
+mgmt.key.update.admin_only: {tier: P0, source: 'key_management_endpoints.py:2462', rationale: Non-admin cannot escalate perms}
+mgmt.key.update.happy_path: {tier: P1, source: 'key_management_endpoints.py:2462', rationale: Key edit through the dashboard}
+mgmt.key.delete.persists: {tier: P0, source: 'key_management_endpoints.py:3122', rationale: Deletion revokes future calls}
+mgmt.key.delete.admin_only: {tier: P0, source: 'key_management_endpoints.py:3122', rationale: Non-owner cannot delete}
+mgmt.key.info.persists: {tier: P0, source: 'key_management_endpoints.py:3380', rationale: Info reflects all writes}
+mgmt.team.new.persists: {tier: P0, source: 'team_endpoints.py:897', rationale: team_id/alias/budgets stored}
+mgmt.team.new.admin_only: {tier: P0, source: 'team_endpoints.py:897', rationale: Only org-admin/master creates teams}
+mgmt.team.member_add.persists: {tier: P0, source: 'team_endpoints.py:2424', rationale: Membership + per-member budget persist}
+mgmt.team.member_add.member_forbidden: {tier: P0, source: 'team_endpoints.py:2424', rationale: Non-admin forbidden to add}
+mgmt.team.member_delete.persists: {tier: P0, source: 'team_endpoints.py:2800', rationale: Removal revokes team key access}
+mgmt.team.member_delete.member_forbidden: {tier: P0, source: 'team_endpoints.py:2800', rationale: Non-admin forbidden to remove}
+mgmt.budget.new.persists: {tier: P0, source: 'budget_management_endpoints.py:40', rationale: max/soft/reset windows persist}
+mgmt.budget.new.admin_only: {tier: P0, source: 'budget_management_endpoints.py:40', rationale: Requires master/admin}
+mgmt.model.add.persists: {tier: P0, source: 'model_management_endpoints.py:1201', rationale: Registration persists for routing}
+mgmt.model.add.admin_only: {tier: P0, source: 'model_management_endpoints.py:1201', rationale: Non-admin cannot inject model config}
+mgmt.user.new.happy_path: {tier: P0, source: 'internal_user_endpoints.py:360', rationale: User creation full cycle}
+mgmt.key.list.happy_path: {tier: P1, source: 'key_management_endpoints.py:5119', rationale: Key inventory pagination}
+mgmt.key.block.persists: {tier: P1, source: 'key_management_endpoints.py:5849', rationale: Blocked stays blocked on restart}
+mgmt.key.unblock.persists: {tier: P1, source: 'key_management_endpoints.py:5960', rationale: Unblock restores access}
+mgmt.key.regenerate.happy_path: {tier: P1, source: 'key_management_endpoints.py:6071', rationale: 'Rotation: new works, old invalid'}
+mgmt.key.health.happy_path: {tier: P1, source: 'key_management_endpoints.py:4292', rationale: Key health endpoint}
+mgmt.key.bulk_update.happy_path: {tier: P1, source: 'key_management_endpoints.py:2677', rationale: Batch key updates}
+mgmt.team.update.persists: {tier: P1, source: 'team_endpoints.py:1582', rationale: Metadata/budget updates persist}
+mgmt.team.delete.persists: {tier: P1, source: 'team_endpoints.py:1750', rationale: Deletion prevents key access}
+mgmt.team.block.persists: {tier: P1, source: team_endpoints.py, rationale: Block suspends all members}
+mgmt.team.info.happy_path: {tier: P1, source: 'team_endpoints.py:2244', rationale: Metadata+members+budgets}
+mgmt.team.list.happy_path: {tier: P1, source: 'team_endpoints.py:3645', rationale: Pagination/filtering}
+mgmt.team.member_update.persists: {tier: P1, source: 'team_endpoints.py:2768', rationale: Member budget/role updates persist}
+mgmt.user.update.persists: {tier: P1, source: 'internal_user_endpoints.py:555', rationale: Metadata/perm updates persist}
+mgmt.user.delete.persists: {tier: P1, source: 'internal_user_endpoints.py:640', rationale: Deletion revokes keys+teams}
+mgmt.user.list.happy_path: {tier: P1, source: 'internal_user_endpoints.py:475', rationale: Admin view all users}
+mgmt.user.info.happy_path: {tier: P1, source: 'internal_user_endpoints.py:440', rationale: Roles/perms/team membership}
+mgmt.organization.new.happy_path: {tier: P1, source: 'organization_endpoints.py:403', rationale: Org for multi-tenant isolation}
+mgmt.organization.update.persists: {tier: P1, source: 'organization_endpoints.py:545', rationale: Org metadata updates persist}
+mgmt.organization.delete.persists: {tier: P1, source: 'organization_endpoints.py:710', rationale: Cascades to teams/keys}
+mgmt.organization.member_add.happy_path: {tier: P1, source: 'organization_endpoints.py:835', rationale: Org member onboarding}
+mgmt.customer.new.happy_path: {tier: P1, source: 'customer_endpoints.py:372', rationale: End-user for spend tracking}
+mgmt.customer.delete.persists: {tier: P1, source: 'customer_endpoints.py:480', rationale: Removes from spend tracking}
+mgmt.end_user.new.happy_path: {tier: P1, source: 'customer_endpoints.py:730', rationale: End-user create (synonym)}
+mgmt.tag.new.happy_path: {tier: P1, source: 'tag_management_endpoints.py:160', rationale: Tag for spend categorization}
+mgmt.tag.list.happy_path: {tier: P1, source: 'tag_management_endpoints.py:315', rationale: Tag enumeration}
+mgmt.tag.delete.persists: {tier: P1, source: 'tag_management_endpoints.py:390', rationale: Stops future tagging}
+mgmt.model.update.persists: {tier: P1, source: 'model_management_endpoints.py:1358', rationale: Pricing/concurrency persist}
+mgmt.model.delete.persists: {tier: P1, source: 'model_management_endpoints.py:1045', rationale: Removes from registry}
+mgmt.model.block.persists: {tier: P1, source: model_management_endpoints.py, rationale: Blocked model stays blocked}
+mgmt.access_group.new.happy_path: {tier: P1, source: 'model_access_group_management_endpoints.py:450', rationale: Model permissioning group}
+mgmt.access_group.info.happy_path: {tier: P1, source: 'model_access_group_management_endpoints.py:600', rationale: Access group membership query}
+mgmt.mcp_server.register.happy_path: {tier: P1, source: 'mcp_management_endpoints.py:880', rationale: MCP server registration}
+mgmt.mcp_server.approve.persists: {tier: P1, source: 'mcp_management_endpoints.py:1200', rationale: Admin approval persists}
+mgmt.budget.update.persists: {tier: P1, source: 'budget_management_endpoints.py:155', rationale: Limit changes apply}
+mgmt.budget.delete.persists: {tier: P1, source: 'budget_management_endpoints.py:280', rationale: Clears limits}
+mgmt.budget.list.happy_path: {tier: P1, source: 'budget_management_endpoints.py:215', rationale: Budget enumeration}
+mgmt.callback.list.happy_path: {tier: P2, source: callback_management_endpoints.py, rationale: Callback config (smoke)}
+mgmt.cache_settings.update.happy_path: {tier: P2, source: cache_settings_endpoints.py, rationale: Cache config (smoke)}
+mgmt.cost_tracking.estimate.happy_path: {tier: P2, source: cost_tracking_settings.py, rationale: Cost estimate (smoke)}
+mgmt.router_settings.update.happy_path: {tier: P2, source: router_settings_endpoints.py, rationale: Router config (smoke)}
+mgmt.jwt_key_mapping.new.happy_path: {tier: P2, source: jwt_key_mapping_endpoints.py, rationale: JWT->key mapping (smoke)}
+mgmt.compliance.gdpr.happy_path: {tier: P2, source: compliance_endpoints.py, rationale: GDPR ops (smoke)}
+mgmt.tool_management.list.happy_path: {tier: P2, source: tool_management_endpoints.py, rationale: Tool inventory (smoke)}
+mgmt.fallback_management.update.happy_path: {tier: P2, source: fallback_management_endpoints.py, rationale: Fallback config (smoke)}
+mgmt.config_override.hashicorp_vault.happy_path: {tier: P2, source: config_override_endpoints.py, rationale: Vault integration (smoke)}
+mgmt.workflow.list.happy_path: {tier: P2, source: workflow_management_endpoints.py, rationale: Workflow tracking (smoke)}
+mgmt.credential_migration.check.happy_path: {tier: P2, source: 'key_management_endpoints.py:4252', rationale: Encryption migration (smoke)}
+
+# ---- other ----
+other.auth.master_key.valid_allows: {tier: P0, source: 'user_api_key_auth.py:1569-1588', rationale: Master key authenticates; timing-safe compare}
+other.auth.master_key.invalid_denied: {tier: P0, source: 'user_api_key_auth.py:1580', rationale: Invalid master key rejected}
+other.auth.jwt.valid_token_allows: {tier: P0, source: 'handle_jwt.py:77-150', rationale: Valid JWT with correct issuer + claims grants access}
+other.auth.jwt.expired_denied: {tier: P0, source: 'handle_jwt.py:125-135', rationale: Expired JWT rejected even with valid signature}
+other.auth.jwt.invalid_signature_denied: {tier: P0, source: 'handle_jwt.py:145-150', rationale: Bad/missing signature fails verification}
+other.auth.virtual_key.route_permission_enforced: {tier: P0, source: 'route_checks.py:89-151', rationale: allowed_routes whitelist denies disallowed routes}
+other.auth.virtual_key.route_group_allowed: {tier: P1, source: 'route_checks.py:106-128', rationale: 'allowed_routes=[llm_api_routes] grants all LLM endpoints'}
+other.auth.passthrough.model_allowlist_enforced: {tier: P1, source: 'route_checks.py:135-151', rationale: Passthrough enforces per-key model allow-lists}
+other.auth.oauth2.token_valid_allows: {tier: P1, source: 'oauth2_check.py:15-73', rationale: OAuth2 introspection grants active token}
+other.auth.oauth2.token_invalid_denied: {tier: P1, source: 'oauth2_check.py:37-73', rationale: Expired/inactive OAuth2 token denied}
+other.auth.ip_allowlist.internal_ip_allows: {tier: P1, source: 'ip_address_utils.py:54-76', rationale: Internal CIDR bypasses public-API restriction}
+other.auth.ip_allowlist.external_ip_denied_to_private: {tier: P1, source: 'ip_address_utils.py:54-76', rationale: External IP cannot reach internal-only resources}
+other.lifecycle.readiness.public_probe: {tier: P0, source: '_health_endpoints.py:1551-1570', rationale: Unauthenticated /health/readiness safe for LBs}
+other.lifecycle.readiness.reports_db_status: {tier: P0, source: '_health_endpoints.py:1551-1570', rationale: readiness distinguishes healthy vs DB-unreachable}
+other.lifecycle.readiness.shutting_down_returns_503: {tier: P0, source: '_health_endpoints.py:1554-1556', rationale: Graceful shutdown drains LB via 503}
+other.lifecycle.readiness_details.authenticated_diagnostics: {tier: P1, source: '_health_endpoints.py:1574-1584', rationale: Auth'd details expose cache/callback status}
+other.lifecycle.liveness.ping: {tier: P1, source: '_health_endpoints.py:134-155', rationale: Liveness confirms server responding}
+other.lifecycle.startup.config_loads: {tier: P0, source: 'proxy_server.py:4020-4100', rationale: 'Startup loads YAML, resolves env, persists to DB'}
+other.lifecycle.startup.env_vars_resolved: {tier: P1, source: 'proxy_server.py:3984-4010', rationale: os.environ/ refs resolved at startup}
+other.lifecycle.background_health_check.interval_configurable: {tier: P1, source: 'proxy_server.py:3245-3310', rationale: Background checks run at configurable interval}
+other.config.runtime_update.applies_at_runtime: {tier: P0, source: 'proxy_server.py:14014-14060', rationale: /config/update persists to DB + invalidates cache}
+other.config.general_settings.alert_webhook_side_effect: {tier: P1, source: 'proxy_server.py:14215', rationale: alert_to_webhook_url auto-enables slack alerting}
+other.config.secret_resolution.kms_integration: {tier: P1, source: 'proxy_server.py:3984-4010', rationale: Resolves secrets from Vault/KMS at startup}
+other.config.overrides.audit_logged: {tier: P1, source: 'config_override_endpoints.py:67-100', rationale: 'Config override mutations audit-logged, values redacted'}
+other.key_mgmt.regenerate.grace_period_honored: {tier: P1, source: 'key_management_endpoints.py:4503-4560', rationale: Old key valid during grace_period then revoked}
+other.key_mgmt.spend_reset.resets_to_value: {tier: P1, source: 'key_management_endpoints.py:4841', rationale: reset_spend resets accumulated spend}
+
+# ---- quota_management ----
+quota_management.ratelimit.rpm.blocks_over_limit: {tier: P0, source: parallel_request_limiter_v3.py, rationale: v3 limiter enforces RPM per key/team/model; 429 on breach}
+quota_management.ratelimit.tpm.blocks_over_limit: {tier: P0, source: parallel_request_limiter_v3.py, rationale: v3 limiter enforces TPM per key/team/model; 429 on breach}
+quota_management.ratelimit.rpm.resets_after_window: {tier: P1, source: parallel_request_limiter_v3.py, rationale: 'Rate-limit window (LITELLM_RATE_LIMIT_WINDOW_SIZE, 60s default) expires; a blocked key serves again in the next window'}
+quota_management.ratelimit.rpm.headers_report_remaining: {tier: P1, source: parallel_request_limiter_v3.py async_post_call_success_hook, rationale: 'Successful responses carry x-ratelimit-api_key-{limit,remaining}-{requests,tokens} so clients can pace'}
+quota_management.ratelimit.priority_generous.picks_under_tpm: {tier: P1, source: 'dynamic_rate_limiter_v3.py:36-52', rationale: Generous mode (<80% sat) allows priority borrowing}
+quota_management.ratelimit.priority_strict.picks_under_tpm: {tier: P1, source: 'dynamic_rate_limiter_v3.py:53-71', rationale: Strict mode (>=80% sat) enforces priority fairness}
+quota_management.budget.key.blocks_over_limit: {tier: P0, source: proxy/auth/auth_checks.py, rationale: A key's max_budget blocks further paid calls once spend crosses it}
+quota_management.budget.internal_user.blocks_over_limit: {tier: P1, source: proxy/auth/auth_checks.py, rationale: An internal user's max_budget governs personal keys}
+quota_management.budget.end_user.blocks_over_limit: {tier: P1, source: proxy/auth/auth_checks.py, rationale: A customer (end-user) max_budget blocks calls attributed via user=}
+quota_management.budget.organization.blocks_over_limit: {tier: P1, source: proxy/auth/auth_checks.py, rationale: An organization's max_budget blocks keys under its teams}
+quota_management.budget.team_member.blocks_over_limit: {tier: P1, source: proxy/auth/auth_checks.py, rationale: A member's per-team budget blocks independently of the team budget}
+quota_management.budget.tag.blocks_over_limit: {tier: P1, source: router_strategy/budget_limiter.py, rationale: Proxy-level tag budgets block tagged requests at the cap}
+quota_management.budget.model_max.isolates_per_model: {tier: P1, source: proxy/hooks/model_max_budget_limiter.py, rationale: model_max_budget caps one model without touching a sibling's budget}
+quota_management.budget.soft.alerts_without_blocking: {tier: P1, source: proxy/auth/auth_checks.py, rationale: soft_budget alerts but never blocks traffic}
+quota_management.budget.key.resets_after_window: {tier: P1, source: proxy/common_utils/reset_budget_job.py, rationale: budget_duration zeroes key spend after the window; a blocked key serves again}
+quota_management.budget.team_member.resets_after_window: {tier: P1, source: proxy/common_utils/reset_budget_job.py, rationale: Member per-team budget reset keeps advancing window after window}
+quota_management.budget.key_multi_window.blocks_then_resets: {tier: P1, source: proxy/common_utils/reset_budget_job.py, rationale: budget_limits enforce within a short window and serve again in the next}
+quota_management.budget.key_multi_window.resets_windows_independently: {tier: P2, source: proxy/common_utils/reset_budget_job.py, rationale: Each window of a multi-window budget resets on its own schedule}
+quota_management.budget.team_multi_window.blocks_then_resets: {tier: P1, source: proxy/common_utils/reset_budget_job.py, rationale: Team budget_limits enforce and reset per window}
+quota_management.budget.fallback.routes_to_fallback: {tier: P1, source: proxy/hooks/model_max_budget_limiter.py, rationale: budget_fallbacks reroute to the fallback model once the primary's budget is exhausted}
+quota_management.budget.spend_counter.reseed_matches_db: {tier: P2, source: proxy/spend_tracking/budget_reservation.py, rationale: Concurrent cold-counter reseeds keep the enforcement counter equal to DB spend (#26829)}
+quota_management.spend_tracking.chat_completions.logs_cost: {tier: P0, source: proxy/spend_tracking/spend_tracking_utils.py, rationale: A paid chat call writes a nonzero spend row}
+quota_management.spend_tracking.stream.logs_cost: {tier: P1, source: proxy/spend_tracking/spend_tracking_utils.py, rationale: Streaming responses aggregate token counts into a spend row}
+quota_management.spend_tracking.embeddings.logs_cost: {tier: P1, source: proxy/spend_tracking/spend_tracking_utils.py, rationale: Embedding calls write nonzero spend rows}
+quota_management.spend_tracking.cache_hit.zero_cost: {tier: P1, source: proxy/spend_tracking/spend_tracking_utils.py, rationale: A response-cache hit logs at zero cost with the cache-hit marker}
+quota_management.spend_tracking.key_rollup.matches_sum_of_logs: {tier: P1, source: proxy/db/db_spend_update_writer.py, rationale: A key's rolled-up spend equals the sum of its log rows}
+quota_management.spend_tracking.concurrent_burst.loses_no_spend: {tier: P1, source: proxy/db/db_spend_update_writer.py, rationale: Concurrent calls all land as spend; no row lost to write contention}
+quota_management.spend_tracking.tags.attributes_spend: {tier: P1, source: proxy/spend_tracking/spend_tracking_utils.py, rationale: Request tags round-trip to spend rows and tag rollups match tagged logs}
+quota_management.spend_tracking.end_user.attributes_spend: {tier: P1, source: proxy/spend_tracking/spend_tracking_utils.py, rationale: user= attribution lands the end-user id on the spend row}
+quota_management.spend_tracking.per_model.writes_own_rows: {tier: P2, source: proxy/spend_tracking/spend_tracking_utils.py, rationale: Each model on a shared key gets its own spend row}
+quota_management.spend_tracking.failure.writes_failure_row: {tier: P1, source: proxy/spend_tracking/spend_log_error_logger.py, rationale: A failed call writes a failure-status spend row}
+quota_management.spend_tracking.spend_calculate.returns_cost: {tier: P2, source: proxy/spend_tracking/spend_management_endpoints.py, rationale: /spend/calculate prices a hypothetical request at nonzero cost}
+quota_management.spend_tracking.pagination.keeps_total: {tier: P2, source: proxy/spend_tracking/spend_management_endpoints.py, rationale: Spend-logs v2 pagination caps page size without losing the total}
+
+# ---- reliability ----
+reliability.fallback.5xx.routes_to_fallback: {tier: P0, source: 'litellm/router.py:2024', rationale: Reroute on provider 5xx to alternate deployment}
+reliability.fallback.context_window.routes_to_fallback: {tier: P0, source: 'litellm/router.py:6108', rationale: Fallback when model exceeds context limit}
+reliability.fallback.content_policy.routes_to_fallback: {tier: P0, source: 'litellm/router.py:6023', rationale: Reroute on content-policy violation}
+reliability.fallback.timeout.routes_to_fallback: {tier: P0, source: 'litellm/router.py:2766', rationale: Fallback on request timeout}
+reliability.retry.5xx.succeeds_within_retries: {tier: P0, source: 'litellm/router.py:6414', rationale: Transient 5xx often succeeds on retry}
+reliability.retry.timeout.succeeds_within_retries: {tier: P0, source: 'get_retry_from_policy.py:44', rationale: Timeout retried per policy}
+reliability.retry.429.succeeds_within_retries: {tier: P0, source: 'get_retry_from_policy.py:46', rationale: 429 retried per RateLimitErrorRetries policy}
+reliability.retry.auth.succeeds_within_retries: {tier: P1, source: 'get_retry_from_policy.py:42', rationale: Transient auth glitch retry}
+reliability.retry.context_window.succeeds_within_retries: {tier: P1, source: 'get_retry_from_policy.py:51', rationale: Multi-attempt on context error}
+reliability.cooldown.5xx.trips_then_recovers: {tier: P0, source: 'cooldown_handlers.py:40', rationale: 'Deployment cools after repeated 5xx, recovers after cooldown_time'}
+reliability.cooldown.429.trips_then_recovers: {tier: P0, source: 'cooldown_handlers.py:69', rationale: 'Cools on 429, avoids hammering exhausted provider'}
+reliability.cooldown.auth.trips_then_recovers: {tier: P1, source: 'cooldown_handlers.py:74', rationale: Cools on 401 auth error}
+reliability.cooldown.timeout.trips_then_recovers: {tier: P1, source: 'cooldown_handlers.py:77', rationale: Cools on 408 timeout}
+reliability.routing.simple_shuffle.picks_healthy_deployment: {tier: P1, source: router_strategy/simple_shuffle.py, rationale: Baseline weighted/uniform pick}
+reliability.routing.latency_based.picks_lowest_latency: {tier: P1, source: router_strategy/lowest_latency.py, rationale: Routes to lowest-latency deployment}
+reliability.routing.cost_based.picks_lowest_cost: {tier: P1, source: router_strategy/lowest_cost.py, rationale: Spend-aware routing}
+reliability.routing.usage_based.picks_under_tpm: {tier: P0, source: router_strategy/lowest_tpm_rpm_v2.py, rationale: Routes to lowest-TPM deployment; prevents over-allocation}
+reliability.routing.least_busy.picks_lowest_traffic: {tier: P1, source: router_strategy/least_busy.py, rationale: Fewest in-flight requests}
+reliability.routing.complexity_llm_classifier.routes_by_llm_tier: {tier: P1, source: router_strategy/complexity_router/complexity_router.py, rationale: v2 auto-router LLM complexity classifier runs over the proxy and routes by semantic tier instead of silently crashing on absent litellm_metadata and falling back to heuristic scoring, fail_before_fix: proven}
+reliability.cache.exact.returns_cached: {tier: P1, source: litellm/caching/caching.py, rationale: Response cache returns cached on exact match}
+reliability.cache.prompt_caching_model_select.returns_cached: {tier: P1, source: router_utils/prompt_caching_cache.py, rationale: Selects model supporting prompt caching for cacheable prefix}
+reliability.circuit_breaker.redis.trips_then_recovers: {tier: P0, source: 'litellm/caching/redis_cache.py:99', rationale: Redis breaker CLOSED->OPEN->HALF_OPEN; guards all cache/rate-limit ops}
+reliability.timeout.request_timeout.exceeds_deadline: {tier: P1, source: 'litellm/router.py:545-551', rationale: Per-request timeout raises Timeout}
+reliability.timeout.stream_timeout.exceeds_deadline: {tier: P1, source: 'litellm/router.py:551', rationale: Streaming chunk-delivery timeout}
+reliability.perf.latency.under_slo: {tier: P1, source: router_strategy/lowest_latency.py, rationale: Latency SLO (p50/p99) compliance}
+reliability.perf.throughput.under_slo: {tier: P1, source: grammar, rationale: Throughput SLO under load}

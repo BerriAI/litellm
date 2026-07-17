@@ -22,8 +22,9 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel
 
+from .product_surface import ROUTE_CHECKABLE_ENDPOINTS, route_table_endpoints
 from .registry import load_registry
-from .schema import MODULE_ORDER, Cell, Tier, dashboard_module, loki_module_label
+from .schema import MODULE_ORDER, Cell, Tier, dashboard_module, loki_module_label, parse_llm_id
 
 E2E_DIR = Path(__file__).resolve().parent.parent
 
@@ -38,13 +39,9 @@ class _CoversSink:
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
         marker_args: tuple[tuple[object, ...], ...] = tuple(
-            marker.args
-            for item in session.items
-            for marker in item.iter_markers(name="covers")
+            marker.args for item in session.items for marker in item.iter_markers(name="covers")
         )
-        self.covered_ids = frozenset(
-            arg for args in marker_args for arg in args if isinstance(arg, str)
-        )
+        self.covered_ids = frozenset(arg for args in marker_args for arg in args if isinstance(arg, str))
 
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
         if report.failed:
@@ -94,6 +91,7 @@ class CoverageReport:
     p0_gaps: tuple[str, ...]
     orphan_markers: tuple[str, ...]
     collection_errors: tuple[str, ...]
+    route_table_drift: tuple[str, ...] = ()
 
     @property
     def coverage_percent(self) -> float:
@@ -104,9 +102,7 @@ def _percent(covered: int, total: int) -> float:
     return (100.0 * covered / total) if total else 0.0
 
 
-def _module_coverage(
-    module: str, cells: tuple[Cell, ...], covered: frozenset[str]
-) -> ModuleCoverage:
+def _module_coverage(module: str, cells: tuple[Cell, ...], covered: frozenset[str]) -> ModuleCoverage:
     in_module = tuple(c for c in cells if dashboard_module(c) == module)
     p0 = tuple(c for c in in_module if c.tier is Tier.P0)
     return ModuleCoverage(
@@ -122,6 +118,7 @@ def compute_coverage(
     cells: tuple[Cell, ...],
     covered: frozenset[str],
     collection_errors: tuple[str, ...] = (),
+    route_table_drift: tuple[str, ...] = (),
 ) -> CoverageReport:
     p0_cells = tuple(c for c in cells if c.tier is Tier.P0)
     registry_ids = frozenset(c.id for c in cells)
@@ -134,7 +131,20 @@ def compute_coverage(
         p0_gaps=tuple(sorted(c.id for c in p0_cells if c.id not in covered)),
         orphan_markers=tuple(sorted(covered - registry_ids)),
         collection_errors=collection_errors,
+        route_table_drift=route_table_drift,
     )
+
+
+def compute_route_table_drift(cells: tuple[Cell, ...]) -> tuple[str, ...]:
+    """LLM endpoints the denominator enumerates that the live proxy route table does
+    not serve. Empty when the route table cannot be read (litellm not importable) or
+    when everything the denominator enumerates is served."""
+    served = route_table_endpoints()
+    if served is None:
+        return ()
+    enumerated = frozenset(parsed.endpoint for c in cells if (parsed := parse_llm_id(c.id)) is not None)
+    checkable = enumerated & ROUTE_CHECKABLE_ENDPOINTS
+    return tuple(sorted(endpoint for endpoint in checkable if endpoint not in served))
 
 
 def _row(label: str, covered: int, total: int) -> str:
@@ -155,8 +165,7 @@ def render(report: CoverageReport) -> str:
     orphans = (
         (
             f"\n{len(report.orphan_markers)} marker(s) point at ids not in the registry "
-            f"(reconcile: fix the marker or add the cell):\n  "
-            + "\n  ".join(report.orphan_markers),
+            f"(reconcile: fix the marker or add the cell):\n  " + "\n  ".join(report.orphan_markers),
         )
         if report.orphan_markers
         else ()
@@ -164,13 +173,21 @@ def render(report: CoverageReport) -> str:
     warning = (
         (
             f"\nWARNING: {len(report.collection_errors)} node(s) failed to import during "
-            f"collection, so coverage may undercount:\n  "
-            + "\n  ".join(report.collection_errors),
+            f"collection, so coverage may undercount:\n  " + "\n  ".join(report.collection_errors),
         )
         if report.collection_errors
         else ()
     )
-    return "\n".join((*lines, *orphans, *warning))
+    drift = (
+        (
+            f"\nWARNING: {len(report.route_table_drift)} enumerated LLM endpoint(s) are not in "
+            f"the live proxy route table (denominator drift, reconcile the schema vocab):\n  "
+            + "\n  ".join(report.route_table_drift),
+        )
+        if report.route_table_drift
+        else ()
+    )
+    return "\n".join((*lines, *orphans, *warning, *drift))
 
 
 def _report_dict(report: CoverageReport) -> dict[str, object]:
@@ -209,12 +226,8 @@ def render_prometheus(report: CoverageReport) -> str:
     ]
     for module in report.modules:
         label = _label_value(module.module)
-        lines.append(
-            f'litellm_e2e_coverage_cells{{module="{label}",state="covered"}} {module.covered}'
-        )
-        lines.append(
-            f'litellm_e2e_coverage_cells{{module="{label}",state="total"}} {module.total}'
-        )
+        lines.append(f'litellm_e2e_coverage_cells{{module="{label}",state="covered"}} {module.covered}')
+        lines.append(f'litellm_e2e_coverage_cells{{module="{label}",state="total"}} {module.total}')
     lines.extend(
         [
             f'litellm_e2e_coverage_cells{{module="ALL",state="covered"}} {report.covered}',
@@ -225,9 +238,7 @@ def render_prometheus(report: CoverageReport) -> str:
     )
     for module in report.modules:
         label = _label_value(module.module)
-        lines.append(
-            f'litellm_e2e_coverage_percent{{module="{label}"}} {module.coverage_percent:.6f}'
-        )
+        lines.append(f'litellm_e2e_coverage_percent{{module="{label}"}} {module.coverage_percent:.6f}')
     lines.extend(
         [
             f'litellm_e2e_coverage_percent{{module="ALL"}} {report.coverage_percent:.6f}',
@@ -243,12 +254,7 @@ def render_prometheus(report: CoverageReport) -> str:
 
 
 def render_loki(report: CoverageReport) -> str:
-    lines = [
-        (
-            f"COVERAGE_TOTAL percent={report.coverage_percent:.1f} "
-            f"covered={report.covered} total={report.total}"
-        )
-    ]
+    lines = [(f"COVERAGE_TOTAL percent={report.coverage_percent:.1f} covered={report.covered} total={report.total}")]
     lines.extend(
         (
             f"COVERAGE_MODULE module={loki_module_label(module.module)} "
@@ -287,7 +293,7 @@ def main() -> int:
     args = _CliArgs.model_validate(vars(parser.parse_args()))
     cells = load_registry()
     covered, errors = collect_covered_ids()
-    report = compute_coverage(cells, covered, errors)
+    report = compute_coverage(cells, covered, errors, compute_route_table_drift(cells))
     output = {
         "text": render,
         "json": render_json,

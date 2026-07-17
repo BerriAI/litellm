@@ -61,13 +61,13 @@ The harness is fully typed with no error budget: `make lint-e2e-basedpyright` mu
 
 ## Coverage registry
 
-The set of tests we want is a registry checked into this repo, one row per behavior; that file is the definition of done and the denominator. Each e2e test declares what it covers with `@pytest.mark.covers("...")`, and a small collector diffs the registry against the tests and ships coverage to the existing Grafana. No Allure, no new dependencies
+The set of tests we want is a denominator generated from the product surface, not a hand-written list; that generated set is the definition of done. Each e2e test declares what it covers with `@pytest.mark.covers("...")`, and a small collector diffs the denominator against the tests and ships coverage to the existing Grafana. No Allure, no new dependencies. A hand-written list is self-fulfilling (the row and its test land in the same PR, so a wanted-but-untested behavior never surfaces as a gap), so the denominator is derived instead; see `coverage_registry/README.md`
 
 Coverage is organized as module > feature > test. Dashboard modules are `Core LLMs`, `Non-Core LLMs`, `MCPs`, `Management/UI`, `Reliability & Performance`, `Quota Management`, `Logging & Guardrails`, and `Other`. The Loki stdout formatter maps those display modules to log-safe labels (`core_llms`, `non_core_llms`, `mcp`, `management_ui`, `reliability_performance`, `quota_management`, `logging_guardrails`, and `other`) without changing JSON or Prometheus labels. A feature is either an endpoint (`/chat/completions`) or a behavior (fallbacks, rate limits; config-driven, with no route of its own). A cell reads like `llm.chat_completions.bedrock_converse.tool_use.stream.works`
 
-The metric is coverage: the share of registry rows that have a passing covering test, reported to Grafana per module so a gap surfaces as an uncovered row rather than a silent absence
+The metric is coverage: the share of denominator cells that have a passing covering test, reported to Grafana per module so a gap surfaces as an uncovered cell rather than a silent absence
 
-Tests do not declare a dashboard module directly. They only declare the registry cell id with `@pytest.mark.covers("...")`; the registry row decides the module, tier, endpoint, and dashboard rollup. Run `python -m coverage_registry.collector --strict` when you want CI to reject unknown marker ids. Add `--fail-on-collection-errors` when the job should also fail on pytest collection errors.
+Tests do not declare a dashboard module directly, and they never add a denominator row. They only declare the cell id with `@pytest.mark.covers("...")`; the module, endpoint, and dashboard rollup are parsed from that id, and the conversational-core cell set is generated in `coverage_registry/product_surface.py` from the schema vocabulary crossed with `model_prices_and_context_window.json`. The only hand-curated data is `coverage_registry/overlay.yaml`, keyed by cell id, carrying tier, source, rationale, fail_before_fix, and supported; it is owner-gated and ordinary test PRs do not touch it. Run `python -m coverage_registry.collector --strict` when you want CI to reject unknown marker ids. Add `--fail-on-collection-errors` when the job should also fail on pytest collection errors.
 
 ### Naming grammar per module
 

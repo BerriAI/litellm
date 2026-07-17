@@ -1,29 +1,52 @@
 # e2e coverage registry
 
-This directory is the **denominator** for e2e test coverage: the set of behaviors we
-want covered, one row per behavior, checked into the repo so coverage is a number we
-can track instead of a guess. It implements the plan in the "E2E Coverage Tracking"
-note; the naming grammar lives in `tests/e2e/CLAUDE.md`.
+This directory holds the **denominator** for e2e test coverage: the set of behaviors we
+want covered. The denominator is generated from the product surface rather than
+hand-listed, so it grows on its own when the product gains a surface; a test PR only adds
+a `@pytest.mark.covers(...)` marker. The naming grammar lives in `tests/e2e/CLAUDE.md`.
+
+## Why it is generated
+
+The denominator used to be a hand-written set of YAML rows, one per behavior. That is
+self-fulfilling: the row and its covering test land in the same PR, so a wanted-but-untested
+behavior never shows up as a gap. Deriving the denominator from the tests instead is just
+as useless; it is 100% by construction. So the set of cells is derived from what the proxy
+actually supports, and the tests are diffed against it.
 
 ## The model
 
-A **cell** is one customer-noticeable behavior a single e2e test can assert pass/fail
-on, for example `llm.chat_completions.bedrock_converse.tool_use.stream.works`. Cells are
-grouped `module > feature > test`, with LLM cells split into `Core LLMs` and
-`Non-Core LLMs` for dashboarding. Each cell carries a tier (P0/P1/P2), a source, and a
-`fail_before_fix` flag.
+A **cell** is one customer-noticeable behavior a single e2e test can assert pass/fail on,
+for example `llm.chat_completions.bedrock_converse.tool_use.stream.works`. Cells are grouped
+`module > feature > test`, with LLM cells split into `Core LLMs` and `Non-Core LLMs` for
+dashboarding. The module, endpoint, route, capability and streaming are parsed back out of
+the id (see `parse_llm_id` / `parse_module` in `schema.py`); nothing restates them, so an id
+and its facets can never drift.
 
-The rows live in per-prefix YAML files (`llm_*.yaml`, `mgmt.yaml`, `mcp.yaml`,
-`reliability.yaml`, `quota_management.yaml`, `logging.yaml`, `guardrail.yaml`,
-`other.yaml`) and validate against
-the discriminated union in `schema.py`, so an LLM row cannot carry a guardrail field and
-vice versa. `llm` rows with `subject_endpoint` of `chat_completions`, `messages`, or
-`responses` roll up to `Core LLMs`; all other LLM endpoints roll up to `Non-Core LLMs`.
-LLM endpoint, route, and capability values are typed in `schema.py`, so new taxonomy
-values require an explicit schema change. `logging` and `guardrail` are two id-prefixes
-that roll up into the single `Logging & Guardrails` dashboard module.
+The denominator is the union of two sources.
 
-A test declares what it covers with a marker:
+Generated surface (`product_surface.py`). The conversational core (chat_completions,
+messages, responses) is generated from the typed vocabularies in `schema.py` crossed with
+the capability metadata in `model_prices_and_context_window.json`, the same file the proxy
+ships. A flagged capability (tool_use, vision, thinking, structured_output, prompt caching)
+is emitted for a route only when a model on that route advertises the matching `supports_*`
+flag, so adding provider support in that json grows the denominator with no edit here. The
+Anthropic-format `messages` surface is the Claude Code compatibility matrix, so its
+capabilities are the CLI feature set and are not gated by model flags. The live route table
+(`litellm.proxy._types.LiteLLMRoutes`) is read as a drift check: the collector warns when
+the vocabulary enumerates an LLM endpoint the proxy no longer serves. This exact set of
+product-surface sources is a design decision open to review.
+
+Curated overlay (`overlay.yaml`). The only per-cell data a human decides lives here, keyed
+by cell id: `tier`, `source`, `rationale`, `fail_before_fix`, and `supported`. The overlay
+never decides whether a behavior exists; it annotates a generated cell, and it also
+enumerates the ids that generation does not yet produce (the non-core LLM operations such as
+batches, files, rerank, embeddings, audio and images, and the behavior modules mgmt, mcp,
+reliability, quota, logging, guardrail, other, which have no clean cartesian to generate
+from). A generated cell with no overlay row defaults to P2, so a newly generated surface
+shows up as an uncovered gap rather than vanishing. Ordinary test PRs never touch this file;
+it should be owner-gated via CODEOWNERS (not added here).
+
+A test declares what it covers with a marker, and nothing else:
 
 ```python
 @pytest.mark.covers("llm.chat_completions.openai.tool_use.stream.works")
@@ -33,7 +56,7 @@ def test_openai_streaming_tool_calls(self) -> None:
 
 ## The number
 
-`collector.py` diffs the registry against those markers and reports coverage per module.
+`collector.py` diffs the denominator against those markers and reports coverage per module.
 It is static: a collect-only pass reads the markers, so it runs no test and needs no live
 proxy. Whether a covered cell currently passes or fails is a separate, live concern.
 
@@ -48,35 +71,30 @@ structured stdout lines for Loki:
 cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector --format loki --strict
 ```
 
-This emits exactly one `COVERAGE_TOTAL` line and one `COVERAGE_MODULE` line per module
-in `MODULE_ORDER`, in that order. Loki uses log-safe `module=` labels from
-`LOKI_MODULE_LABELS` (`core_llms`, `management_ui`, etc.) so existing JSON and
-Prometheus consumers keep their human-readable module names unchanged.
+This emits exactly one `COVERAGE_TOTAL` line and one `COVERAGE_MODULE` line per module in
+`MODULE_ORDER`, in that order. Loki uses log-safe `module=` labels from `LOKI_MODULE_LABELS`
+(`core_llms`, `management_ui`, etc.) so existing JSON and Prometheus consumers keep their
+human-readable module names unchanged.
 
-The headline is overall coverage. The collector also lists markers that point at ids
-not in the registry, so a typo or an unenumerated behavior surfaces instead of being
-silently dropped.
+The headline is overall coverage. The collector also lists markers that point at ids not in
+the denominator, so a typo or an unenumerated behavior surfaces instead of being silently
+dropped, and warns on route-table drift.
 
-Use strict mode in CI once existing draft markers are reconciled:
+Use strict mode in CI once existing markers are reconciled:
 
 ```
 cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector --strict
 ```
 
-Strict mode exits non-zero on `@pytest.mark.covers(...)` ids that are not checked into
-the registry. Add `--fail-on-collection-errors` when the job should also fail on pytest
-collection errors.
+Strict mode exits non-zero on `@pytest.mark.covers(...)` ids that are not in the denominator.
+Add `--fail-on-collection-errors` when the job should also fail on pytest collection errors.
 
-## Status: this is a draft for review
+## Follow-up
 
-The cells were enumerated from the codebase and the tiers are a first proposal. Known
-things to settle before treating the set as final:
-
-- tiers are proposed, not signed off; 125 P0 is a lot to prove fail-before-fix, so P0 may
-  want tightening
-- a few cells need a support check or a prune (for example `llm.embeddings.anthropic.*`
-  and `reliability.perf.throughput.under_slo`)
-- auth is covered in two places (`other.auth.*` and the mgmt authz assertions); the
-  boundary needs a decision, and the auth cluster may deserve promotion to its own module
-- the P2 "niche" cells each stand in for a large tail of integrations/providers by design,
-  so the denominator is deliberately P0-weighted rather than a full inventory
+Generation currently covers the conversational core only. The non-core LLM operations and
+the behavior modules still live in the overlay because they have no clean product-surface
+enumeration yet; wiring their own sources into generation (the route table for endpoint
+operations, `guardrail_hooks/` for guardrail providers, `integrations/` for logging targets,
+`router_strategy/` for reliability behaviors) is the remaining work, tracked rather than
+faked. Tiers in the overlay were migrated from the previous hand-written rows and are a
+first proposal, not a sign-off.
