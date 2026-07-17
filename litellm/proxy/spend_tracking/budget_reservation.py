@@ -4,7 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence, cast
+from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -12,6 +12,7 @@ from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
+    Litellm_EntityType,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -34,6 +35,17 @@ class _BudgetCounter:
     source_cache_key: Optional[str] = None
     spend_log_entity_id: Optional[str] = None
     window_start: Optional[datetime] = None
+
+
+_COUNTER_ENTITY_TYPES: Mapping[str, str] = {
+    "Key": Litellm_EntityType.KEY.value,
+    "Team": Litellm_EntityType.TEAM.value,
+    "TeamMember": Litellm_EntityType.TEAM_MEMBER.value,
+    "User": Litellm_EntityType.USER.value,
+    "EndUser": Litellm_EntityType.END_USER.value,
+    "Tag": Litellm_EntityType.TAG.value,
+    "Organization": Litellm_EntityType.ORGANIZATION.value,
+}
 
 
 class _CounterReservationUnavailable(Exception):
@@ -108,6 +120,8 @@ async def _apply_over_budget_reservation_policy(
             f"Current cost: {current_spend}, "
             f"Max budget: {counter.max_budget}"
         ),
+        entity_type=_COUNTER_ENTITY_TYPES.get(counter.entity_type),
+        entity_id=counter.spend_log_entity_id or counter.entity_id,
     )
 
 
