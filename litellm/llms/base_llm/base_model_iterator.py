@@ -65,9 +65,10 @@ def convert_model_response_to_streaming(
 
 
 MAX_PARTIAL_JSON_LINE_CHARS = 1_000_000
+MAX_PARTIAL_JSON_LINE_FRAGMENTS = 64
 
 
-def _try_parse_json_object(payload: str) -> Optional[dict]:
+def _try_parse_json_object(payload: str) -> dict | None:
     try:
         parsed = json.loads(payload)
     except json.JSONDecodeError:
@@ -84,6 +85,7 @@ class BaseModelResponseIterator:
         self.json_mode = json_mode
         self.http_response: Optional["httpx.Response"] = None
         self.partial_json_line: str = ""
+        self.partial_json_line_fragments: int = 0
 
     async def aclose(self) -> None:
         """Close the upstream HTTP response so the provider connection is
@@ -123,28 +125,36 @@ class BaseModelResponseIterator:
             stripped_json_chunk = None
         return stripped_json_chunk
 
-    def _parse_payload_with_rejoin(self, payload: str) -> Optional[dict]:
-        rejoined_line = self.partial_json_line + payload
+    def _drop_partial_json_line(self) -> None:
         if self.partial_json_line:
+            verbose_logger.debug("Dropping unparseable stream fragment: %s", self.partial_json_line[:1000])
+        self.partial_json_line = ""
+        self.partial_json_line_fragments = 0
+
+    def _parse_payload_with_rejoin(self, payload: str) -> dict | None:
+        rejoined_line = self.partial_json_line + payload
+        if self.partial_json_line and "}" in payload:
             rejoined_parsed = _try_parse_json_object(rejoined_line)
             if rejoined_parsed is not None:
                 self.partial_json_line = ""
+                self.partial_json_line_fragments = 0
                 return rejoined_parsed
         parsed = _try_parse_json_object(payload)
         if parsed is not None:
-            if self.partial_json_line:
-                verbose_logger.debug("Dropping unparseable stream fragment: %s", self.partial_json_line[:1000])
-                self.partial_json_line = ""
+            self._drop_partial_json_line()
             return parsed
         if self.partial_json_line:
-            if len(rejoined_line) > MAX_PARTIAL_JSON_LINE_CHARS:
-                verbose_logger.debug("Dropping unparseable stream fragment: %s", rejoined_line[:1000])
-                self.partial_json_line = ""
-            else:
+            if (
+                len(rejoined_line) <= MAX_PARTIAL_JSON_LINE_CHARS
+                and self.partial_json_line_fragments < MAX_PARTIAL_JSON_LINE_FRAGMENTS
+            ):
                 self.partial_json_line = rejoined_line
-            return None
-        if payload.lstrip().startswith("{"):
+                self.partial_json_line_fragments += 1
+                return None
+            self._drop_partial_json_line()
+        if payload.lstrip().startswith("{") and len(payload) <= MAX_PARTIAL_JSON_LINE_CHARS:
             self.partial_json_line = payload
+            self.partial_json_line_fragments = 1
             return None
         verbose_logger.debug("Dropping unparseable stream line: %s", payload[:1000])
         return None
@@ -153,7 +163,7 @@ class BaseModelResponseIterator:
         # chunk is a str at this point
         payload = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(str_line) or ""
         if payload.strip().startswith("[DONE]"):
-            self.partial_json_line = ""
+            self._drop_partial_json_line()
             return GenericStreamingChunk(
                 text="",
                 is_finished=True,

@@ -1033,7 +1033,7 @@ class CustomStreamWrapper:
             visible_content or not reasoning_content
         )
 
-    def _consume_pending_think_close_tag(self) -> Optional[str]:
+    def _consume_pending_think_close_tag(self) -> str | None:
         if (
             self.merge_reasoning_content_in_choices
             and self.sent_first_thinking_block
