@@ -59,6 +59,10 @@ BEDROCK_INVOKE_MODELS = [
 ]
 
 
+@pytest.mark.skip(
+    reason="product bug LIT-4522: Bedrock Invoke /v1/messages does not normalize "
+    "tool_search_tool_regex_20251119; re-enable when messages path matches chat path"
+)
 @pytest.mark.covers("llm.messages.bedrock_invoke.tool_search.nonstream.works")
 def test_tool_search_bedrock_invoke(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`

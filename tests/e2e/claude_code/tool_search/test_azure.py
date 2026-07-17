@@ -59,6 +59,7 @@ AZURE_MODELS = [
 ]
 
 
+@pytest.mark.skip(reason="stage red: Azure Foundry tool_search_server not supported in workspace for probed models")
 @pytest.mark.covers("llm.messages.azure_foundry.tool_search.nonstream.works")
 def test_tool_search_azure(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`

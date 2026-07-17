@@ -153,6 +153,7 @@ def _build_long_prompt(target_tokens: int = TARGET_INPUT_TOKENS) -> str:
     return preamble + "".join(pad_lines) + closing
 
 
+@pytest.mark.skip(reason="stage red: 1M long_context not green on stage Bedrock Converse deployments yet")
 @pytest.mark.covers("llm.messages.bedrock_converse.long_context_1m.nonstream.works")
 def test_long_context_1m_bedrock_converse(compat_result):
     """Drive the `claude` CLI (Bedrock (Converse)) with a ~210k-token prompt and the
