@@ -2984,3 +2984,101 @@ class TestRoutingPlugins:
         assert first.model == "gpt-4o-mini"
         assert second.model == "gpt-4o-mini"
         assert spy.call_count == 2
+
+
+class TestComplexityRouterTagBasedRouting:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/33655.
+
+    Two complexity-router deployments that share a model_name but carry different
+    tags must both be registered, and each request must resolve to the config
+    whose tags match the request's tags.
+    """
+
+    @staticmethod
+    def _two_region_model_list():
+        return [
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_default_model": "cn/simple",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": "cn/simple",
+                            "MEDIUM": "cn/simple",
+                            "COMPLEX": "cn/complex",
+                            "REASONING": "cn/complex",
+                        }
+                    },
+                    "tags": ["cn-dev"],
+                },
+            },
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_default_model": "row/simple",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": "row/simple",
+                            "MEDIUM": "row/simple",
+                            "COMPLEX": "row/complex",
+                            "REASONING": "row/complex",
+                        }
+                    },
+                    "tags": ["row-dev"],
+                },
+            },
+        ]
+
+    def test_both_tag_differentiated_deployments_registered(self):
+        router = Router(model_list=self._two_region_model_list())
+
+        registered = router.complexity_routers["smart-router"]
+        assert len(registered) == 2
+        assert [r.deployment_tags for r in registered] == [["cn-dev"], ["row-dev"]]
+
+    def test_duplicate_tag_set_still_rejected(self):
+        model_list = self._two_region_model_list()
+        model_list[1]["litellm_params"]["tags"] = ["cn-dev"]
+
+        with pytest.raises(ValueError, match="already exists with tags"):
+            Router(model_list=model_list)
+
+    def test_select_router_by_request_tags(self):
+        router = Router(model_list=self._two_region_model_list())
+
+        cn = router._select_complexity_router(
+            model="smart-router", request_kwargs={"metadata": {"tags": ["cn-dev"]}}
+        )
+        row = router._select_complexity_router(
+            model="smart-router", request_kwargs={"metadata": {"tags": ["row-dev"]}}
+        )
+
+        assert cn is not None and cn.deployment_tags == ["cn-dev"]
+        assert row is not None and row.deployment_tags == ["row-dev"]
+
+    def test_select_router_falls_back_to_first_without_tags(self):
+        router = Router(model_list=self._two_region_model_list())
+
+        selected = router._select_complexity_router(model="smart-router", request_kwargs={})
+
+        assert selected is not None and selected.deployment_tags == ["cn-dev"]
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_routes_to_matching_region_tier(self):
+        router = Router(model_list=self._two_region_model_list())
+
+        cn_response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"tags": ["cn-dev"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        row_response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"tags": ["row-dev"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert cn_response is not None and cn_response.model == "cn/simple"
+        assert row_response is not None and row_response.model == "row/simple"
