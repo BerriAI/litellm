@@ -49,7 +49,7 @@ from litellm.proxy._types import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -6120,23 +6120,22 @@ def create_model_info_response(
 
     # Surface context-window limits for OpenAI-compatible discovery clients.
     # Only emitted when known, so wildcard routes and limitless backends stay clean.
-    # Limits are best-effort enrichment, so a single malformed deployment degrades
-    # to the base response rather than 500-ing the whole listing.
-    if llm_router is not None:
-        try:
-            model_group_info = llm_router.get_model_group_info(model_id)
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "create_model_info_response: get_model_group_info failed for %s: %s",
-                model_id,
-                e,
-            )
-            model_group_info = None
-        if model_group_info is not None:
-            if model_group_info.max_input_tokens is not None:
-                base["max_input_tokens"] = int(model_group_info.max_input_tokens)
-            if model_group_info.max_output_tokens is not None:
-                base["max_output_tokens"] = int(model_group_info.max_output_tokens)
+    try:
+        model_cost_info: ModelInfo | None = litellm.get_model_info(model_id)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "create_model_info_response: cost map lookup failed for %s: %s",
+            model_id,
+            e,
+        )
+        model_cost_info = None
+    if model_cost_info is not None:
+        max_input_tokens = model_cost_info.get("max_input_tokens")
+        if max_input_tokens is not None:
+            base["max_input_tokens"] = int(max_input_tokens)
+        max_output_tokens = model_cost_info.get("max_output_tokens")
+        if max_output_tokens is not None:
+            base["max_output_tokens"] = int(max_output_tokens)
 
     if not include_metadata:
         return base

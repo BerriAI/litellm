@@ -108,6 +108,8 @@ def test_create_model_info_response_happy_path_no_metadata():
         "object": "model",
         "created": result["created"],
         "owned_by": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
     }
     snapshot = {
         "id": result["id"],
