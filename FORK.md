@@ -71,14 +71,37 @@ Do not branch from `upstream/main` or a stable tag for Bitovi-only work; that dr
 
 `.github/workflows/fork-compatibility-check.yml` runs Mondays and Thursdays (and on `workflow_dispatch`). When a newer stable tag exists than our staging tip contains, it:
 
-1. Creates `sync/upstream-vX.Y.Z` from `litellm_internal_staging`
-2. Merges the stable tag onto that branch (so the PR Files changed tab shows the real diff)
-3. If there are conflicts, commits the conflict markers on the branch and labels the PR `needs-conflict-resolution`
-4. Opens (or refreshes) a PR into `litellm_internal_staging` labeled `upstream-sync`
-5. Runs Bedrock Mantle tests on staging and on the sync branch when there are no conflicts
-6. Notifies via the PR and optional Slack (`SLACK_WEBHOOK_URL` secret)
+1. Points `sync/upstream-vX.Y.Z` at the **stable tag tip** (not a pre-merged branch with conflict markers)
+2. Opens (or refreshes) a PR **into** `litellm_internal_staging` so GitHub can show real merge conflicts
+3. Labels `upstream-sync` (and `needs-conflict-resolution` when a trial merge finds conflicts)
+4. Runs Bedrock Mantle checks on the current staging tip
+5. Notifies via the PR and optional Slack (`SLACK_WEBHOOK_URL` secret)
 
-**The Action never merges into `litellm_internal_staging`.** A person reviews the PR, resolves conflicts on the sync branch if needed, then merges the PR when ready.
+**The Action never merges into `litellm_internal_staging`.** A person resolves conflicts (if any) and merges the PR.
+
+Large diffs (often 1000+ files) are normal for a weekly stable: release tags are not always linear, and `litellm/proxy/_experimental/out/**` UI build assets churn a lot.
+
+### Junior review guide (sync PRs)
+
+**Do not merge if** GitHub shows **This branch has conflicts that must be resolved**.
+
+**What to do:**
+
+1. Open the PR → click **Resolve conflicts** (or merge the tag into staging locally)
+2. For each conflicted file, choose sides using:
+
+| Path pattern | Prefer |
+|--------------|--------|
+| `litellm/llms/bedrock_mantle/**` | Bitovi (staging) |
+| `litellm/proxy/auth/**`, key/team/budget proxy code | Bitovi when both changed; read both sides |
+| `tests/e2e/budgets/**`, VK/budget UI (`ui/**/key_*`) | Bitovi |
+| `deploy/**`, `.github/workflows/publish-*.yml` | Bitovi |
+| `ui/**/eslint-metrics.json`, `litellm/proxy/_experimental/out/**` | Upstream / regenerate |
+| Everything else | Prefer upstream unless you know it is Bitovi-owned |
+
+3. When the conflict banner is gone and the PR looks right, merge into `litellm_internal_staging`
+
+The Action points the sync branch at the **stable tag tip** (not a pre-merged branch), so GitHub can show real conflicts. It does not commit conflict markers.
 
 ### Required: `FORK_SYNC_TOKEN` (PR create)
 
@@ -117,7 +140,7 @@ After the sync PR (or manual merge) lands on staging, deploy via the existing Bi
 
 ### Conflict expectations
 
-Conflicts should concentrate in Mantle, team/VK/budget code, and `deploy/`. Widespread unrelated conflicts usually mean upstream refactored shared surfaces; stop and inspect before forcing.
+Conflicts should concentrate in Mantle, team/VK/budget code, and `deploy/`. Widespread unrelated conflicts mean upstream refactored shared surfaces; stop and inspect before forcing.
 
 ## Contribute back to BerriAI (rare)
 
@@ -132,8 +155,8 @@ If the change is useful both places, land it on BerriAI first, then pick it up h
 ## Keeping current
 
 1. Ensure `FORK_SYNC_TOKEN` is set so the Action can open sync PRs
-2. Rely on the Monday/Thursday Action and review open `upstream-sync` PRs (diff + conflicts)
-3. Resolve conflicts on the sync branch if labeled `needs-conflict-resolution`, then merge the PR into staging
-4. Optionally set `SLACK_WEBHOOK_URL` for alerts when a new stable appears or Mantle checks fail
-5. Watch upstream release notes and breaking signals in provider auth, proxy team/key APIs, and Helm/deploy
-6. After each sync: Mantle pytest; smoke team/VK if those areas changed
+2. Review open `upstream-sync` PRs using the junior guide above (resolve via GitHub conflict UI when shown)
+3. Do not merge while the GitHub conflicts banner is present
+4. Optionally set `SLACK_WEBHOOK_URL` for alerts
+5. Watch upstream release notes / breaking signals in provider auth, proxy team/key APIs, Helm/deploy
+6. After each sync lands: Mantle pytest; smoke team/VK if those areas changed

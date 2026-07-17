@@ -94,7 +94,7 @@ jobs:
           echo "Commits behind tag: $COMMITS_BEHIND"
           echo "Needs sync: $NEEDS_SYNC"
 
-      - name: Open or refresh mergeable sync PR
+      - name: Open or refresh sync PR (tag as head; GitHub shows conflicts)
         id: sync-pr
         if: steps.stable.outputs.needs_sync == 'true'
         env:
@@ -110,48 +110,65 @@ jobs:
           gh label create upstream-sync --description "Upstream stable sync" --color "0E8A16" --force 2>/dev/null || true
           gh label create fork-compatibility --description "Fork Mantle compatibility" --color "D93F0B" --force 2>/dev/null || true
           gh label create ci-alert --description "CI alert" --color "B60205" --force 2>/dev/null || true
-          gh label create needs-conflict-resolution --description "Sync PR has unresolved conflict markers" --color "E4E669" --force 2>/dev/null || true
+          gh label create needs-conflict-resolution --description "GitHub reports merge conflicts on this sync PR" --color "E4E669" --force 2>/dev/null || true
 
-          git checkout -B "$BRANCH" origin/litellm_internal_staging
-          SHORTLOG=$(git log --oneline "HEAD..${STABLE_TAG}" | head -40 || true)
+          SHORTLOG=$(git log --oneline "origin/litellm_internal_staging..${STABLE_TAG}" | head -40 || true)
 
-          # Build the sync branch with a real merge so the PR shows the full diff.
-          # Do NOT merge this PR automatically into litellm_internal_staging.
+          # Preview conflicts without committing markers (markers hide conflicts from GitHub UI).
           HAS_CONFLICTS=false
           CONFLICT_FILES=""
-          if git merge -m "chore: merge upstream ${STABLE_TAG}" "$STABLE_TAG"; then
-            echo "Clean merge of ${STABLE_TAG} onto sync branch"
+          git checkout -B "_conflict_preview" origin/litellm_internal_staging
+          if git merge --no-commit --no-ff "$STABLE_TAG"; then
+            echo "Trial merge is clean"
+            git merge --abort || git reset --hard HEAD
           else
             HAS_CONFLICTS=true
             CONFLICT_FILES=$(git diff --name-only --diff-filter=U || true)
-            echo "Merge has conflicts; committing conflict markers for review"
-            git add -A
-            git -c core.editor=true commit --no-edit -m "chore: merge upstream ${STABLE_TAG} (CONFLICTS; resolve before merging PR)" || \
-              git commit -m "chore: merge upstream ${STABLE_TAG} (CONFLICTS; resolve before merging PR)"
+            echo "Trial merge has conflicts:"
+            echo "$CONFLICT_FILES"
+            git merge --abort || git reset --hard HEAD
           fi
-
           echo "has_conflicts=${HAS_CONFLICTS}" >> "$GITHUB_OUTPUT"
+
+          # Point the sync branch at the stable tag. PR base = staging, head = tag tip.
+          # GitHub then shows native "This branch has conflicts" UI for juniors to resolve.
+          # Do NOT commit conflict markers into the branch.
+          git checkout -B "$BRANCH" "$STABLE_TAG"
           git push -u origin "$BRANCH" --force
 
           if [ "$HAS_CONFLICTS" = "true" ]; then
-            TITLE="chore: sync upstream ${STABLE_TAG} (conflicts; resolve before merge)"
+            TITLE="chore: sync upstream ${STABLE_TAG} (conflicts; resolve in GitHub UI)"
             CONFLICT_SECTION=$(cat <<EOF
-          ### Conflicts (resolve on this branch before merging)
+          ### Conflicts (resolve in GitHub before merging)
 
-          This PR includes conflict markers in:
+          GitHub should show **This branch has conflicts that must be resolved**.
+          Use **Resolve conflicts** on the PR (or merge locally). Do not merge until that banner is gone.
+
+          Likely conflicted paths (from trial merge):
 
           \`\`\`
           ${CONFLICT_FILES}
           \`\`\`
 
-          Check out \`${BRANCH}\`, resolve markers, push, then merge the PR into \`litellm_internal_staging\`.
+          #### What to keep
+
+          | Path pattern | Prefer |
+          |--------------|--------|
+          | \`litellm/llms/bedrock_mantle/**\` | Bitovi (staging / current) |
+          | \`litellm/proxy/auth/**\`, key/team/budget proxy code | Bitovi when both changed; read both sides |
+          | \`tests/e2e/budgets/**\`, VK/budget UI under \`ui/litellm-dashboard/**/key_*\` | Bitovi |
+          | \`deploy/**\`, Bitovi workflows under \`.github/workflows/publish-*.yml\` | Bitovi |
+          | \`ui/**/eslint-metrics.json\`, \`litellm/proxy/_experimental/out/**\` | Upstream / regenerate (noise) |
+          | Everything else | Prefer upstream unless you know it is a Bitovi change |
+
+          In the GitHub conflict editor, **staging is the branch you are merging into**; keep Bitovi lines for the rows above.
           EOF
             )
           else
             TITLE="chore: sync upstream ${STABLE_TAG}"
             CONFLICT_SECTION="### Conflicts
 
-          None from the automated merge. Review the diff, run checks, then merge this PR into \`litellm_internal_staging\`."
+          Trial merge was clean. Review the diff (large UI \`_experimental/out\` churn is normal), wait for checks, then merge."
           fi
           CONFLICT_SECTION=$(printf '%s\n' "$CONFLICT_SECTION" | sed 's/^          //')
 
@@ -161,12 +178,12 @@ jobs:
           Stable tag: [\`${STABLE_TAG}\`](https://github.com/BerriAI/litellm/releases/tag/${STABLE_TAG})
 
           - Tag SHA: \`${TAG_SHA}\`
-          - Commits brought onto this branch: ${COMMITS_BEHIND}
+          - Commits not yet in staging: ${COMMITS_BEHIND}
           - Sync source: stable tag only (not \`upstream/main\` or BerriAI staging)
+          - Head branch is **the tag tip** so GitHub can show real merge conflicts
           - Docs: [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md)
 
-          **This Action opens a reviewable PR only.** It does not merge into \`litellm_internal_staging\`.
-          Review the Files changed tab, resolve any conflicts on this branch, then merge the PR when ready.
+          **This Action never merges into \`litellm_internal_staging\`.** A human must resolve conflicts (if any) and merge.
 
           ${CONFLICT_SECTION}
 
@@ -176,21 +193,16 @@ jobs:
           ${SHORTLOG}
           \`\`\`
 
-          ### Checklist
+          ### Checklist (do not merge until all are done)
 
-          - [ ] Review diff (expect Mantle, team/VK/budget, and \`deploy/\` to need care)
-          - [ ] Resolve conflict markers if present; remove \`needs-conflict-resolution\` label
-          - [ ] Bedrock Mantle tests pass on this branch
-          - [ ] Smoke team / virtual-key paths if those files changed
-          - [ ] Helm / deploy values look right if \`deploy/\` changed
+          - [ ] No GitHub banner: "This branch has conflicts that must be resolved"
+          - [ ] Bitovi paths above kept correctly (Mantle / auth / VK / budgets / deploy)
+          - [ ] Checks understood if red
           - [ ] Merge this PR into \`litellm_internal_staging\` (manual)
           EOF
           )
           BODY=$(printf '%s\n' "$BODY" | sed 's/^          //')
 
-          # Use REST API (not \`gh pr create\` GraphQL). GraphQL createPullRequest often fails with
-          # "Resource not accessible by integration" when GITHUB_TOKEN cannot create PRs, and
-          # fine-grained PATs also lack that GraphQL mutation; REST works with a proper token.
           EXISTING_NUM=$(gh api "repos/${GH_REPO}/pulls" --paginate \
             --jq ".[] | select(.head.ref == \"${BRANCH}\" and .base.ref == \"litellm_internal_staging\" and .state == \"open\") | .number" \
             | head -1 || true)
@@ -215,11 +227,7 @@ jobs:
             if [ "$CREATE_STATUS" -ne 0 ]; then
               echo "::error::Failed to create pull request (HTTP/API)."
               cat pr_create_err.txt || true
-              echo "::error::Fix: create repo secret FORK_SYNC_TOKEN."
-              echo "::error::  Classic PAT: scope \`repo\`"
-              echo "::error::  Fine-grained PAT: Repository access to bitovi/litellm; Contents R/W; Pull requests R/W; Issues R/W"
-              echo "::error::Also check: Settings > Actions > General > Workflow permissions >"
-              echo "::error::  Read and write permissions + Allow GitHub Actions to create and approve pull requests"
+              echo "::error::Fix: create repo secret FORK_SYNC_TOKEN (see FORK.md)."
               echo "::error::Branch was pushed: https://github.com/${GH_REPO}/tree/${BRANCH}"
               exit 1
             fi
@@ -243,12 +251,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
       - name: Install uv
         uses: astral-sh/setup-uv@v2
         with:
           version: "0.11.7"
+          enable-cache: true
 
       - name: Install dependencies with bedrock extras
         run: |
@@ -282,22 +290,12 @@ jobs:
           print("Auth contract OK on staging")
           EOF
 
-      - name: Run Bedrock Mantle tests on sync branch
-        id: bedrock-sync
-        if: steps.stable.outputs.needs_sync == 'true' && steps.sync-pr.outputs.has_conflicts != 'true'
-        continue-on-error: true
-        run: |
-          git checkout "sync/upstream-${{ steps.stable.outputs.tag }}"
-          pytest tests/test_litellm/llms/bedrock_mantle/ -v --tb=short --junit-xml=test-results-sync.xml
-
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bedrock-mantle-test-results
-          path: |
-            test-results-staging.xml
-            test-results-sync.xml
+          path: test-results-staging.xml
           if-no-files-found: ignore
 
       - name: Summarize Mantle results
@@ -306,9 +304,6 @@ jobs:
         run: |
           OK=true
           if [ "${{ steps.bedrock-staging.outcome }}" = "failure" ] || [ "${{ steps.auth-staging.outcome }}" = "failure" ]; then
-            OK=false
-          fi
-          if [ "${{ steps.bedrock-sync.outcome }}" = "failure" ]; then
             OK=false
           fi
           echo "ok=$OK" >> "$GITHUB_OUTPUT"
@@ -329,7 +324,6 @@ jobs:
 
           - Staging tip Mantle tests: ${{ steps.bedrock-staging.outcome }}
           - Staging auth contract: ${{ steps.auth-staging.outcome }}
-          - Sync branch Mantle tests: ${{ steps.bedrock-sync.outcome }}
 
           See [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md).
           EOF
@@ -348,7 +342,6 @@ jobs:
           - Stable tag under review: \`${STABLE_TAG}\`
           - Staging Mantle tests: ${{ steps.bedrock-staging.outcome }}
           - Auth contract: ${{ steps.auth-staging.outcome }}
-          - Sync branch Mantle tests: ${{ steps.bedrock-sync.outcome }}
           - Sync PR: ${{ steps.sync-pr.outputs.pr_url || 'n/a' }}
           - [Action run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
