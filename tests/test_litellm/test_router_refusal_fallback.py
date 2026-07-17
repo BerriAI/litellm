@@ -287,3 +287,109 @@ def test_stream_hold_disarmed_for_multi_choice_requests(monkeypatch):
     assert router._refusal_stream_hold_for_call({"model": "m", "n": 2}).active is False
     assert router._refusal_stream_hold_for_call({"model": "m", "n": 1}).active is True
     assert router._refusal_stream_hold_for_call({"model": "m"}).active is True
+
+
+def test_get_refusal_fallback_patterns_direct(monkeypatch):
+    from litellm.router import _get_refusal_fallback_patterns
+
+    monkeypatch.delenv("LITELLM_REFUSAL_FALLBACK_PATTERNS", raising=False)
+    assert _get_refusal_fallback_patterns() == []
+
+    monkeypatch.setenv("LITELLM_REFUSAL_FALLBACK_PATTERNS", json.dumps(["a", "b"]))
+    assert _get_refusal_fallback_patterns() == ["a", "b"]
+
+    # Non-JSON value is tolerated as a single literal pattern, not raised.
+    monkeypatch.setenv("LITELLM_REFUSAL_FALLBACK_PATTERNS", "not json[")
+    assert _get_refusal_fallback_patterns() == ["not json["]
+
+    # A JSON object (not an array) is also coerced to a single literal pattern.
+    monkeypatch.setenv("LITELLM_REFUSAL_FALLBACK_PATTERNS", json.dumps({"a": 1}))
+    assert _get_refusal_fallback_patterns() == [json.dumps({"a": 1})]
+
+    # Blank/non-string entries in an otherwise valid array are dropped.
+    monkeypatch.setenv("LITELLM_REFUSAL_FALLBACK_PATTERNS", json.dumps(["ok", "", 5, None]))
+    assert _get_refusal_fallback_patterns() == ["ok"]
+
+
+def test_text_matches_refusal_patterns_direct():
+    from litellm.router import _text_matches_refusal_patterns
+
+    assert _text_matches_refusal_patterns("I cannot assist", ["cannot assist"]) is True
+    assert _text_matches_refusal_patterns("all good here", ["cannot assist"]) is False
+    # A malformed regex among the patterns is skipped, not raised.
+    assert (
+        _text_matches_refusal_patterns("I cannot assist", ["[", "cannot assist"])
+        is True
+    )
+    assert _text_matches_refusal_patterns("I cannot assist", ["["]) is False
+
+
+def test_refusal_stream_hold_chars_direct(monkeypatch):
+    from litellm.router import _refusal_stream_hold_chars
+
+    monkeypatch.delenv("LITELLM_REFUSAL_FALLBACK_STREAM_HOLD_CHARS", raising=False)
+    assert _refusal_stream_hold_chars() == 400
+
+    monkeypatch.setenv("LITELLM_REFUSAL_FALLBACK_STREAM_HOLD_CHARS", "50")
+    assert _refusal_stream_hold_chars() == 50
+
+    monkeypatch.setenv("LITELLM_REFUSAL_FALLBACK_STREAM_HOLD_CHARS", "0")
+    assert _refusal_stream_hold_chars() == 0
+
+    monkeypatch.setenv("LITELLM_REFUSAL_FALLBACK_STREAM_HOLD_CHARS", "-5")
+    assert _refusal_stream_hold_chars() == 0
+
+    monkeypatch.setenv("LITELLM_REFUSAL_FALLBACK_STREAM_HOLD_CHARS", "not-a-number")
+    assert _refusal_stream_hold_chars() == 400
+
+
+def test_stream_hold_release_direct():
+    """_release() drains and clears the held buffer and disarms the hold."""
+    from litellm.router import _RefusalStreamHold
+
+    hold = _RefusalStreamHold(patterns=["cannot assist"], hold_chars=1000, model="m")
+    hold.process(_stream_chunk("hello"))
+    hold.process(_stream_chunk(" world"))
+    assert len(hold._held) == 2
+
+    released = hold._release()
+    assert len(released) == 2
+    assert hold.active is False
+    assert hold._held == []
+
+    # Calling again returns nothing further: the buffer was already drained.
+    assert hold._release() == []
+
+
+def test_stream_hold_delta_state_direct():
+    """_delta_state() extracts (matchable text, reasoning length, saw tool call)
+    from a single stream item for every delta shape it must handle."""
+    from litellm.router import _RefusalStreamHold
+    from litellm.types.utils import ModelResponseStream
+
+    assert _RefusalStreamHold._delta_state(_stream_chunk("hello")) == ("hello", 0, False)
+    assert _RefusalStreamHold._delta_state(
+        _stream_chunk(refusal="I cannot help")
+    ) == ("I cannot help", 0, False)
+    assert _RefusalStreamHold._delta_state(
+        _stream_chunk(reasoning_content="thinking...")
+    ) == ("", len("thinking..."), False)
+    tool_call = {"id": "t1", "type": "function", "function": {"name": "f", "arguments": ""}}
+    text, reasoning_len, saw_tool_call = _RefusalStreamHold._delta_state(
+        _stream_chunk(None, tool_calls=[tool_call])
+    )
+    assert saw_tool_call is True
+    # Empty choices (e.g. a trailing usage-only chunk) must not raise.
+    assert _RefusalStreamHold._delta_state(ModelResponseStream(choices=[])) == ("", 0, False)
+
+
+def test_stream_hold_raise_refusal_direct():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router import _RefusalStreamHold
+
+    hold = _RefusalStreamHold(patterns=["cannot assist"], hold_chars=400, model="my-model")
+    with pytest.raises(MidStreamFallbackError) as exc:
+        hold._raise_refusal()
+    assert exc.value.model == "my-model"
+    assert exc.value.is_pre_first_chunk is True
+    assert isinstance(exc.value.original_exception, litellm.ContentPolicyViolationError)
