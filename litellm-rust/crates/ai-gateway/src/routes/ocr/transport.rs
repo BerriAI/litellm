@@ -58,13 +58,17 @@ pub struct OcrCall {
 }
 
 fn parse_timeout(seconds: Option<f64>) -> CoreResult<Option<Duration>> {
-    match seconds {
-        None => Ok(None),
-        Some(value) if value.is_finite() && value > 0.0 => Ok(Some(Duration::from_secs_f64(value))),
-        Some(_) => Err(CoreError::InvalidRequest(
+    let Some(value) = seconds else {
+        return Ok(None);
+    };
+    if !value.is_finite() || value <= 0.0 {
+        return Err(CoreError::InvalidRequest(
             "'timeout' must be a positive, finite number of seconds".to_string(),
-        )),
+        ));
     }
+    Duration::try_from_secs_f64(value).map(Some).map_err(|_| {
+        CoreError::InvalidRequest("'timeout' is larger than the supported range".to_string())
+    })
 }
 
 fn reject_reserved_params<'a>(names: impl IntoIterator<Item = &'a str>) -> CoreResult<()> {
@@ -451,7 +455,7 @@ mod tests {
 
     #[test]
     fn json_rejects_non_positive_timeout() {
-        for timeout in ["0", "-1", "-0.5"] {
+        for timeout in ["0", "-1", "-0.5", "1e300"] {
             let body = format!(
                 r#"{{"model":"m","document":{{"type":"document_url","document_url":"https://x"}},"timeout":{timeout}}}"#
             );
@@ -468,7 +472,7 @@ mod tests {
     #[test]
     fn multipart_rejects_non_positive_and_non_finite_timeout() {
         let document = json!({"type": "document_url", "document_url": "data:x"});
-        for timeout in ["0", "-3", "inf", "-inf", "NaN"] {
+        for timeout in ["0", "-3", "inf", "-inf", "NaN", "1e300"] {
             let fields = vec![
                 ("model".to_string(), "m".to_string()),
                 ("timeout".to_string(), timeout.to_string()),
