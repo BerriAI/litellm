@@ -45,6 +45,41 @@ from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownMan
 
 #### Health ENDPOINTS ####
 
+_REDIS_CACHE_INDEX_INFO_TTL_SECONDS = 30
+_redis_cache_index_info: Dict[str, Any] = {}
+
+
+async def _get_redis_cache_index_info_with_ttl() -> Any:
+    """
+    Get Redis cache index info with TTL caching to avoid pinging the cache
+    on every health check. Caches result for _REDIS_CACHE_INDEX_INFO_TTL_SECONDS.
+
+    Resolves https://github.com/BerriAI/litellm/issues/XXXX:
+    /health/readiness was pinging the semantic cache on every request, adding latency.
+    This caches the result to reduce unnecessary network calls.
+    """
+    global _redis_cache_index_info
+
+    current_time = time.time()
+    cached_time = _redis_cache_index_info.get("timestamp", 0)
+
+    if (
+        "index_info" in _redis_cache_index_info
+        and (current_time - cached_time) < _REDIS_CACHE_INDEX_INFO_TTL_SECONDS
+    ):
+        return _redis_cache_index_info["index_info"]
+
+    try:
+        index_info = await litellm.cache.cache._index_info()
+        _redis_cache_index_info["index_info"] = index_info
+        _redis_cache_index_info["timestamp"] = current_time
+        return index_info
+    except Exception as e:
+        error_msg = f"index does not exist - error: {str(e)}"
+        _redis_cache_index_info["index_info"] = error_msg
+        _redis_cache_index_info["timestamp"] = current_time
+        return error_msg
+
 
 def _reject_os_environ_references(params: dict) -> None:
     """
@@ -1434,13 +1469,7 @@ async def _get_health_readiness_details(
             cache_type = litellm.cache.type
 
             if isinstance(litellm.cache.cache, RedisSemanticCache):
-                # ping the cache
-                # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
-                index_info: Any
-                try:
-                    index_info = await litellm.cache.cache._index_info()
-                except Exception as e:
-                    index_info = "index does not exist - error: " + str(e)  # type: ignore[assignment]
+                index_info = await _get_redis_cache_index_info_with_ttl()
                 cache_type = {"type": cache_type, "index_info": index_info}  # type: ignore[assignment]
 
         # check log level
