@@ -201,6 +201,9 @@ make help                       # Show all available commands
 make install-dev               # Install development dependencies
 make install-proxy-dev         # Install proxy development dependencies
 make install-test-deps         # Install the full local test environment
+make install-helm-chartsnap    # Install helm chartsnap plugin
+make helm-chartsnap            # Run helm chartsnap snapshot check
+make helm-chartsnap-update     # Update helm chartsnap snapshots
 make format                    # Apply Black code formatting
 make format-check              # Check Black formatting (matches CI)
 make lint                      # Run all linting checks
