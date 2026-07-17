@@ -295,6 +295,15 @@ class ResponsesSessionHandler:
             query, previous_response_id, DEFAULT_MAX_SPEND_LOGS_PER_RESPONSES_SESSION
         )
 
+        if len(spend_logs) >= DEFAULT_MAX_SPEND_LOGS_PER_RESPONSES_SESSION:
+            verbose_proxy_logger.warning(
+                "Responses session for previous_response_id=%s hit the %d-row cap "
+                "(DEFAULT_MAX_SPEND_LOGS_PER_RESPONSES_SESSION); the oldest turns were dropped. "
+                "Raise the limit if you need more history.",
+                previous_response_id,
+                DEFAULT_MAX_SPEND_LOGS_PER_RESPONSES_SESSION,
+            )
+
         verbose_proxy_logger.debug(
             "Found the following spend logs for previous response id %s: %s",
             previous_response_id,

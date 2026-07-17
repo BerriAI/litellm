@@ -491,3 +491,40 @@ async def test_get_all_spend_logs_returns_most_recent_in_ascending_order():
     executed_query = mock_prisma_client.db.query_raw.await_args.args[0]
     assert 'ORDER BY "endTime" DESC' in executed_query
     assert executed_query.rstrip().rstrip(";").endswith('ORDER BY "endTime" ASC')
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_warns_when_cap_is_hit():
+    """
+    Operators need a runtime signal when a session is truncated: when the query returns
+    the full cap of rows (older turns silently dropped), a warning must be emitted.
+    """
+    cap = litellm.constants.DEFAULT_MAX_SPEND_LOGS_PER_RESPONSES_SESSION
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[{} for _ in range(cap)])
+
+    with _patched_prisma_client(mock_prisma_client):
+        with patch.object(session_handler.verbose_proxy_logger, "warning") as mock_warning:
+            await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+                "resp_previous_id"
+            )
+
+    mock_warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_does_not_warn_below_cap():
+    """
+    Below the cap nothing is truncated, so no truncation warning should be emitted.
+    """
+    cap = litellm.constants.DEFAULT_MAX_SPEND_LOGS_PER_RESPONSES_SESSION
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[{} for _ in range(cap - 1)])
+
+    with _patched_prisma_client(mock_prisma_client):
+        with patch.object(session_handler.verbose_proxy_logger, "warning") as mock_warning:
+            await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+                "resp_previous_id"
+            )
+
+    mock_warning.assert_not_called()
