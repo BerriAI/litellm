@@ -526,6 +526,44 @@ def test_img_url_token_counter(img_url, monkeypatch):
     assert height is not None
 
 
+def test_calculate_img_tokens_auto_matches_high_not_low(monkeypatch):
+    """
+    Regression test for the "auto" image detail mode silently being costed
+    as "low" detail instead of using the real tile-based sizing.
+
+    "auto" is the *default* detail level whenever a caller doesn't set one
+    explicitly, and OpenAI's actual auto-detail behavior is tile-based
+    (same sizing math as "high"), not a flat low-res estimate. Before this
+    fix, `calculate_img_tokens(mode="auto")` fell into the same branch as
+    `mode="low"` and returned a flat 85-token estimate regardless of image
+    size, which meant a large image sent with no explicit detail could be
+    undercounted by hundreds of tokens relative to what the API actually
+    bills for it.
+
+    For a 4096x4096 image this under-count is stark: "low" is a flat 85
+    tokens, "high" (tile-based) is 765 tokens, and "auto" must match
+    "high" here, not "low".
+    """
+    from litellm.litellm_core_utils.token_counter import calculate_img_tokens
+
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.token_counter.get_image_dimensions",
+        lambda **kwargs: (4096, 4096),
+    )
+
+    low_tokens = calculate_img_tokens(data=b"fake", mode="low")
+    high_tokens = calculate_img_tokens(data=b"fake", mode="high")
+    auto_tokens = calculate_img_tokens(data=b"fake", mode="auto")
+
+    assert low_tokens == 85
+    assert high_tokens == 765
+    assert auto_tokens == high_tokens, (
+        "'auto' detail must use the same tile-based sizing as 'high', "
+        f"got {auto_tokens} tokens vs high={high_tokens} tokens"
+    )
+    assert auto_tokens != low_tokens
+
+
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
     token_counter(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
