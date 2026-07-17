@@ -3235,6 +3235,7 @@ all_litellm_params = (
         "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
+        "chatgpt_auth_file",
         "_litellm_rate_limit_descriptors",
         "_litellm_tpm_reserved_tokens",
         "_litellm_tpm_reserved_model",
