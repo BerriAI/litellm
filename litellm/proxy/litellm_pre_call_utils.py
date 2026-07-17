@@ -961,10 +961,13 @@ class LiteLLMProxyRequestSetup:
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug(f"Extracted chain_id from header (trace-id/session-id): {chain_id}")
         else:
-            session_id = _get_anthropic_session_id_from_metadata(data.get("metadata"))
+            body_metadata = data.get("metadata")
+            session_id = _get_anthropic_session_id_from_metadata(body_metadata)
             if session_id:
                 metadata_from_headers["session_id"] = session_id
                 data["litellm_session_id"] = session_id
+                if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
+                    body_metadata["user_id"] = session_id
                 verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
 
         if isinstance(data[_metadata_variable_name], dict):

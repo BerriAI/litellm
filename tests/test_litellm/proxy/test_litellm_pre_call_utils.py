@@ -2587,6 +2587,7 @@ def test_add_litellm_metadata_from_anthropic_user_id_dict_sets_session_id():
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers={}, data=data, _metadata_variable_name="metadata"
     )
+    assert data["metadata"]["user_id"] == "sess_4f8c1d2a-1234"
     assert data["metadata"]["session_id"] == "sess_4f8c1d2a-1234"
     assert data["litellm_session_id"] == "sess_4f8c1d2a-1234"
     assert "litellm_trace_id" not in data
