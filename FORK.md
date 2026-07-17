@@ -80,6 +80,27 @@ Do not branch from `upstream/main` or a stable tag for Bitovi-only work; that dr
 
 **The Action never merges into `litellm_internal_staging`.** A person reviews the PR, resolves conflicts on the sync branch if needed, then merges the PR when ready.
 
+### Required: `FORK_SYNC_TOKEN` (PR create)
+
+`GITHUB_TOKEN` often cannot open PRs even when the repo checkbox **Allow GitHub Actions to create and approve pull requests** is enabled. Common reasons:
+
+- Org (or Enterprise) Actions settings still disallow PR create, which overrides the repo
+- Workflow permissions are still **Read** only (the create-PR checkbox is separate from Read and write)
+- `gh pr create` uses GraphQL `createPullRequest`, which fails with “Resource not accessible by integration”
+
+This Action creates PRs via the **REST** API and expects a PAT:
+
+1. Create a **classic** PAT with `repo` scope (simplest), or a fine-grained PAT on `bitovi/litellm` with **Contents**, **Pull requests**, and **Issues** read/write
+2. Add it as repo secret `FORK_SYNC_TOKEN` (Settings → Secrets and variables → Actions)
+3. Re-run the workflow
+
+Optional (only helps `GITHUB_TOKEN` fallback; PAT is still recommended):
+
+- Repo **and** org: Settings → Actions → General → Workflow permissions → **Read and write permissions**
+- Same page: enable **Allow GitHub Actions to create and approve pull requests** (must be allowed at org/enterprise first if the repo checkbox is grayed or ineffective)
+
+Optional: `SLACK_WEBHOOK_URL` for Slack alerts (incoming webhook URL).
+
 ### Manual fallback
 
 ```bash
@@ -110,8 +131,9 @@ If the change is useful both places, land it on BerriAI first, then pick it up h
 
 ## Keeping current
 
-1. Rely on the Monday/Thursday Action and review open `upstream-sync` PRs (diff + conflicts)
-2. Resolve conflicts on the sync branch if labeled `needs-conflict-resolution`, then merge the PR into staging
-3. Optionally set `SLACK_WEBHOOK_URL` for alerts when a new stable appears or Mantle checks fail
-4. Watch upstream release notes and breaking signals in provider auth, proxy team/key APIs, and Helm/deploy
-5. After each sync: Mantle pytest; smoke team/VK if those areas changed
+1. Ensure `FORK_SYNC_TOKEN` is set so the Action can open sync PRs
+2. Rely on the Monday/Thursday Action and review open `upstream-sync` PRs (diff + conflicts)
+3. Resolve conflicts on the sync branch if labeled `needs-conflict-resolution`, then merge the PR into staging
+4. Optionally set `SLACK_WEBHOOK_URL` for alerts when a new stable appears or Mantle checks fail
+5. Watch upstream release notes and breaking signals in provider auth, proxy team/key APIs, and Helm/deploy
+6. After each sync: Mantle pytest; smoke team/VK if those areas changed

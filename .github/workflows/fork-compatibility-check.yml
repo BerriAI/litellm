@@ -8,6 +8,9 @@ on:
     - cron: "0 10 * * 4"
   workflow_dispatch:
 
+# GITHUB_TOKEN alone often cannot create PRs in org repos unless
+# Settings > Actions > "Allow GitHub Actions to create and approve pull requests"
+# is enabled. Prefer secrets.FORK_SYNC_TOKEN (see FORK.md).
 permissions:
   contents: write
   pull-requests: write
@@ -18,6 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     name: Open sync PR and check Mantle
     timeout-minutes: 45
+    env:
+      # Classic PAT with `repo`, or fine-grained: Contents + Pull requests + Issues (read/write)
+      GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
+      GH_REPO: ${{ github.repository }}
     outputs:
       stable_tag: ${{ steps.stable.outputs.tag }}
       needs_sync: ${{ steps.stable.outputs.needs_sync }}
@@ -26,12 +33,30 @@ jobs:
       mantle_ok: ${{ steps.mantle-summary.outputs.ok }}
 
     steps:
+      - name: Verify token can open PRs
+        id: token-check
+        env:
+          FORK_SYNC_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FORK_SYNC_TOKEN}" ]; then
+            echo "::warning::FORK_SYNC_TOKEN is not set; falling back to GITHUB_TOKEN"
+            echo "::warning::If PR create fails with createPullRequest / Resource not accessible by integration, add FORK_SYNC_TOKEN (see FORK.md)"
+            echo "using_pat=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "using_pat=true" >> "$GITHUB_OUTPUT"
+            echo "Using FORK_SYNC_TOKEN for git push and PR create"
+          fi
+          # Installation tokens are not users; probe repo access instead of /user
+          gh api "repos/${GH_REPO}" --jq .full_name
+
       - name: Checkout fork (litellm_internal_staging)
         uses: actions/checkout@v4
         with:
           ref: litellm_internal_staging
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Same token used for push + PR create (must be able to write contents)
+          token: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
 
       - name: Configure git
         run: |
@@ -73,7 +98,6 @@ jobs:
         id: sync-pr
         if: steps.stable.outputs.needs_sync == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STABLE_TAG: ${{ steps.stable.outputs.tag }}
           TAG_SHA: ${{ steps.stable.outputs.sha }}
           COMMITS_BEHIND: ${{ steps.stable.outputs.commits_behind }}
@@ -101,7 +125,6 @@ jobs:
             HAS_CONFLICTS=true
             CONFLICT_FILES=$(git diff --name-only --diff-filter=U || true)
             echo "Merge has conflicts; committing conflict markers for review"
-            # Stage conflicted files as-is (markers included) so the PR shows them.
             git add -A
             git -c core.editor=true commit --no-edit -m "chore: merge upstream ${STABLE_TAG} (CONFLICTS; resolve before merging PR)" || \
               git commit -m "chore: merge upstream ${STABLE_TAG} (CONFLICTS; resolve before merging PR)"
@@ -165,29 +188,55 @@ jobs:
           )
           BODY=$(printf '%s\n' "$BODY" | sed 's/^          //')
 
-          # Create/update the PR first without labels so a missing label cannot fail the job.
-          EXISTING_PR=$(gh pr list --base litellm_internal_staging --head "$BRANCH" --state open --json number,url --jq '.[0].url // empty')
-          if [ -n "$EXISTING_PR" ]; then
-            PR_NUM=$(gh pr list --base litellm_internal_staging --head "$BRANCH" --state open --json number --jq '.[0].number')
-            gh pr edit "$PR_NUM" --title "$TITLE" --body "$BODY"
-            echo "pr_url=$EXISTING_PR" >> "$GITHUB_OUTPUT"
-            echo "Refreshed PR: $EXISTING_PR"
+          # Use REST API (not \`gh pr create\` GraphQL). GraphQL createPullRequest often fails with
+          # "Resource not accessible by integration" when GITHUB_TOKEN cannot create PRs, and
+          # fine-grained PATs also lack that GraphQL mutation; REST works with a proper token.
+          EXISTING_NUM=$(gh api "repos/${GH_REPO}/pulls" --paginate \
+            --jq ".[] | select(.head.ref == \"${BRANCH}\" and .base.ref == \"litellm_internal_staging\" and .state == \"open\") | .number" \
+            | head -1 || true)
+
+          if [ -n "${EXISTING_NUM}" ]; then
+            PR_JSON=$(jq -n --arg title "$TITLE" --arg body "$BODY" '{title:$title, body:$body}' \
+              | gh api "repos/${GH_REPO}/pulls/${EXISTING_NUM}" --method PATCH --input -)
+            PR_URL=$(echo "$PR_JSON" | jq -r .html_url)
+            PR_NUM="$EXISTING_NUM"
+            echo "Refreshed PR: $PR_URL"
           else
-            PR_URL=$(gh pr create \
-              --base litellm_internal_staging \
-              --head "$BRANCH" \
-              --title "$TITLE" \
-              --body "$BODY")
-            PR_NUM="${PR_URL##*/}"
-            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+            set +e
+            PR_JSON=$(jq -n \
+              --arg title "$TITLE" \
+              --arg body "$BODY" \
+              --arg head "$BRANCH" \
+              --arg base "litellm_internal_staging" \
+              '{title:$title, body:$body, head:$head, base:$base}' \
+              | gh api "repos/${GH_REPO}/pulls" --method POST --input - 2>pr_create_err.txt)
+            CREATE_STATUS=$?
+            set -e
+            if [ "$CREATE_STATUS" -ne 0 ]; then
+              echo "::error::Failed to create pull request (HTTP/API)."
+              cat pr_create_err.txt || true
+              echo "::error::Fix: create repo secret FORK_SYNC_TOKEN."
+              echo "::error::  Classic PAT: scope \`repo\`"
+              echo "::error::  Fine-grained PAT: Repository access to bitovi/litellm; Contents R/W; Pull requests R/W; Issues R/W"
+              echo "::error::Also check: Settings > Actions > General > Workflow permissions >"
+              echo "::error::  Read and write permissions + Allow GitHub Actions to create and approve pull requests"
+              echo "::error::Branch was pushed: https://github.com/${GH_REPO}/tree/${BRANCH}"
+              exit 1
+            fi
+            PR_URL=$(echo "$PR_JSON" | jq -r .html_url)
+            PR_NUM=$(echo "$PR_JSON" | jq -r .number)
             echo "Created PR: $PR_URL"
           fi
 
-          gh pr edit "$PR_NUM" --add-label upstream-sync || true
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+          jq -n '{labels:["upstream-sync"]}' \
+            | gh api --method POST "repos/${GH_REPO}/issues/${PR_NUM}/labels" --input - 2>/dev/null || true
           if [ "$HAS_CONFLICTS" = "true" ]; then
-            gh pr edit "$PR_NUM" --add-label needs-conflict-resolution || true
+            jq -n '{labels:["needs-conflict-resolution"]}' \
+              | gh api --method POST "repos/${GH_REPO}/issues/${PR_NUM}/labels" --input - 2>/dev/null || true
           else
-            gh pr edit "$PR_NUM" --remove-label needs-conflict-resolution || true
+            gh api --method DELETE "repos/${GH_REPO}/issues/${PR_NUM}/labels/needs-conflict-resolution" 2>/dev/null || true
           fi
 
       - name: Set up Python
@@ -270,12 +319,10 @@ jobs:
           always() &&
           steps.mantle-summary.outputs.ok == 'false' &&
           steps.sync-pr.outputs.pr_url != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_URL="${{ steps.sync-pr.outputs.pr_url }}"
           PR_NUM="${PR_URL##*/}"
-          gh pr comment "$PR_NUM" --body "$(cat <<EOF
+          jq -n --arg body "$(cat <<EOF
           ## Mantle compatibility alert
 
           Bedrock Mantle checks failed on this run ([logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})).
@@ -286,12 +333,11 @@ jobs:
 
           See [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md).
           EOF
-          )"
+          )" '{body:$body}' | gh api "repos/${GH_REPO}/issues/${PR_NUM}/comments" --method POST --input -
 
       - name: Create or update Mantle failure issue
         if: always() && steps.mantle-summary.outputs.ok == 'false'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STABLE_TAG: ${{ steps.stable.outputs.tag }}
         run: |
           set -euo pipefail
@@ -309,18 +355,19 @@ jobs:
           See [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md).
           EOF
           )
-          EXISTING_URL=$(gh issue list --label fork-compatibility --state open --search "Mantle failed in:title" --json number,url --jq '.[0].url // empty' || true)
-          if [ -n "$EXISTING_URL" ]; then
-            NUM=$(gh issue list --label fork-compatibility --state open --search "Mantle failed in:title" --json number --jq '.[0].number')
-            gh issue comment "$NUM" --body "$BODY"
-            echo "Updated issue: $EXISTING_URL"
+          EXISTING_NUM=$(gh api "repos/${GH_REPO}/issues?state=open&labels=fork-compatibility" \
+            --jq ".[] | select(.title | contains(\"Mantle failed\")) | .number" | head -1 || true)
+          if [ -n "$EXISTING_NUM" ]; then
+            jq -n --arg body "$BODY" '{body:$body}' \
+              | gh api "repos/${GH_REPO}/issues/${EXISTING_NUM}/comments" --method POST --input -
+            echo "Updated issue #${EXISTING_NUM}"
           else
-            # Prefer unlabeled create if labels are missing in the repo
-            ISSUE_URL=$(gh issue create --title "$TITLE" --body "$BODY")
-            ISSUE_NUM="${ISSUE_URL##*/}"
-            gh issue edit "$ISSUE_NUM" --add-label fork-compatibility || true
-            gh issue edit "$ISSUE_NUM" --add-label ci-alert || true
-            echo "Created issue: $ISSUE_URL"
+            ISSUE_JSON=$(jq -n --arg title "$TITLE" --arg body "$BODY" '{title:$title, body:$body}' \
+              | gh api "repos/${GH_REPO}/issues" --method POST --input -)
+            ISSUE_NUM=$(echo "$ISSUE_JSON" | jq -r .number)
+            gh api --method POST "repos/${GH_REPO}/issues/${ISSUE_NUM}/labels" --input - <<< '{"labels":["fork-compatibility"]}' 2>/dev/null || true
+            gh api --method POST "repos/${GH_REPO}/issues/${ISSUE_NUM}/labels" --input - <<< '{"labels":["ci-alert"]}' 2>/dev/null || true
+            echo "Created issue #${ISSUE_NUM}"
           fi
 
       - name: Job summary
@@ -334,6 +381,7 @@ jobs:
             echo "- Has conflicts on sync branch: \`${{ steps.sync-pr.outputs.has_conflicts }}\`"
             echo "- Sync PR (review + merge manually): ${{ steps.sync-pr.outputs.pr_url || 'none' }}"
             echo "- Mantle OK: \`${{ steps.mantle-summary.outputs.ok }}\`"
+            echo "- Token: FORK_SYNC_TOKEN preferred over GITHUB_TOKEN (see FORK.md)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   notify-slack:
