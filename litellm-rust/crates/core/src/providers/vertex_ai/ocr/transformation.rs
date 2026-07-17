@@ -81,22 +81,32 @@ pub fn classify_vertex_bearer(
 
 fn malformed_vertex_authorization_error() -> CoreError {
     CoreError::Auth(
-        "Vertex AI requires an `Authorization: Bearer <OAuth access token>` header. \
+        "Vertex AI requires exactly one `Authorization: Bearer <OAuth access token>` header. \
          Provide a valid OAuth Bearer token, or omit the header to mint one from credentials/ADC"
             .to_string(),
     )
 }
 
-pub fn validate_vertex_authorization_header(header_value: &str) -> CoreResult<()> {
-    let (scheme, token) = header_value
-        .trim()
-        .split_once(char::is_whitespace)
+pub fn validate_vertex_authorization_headers(values: &[&str]) -> CoreResult<()> {
+    match values {
+        [] => Ok(()),
+        [single] => validate_vertex_authorization_value(single),
+        _ => Err(malformed_vertex_authorization_error()),
+    }
+}
+
+fn validate_vertex_authorization_value(header_value: &str) -> CoreResult<()> {
+    let mut parts = header_value.split_whitespace();
+    let scheme = parts
+        .next()
         .ok_or_else(malformed_vertex_authorization_error)?;
-    if !scheme.eq_ignore_ascii_case(BEARER_SCHEME) {
+    let token = parts
+        .next()
+        .ok_or_else(malformed_vertex_authorization_error)?;
+    if parts.next().is_some() {
         return Err(malformed_vertex_authorization_error());
     }
-    let token = token.trim();
-    if token.is_empty() {
+    if !scheme.eq_ignore_ascii_case(BEARER_SCHEME) {
         return Err(malformed_vertex_authorization_error());
     }
     if is_google_api_key(token) {
@@ -526,38 +536,62 @@ mod tests {
     }
 
     #[test]
-    fn validate_vertex_authorization_header_rejects_api_key_bearer() {
-        let err = validate_vertex_authorization_header("Bearer AIzaSyExampleApiKeyValue")
-            .expect_err("bearer api key rejected");
-        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
-
-        let err = validate_vertex_authorization_header("  bearer   AIzaSyExampleApiKeyValue  ")
-            .expect_err("lowercase bearer api key rejected");
-        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+    fn validate_vertex_authorization_headers_rejects_api_key_bearer() {
+        for header in [
+            "Bearer AIzaSyExampleApiKeyValue",
+            "  bearer   AIzaSyExampleApiKeyValue  ",
+            "BEARER AIzaSyExampleApiKeyValue",
+        ] {
+            let err = validate_vertex_authorization_headers(&[header])
+                .expect_err(&format!("api key bearer rejected: {header:?}"));
+            assert!(matches!(err, CoreError::Auth(_)), "{header:?} -> {err:?}");
+        }
     }
 
     #[test]
-    fn validate_vertex_authorization_header_rejects_malformed_schemes() {
+    fn validate_vertex_authorization_headers_rejects_malformed_values() {
         for header in [
+            "",
+            "   ",
             "AIzaSyExampleApiKeyValue",
+            "ya29.raw-token-without-scheme",
             "Basic dXNlcjpwYXNz",
             "Token ya29.some-token",
+            "Bearer2 ya29.token",
             "Bearer",
             "Bearer    ",
-            "ya29.raw-token-without-scheme",
+            "Bearer ya29.token extra-part",
+            "Bearer ya29.token AIzaExtra",
         ] {
-            let err = validate_vertex_authorization_header(header)
+            let err = validate_vertex_authorization_headers(&[header])
                 .expect_err(&format!("expected rejection for {header:?}"));
             assert!(matches!(err, CoreError::Auth(_)), "{header:?} -> {err:?}");
         }
     }
 
     #[test]
-    fn validate_vertex_authorization_header_allows_oauth_bearer() {
-        validate_vertex_authorization_header("Bearer ya29.real-oauth-token")
-            .expect("oauth bearer allowed");
-        validate_vertex_authorization_header("bearer ya29.real-oauth-token")
-            .expect("lowercase oauth bearer allowed");
+    fn validate_vertex_authorization_headers_rejects_duplicate_headers() {
+        let err = validate_vertex_authorization_headers(&[
+            "Bearer ya29.first-token",
+            "Bearer ya29.second-token",
+        ])
+        .expect_err("duplicate authorization headers rejected");
+        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+    }
+
+    #[test]
+    fn validate_vertex_authorization_headers_allows_single_oauth_bearer() {
+        for header in [
+            "Bearer ya29.real-oauth-token",
+            "bearer ya29.real-oauth-token",
+            "BEARER ya29.real-oauth-token",
+            "  Bearer   ya29.real-oauth-token  ",
+        ] {
+            validate_vertex_authorization_headers(&[header])
+                .unwrap_or_else(|err| panic!("oauth bearer allowed: {header:?} -> {err:?}"));
+        }
+        validate_vertex_authorization_headers(&[])
+            .expect("no authorization header defers to minting");
     }
 
     #[test]
