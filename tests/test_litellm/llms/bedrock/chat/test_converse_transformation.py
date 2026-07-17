@@ -5401,8 +5401,9 @@ def test_bedrock_tool_message_file_id_http_url_becomes_document():
     assert mock_proc.call_args.kwargs["image_url"] == pdf_url
 
     tool_result = translated_msg[-1]["content"][-1]["toolResult"]
-    assert len(tool_result["content"]) == 1
-    block = tool_result["content"][0]
+    assert len(tool_result["content"]) == 2
+    assert "text" in tool_result["content"][0]
+    block = tool_result["content"][1]
     assert "document" in block, f"expected document block, got {block}"
     assert block["document"]["source"]["bytes"] == "ZmFrZQ=="
 
