@@ -168,18 +168,44 @@ class OrganizationBudgetCase(_BudgetCase):
 
 
 class TeamMemberBudgetCase(_BudgetCase):
+    """Member A's per-team budget is tiny while the team and both members' user
+    budgets are roomy (100.0), so the only cap that can trip is A's: the refusal
+    must be a 429 budget_exceeded quoting the tiny member cap as the binding
+    budget. Teammate B, uncapped on the same team, must keep serving after A is
+    cut off, proving the member cap does not leak onto the team or its members."""
+
     def init(self) -> None:
-        # Member's per-team budget is tiny while the team has a large budget, so a
-        # block proves member-level (not team-level) enforcement.
-        team_id = self.client.create_team(
+        self._team_id = self.client.create_team(
             alias=f"e2e-budget-team-{unique_marker()}", max_budget=100.0
         )
-        self._undo.append(lambda: self.client.delete_team(team_id))
-        user_id = self.client.create_user(max_budget=100.0)
-        self._undo.append(lambda: self.client.delete_user(user_id))
-        self.client.add_team_member(team_id, user_id, max_budget_in_team=3e-6)
-        self.key = self.client.generate_key(team_id=team_id, user_id=user_id)
+        self._undo.append(lambda: self.client.delete_team(self._team_id))
+        self._member_id = self.client.create_user(max_budget=100.0)
+        self._undo.append(lambda: self.client.delete_user(self._member_id))
+        self.client.add_team_member(self._team_id, self._member_id, max_budget_in_team=3e-6)
+        self.key = self.client.generate_key(team_id=self._team_id, user_id=self._member_id)
         self._undo.append(lambda: self.client.delete_key(self.key))
+        teammate_id = self.client.create_user(max_budget=100.0)
+        self._undo.append(lambda: self.client.delete_user(teammate_id))
+        self.client.add_team_member(self._team_id, teammate_id)
+        self._teammate_key = self.client.generate_key(team_id=self._team_id, user_id=teammate_id)
+        self._undo.append(lambda: self.client.delete_key(self._teammate_key))
+
+    def run(self) -> None:
+        blocked = _assert_budget_blocks(self.client, self.key)
+        assert blocked.status_code == 429, (
+            f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+        )
+        assert "Max budget: 3e-06" in blocked.body, (
+            f"refusal must quote the member's tiny cap as the binding budget "
+            f"(team and user budgets are 100.0), got: {blocked.body[:200]}"
+        )
+        teammate = self.client.chat(
+            self._teammate_key,
+            "claude-haiku-4-5",
+            f"spend {unique_marker()}",
+            max_tokens=16,
+        )
+        require_successful_call(teammate)
 
 
 def _case_id(case_cls: Type[_BudgetCase]) -> str:
