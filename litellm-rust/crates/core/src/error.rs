@@ -56,12 +56,12 @@ impl CoreError {
             }
             CoreError::Routing(_) => "OCR request could not be routed".to_string(),
             CoreError::Auth(_) => "OCR request failed provider authentication".to_string(),
+            CoreError::InvalidRequest(_) => "Invalid OCR request".to_string(),
             CoreError::Timeout
             | CoreError::NotFound(_)
             | CoreError::InvalidType { .. }
             | CoreError::MissingField(_)
-            | CoreError::InvalidProvider(_)
-            | CoreError::InvalidRequest(_) => self.to_string(),
+            | CoreError::InvalidProvider(_) => self.to_string(),
         }
     }
 }
@@ -176,6 +176,24 @@ mod tests {
         assert!(!message.contains("sa.json"));
         assert!(!message.contains("ya29"));
         assert!(!message.contains("token"));
+    }
+
+    #[test]
+    fn public_message_hides_invalid_request_detail() {
+        let err = CoreError::InvalidRequest(
+            "document_url=https://signed.example/doc.pdf?token=SECRET123 \
+             base64=QUJDREVG header=x-api-key page=42"
+                .to_string(),
+        );
+        let message = err.public_message();
+        assert_eq!(message, "Invalid OCR request");
+        assert!(!message.contains("SECRET123"));
+        assert!(!message.contains("token"));
+        assert!(!message.contains("base64"));
+        assert!(!message.contains("QUJDREVG"));
+        assert!(!message.contains("x-api-key"));
+        assert!(!message.contains("signed.example"));
+        assert_eq!(err.public_status_code(), Some(400));
     }
 
     #[test]
