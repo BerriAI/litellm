@@ -19,16 +19,20 @@ from ..prompt_caching_cache import PromptCachingCache
 
 def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int:
     """
-    Returns the highest minimum cacheable prefix across a model group.
+    Returns the lowest minimum cacheable prefix across a model group.
 
+    This gate only decides whether the cache lookup is worth doing. It cannot cause a wrong pin,
+    because a deployment is only pinned when the cache already holds an entry for the prefix, and
+    entries are written by `async_log_success_event` against the deployment's real model. A model
+    that will not cache a prefix never records one, so there is nothing to pin it to.
+
+    That makes the lowest minimum in the group the correct threshold rather than the highest.
     `model` here is the model-group alias the operator chose, not a model name, so the threshold
-    has to come from the deployments themselves. A group may mix models with different minimums,
-    and one gate decides for all of them, so take the max: a prompt is only treated as cacheable
-    when it clears every member's minimum. The errors are not symmetric. Pinning a deployment for
-    a prefix its provider will not cache costs load balancing for nothing, which is the bug this
-    guards against, while declining to pin only forfeits a cache hit.
+    has to come from the deployments themselves, and a group may mix models whose minimums differ.
+    Taking the highest would skip the lookup for a prefix a lower-minimum member genuinely cached,
+    losing a cache hit it had earned. The lowest can only cost a lookup that finds nothing.
     """
-    return max(
+    return min(
         (
             get_prompt_cache_min_tokens(model=deployment["litellm_params"]["model"])
             for deployment in healthy_deployments
