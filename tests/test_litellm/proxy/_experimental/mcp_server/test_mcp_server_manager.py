@@ -1760,6 +1760,42 @@ class TestMCPServerManager:
         assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
 
     @pytest.mark.asyncio
+    async def test_injected_authorization_does_not_shadow_m2m_minted_token(self):
+        """The M2M twin of the OBO shadow test: a guardrail/static Authorization must not displace
+        the gateway-minted client_credentials bearer. Dropping the resolved auth here would also
+        drop the one-shot 401 refetch that rides on it, so the resolver-owned credential is
+        authoritative exactly as for token_exchange and authorization_code."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="m2m-shadow",
+            name="m2m-shadow-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            client_id="cid",
+            client_secret="csec",
+            token_url="https://idp.example.com/token",
+        )
+
+        client = await manager._create_mcp_client(
+            server,
+            extra_headers={"Authorization": "Bearer signer-jwt"},  # simulate the JWT signer
+        )
+
+        assert client._resolved_auth is not None
+        assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
+
+    @pytest.mark.asyncio
     async def test_preflight_token_exchange_challenges_on_rejected_subject(self):
         """A subject the IdP rejects must raise the RFC 9728 401 challenge from the preflight, so a
         single-server route fails observably at the transport edge instead of the old behavior of

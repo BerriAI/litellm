@@ -21,12 +21,9 @@ from typing_extensions import assert_never
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
-<<<<<<< HEAD
     ClientAuth,
-    ClientSecretAuth,
-=======
     ClientCredentialsConfig,
->>>>>>> 73df37ca23 (feat(mcp): migrate client_credentials (M2M) onto the v2 resolver arm)
+    ClientSecretAuth,
     CredError,
     IdJagConfig,
     NoneConfig,
