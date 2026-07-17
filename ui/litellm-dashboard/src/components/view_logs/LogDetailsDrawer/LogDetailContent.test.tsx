@@ -56,6 +56,22 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("completion")).toBeInTheDocument();
   });
 
+  it("should display relay source with logo in Request Details", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          model: "notion-ai",
+          call_type: "litellm-relay",
+          metadata: { status: "success", app: "notion", source: "litellm-relay" },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Source")).toBeInTheDocument();
+    expect(screen.getByText("N")).toBeInTheDocument();
+    expect(screen.getByText("Notion")).toBeInTheDocument();
+  });
+
   it("should display error alert when request has failed", () => {
     render(
       <LogDetailContent
