@@ -4,7 +4,7 @@ Each entity is an E2ECase (lifecycle.E2ECase) driven by run_case: init() creates
 the budgeted entity + a key, run() drives spend until a `budget_exceeded` block,
 teardown() deletes everything init() created (always runs, even on failure/skip).
 Covers the entities with no prior live coverage - internal user, end-user,
-organization, team member. See BUDGET_TEST_COVERAGE_MATRIX.md.
+organization, team member - plus key and team. See BUDGET_TEST_COVERAGE_MATRIX.md.
 
 A non-budget error fails hard (never a skip); if calls never get blocked, budget
 enforcement is broken -> fail.
@@ -18,16 +18,17 @@ import pytest
 
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
+from e2e_http import StreamingResponse, require_successful_call
 from lifecycle import run_case
 
 pytestmark = pytest.mark.e2e
 
-def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> None:
-    """Send paid calls until the entity's budget blocks one. Key/user/org/member
-    block within a couple calls off real-time reservation counters; the end-user
-    budget enforces off table spend that lands on the batch write, so it takes a
-    few more. A non-budget error fails hard (never a skip)."""
+def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> StreamingResponse:
+    """Send paid calls until the entity's budget blocks one; return the blocked
+    response so callers can assert on its shape. Key/user/org/member block within
+    a couple calls off real-time reservation counters; the end-user budget
+    enforces off table spend that lands on the batch write, so it takes a few
+    more. A non-budget error fails hard (never a skip)."""
     for _ in range(40):
         result = client.chat(
             key,
@@ -37,7 +38,7 @@ def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> 
             user=user or None,
         )
         if is_budget_block(result):
-            return
+            return result
         require_successful_call(result)
         time.sleep(2)
     pytest.fail("budget never enforced within the call budget")
@@ -69,9 +70,52 @@ class _BudgetCase:
 
 
 class KeyBudgetCase(_BudgetCase):
+    """A bare key (no team_id / user_id) carrying its own max_budget, so only the
+    key-level budget can be the thing that blocks. The refusal must be a 429
+    budget_exceeded; any other error already fails via _assert_budget_blocks."""
+
     def init(self) -> None:
         self.key = self.client.generate_key(max_budget=3e-6)
         self._undo.append(lambda: self.client.delete_key(self.key))
+
+    def run(self) -> None:
+        blocked = _assert_budget_blocks(self.client, self.key)
+        assert blocked.status_code == 429, (
+            f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+        )
+
+
+class TeamBudgetCase(_BudgetCase):
+    """An admin caps a whole team: two keys under a tiny-budget team, neither with
+    a key-level budget. Key A is driven until the team cap blocks it; key B's very
+    first call must then be refused too, proving the cap sits on the team, not the
+    key that spent. Both refusals must be 429 budget_exceeded."""
+
+    def init(self) -> None:
+        team_id = self.client.create_team(
+            alias=f"e2e-budget-team-{unique_marker()}", max_budget=3e-6
+        )
+        self._undo.append(lambda: self.client.delete_team(team_id))
+        self.key = self.client.generate_key(team_id=team_id)
+        self._undo.append(lambda: self.client.delete_key(self.key))
+        self._sibling_key = self.client.generate_key(team_id=team_id)
+        self._undo.append(lambda: self.client.delete_key(self._sibling_key))
+
+    def run(self) -> None:
+        blocked = _assert_budget_blocks(self.client, self.key)
+        assert blocked.status_code == 429, (
+            f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+        )
+        sibling = self.client.chat(
+            self._sibling_key,
+            "claude-haiku-4-5",
+            f"spend {unique_marker()}",
+            max_tokens=16,
+        )
+        assert is_budget_block(sibling) and sibling.status_code == 429, (
+            f"a sibling key on the capped team must get the same 429 budget_exceeded, "
+            f"got {sibling.status_code}: {sibling.body[:200]}"
+        )
 
 
 class InternalUserBudgetCase(_BudgetCase):
@@ -137,6 +181,10 @@ def _case_id(case_cls: Type[_BudgetCase]) -> str:
         pytest.param(
             KeyBudgetCase,
             marks=pytest.mark.covers("quota_management.budget.key.blocks_over_limit"),
+        ),
+        pytest.param(
+            TeamBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.team.blocks_over_limit"),
         ),
         pytest.param(
             InternalUserBudgetCase,

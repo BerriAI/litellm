@@ -352,6 +352,7 @@ quota_management.ratelimit.rpm.headers_report_remaining: {tier: P1, source: para
 quota_management.ratelimit.priority_generous.picks_under_tpm: {tier: P1, source: 'dynamic_rate_limiter_v3.py:36-52', rationale: Generous mode (<80% sat) allows priority borrowing}
 quota_management.ratelimit.priority_strict.picks_under_tpm: {tier: P1, source: 'dynamic_rate_limiter_v3.py:53-71', rationale: Strict mode (>=80% sat) enforces priority fairness}
 quota_management.budget.key.blocks_over_limit: {tier: P0, source: proxy/auth/auth_checks.py, rationale: A key's max_budget blocks further paid calls once spend crosses it}
+quota_management.budget.team.blocks_over_limit: {tier: P0, source: proxy/auth/auth_checks.py, rationale: "A team's max_budget blocks every key on the team once combined spend crosses it, including keys that spent nothing themselves"}
 quota_management.budget.internal_user.blocks_over_limit: {tier: P1, source: proxy/auth/auth_checks.py, rationale: An internal user's max_budget governs personal keys}
 quota_management.budget.end_user.blocks_over_limit: {tier: P1, source: proxy/auth/auth_checks.py, rationale: A customer (end-user) max_budget blocks calls attributed via user=}
 quota_management.budget.organization.blocks_over_limit: {tier: P1, source: proxy/auth/auth_checks.py, rationale: An organization's max_budget blocks keys under its teams}
