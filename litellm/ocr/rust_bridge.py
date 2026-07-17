@@ -56,6 +56,15 @@ _UNSET: Final[_Unset] = _Unset()
 
 _rust_ocr_impl: RustOcr | None = None
 _rust_aocr_impl: RustAocr | None = None
+_rust_ocr_input_error_override: type[BaseException] | None | _Unset = _UNSET
+
+
+def _set_rust_ocr_input_error_type(
+    error_type: type[BaseException] | None | _Unset = _UNSET,
+) -> None:
+    global _rust_ocr_input_error_override
+    if not isinstance(error_type, _Unset):
+        _rust_ocr_input_error_override = error_type
 
 
 def _set_rust_ocr_bridge(
@@ -102,3 +111,17 @@ def load_rust_aocr() -> RustAocr | None:
     if native_bridge is None:
         return None
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
+
+
+def rust_ocr_input_error_type() -> type[BaseException] | None:
+    if not isinstance(_rust_ocr_input_error_override, _Unset):
+        return _rust_ocr_input_error_override
+    try:
+        from litellm.rust_bridge._native import RustOcrInputError
+    except ImportError:
+        return None
+    if isinstance(RustOcrInputError, type) and issubclass(
+        RustOcrInputError, BaseException
+    ):
+        return RustOcrInputError
+    return None

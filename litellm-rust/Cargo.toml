@@ -28,3 +28,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
+url = "=2.5.8"

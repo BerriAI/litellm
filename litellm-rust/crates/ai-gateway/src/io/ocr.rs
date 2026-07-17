@@ -14,12 +14,18 @@ use litellm_core::ocr::transformation::{
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
 
+mod azure_poll;
 mod common_utils;
+mod document_fetch;
+mod reducto;
+mod ssrf;
+#[cfg(test)]
+mod test_support;
 
-use common_utils::{
-    convert_document_url_to_data_uri, has_header, ocr_provider_config, poll_document_intelligence,
-    string_headers, truncate_error_body, upload_reducto_document,
-};
+use azure_poll::poll_document_intelligence;
+use common_utils::{has_header, ocr_provider_config, read_error_body, string_headers};
+use document_fetch::convert_document_url_to_data_uri;
+use reducto::upload_reducto_document;
 
 /// OCR over large documents can take a while; bound it generously rather than
 /// hanging forever on an unresponsive upstream. The client-level limit is the
@@ -141,17 +147,17 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
             .into_json());
     }
 
+    if !status.is_success() {
+        return Err(CoreError::Http {
+            status: status.as_u16(),
+            body: read_error_body(response).await,
+        });
+    }
+
     let text = response
         .text()
         .await
         .map_err(|err| CoreError::Network(err.to_string()))?;
-
-    if !status.is_success() {
-        return Err(CoreError::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
-    }
 
     let response_json: Value = serde_json::from_str(&text)
         .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
@@ -163,6 +169,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
 
 #[cfg(test)]
 mod tests {
+    use super::common_utils::truncate_error_body;
     use super::*;
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -329,7 +336,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn document_intelligence_poll_uses_resolved_subscription_key() {
+    async fn document_intelligence_rejects_unsafe_operation_location_end_to_end() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test listener binds");
@@ -346,23 +353,10 @@ mod tests {
                 .write_all(post_response.as_bytes())
                 .await
                 .expect("writes post response");
-
-            let (mut poll_socket, _) = listener.accept().await.expect("accepts poll request");
-            let poll_request = read_http_headers(&mut poll_socket).await;
-            let response_body = r#"{"status":"succeeded","analyzeResult":{"pages":[{"pageNumber":1,"lines":[{"content":"ok"}]}]}}"#;
-            let poll_response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                response_body.len(),
-                response_body
-            );
-            poll_socket
-                .write_all(poll_response.as_bytes())
-                .await
-                .expect("writes poll response");
-            (post_request, poll_request)
+            post_request
         });
 
-        let response = ocr(OcrRequest {
+        let error = ocr(OcrRequest {
             model: "prebuilt-read",
             document: json!({
                 "type": "document_url",
@@ -376,22 +370,19 @@ mod tests {
             timeout: Some(Duration::from_secs(5)),
         })
         .await
-        .expect("document intelligence request succeeds");
+        .expect_err("loopback operation-location must be rejected");
 
-        assert_eq!(response["pages"][0]["markdown"], "ok");
+        assert!(
+            matches!(&error, CoreError::InvalidRequest(message) if message.contains("SSRF protection")),
+            "got {error:?}"
+        );
 
-        let (post_request, poll_request) = server.await.expect("server task completes");
+        let post_request = server.await.expect("server task completes");
         assert!(
             post_request
                 .to_ascii_lowercase()
                 .contains("ocp-apim-subscription-key: di-key"),
             "{post_request}"
-        );
-        assert!(
-            poll_request
-                .to_ascii_lowercase()
-                .contains("ocp-apim-subscription-key: di-key"),
-            "{poll_request}"
         );
     }
 

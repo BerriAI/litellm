@@ -2,12 +2,15 @@ use std::time::Duration;
 
 use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
 use litellm_core::error::CoreError;
+use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
 
 mod gil;
+
+create_exception!(_native, RustOcrInputError, PyValueError);
 
 type MarshaledOcrInputs = (
     Value,
@@ -31,11 +34,11 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
 
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
     match err {
-        CoreError::Auth(message) => PyValueError::new_err(message),
-        CoreError::InvalidProvider(_)
+        CoreError::Auth(_)
+        | CoreError::InvalidProvider(_)
         | CoreError::InvalidRequest(_)
         | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
+        | CoreError::MissingField(_) => RustOcrInputError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
@@ -48,7 +51,7 @@ fn optional_object_to_map(
     match value {
         Some(value) => match py_to_json(py, value.bind(py))? {
             Value::Object(map) => Ok(map),
-            _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
+            _ => Err(RustOcrInputError::new_err(format!("{name} must be a dict"))),
         },
         None => Ok(Map::new()),
     }
@@ -177,5 +180,9 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
+    module.add(
+        "RustOcrInputError",
+        module.py().get_type::<RustOcrInputError>(),
+    )?;
     Ok(())
 }

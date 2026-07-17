@@ -7,7 +7,7 @@ import mimetypes
 import os
 import re
 from io import IOBase
-from typing import Any, Coroutine, Union, cast
+from typing import Any, Coroutine, NoReturn, Union, cast
 
 import httpx
 
@@ -21,6 +21,7 @@ from litellm.ocr.rust_bridge import (
     RustOcr,
     load_rust_aocr,
     load_rust_ocr,
+    rust_ocr_input_error_type,
 )
 from litellm.utils import client, filter_out_litellm_params
 
@@ -199,6 +200,24 @@ def _missing_rust_bridge_error() -> RuntimeError:
     )
 
 
+def _raise_ocr_input_error(
+    e: BaseException,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+) -> NoReturn:
+    raise litellm.BadRequestError(
+        message=str(e),
+        model=model,
+        llm_provider=custom_llm_provider or "",
+    ) from e
+
+
+def _is_rust_ocr_input_error(e: BaseException) -> bool:
+    input_error_type = rust_ocr_input_error_type()
+    return input_error_type is not None and isinstance(e, input_error_type)
+
+
 async def _run_rust_aocr(
     rust_aocr: RustAocr,
     model: str,
@@ -357,6 +376,10 @@ async def aocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
+        if _is_rust_ocr_input_error(e):
+            _raise_ocr_input_error(
+                e, model=model, custom_llm_provider=custom_llm_provider
+            )
         raise litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -621,6 +644,10 @@ def ocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
+        if _is_rust_ocr_input_error(e):
+            _raise_ocr_input_error(
+                e, model=model, custom_llm_provider=custom_llm_provider
+            )
         raise litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,

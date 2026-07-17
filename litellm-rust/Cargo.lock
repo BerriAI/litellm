@@ -663,6 +663,7 @@ dependencies = [
  "subtle",
  "tokio",
  "tokio-tungstenite",
+ "url",
 ]
 
 [[package]]
