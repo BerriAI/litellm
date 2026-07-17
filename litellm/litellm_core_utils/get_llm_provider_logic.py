@@ -464,8 +464,6 @@ def get_llm_provider(
             custom_llm_provider = "compactifai"
         elif model.startswith("ovhcloud/"):
             custom_llm_provider = "ovhcloud"
-        elif model.startswith("lemonade/"):
-            custom_llm_provider = "lemonade"
         elif model.startswith("clarifai/"):
             custom_llm_provider = "clarifai"
         elif model.startswith("amazon_nova"):
