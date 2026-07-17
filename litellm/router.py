@@ -488,7 +488,7 @@ class Router:
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
-        self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
+        self.complexity_routers: Dict[str, list["ComplexityRouter"]] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
         self.quality_routers: Dict[str, "QualityRouter"] = {}
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
@@ -7652,17 +7652,22 @@ class Router:
                 "or configure tiers in complexity_router_config. Please set it in the litellm_params"
             )
 
+        deployment_tags = deployment.litellm_params.tags or []
         complexity_router: ComplexityRouter = ComplexityRouter(
             model_name=deployment.model_name,
             default_model=default_model,
             litellm_router_instance=self,
             complexity_router_config=complexity_router_config,
+            deployment_tags=deployment_tags,
         )
-        if deployment.model_name in self.complexity_routers:
+        existing_routers = self.complexity_routers.get(deployment.model_name, [])
+        new_tag_set = frozenset(deployment_tags)
+        if any(frozenset(router.deployment_tags) == new_tag_set for router in existing_routers):
             raise ValueError(
-                f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
+                f"Complexity-router deployment {deployment.model_name} already exists with tags "
+                f"{sorted(new_tag_set)}. Give each deployment sharing a model_name a distinct set of tags."
             )
-        self.complexity_routers[deployment.model_name] = complexity_router
+        self.complexity_routers[deployment.model_name] = [*existing_routers, complexity_router]
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
@@ -7698,12 +7703,16 @@ class Router:
                 continue
             self.init_adaptive_router_deployment(deployment=deployment)
 
-        for model_name, complexity_router in self.complexity_routers.items():
-            if not complexity_router.config.adaptive or model_name in self.adaptive_routers:
+        for model_name, complexity_router_list in self.complexity_routers.items():
+            if model_name in self.adaptive_routers:
                 continue
-            adaptive_router = complexity_router._ensure_adaptive_router()
-            if adaptive_router is not None:
-                self.adaptive_routers[model_name] = adaptive_router
+            for complexity_router in complexity_router_list:
+                if not complexity_router.config.adaptive:
+                    continue
+                adaptive_router = complexity_router._ensure_adaptive_router()
+                if adaptive_router is not None:
+                    self.adaptive_routers[model_name] = adaptive_router
+                break
 
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
             litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
@@ -10810,6 +10819,44 @@ class Router:
 
         return filtered
 
+    def _select_complexity_router(self, model: str, request_kwargs: dict) -> Optional["ComplexityRouter"]:
+        """
+        Resolve which complexity router handles this request.
+
+        Multiple complexity-router deployments can share a model_name while
+        targeting different tag groups (e.g. one per region). Pick the router
+        whose deployment tags match the request's tags, falling back to a
+        `default`-tagged router and finally to the first registered one so
+        single-deployment setups keep their existing behaviour.
+        """
+        from litellm.router_strategy.tag_based_routing import (
+            _get_tags_from_request_kwargs,
+            is_valid_deployment_tag,
+        )
+
+        routers = self.complexity_routers.get(model)
+        if not routers:
+            return None
+        if len(routers) == 1:
+            return routers[0]
+
+        request_tags = _get_tags_from_request_kwargs(
+            request_kwargs=request_kwargs,
+            metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
+        )
+        if request_tags:
+            for router in routers:
+                if router.deployment_tags and is_valid_deployment_tag(
+                    router.deployment_tags, request_tags, self.tag_filtering_match_any
+                ):
+                    return router
+
+        for router in routers:
+            if "default" in router.deployment_tags:
+                return router
+
+        return routers[0]
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -10834,7 +10881,7 @@ class Router:
 
         router_strategy = (
             self.auto_routers.get(model)
-            or self.complexity_routers.get(model)
+            or self._select_complexity_router(model=model, request_kwargs=request_kwargs)
             or self.adaptive_routers.get(model)
             or self.quality_routers.get(model)
         )
