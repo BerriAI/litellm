@@ -1,4 +1,6 @@
-use crate::constants::{GOOGLE_API_KEY_PREFIX, VERTEX_GLOBAL_API_BASE, VERTEX_GLOBAL_LOCATION};
+use crate::constants::{
+    BEARER_SCHEME, GOOGLE_API_KEY_PREFIX, VERTEX_GLOBAL_API_BASE, VERTEX_GLOBAL_LOCATION,
+};
 use crate::error::{json_type_name, CoreError, CoreResult};
 use crate::ocr::transformation::{OcrAuth, OcrProviderConfig};
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
@@ -77,13 +79,26 @@ pub fn classify_vertex_bearer(
     }
 }
 
-pub fn reject_google_api_key_authorization(header_value: &str) -> CoreResult<()> {
-    let trimmed = header_value.trim();
-    let token = trimmed
-        .strip_prefix("Bearer ")
-        .or_else(|| trimmed.strip_prefix("bearer "))
-        .unwrap_or(trimmed)
-        .trim();
+fn malformed_vertex_authorization_error() -> CoreError {
+    CoreError::Auth(
+        "Vertex AI requires an `Authorization: Bearer <OAuth access token>` header. \
+         Provide a valid OAuth Bearer token, or omit the header to mint one from credentials/ADC"
+            .to_string(),
+    )
+}
+
+pub fn validate_vertex_authorization_header(header_value: &str) -> CoreResult<()> {
+    let (scheme, token) = header_value
+        .trim()
+        .split_once(char::is_whitespace)
+        .ok_or_else(malformed_vertex_authorization_error)?;
+    if !scheme.eq_ignore_ascii_case(BEARER_SCHEME) {
+        return Err(malformed_vertex_authorization_error());
+    }
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(malformed_vertex_authorization_error());
+    }
     if is_google_api_key(token) {
         return Err(google_api_key_not_oauth_error());
     }
@@ -511,24 +526,38 @@ mod tests {
     }
 
     #[test]
-    fn reject_google_api_key_authorization_rejects_bearer_api_key() {
-        let err = reject_google_api_key_authorization("Bearer AIzaSyExampleApiKeyValue")
+    fn validate_vertex_authorization_header_rejects_api_key_bearer() {
+        let err = validate_vertex_authorization_header("Bearer AIzaSyExampleApiKeyValue")
             .expect_err("bearer api key rejected");
         assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
 
-        let err = reject_google_api_key_authorization("  bearer   AIzaSyExampleApiKeyValue  ")
+        let err = validate_vertex_authorization_header("  bearer   AIzaSyExampleApiKeyValue  ")
             .expect_err("lowercase bearer api key rejected");
-        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
-
-        let err = reject_google_api_key_authorization("AIzaSyExampleApiKeyValue")
-            .expect_err("raw api key rejected");
         assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
     }
 
     #[test]
-    fn reject_google_api_key_authorization_allows_oauth_bearer() {
-        reject_google_api_key_authorization("Bearer ya29.real-oauth-token")
+    fn validate_vertex_authorization_header_rejects_malformed_schemes() {
+        for header in [
+            "AIzaSyExampleApiKeyValue",
+            "Basic dXNlcjpwYXNz",
+            "Token ya29.some-token",
+            "Bearer",
+            "Bearer    ",
+            "ya29.raw-token-without-scheme",
+        ] {
+            let err = validate_vertex_authorization_header(header)
+                .expect_err(&format!("expected rejection for {header:?}"));
+            assert!(matches!(err, CoreError::Auth(_)), "{header:?} -> {err:?}");
+        }
+    }
+
+    #[test]
+    fn validate_vertex_authorization_header_allows_oauth_bearer() {
+        validate_vertex_authorization_header("Bearer ya29.real-oauth-token")
             .expect("oauth bearer allowed");
+        validate_vertex_authorization_header("bearer ya29.real-oauth-token")
+            .expect("lowercase oauth bearer allowed");
     }
 
     #[test]

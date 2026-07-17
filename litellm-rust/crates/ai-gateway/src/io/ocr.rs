@@ -12,7 +12,7 @@ use litellm_core::ocr::transformation::{
     OcrAuth, OcrAuthStrategy, OcrDocumentPreparation, OcrResponseHandling,
 };
 use litellm_core::providers::vertex_ai::ocr::transformation::{
-    classify_vertex_bearer, reject_google_api_key_authorization, VertexTokenSource,
+    classify_vertex_bearer, validate_vertex_authorization_header, VertexTokenSource,
 };
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
@@ -113,7 +113,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
     let api_key = if has_header(&headers, auth_strategy.header_name()) {
         if config.ocr_auth() == OcrAuth::VertexOauth {
             if let Some(value) = header_value(&headers, auth_strategy.header_name()) {
-                reject_google_api_key_authorization(value)?;
+                validate_vertex_authorization_header(value)?;
             }
         }
         None
@@ -567,6 +567,43 @@ mod tests {
 
         match err {
             CoreError::Auth(message) => assert!(message.contains("OAuth"), "{message}"),
+            other => panic!("expected auth error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn vertex_ocr_rejects_malformed_authorization_scheme_before_upstream() {
+        let mut optional_params = Map::new();
+        optional_params.insert("vertex_project".to_string(), Value::String("proj-1".into()));
+        optional_params.insert(
+            "vertex_location".to_string(),
+            Value::String("global".into()),
+        );
+
+        let mut headers = Map::new();
+        headers.insert(
+            "Authorization".to_string(),
+            Value::String("Basic dXNlcjpwYXNzd29yZA==".to_string()),
+        );
+
+        let err = ocr(OcrRequest {
+            model: "mistral-ocr-maas",
+            document: json!({
+                "type": "image_url",
+                "image_url": "data:image/png;base64,abc"
+            }),
+            api_key: None,
+            api_base: Some("http://192.0.2.1:9"),
+            custom_llm_provider: "vertex_ai",
+            extra_headers: Some(headers),
+            optional_params,
+            timeout: Some(Duration::from_secs(5)),
+        })
+        .await
+        .expect_err("malformed authorization scheme is rejected");
+
+        match err {
+            CoreError::Auth(message) => assert!(message.contains("Bearer"), "{message}"),
             other => panic!("expected auth error, got {other:?}"),
         }
     }
