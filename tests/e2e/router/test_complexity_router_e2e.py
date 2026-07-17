@@ -10,12 +10,13 @@ from heuristic scoring, so every request still returned 200. The only tell is wh
 tier, and therefore which backend, served the request.
 
 `complexity-smart-router` (see the inline config in docker-compose.yml) pins SIMPLE
-to the openai backend and every higher tier to the anthropic backend. "Is P equal
-to NP?" is lexically trivial, so the heuristic scorer lands it in SIMPLE (openai),
-but any competent LLM classifier reads it as a hard reasoning question and lands it
-above SIMPLE (anthropic). The served deployment is read back from the spend log's
-`model`, so anthropic proves the classifier ran and openai proves it silently fell
-back - the exact failure before the fix.
+to the openai backend and every higher tier to the anthropic backend. The prompt
+below carries none of the heuristic scorer's reasoning/technical/code keywords and
+stays short, so heuristic scoring lands it in SIMPLE (openai), but an LLM classifier
+reads it as a decision that has to weigh tradeoffs and lands it above SIMPLE
+(anthropic). The served deployment is read back from the spend log's `model`, so
+anthropic proves the classifier ran and openai proves it silently fell back - the
+exact failure before the fix.
 """
 
 import pytest
@@ -27,8 +28,8 @@ from models import ChatBody, ChatMessage
 pytestmark = pytest.mark.e2e
 
 ROUTER_MODEL = "complexity-smart-router"
-# Lexically simple (heuristic -> SIMPLE) but a hard reasoning question (LLM -> above SIMPLE).
-LEXICALLY_SIMPLE_HARD_PROMPT = "Is P equal to NP?"
+# Lexically simple (heuristic -> SIMPLE) but a tradeoff decision (LLM -> above SIMPLE).
+LEXICALLY_SIMPLE_HARD_PROMPT = "Should I pay off my mortgage early or invest the extra money instead?"
 # SIMPLE tier backend; served only when the classifier silently falls back to heuristic.
 # Spend logs may store the alias (gpt-5.5) or the provider-prefixed form depending on
 # how the deployment is registered (compose vs /model/new).
