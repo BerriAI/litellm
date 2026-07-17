@@ -98,6 +98,11 @@ def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  #
 
     Compose already declares it in docker-compose.yml; stage does not. Register
     via /model/new when missing and tear down only what we created.
+
+    Always re-check servability after registration: a bare /model/new 200 is not
+    enough if control→data propagation lags (stage) or the data plane filters
+    the virtual name. Without this the chat cell fails with a vague
+    ``Invalid model name`` 400 instead of a registration error.
     """
     gateway = client.gateway
     if _model_is_servable(gateway, ROUTER_MODEL):
@@ -117,6 +122,11 @@ def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  #
 
     try:
         _await_router_model_servable(gateway)
+        if not _model_is_servable(gateway, ROUTER_MODEL):
+            raise AssertionError(
+                f"{ROUTER_MODEL!r} registered as {model_id!r} but still missing "
+                f"from /v1/models after wait; data-plane sync failed"
+            )
         yield
     finally:
         gateway.delete_model(model_id)
