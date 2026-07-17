@@ -17,22 +17,6 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-class SemanticToolFilterContextWindowError(Exception):
-    """Raised when the embedding model exceeds its context window, so semantic filtering cannot run."""
-
-    def __init__(self, embedding_model: str, stage: str, original_error: str):
-        self.embedding_model = embedding_model
-        self.stage = stage
-        self.original_error = original_error
-        super().__init__(
-            f"MCP semantic tool filtering could not run: embedding model '{embedding_model}' "
-            f"exceeded its context window while embedding {stage}. "
-            f"The request was blocked instead of silently passing all tools through. "
-            f"Switch to an embedding model with a larger context window, or disable "
-            f"semantic tool filtering."
-        )
-
-
 def _is_context_window_error(error: Optional[BaseException], max_depth: int = 5) -> bool:
     """Detect a context-window overflow anywhere in an exception's cause chain."""
     current = error
@@ -120,9 +104,17 @@ class SemanticMCPToolFilter:
         description: str
 
         if isinstance(tool, dict):
-            # OpenAI function format
-            name = tool.get("name", "")
-            description = tool.get("description", name)
+            function_spec = tool.get("function")
+            if isinstance(function_spec, dict):
+                # Chat Completions nested format:
+                # {"type": "function", "function": {"name": ..., "description": ...}}
+                name = function_spec.get("name", "")
+                description = function_spec.get("description", name)
+            else:
+                # Flat format (legacy OpenAI functions / Responses API):
+                # {"type": "function", "name": ..., "description": ...}
+                name = tool.get("name", "")
+                description = tool.get("description", name)
         else:
             # MCPTool object
             name = str(tool.name)
@@ -207,11 +199,17 @@ class SemanticMCPToolFilter:
             return available_tools
 
         if self.context_window_error is not None:
-            raise SemanticToolFilterContextWindowError(
-                embedding_model=self.embedding_model,
-                stage="the MCP tool descriptions during semantic router build",
-                original_error=self.context_window_error,
+            # Build-time overflow: tool descriptions exceeded the embedding
+            # model's context window. Log and return no MCP tools instead of
+            # raising; native tools are preserved by the hook.
+            verbose_logger.warning(
+                f"MCP semantic tool filter: embedding model '{self.embedding_model}' "
+                f"exceeded its context window while embedding tool descriptions at "
+                f"startup. Returning 0 MCP tools (native tools preserved). "
+                f"Switch to a larger-context embedding model or disable semantic "
+                f"filtering. Original error: {self.context_window_error}"
             )
+            return []
 
         if not query or not query.strip():
             return available_tools
@@ -234,15 +232,19 @@ class SemanticMCPToolFilter:
 
         except Exception as e:
             if _is_context_window_error(e):
-                verbose_logger.error(
-                    f"Semantic tool filter embedding exceeded its context window: {e}",
-                    exc_info=True,
+                # Query-time overflow: the user query exceeded the embedding
+                # model's context window. Log and return no MCP tools instead
+                # of raising; native tools are preserved by the hook.
+                # Intentionally no exc_info: the cause is already inlined and
+                # litellm.Router logs the full upstream error separately.
+                verbose_logger.warning(
+                    f"MCP semantic tool filter: embedding model '{self.embedding_model}' "
+                    f"exceeded its context window while embedding the user query. "
+                    f"Returning 0 MCP tools (native tools preserved). "
+                    f"Switch to a larger-context embedding model or disable "
+                    f"semantic filtering. Original error: {e}"
                 )
-                raise SemanticToolFilterContextWindowError(
-                    embedding_model=self.embedding_model,
-                    stage="the user query",
-                    original_error=str(e),
-                ) from e
+                return []
             verbose_logger.error(f"Semantic tool filter failed: {e}", exc_info=True)
             return available_tools
 
@@ -319,6 +321,16 @@ class SemanticMCPToolFilter:
             client_name, _ = self._extract_tool_info(tool)
             if client_name and client_name not in available_by_name:
                 available_by_name[client_name] = tool
+
+        if available_tools and not available_by_name:
+            # Couldn't extract a usable name from any tool in the list, so
+            # there's nothing to safely map the router's matches back onto.
+            # Fail open instead of silently returning zero tools.
+            verbose_logger.warning(
+                f"Semantic tool filter: could not extract names from any of "
+                f"{len(available_tools)} available tool(s); returning tools unfiltered"
+            )
+            return available_tools
 
         matched: List[Any] = []
         used_ids: set = set()

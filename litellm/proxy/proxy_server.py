@@ -993,21 +993,6 @@ async def proxy_startup_event(app: FastAPI):
         redis_usage_cache=transaction_buffer_redis_cache,
     )
 
-    ## SEMANTIC TOOL FILTER ##
-    # Read litellm_settings from config for semantic filter initialization
-    try:
-        verbose_proxy_logger.debug("About to initialize semantic tool filter")
-        _config = proxy_config.get_config_state()
-        _litellm_settings = _config.get("litellm_settings", {})
-        verbose_proxy_logger.debug(f"litellm_settings keys = {list(_litellm_settings.keys())}")
-        await ProxyStartupEvent._initialize_semantic_tool_filter(
-            llm_router=llm_router,
-            litellm_settings=_litellm_settings,
-        )
-        verbose_proxy_logger.debug("After semantic tool filter initialization")
-    except Exception as e:
-        verbose_proxy_logger.error(f"Semantic filter init failed: {e}", exc_info=True)
-
     ## JWT AUTH ##
     ProxyStartupEvent._initialize_jwt_auth(
         general_settings=general_settings,
@@ -1044,6 +1029,24 @@ async def proxy_startup_event(app: FastAPI):
 
         ## SYNC UI SETTINGS ##
         await ProxyStartupEvent._sync_ui_settings_to_general_settings()
+
+    ## SEMANTIC TOOL FILTER ##
+    # Initialized after `initialize_scheduled_background_jobs` so DB-stored
+    # model deployments (store_model_in_db) are registered in the router before
+    # the semantic router eagerly embeds tool descriptions. Running this earlier
+    # fails for embedding models that only exist in the DB, not in config.yaml.
+    try:
+        verbose_proxy_logger.debug("About to initialize semantic tool filter")
+        _config = proxy_config.get_config_state()
+        _litellm_settings = _config.get("litellm_settings", {})
+        verbose_proxy_logger.debug(f"litellm_settings keys = {list(_litellm_settings.keys())}")
+        await ProxyStartupEvent._initialize_semantic_tool_filter(
+            llm_router=llm_router,
+            litellm_settings=_litellm_settings,
+        )
+        verbose_proxy_logger.debug("After semantic tool filter initialization")
+    except Exception as e:
+        verbose_proxy_logger.error(f"Semantic filter init failed: {e}", exc_info=True)
 
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:

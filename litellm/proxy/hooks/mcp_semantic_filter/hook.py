@@ -7,8 +7,6 @@ Reduces context window size and improves tool selection accuracy.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from fastapi import HTTPException
-
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL,
@@ -16,9 +14,6 @@ from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_TOP_K,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
-    SemanticToolFilterContextWindowError,
-)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -160,16 +155,24 @@ class SemanticToolFilterHook(CustomLogger):
         Check whether *tool* is registered in the MCP semantic router.
 
         Classification strategy (shape-first, lookup-second):
-        1. Chat Completions format dicts are always native.
-        2. Responses API function tools are always native.
-        3. Everything else is looked up by name in the MCP registry.
+        1. Responses API function tools are always native.
+        2. Everything else is looked up by name in the MCP registry,
+           with tolerant suffix matching for client-side namespace prefixes.
         """
-        if isinstance(tool, dict) and tool.get("type") == "function" and isinstance(tool.get("function"), dict):
-            return False
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+
         if isinstance(tool, dict) and tool.get("type") == "function" and isinstance(tool.get("name"), str):
             return False
         name, _ = self.filter._extract_tool_info(tool)
-        return bool(name) and name in self.filter._tool_map
+        if not name:
+            return False
+        if name in self.filter._tool_map:
+            return True
+        return any(
+            SemanticMCPToolFilter._name_matches_canonical(name, canonical) for canonical in self.filter._tool_map
+        )
 
     def _get_metadata_variable_name(self, data: dict) -> str:
         if "litellm_metadata" in data:
@@ -299,8 +302,6 @@ class SemanticToolFilterHook(CustomLogger):
                 )
                 return data
 
-            except SemanticToolFilterContextWindowError as e:
-                raise HTTPException(status_code=400, detail={"error": str(e)}) from e
             except Exception as e:
                 verbose_proxy_logger.error(f"Failed to expand MCP references: {e}", exc_info=True)
                 return None
@@ -373,8 +374,6 @@ class SemanticToolFilterHook(CustomLogger):
 
             return data
 
-        except SemanticToolFilterContextWindowError as e:
-            raise HTTPException(status_code=400, detail={"error": str(e)}) from e
         except Exception as e:
             verbose_proxy_logger.warning(f"Semantic tool filter hook failed: {e}. Proceeding with all tools.")
             return None
