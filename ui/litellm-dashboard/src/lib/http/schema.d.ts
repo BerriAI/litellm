@@ -21871,6 +21871,11 @@ export interface components {
         /** ChatCompletionCachedContent */
         ChatCompletionCachedContent: {
             /**
+             * Ttl
+             * @enum {string}
+             */
+            ttl?: "5m" | "1h";
+            /**
              * Type
              * @constant
              */
