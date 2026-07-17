@@ -158,11 +158,12 @@ RUN mkdir -p /nonexistent /var/lib/litellm/assets /var/lib/litellm/ui && \
     LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
     [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup "$LITELLM_PKG_MIGRATIONS_PATH" || true && \
     LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
-    chgrp -R 0 "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    chgrp -R 0 /app "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 "$LITELLM_PROXY_EXTRAS_PATH" || true && \
     chmod -R g=u "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u "$LITELLM_PROXY_EXTRAS_PATH" || true && \
-    chmod -R g+w "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    PYTHON_SITE_PACKAGES=$(python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") && \
+    chmod -R g+w "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets /app/.cache "$PYTHON_SITE_PACKAGES/prisma" && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w "$LITELLM_PROXY_EXTRAS_PATH" || true && \
     chmod -R g+rX "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets /app/.cache
 
