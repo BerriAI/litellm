@@ -6152,10 +6152,13 @@ def validate_environment(
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
         elif custom_llm_provider == "heroku":
-            if "HEROKU_API_KEY" in os.environ:
+            if "HEROKU_API_KEY" in os.environ and "HEROKU_API_BASE" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.append("HEROKU_API_KEY")
+                if "HEROKU_API_KEY" not in os.environ:
+                    missing_keys.append("HEROKU_API_KEY")
+                if "HEROKU_API_BASE" not in os.environ:
+                    missing_keys.append("HEROKU_API_BASE")
     else:
         ## openai - chatcompletion + text completion
         if (
