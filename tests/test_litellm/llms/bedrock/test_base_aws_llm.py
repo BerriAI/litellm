@@ -2355,7 +2355,7 @@ def test_get_credentials_same_role_explicit_session_name_assumes_role():
             base_aws_llm,
             "_is_already_running_as_role",
             return_value=True,
-        ):
+        ) as mock_already_running:
             with patch.object(
                 base_aws_llm,
                 "_auth_with_env_vars",
@@ -2371,6 +2371,7 @@ def test_get_credentials_same_role_explicit_session_name_assumes_role():
                         RoleArn="arn:aws:iam::123456789012:role/MyEcsTaskRole",
                         RoleSessionName="caller-attribution-session",
                     )
+                    mock_already_running.assert_not_called()
                     mock_env_auth.assert_not_called()
                     assert credentials.access_key == "assumed-access-key"
 
