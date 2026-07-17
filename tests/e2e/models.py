@@ -39,6 +39,10 @@ class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
 
 
+class ObjectPermission(BaseModel):
+    mcp_servers: list[str] | None = None
+
+
 class KeyGenerateBody(BaseModel):
     models: list[str] = []
     duration: str | None = None
@@ -57,6 +61,7 @@ class KeyGenerateBody(BaseModel):
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyGenerateResponse(BaseModel):
