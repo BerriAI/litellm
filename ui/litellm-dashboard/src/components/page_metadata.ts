@@ -7,7 +7,6 @@
 export const pageDescriptions: Record<string, string> = {
   "api-keys": "Manage virtual keys for API access and authentication",
   "llm-playground": "Interactive playground for testing LLM requests",
-  chat: "Chat with an LLM and connect your own MCP server credentials via OAuth",
   models: "Configure and manage LLM models and endpoints",
   agents: "Create and manage AI agents",
   agentic: "Manage agentic resources: agents, workflow runs, and memory",
