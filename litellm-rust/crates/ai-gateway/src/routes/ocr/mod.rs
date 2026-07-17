@@ -129,7 +129,7 @@ fn error_response(error: &CoreError) -> Response {
         CoreError::Auth(_) => (
             StatusCode::UNAUTHORIZED,
             "authentication_error",
-            error.to_string(),
+            "authentication failed".to_string(),
         ),
         CoreError::Routing(_) => (StatusCode::NOT_FOUND, "not_found_error", error.to_string()),
         CoreError::Http { status, .. } => {
@@ -195,6 +195,61 @@ mod tests {
             }
         }
         String::from_utf8_lossy(&request).into_owned()
+    }
+
+    async fn read_full_http_request(socket: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let mut body_start: Option<usize> = None;
+        let mut content_length = 0_usize;
+        loop {
+            let n = socket.read(&mut buffer).await.expect("reads request");
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..n]);
+            if body_start.is_none() {
+                if let Some(pos) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let start = pos + 4;
+                    body_start = Some(start);
+                    let headers = String::from_utf8_lossy(&request[..pos]).to_ascii_lowercase();
+                    content_length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                }
+            }
+            if let Some(start) = body_start {
+                if request.len() >= start + content_length {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    async fn spawn_mock_upstream_capture() -> (String, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binds upstream");
+        let addr = listener.local_addr().expect("upstream addr");
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts one request");
+            let request = read_full_http_request(&mut socket).await;
+            let body = r#"{"pages":[{"index":0,"markdown":"hello ocr"}],"model":"mistral-ocr-latest","usage_info":{"pages_processed":1}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writes response");
+            request
+        });
+        (format!("http://{addr}"), handle)
     }
 
     async fn spawn_mock_upstream() -> (String, tokio::task::JoinHandle<String>) {
@@ -372,6 +427,67 @@ mod tests {
 
         let upstream_request = upstream_handle.await.expect("upstream served");
         assert!(upstream_request.starts_with("POST"), "{upstream_request}");
+    }
+
+    #[tokio::test]
+    async fn multipart_unnamed_octet_stream_pdf_is_sniffed() {
+        let (upstream, upstream_handle) = spawn_mock_upstream_capture().await;
+        let addr = serve(app_with_deployment(&upstream)).await;
+
+        let form = reqwest::multipart::Form::new()
+            .text("model", "rust-ocr-mistral")
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(b"%PDF-1.7 minimal pdf bytes".to_vec())
+                    .mime_str("application/octet-stream")
+                    .expect("mime"),
+            );
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/v1/ocr"))
+            .bearer_auth(MASTER_KEY)
+            .multipart(form)
+            .send()
+            .await
+            .expect("request sent");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let upstream_request = upstream_handle.await.expect("upstream served");
+        assert!(
+            upstream_request.contains("data:application/pdf;base64,"),
+            "unnamed octet-stream PDF must be sniffed to application/pdf: {upstream_request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_unnamed_octet_stream_image_is_sniffed() {
+        let (upstream, upstream_handle) = spawn_mock_upstream_capture().await;
+        let addr = serve(app_with_deployment(&upstream)).await;
+
+        let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01];
+        let form = reqwest::multipart::Form::new()
+            .text("model", "rust-ocr-mistral")
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(png)
+                    .mime_str("application/octet-stream")
+                    .expect("mime"),
+            );
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{addr}/v1/ocr"))
+            .bearer_auth(MASTER_KEY)
+            .multipart(form)
+            .send()
+            .await
+            .expect("request sent");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let upstream_request = upstream_handle.await.expect("upstream served");
+        assert!(
+            upstream_request.contains("data:image/png;base64,"),
+            "unnamed octet-stream PNG must be sniffed to image/png: {upstream_request}"
+        );
     }
 
     #[tokio::test]

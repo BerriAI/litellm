@@ -3,6 +3,7 @@ use std::time::Duration;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use litellm_core::error::CoreError;
+use litellm_core::ocr::mime::sniff_mime;
 use litellm_core::CoreResult;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -31,14 +32,6 @@ impl OcrDocument {
                 ))
             }
         };
-        if url.starts_with("reducto://") {
-            return Err(CoreError::InvalidRequest(
-                "reducto:// file IDs are not accepted through the OCR API; upload the file in \
-                 the same request via multipart/form-data with a 'file' field, or pass an \
-                 inline base64 data URI as the document URL"
-                    .to_string(),
-            ));
-        }
         Ok(json!({ "type": field, field: url }))
     }
 }
@@ -95,13 +88,16 @@ fn mime_from_filename(filename: &str) -> Option<&'static str> {
         .map(|(_, mime)| *mime)
 }
 
-fn resolve_upload_mime(content_type: Option<&str>, filename: Option<&str>) -> String {
+fn resolve_upload_mime(bytes: &[u8], content_type: Option<&str>, filename: Option<&str>) -> String {
     let declared = content_type
         .and_then(|value| value.split(';').next())
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != DEFAULT_UPLOAD_MIME_TYPE);
     if let Some(declared) = declared {
         return declared.to_string();
+    }
+    if let Some(sniffed) = sniff_mime(bytes) {
+        return sniffed.to_string();
     }
     filename
         .and_then(mime_from_filename)
@@ -119,7 +115,7 @@ pub fn build_upload_document(
             "uploaded file is empty".to_string(),
         ));
     }
-    let mime = resolve_upload_mime(content_type, filename);
+    let mime = resolve_upload_mime(&bytes, content_type, filename);
     let data_uri = format!("data:{mime};base64,{}", BASE64_STANDARD.encode(&bytes));
     let field = if mime.starts_with("image/") {
         "image_url"
@@ -221,15 +217,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_reducto_file_id_over_json() {
-        let err = parse_json_body(
-            br#"{"model":"m","document":{"type":"document_url","document_url":"reducto://abc"}}"#,
+    fn preserves_reducto_file_id_over_json() {
+        let call = parse_json_body(
+            br#"{"model":"m","document":{"type":"document_url","document_url":"reducto://abc123"}}"#,
         )
-        .expect_err("reducto id rejected");
-        match err {
-            CoreError::InvalidRequest(message) => assert!(message.contains("reducto://")),
-            other => panic!("expected InvalidRequest, got {other:?}"),
-        }
+        .expect("reducto id preserved");
+        assert_eq!(call.document["type"], "document_url");
+        assert_eq!(call.document["document_url"], "reducto://abc123");
     }
 
     #[test]
@@ -253,6 +247,36 @@ mod tests {
             .as_str()
             .expect("data uri")
             .starts_with("data:application/pdf;base64,"));
+    }
+
+    #[test]
+    fn upload_sniffs_pdf_from_bytes_when_unnamed_octet_stream() {
+        let document = build_upload_document(
+            b"%PDF-1.7 minimal".to_vec(),
+            None,
+            Some("application/octet-stream"),
+        )
+        .expect("builds document");
+        assert_eq!(document["type"], "document_url");
+        assert!(document["document_url"]
+            .as_str()
+            .expect("data uri")
+            .starts_with("data:application/pdf;base64,"));
+    }
+
+    #[test]
+    fn upload_sniffs_png_from_bytes_when_unnamed_and_no_content_type() {
+        let document = build_upload_document(
+            vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00],
+            None,
+            None,
+        )
+        .expect("builds document");
+        assert_eq!(document["type"], "image_url");
+        assert!(document["image_url"]
+            .as_str()
+            .expect("data uri")
+            .starts_with("data:image/png;base64,"));
     }
 
     #[test]
