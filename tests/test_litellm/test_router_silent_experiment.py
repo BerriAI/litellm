@@ -86,6 +86,30 @@ def test_get_silent_experiment_kwargs():
     assert result["metadata"]["user_api_key_auth"] is mock_auth
 
 
+def test_get_silent_experiment_kwargs_strips_tags():
+    """
+    Regression test: _update_kwargs_with_deployment merges deployment and
+    credential tags onto metadata["tags"] additively and never resets them.
+    If the primary deployment's tags survive into the silent kwargs, they
+    leak into the silent deployment's own tag merge on the second pass,
+    corrupting spend/tag attribution for the mirrored call.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    kwargs = {
+        "metadata": {
+            "tags": ["Credential: primary-cred", "primary-deployment-tag"],
+        },
+    }
+    result = router._get_silent_experiment_kwargs(**kwargs)
+    assert "tags" not in result["metadata"]
+
+
 def test_silent_experiment_completion_direct():
     """
     Test _silent_experiment_completion directly (for router code coverage).

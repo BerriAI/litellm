@@ -1851,6 +1851,7 @@ class Router:
         silent_kwargs.pop("litellm_logging_obj", None)
         silent_kwargs.pop("standard_logging_object", None)
         # DON'T pop proxy_server_request — it's needed for spend log metadata
+        silent_kwargs["metadata"].pop("tags", None)
 
         return silent_kwargs
 
