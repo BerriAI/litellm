@@ -2840,3 +2840,95 @@ class TestUpdateVectorStoreAccessControlAndRedaction:
         params = response["vector_store"]["litellm_params"]
         assert params["api_key"] == REDACTED_BY_LITELM_STRING
         assert params["api_base"] == "https://api.openai.com/v1"
+
+
+class TestAzureAIDocumentWritePassthroughPermission:
+    """Regression tests for the Azure AI Search passthrough write mapping.
+
+    Azure's batch document write/merge/delete endpoint is
+    ``POST /indexes/{name}/docs/index``. A non-admin team holding a ``write``
+    grant on the index must be allowed to call it, while index lifecycle
+    (create / update / delete the index itself) stays proxy-admin only.
+
+    These exercise the real ``AzureAIVectorStoreConfig`` endpoint map on
+    purpose (no mocked provider config), so reverting the map to the old
+    ``("PUT", "/docs")`` entry makes ``test_team_with_write_grant_can_upload``
+    fail.
+    """
+
+    INDEX = "my-index"
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.url.path = path
+        return request
+
+    def _team_member(self, permissions: list) -> MagicMock:
+        user = MagicMock(spec=UserAPIKeyAuth)
+        user.user_role = None
+        user.metadata = {"allowed_vector_store_indexes": [{"index_name": self.INDEX, "index_permissions": permissions}]}
+        user.team_metadata = None
+        return user
+
+    def test_team_with_write_grant_can_upload(self):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=self.INDEX,
+            request=self._request("POST", f"/azure_ai/indexes/{self.INDEX}/docs/index"),
+            user_api_key_dict=self._team_member(["read", "write"]),
+        )
+        assert result is True
+
+    def test_team_without_write_grant_cannot_upload(self):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=self.INDEX,
+                request=self._request("POST", f"/azure_ai/indexes/{self.INDEX}/docs/index"),
+                user_api_key_dict=self._team_member(["read"]),
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_team_with_read_grant_can_search(self):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=self.INDEX,
+            request=self._request("POST", f"/azure_ai/indexes/{self.INDEX}/docs/search"),
+            user_api_key_dict=self._team_member(["read"]),
+        )
+        assert result is True
+
+    def test_team_with_read_grant_can_get_index_details(self):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=self.INDEX,
+            request=self._request("GET", f"/azure_ai/indexes/{self.INDEX}"),
+            user_api_key_dict=self._team_member(["read"]),
+        )
+        assert result is True
+
+    def test_team_without_read_grant_cannot_get_index_details(self):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=self.INDEX,
+                request=self._request("GET", f"/azure_ai/indexes/{self.INDEX}"),
+                user_api_key_dict=self._team_member(["write"]),
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize(
+        "method, operation",
+        [("PUT", "update"), ("DELETE", "delete")],
+    )
+    def test_team_cannot_manage_index_lifecycle_even_with_write_grant(self, method, operation):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=self.INDEX,
+                request=self._request(method, f"/azure_ai/indexes/{self.INDEX}?api-version=2024-07-01"),
+                user_api_key_dict=self._team_member(["read", "write"]),
+            )
+        assert exc_info.value.status_code == 403
+        assert f"Only proxy admins can {operation}" in exc_info.value.detail
