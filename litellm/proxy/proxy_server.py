@@ -1076,9 +1076,10 @@ async def proxy_startup_event(app: FastAPI):
     # lazily by the flusher on first tick (see `_state_loaded` flag) so
     # hot-reloaded routers also get their persisted priors.
     if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
-        for _ar in llm_router.adaptive_routers.values():
-            await _ar.load_state_from_db(prisma_client)
-            _ar._state_loaded = True
+        for _tagged_routers in llm_router.adaptive_routers.values():
+            for _tagged in _tagged_routers:
+                await _tagged.strategy.load_state_from_db(prisma_client)
+                _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer
@@ -3248,16 +3249,18 @@ async def _adaptive_router_flusher_loop():
             adaptive_routers = getattr(llm_router, "adaptive_routers", None) or {}
             if not adaptive_routers or prisma_client is None:
                 continue
-            for ar in adaptive_routers.values():
-                # Lazy state load: covers adaptive routers registered via
-                # `/config/reload` after proxy boot.
-                if not getattr(ar, "_state_loaded", False):
-                    try:
-                        await ar.load_state_from_db(prisma_client)
-                    finally:
-                        ar._state_loaded = True
-                await ar.queue.flush_state_to_db(prisma_client)
-                await ar.queue.flush_session_to_db(prisma_client)
+            for tagged_routers in adaptive_routers.values():
+                for tagged in tagged_routers:
+                    ar = tagged.strategy
+                    # Lazy state load: covers adaptive routers registered via
+                    # `/config/reload` after proxy boot.
+                    if not getattr(ar, "_state_loaded", False):
+                        try:
+                            await ar.load_state_from_db(prisma_client)
+                        finally:
+                            ar._state_loaded = True
+                    await ar.queue.flush_state_to_db(prisma_client)
+                    await ar.queue.flush_session_to_db(prisma_client)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -16010,7 +16013,11 @@ async def get_adaptive_router_state(
             status_code=404,
             detail={"error": "No adaptive_router is configured on this proxy."},
         )
-    snapshots = [await ar.get_state_snapshot() for ar in llm_router.adaptive_routers.values()]
+    snapshots = [
+        await tagged.strategy.get_state_snapshot()
+        for tagged_routers in llm_router.adaptive_routers.values()
+        for tagged in tagged_routers
+    ]
     return {"routers": snapshots}
 
 
