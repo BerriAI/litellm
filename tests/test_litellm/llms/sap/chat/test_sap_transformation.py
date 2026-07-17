@@ -650,3 +650,47 @@ class TestDeploymentResolution:
             with pytest.raises(GenAIHubOrchestrationError) as exc:
                 cfg._resolve_deployment_url()
         assert "No orchestration deployment found" in str(exc.value)
+
+
+class TestGetCompleteUrl:
+    def test_optional_params_used_first(self):
+        """Step 1: deployment_url in optional_params skips discovery entirely."""
+        cfg = _make_config()
+        explicit = "https://custom.sap.com/deployments/abc"
+        mock = MagicMock()
+        with patch("litellm.module_level_client", mock):
+            url = cfg.get_complete_url(None, None, "gpt-4o", {"deployment_url": explicit}, {})
+        assert url == f"{explicit}/v2/completion"
+        mock.get.assert_not_called()
+
+    def test_env_var_used_when_no_optional_param(self):
+        """Step 2: AICORE_ORCHESTRATION_DEPLOYMENT_URL skips discovery."""
+        cfg = _make_config()
+        env_url = "https://env.sap.com/deployments/env"
+        mock = MagicMock()
+        with patch("litellm.module_level_client", mock):
+            with patch.dict("os.environ", {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": env_url}):
+                url = cfg.get_complete_url(None, None, "gpt-4o", {}, {})
+        assert url == f"{env_url}/v2/completion"
+        mock.get.assert_not_called()
+
+    def test_optional_params_beats_env_var(self):
+        """Step 1 takes precedence over step 2."""
+        cfg = _make_config()
+        opt_url = "https://opt.sap.com/deployments/opt"
+        env_url = "https://env.sap.com/deployments/env"
+        mock = MagicMock()
+        with patch("litellm.module_level_client", mock):
+            with patch.dict("os.environ", {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": env_url}):
+                url = cfg.get_complete_url(None, None, "gpt-4o", {"deployment_url": opt_url}, {})
+        assert url == f"{opt_url}/v2/completion"
+        mock.get.assert_not_called()
+
+    def test_discovery_used_when_no_override(self):
+        """Step 3: no optional_param, no env var — discovery runs."""
+        cfg = _make_config()
+        env = {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": ""}  # empty = falsy
+        with patch("litellm.module_level_client", _mock_client("orch-a")):
+            with patch.dict("os.environ", env):
+                url = cfg.get_complete_url(None, None, "gpt-4o", {}, {})
+        assert url == "https://deploy-orch-a.sap.com/v2/completion"
