@@ -263,7 +263,7 @@ class SpendLogsParams(BaseModel):
             raise ValueError(
                 "unfiltered /spend/logs returns the entire spend table and OOMs the "
                 "runner on long-lived environments; filter by request_id or api_key, "
-                "or use Gateway.spend_logs_window for a bounded /spend/logs/v2 read"
+                "or use ProxyClient.spend_logs_window for a bounded /spend/logs/v2 read"
             )
         return self
 

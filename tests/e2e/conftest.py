@@ -23,7 +23,8 @@ import requests
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from e2e_result_reporter import covers_from_item, format_e2e_result_line, result_from_pytest
-from lifecycle import GatewayProvider, ResourceManager
+from lifecycle import ProxyClientProvider, ResourceManager
+from proxy_client import ProxyClient, build_proxy_client
 
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
@@ -140,11 +141,18 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         print(f"devin remediation best-effort failed: {exc}")
 
 
+@pytest.fixture(scope="session")
+def proxy() -> ProxyClient:
+    """The shared ProxyClient every suite's client is built from. Suite `client`
+    fixtures depend on this and inject it, so the proxy wiring lives in one place."""
+    return build_proxy_client()
+
+
 @pytest.fixture
-def resources(client: GatewayProvider) -> Iterator[ResourceManager]:
+def resources(client: ProxyClientProvider) -> Iterator[ResourceManager]:
     """init -> run -> teardown: create a manager, run the test, release resources.
-    Cleanup goes through the shared Gateway, whatever the suite's client adds."""
-    manager = ResourceManager(client=client.gateway)
+    Cleanup goes through the shared ProxyClient, whatever the suite's client adds."""
+    manager = ResourceManager(client=client.proxy)
     manager.init()
     yield manager
     manager.teardown()

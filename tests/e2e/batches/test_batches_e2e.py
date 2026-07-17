@@ -372,17 +372,17 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     environment and OOMed the e2e runner on stage.
     """
     user_id = f"e2e-batch-rl-{unique_marker()}"
-    key = client.gateway.generate_key(
+    key = client.proxy.generate_key(
         KeyGenerateBody(models=[], tpm_limit=1_000_000, rpm_limit=1_000, user_id=user_id)
     )
-    resources.defer(lambda: client.gateway.delete_key(key))
+    resources.defer(lambda: client.proxy.delete_key(key))
 
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
     window_end = window_start + timedelta(hours=2)
     before = frozenset(
         row.request_id
         for row in unattributed_rows(
-            client.gateway.spend_logs_window(start=window_start, end=window_end)
+            client.proxy.spend_logs_window(start=window_start, end=window_end)
         )
     )
 
@@ -401,12 +401,12 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     batch = BatchObject.model_validate_json(created.body)
     resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
 
-    _ = client.gateway.poll_logs_for_key(key, min_rows=1)
+    _ = client.proxy.poll_logs_for_key(key, min_rows=1)
 
     new_orphans = [
         row
         for row in unattributed_rows(
-            client.gateway.spend_logs_window(start=window_start, end=window_end)
+            client.proxy.spend_logs_window(start=window_start, end=window_end)
         )
         if row.request_id not in before
     ]

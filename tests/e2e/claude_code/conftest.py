@@ -588,19 +588,19 @@ def _build_control_gateway(proxy: ProxyConfig):
     same host and key. Both planes get the one URL the cells use; the
     deployment is fronted by a single address that routes management
     and LLM paths itself."""
-    from e2e_gateway import build_gateway
+    from proxy_client import build_proxy_client
 
-    return build_gateway(
+    return build_proxy_client(
         base_url=proxy.base_url,
         master_key=proxy.api_key,
         control_plane_base_url=proxy.base_url,
     )
 
 
-def _register_deployment(gateway, deployment: CompatDeployment) -> str:
+def _register_deployment(proxy, deployment: CompatDeployment) -> str:
     """Register one deployment and return its proxy-assigned model_id
     once it is servable on the data plane."""
-    return gateway.create_model(
+    return proxy.create_model(
         deployment.model_name,
         deployment.litellm_params,
     )
@@ -631,13 +631,13 @@ def _compat_models_registered() -> Any:
 
     from requests import RequestException
 
-    gateway = _build_control_gateway(proxy)
+    proxy = _build_control_gateway(proxy)
     registered_ids: list[str] = []
     failures: list[tuple[str, str]] = []
     try:
         for deployment in load_all_deployments():
             try:
-                model_id = _register_deployment(gateway, deployment)
+                model_id = _register_deployment(proxy, deployment)
                 registered_ids.append(model_id)
             except (AssertionError, RequestException) as exc:
                 failures.append((deployment.model_name, str(exc)))
@@ -656,7 +656,7 @@ def _compat_models_registered() -> Any:
     finally:
         for model_id in registered_ids:
             try:
-                gateway.delete_model(model_id)
+                proxy.delete_model(model_id)
             except (AssertionError, RequestException):
                 # Best-effort — teardown surfaces via warnings inside
                 # ``delete_model`` already; swallowing here so one flaky
