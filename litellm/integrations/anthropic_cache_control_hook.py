@@ -313,8 +313,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _request_has_cache_control(
         messages: list[AllMessageValues],
-        system: Optional[Union[str, list]],
-        tools: Optional[list] = None,
+        system: str | list | None,
+        tools: list | None = None,
     ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
@@ -336,10 +336,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def get_default_injection_points(
         messages: list[AllMessageValues],
-        system: Optional[Union[str, list]],
+        system: str | list | None,
         model: str,
-        custom_llm_provider: Optional[str],
-        tools: Optional[list] = None,
+        custom_llm_provider: str | None,
+        tools: list | None = None,
     ) -> list[CacheControlInjectionPoint]:
         """Default breakpoints when ``litellm.enable_anthropic_prompt_caching`` is on.
 
@@ -389,8 +389,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         non_default_params: dict[str, Any],
         messages: list[AllMessageValues],
         model: str,
-        custom_llm_provider: Optional[str],
-        tools: Optional[list] = None,
+        custom_llm_provider: str | None,
+        tools: list | None = None,
     ) -> None:
         """For /chat/completions: add default injection points to the request params.
 
@@ -415,9 +415,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: List[Dict],
         system: str | list | None,
         kwargs: Dict[str, Any],
-        model: Optional[str] = None,
-        custom_llm_provider: Optional[str] = None,
-        tools: Optional[list[dict]] = None,
+        model: str | None = None,
+        custom_llm_provider: str | None = None,
+        tools: list[dict] | None = None,
     ) -> Tuple[List[Dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
@@ -427,7 +427,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         are written back so downstream transforms can handle them.
         """
         configured = cast(  # cast-ok: kwargs is untyped; this key only holds the documented injection-point list
-            Optional[list[CacheControlInjectionPoint]], kwargs.pop("cache_control_injection_points", None)
+            list[CacheControlInjectionPoint] | None, kwargs.pop("cache_control_injection_points", None)
         )
         injection_points: list[CacheControlInjectionPoint] = configured or []
         if not injection_points and model is not None:
