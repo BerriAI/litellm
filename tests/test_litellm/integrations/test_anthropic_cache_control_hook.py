@@ -1547,12 +1547,13 @@ class TestEnableAnthropicPromptCaching:
         {"role": "user", "content": "latest turn"},
     ]
 
-    def _points(self, model="claude-sonnet-4-5", provider="anthropic", messages=None, system=None):
+    def _points(self, model="claude-sonnet-4-5", provider="anthropic", messages=None, system=None, tools=None):
         return AnthropicCacheControlHook.get_default_injection_points(
             messages=copy.deepcopy(self.MESSAGES) if messages is None else messages,
             system=system,
             model=model,
             custom_llm_provider=provider,
+            tools=tools,
         )
 
     def test_disabled_by_default(self):
@@ -1596,6 +1597,58 @@ class TestEnableAnthropicPromptCaching:
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         system = [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]
         assert self._points(messages=[{"role": "user", "content": "hi"}], system=system) == []
+
+    @staticmethod
+    def _tools(count: int, cached: bool) -> List[dict]:
+        tool: dict = {"type": "function", "function": {"name": "t", "description": "d", "parameters": {}}}
+        if cached:
+            tool["cache_control"] = {"type": "ephemeral"}
+        return [{**tool, "function": {**tool["function"], "name": f"t{i}"}} for i in range(count)]
+
+    def test_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Caching just the tool definitions is a normal client pattern, and those
+        breakpoints count toward the provider's four-block limit. Three of them plus
+        our two would be five, which Anthropic rejects outright."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert self._points(tools=self._tools(3, cached=True)) == []
+
+    def test_injects_when_tools_carry_no_cache_control(self, monkeypatch):
+        """Tools alone must not suppress injection; only client-marked ones do."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert [p["index"] for p in self._points(tools=self._tools(3, cached=False))] == [None, -1]
+
+    @pytest.mark.parametrize("tools", [None, []])
+    def test_absent_tools_do_not_suppress_injection(self, monkeypatch, tools):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert [p["index"] for p in self._points(tools=tools)] == [None, -1]
+
+    def test_seed_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Same guard on the /chat/completions seeding path."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=self._tools(3, cached=True),
+        )
+        assert "cache_control_injection_points" not in params
+
+    def test_v1_messages_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Same guard on the /v1/messages path, where tools reach the hook directly."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages),
+            "sys",
+            {},
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=self._tools(3, cached=True),
+        )
+        assert result_sys == "sys"
+        assert result_msgs == messages
 
     def test_default_ttl_is_anthropics_five_minute_cache(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
