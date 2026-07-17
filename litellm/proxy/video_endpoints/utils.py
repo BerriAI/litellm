@@ -59,17 +59,6 @@ def encode_character_id_in_response(response: Any, custom_llm_provider: str, mod
 
 
 def reencode_video_id_with_model_id(response: Any, custom_llm_provider: str | None, model_id: str | None) -> Any:
-    """
-    Re-encode a returned video id so it carries the router-selected deployment id.
-
-    The provider transformation layer encodes the client-facing model/group name
-    into the video id because it runs before the router attaches the deployment id
-    to ``_hidden_params``. That is enough for single-deployment groups, but for a
-    group backed by several deployments the status/content round-trip decodes the
-    group name and re-routes through load balancing instead of pinning to the
-    deployment that created the job. Preferring ``model_id`` (the deployment id)
-    here keeps the follow-up calls on the deployment that owns the video
-    """
     if not model_id:
         return response
 
