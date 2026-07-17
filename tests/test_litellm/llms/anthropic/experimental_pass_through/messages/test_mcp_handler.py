@@ -120,3 +120,124 @@ def test_build_tool_result_message_uses_anthropic_tool_result_blocks():
     assert list(message["content"]) == [
         {"type": "tool_result", "tool_use_id": "toolu_1", "content": "9 sections"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials():
+    """
+    Regression test (LIT-4517): the caller's MCP auth must reach both tool listing
+    and tool execution on /v1/messages.
+
+    Given: A request carrying MCP auth headers and request tags
+    When:  The gateway lists and then executes an MCP tool
+    Then:  Both calls receive the caller's credentials, tags and trace ids
+
+    Dropping them does not fail loudly; the tool still executes, just with no
+    credentials, so every auth-requiring MCP server (interactive OAuth, bearer
+    token, per-user env) silently returns nothing while the model claims it has
+    no access. Only a no-auth server would look healthy.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import mcp_handler
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    context = MCPRequestContext(
+        user_api_key_auth="auth-object",
+        mcp_auth_header="legacy-header",
+        mcp_server_auth_headers={"deepwiki": {"authorization": "Bearer per-server"}},
+        oauth2_headers={"authorization": "Bearer oauth"},
+        raw_headers={"x-trace": "abc"},
+        request_tags=["team-a"],
+        litellm_trace_id="trace-123",
+        litellm_call_id="call-456",
+    )
+
+    process = AsyncMock(return_value=([], {}))
+    execute = AsyncMock(return_value=[{"tool_call_id": "toolu_1", "result": "ok", "name": "t"}])
+    responses = [
+        {"stop_reason": "tool_use", "content": [{"type": "tool_use", "id": "toolu_1", "name": "t", "input": {}}]},
+        {"stop_reason": "end_turn", "content": [{"type": "text", "text": "done"}]},
+    ]
+
+    with patch.object(MCPRequestContext, "resolve", return_value=context), patch.object(
+        mcp_handler.LiteLLM_Proxy_MCP_Handler
+        if hasattr(mcp_handler, "LiteLLM_Proxy_MCP_Handler")
+        else __import__(
+            "litellm.responses.mcp.litellm_proxy_mcp_handler", fromlist=["LiteLLM_Proxy_MCP_Handler"]
+        ).LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        new=process,
+    ), patch(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._execute_tool_calls",
+        new=execute,
+    ), patch(
+        "litellm.anthropic_messages", new=AsyncMock(side_effect=responses)
+    ):
+        await mcp_handler.anthropic_messages_with_mcp(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "hi"}],
+            model="claude-sonnet-4-5",
+            tools=[MCP_REFERENCE],
+        )
+
+    listing = process.call_args.kwargs
+    assert listing["mcp_auth_header"] == "legacy-header", "tool listing must use the caller's MCP auth"
+    assert listing["mcp_server_auth_headers"] == {"deepwiki": {"authorization": "Bearer per-server"}}
+    assert listing["request_tags"] == ["team-a"]
+    assert listing["litellm_trace_id"] == "trace-123"
+
+    execution = execute.call_args.kwargs
+    assert execution["user_api_key_auth"] == "auth-object"
+    assert execution["mcp_auth_header"] == "legacy-header", "tool execution must use the caller's MCP auth"
+    assert execution["mcp_server_auth_headers"] == {"deepwiki": {"authorization": "Bearer per-server"}}
+    assert execution["oauth2_headers"] == {"authorization": "Bearer oauth"}
+    assert execution["raw_headers"] == {"x-trace": "abc"}
+    assert execution["litellm_call_id"] == "call-456"
+    assert execution["litellm_trace_id"] == "trace-123"
+    assert execution["request_tags"] == ["team-a"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_mcp_stops_when_every_tool_call_is_skipped():
+    """
+    Regression test (LIT-4517): a tool_use turn whose calls all get skipped must
+    end the loop, not send an empty tool_result message.
+
+    Given: The model asks for a tool but the executor skips it (unresolvable name)
+    When:  The gateway loop handles the empty result set
+    Then:  It returns the last response instead of calling the model again
+
+    _build_tool_result_message([]) produces a user message with empty content, and
+    Anthropic rejects that, so the caller would get an unhandled 400 from the middle
+    of the loop rather than the model's own answer.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import mcp_handler
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    tool_use_response = {
+        "stop_reason": "tool_use",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "gone", "input": {}}],
+    }
+    anthropic_messages_mock = AsyncMock(return_value=tool_use_response)
+
+    with patch.object(
+        MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth="auth")
+    ), patch(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform",
+        new=AsyncMock(return_value=([], {})),
+    ), patch(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._execute_tool_calls",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "litellm.anthropic_messages", new=anthropic_messages_mock
+    ):
+        result = await mcp_handler.anthropic_messages_with_mcp(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "hi"}],
+            model="claude-sonnet-4-5",
+            tools=[MCP_REFERENCE],
+        )
+
+    assert anthropic_messages_mock.await_count == 1, (
+        "With no tool results there is nothing to send back, so the loop must not call the model again"
+    )
+    assert result == tool_use_response
