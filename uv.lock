@@ -4301,6 +4301,7 @@ dev = [
 ]
 e2e-dev = [
     { name = "locust" },
+    { name = "mcp" },
     { name = "playwright" },
     { name = "websockets" },
 ]
@@ -4478,6 +4479,7 @@ dev = [
 ]
 e2e-dev = [
     { name = "locust", specifier = "==2.45.0" },
+    { name = "mcp", specifier = ">=1.28.1,<2.0" },
     { name = "playwright", specifier = "==1.61.0" },
     { name = "websockets", specifier = ">=15.0.1,<16.0" },
 ]
