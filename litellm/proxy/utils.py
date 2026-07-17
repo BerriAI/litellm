@@ -2322,8 +2322,15 @@ class ProxyLogging:
             # Merge model-level guardrails before checking which guardrails to run
             guardrail_data = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
 
+            parallel_guardrails: Tuple[CustomGuardrail, ...] = tuple(
+                callback for callback in guardrail_callbacks if callback.run_in_parallel
+            )
+
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
+                if callback.run_in_parallel:
+                    continue
 
                 if (
                     callback.should_run_guardrail(
@@ -2361,6 +2368,15 @@ class ProxyLogging:
                 if guardrail_response is not None:
                     response = guardrail_response
 
+            if parallel_guardrails:
+                await self._run_parallel_post_call_guardrails(
+                    guardrails=parallel_guardrails,
+                    data=data,
+                    guardrail_data=guardrail_data,
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                )
+
             ############ Handle CustomLogger ###############################
             #################################################################
 
@@ -2373,6 +2389,57 @@ class ProxyLogging:
         except Exception as e:
             raise e
         return response
+
+    async def _run_parallel_post_call_guardrails(
+        self,
+        guardrails: Tuple[CustomGuardrail, ...],
+        data: dict,
+        guardrail_data: dict,
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Run opted-in post_call guardrails concurrently against the response
+        produced by the sequential guardrails. These guardrails are declared
+        block-only, so any modified response they return is discarded; they run
+        for their blocking side effect (raising to reject the response before it
+        reaches the client). The first guardrail to raise propagates out and
+        blocks the response. Each per-guardrail coroutine sets
+        ``guardrail_to_apply`` immediately before awaiting, and the unified hook
+        pops it before its first suspension point, so concurrent guardrails never
+        race on that key.
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        async def _run_one(callback: CustomGuardrail) -> None:
+            if (
+                callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call)
+                is not True
+            ):
+                return
+            if "apply_guardrail" in type(callback).__dict__:
+                data["guardrail_to_apply"] = callback
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    unified_guardrail.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    ),
+                    "post_call",
+                )
+            else:
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    ),
+                    "post_call",
+                )
+
+        await asyncio.gather(*(_run_one(callback) for callback in guardrails))
 
     async def post_call_response_headers_hook(
         self,

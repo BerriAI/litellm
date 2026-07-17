@@ -2798,6 +2798,126 @@ async def test_pre_call_hook_parallel_guardrail_skipped_when_should_not_run():
         litellm.callbacks = original_callbacks
 
 
+class _PostCallGuardrail(CustomGuardrail):
+    """Test double for post_call guardrails; records timing and invocation."""
+
+    def __init__(self, name, run_in_parallel, execution_order, sleep=0.1, default_on=True):
+        super().__init__(
+            guardrail_name=name,
+            event_hook=GuardrailEventHooks.post_call,
+            default_on=default_on,
+            run_in_parallel=run_in_parallel,
+        )
+        self.name = name
+        self.sleep = sleep
+        self.execution_order = execution_order
+        self.was_called = False
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        self.was_called = True
+        self.execution_order.append(f"{self.name}_start")
+        await asyncio.sleep(self.sleep)
+        self.execution_order.append(f"{self.name}_end")
+        return None
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_runs_opted_in_guardrails_in_parallel():
+    """run_in_parallel post_call guardrails execute concurrently (overlap + wall time)."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    execution_order = []
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        litellm.callbacks = [
+            _PostCallGuardrail(f"g{i}", run_in_parallel=True, execution_order=execution_order) for i in range(3)
+        ]
+
+        start = asyncio.get_event_loop().time()
+        await proxy_logging.post_call_success_hook(
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            response=litellm.ModelResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        )
+        elapsed = asyncio.get_event_loop().time() - start
+
+        first_end_idx = next(i for i, item in enumerate(execution_order) if "end" in item)
+        starts_before_first_end = sum(1 for item in execution_order[:first_end_idx] if "start" in item)
+        assert starts_before_first_end == 3, f"expected 3 concurrent starts, got {starts_before_first_end}"
+        assert elapsed < 0.2, f"parallel batch took {elapsed}s, expected < 0.2s"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_runs_default_guardrails_sequentially():
+    """post_call guardrails without run_in_parallel keep the sequential behavior."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    execution_order = []
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        litellm.callbacks = [
+            _PostCallGuardrail(f"g{i}", run_in_parallel=False, execution_order=execution_order) for i in range(2)
+        ]
+
+        start = asyncio.get_event_loop().time()
+        await proxy_logging.post_call_success_hook(
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            response=litellm.ModelResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        )
+        elapsed = asyncio.get_event_loop().time() - start
+
+        assert execution_order == ["g0_start", "g0_end", "g1_start", "g1_end"]
+        assert elapsed >= 0.18, f"sequential run took {elapsed}s, expected >= 0.18s"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_parallel_guardrail_blocks_response():
+    """A raising parallel post_call guardrail blocks the response before it reaches the client."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    class BlockingPostCallGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="post_blocker",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            raise HTTPException(status_code=400, detail="blocked response by guardrail")
+
+    try:
+        litellm.callbacks = [BlockingPostCallGuardrail()]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await proxy_logging.post_call_success_hook(
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                response=litellm.ModelResponse(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "blocked response by guardrail" in str(exc_info.value.detail)
+    finally:
+        litellm.callbacks = original_callbacks
+
+
 @pytest.mark.asyncio
 async def test_handle_logging_proxy_only_error_preserves_pass_through_call_type():
     """Ensure _handle_logging_proxy_only_error does not overwrite call_type

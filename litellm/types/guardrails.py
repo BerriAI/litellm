@@ -876,11 +876,11 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     run_in_parallel: Optional[bool] = Field(
         default=None,
         description=(
-            "When True, this pre_call guardrail runs concurrently with other opted-in pre_call "
-            "guardrails, after the sequential guardrails have run. Use only for block-only "
-            "guardrails that inspect and reject; do not enable it for guardrails that modify the "
-            "request payload (e.g. PII masking or sensitive-data routing), since parallel runs share "
-            "one payload snapshot and their mutations would race."
+            "When True, this pre_call or post_call guardrail runs concurrently with other opted-in "
+            "guardrails of the same hook, after the sequential guardrails have run. Use only for "
+            "block-only guardrails that inspect and reject; do not enable it for guardrails that "
+            "modify the request or response (e.g. PII masking or sensitive-data routing), since "
+            "parallel runs share one snapshot and their mutations would race."
         ),
     )
 

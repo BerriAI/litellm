@@ -132,8 +132,9 @@ class CustomGuardrail(CustomLogger):
             on_sensitive_data: Action when sensitive data is detected. 'block' (default) or 'route'
             sensitive_data_route_to_model: Model to route to when on_sensitive_data='route'
             sticky_session_routing: When True, all subsequent requests in the session use the same model
-            run_in_parallel: When True, this pre_call guardrail runs concurrently with other opted-in
-                pre_call guardrails. Only safe for block-only guardrails that do not mutate the payload.
+            run_in_parallel: When True, this pre_call or post_call guardrail runs concurrently with
+                other opted-in guardrails of the same hook. Only safe for block-only guardrails that
+                do not mutate the request or response.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
