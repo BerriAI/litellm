@@ -2929,6 +2929,33 @@ def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
         )
 
 
+def test_count_pre_call_check_tokens_across_api_surfaces():
+    """
+    _count_pre_call_check_tokens must count tokens from chat `messages`, a Responses
+    API string `input`, and a Responses API list `input`, and raise when given neither.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+    )
+
+    messages_tokens = router._count_pre_call_check_tokens(
+        messages=[{"role": "user", "content": "hello world"}], input=None
+    )
+    string_input_tokens = router._count_pre_call_check_tokens(messages=None, input="hello world")
+    list_input_tokens = router._count_pre_call_check_tokens(
+        messages=None, input=[{"role": "user", "content": "hello world"}]
+    )
+
+    assert messages_tokens > 0
+    assert string_input_tokens > 0
+    assert list_input_tokens > 0
+
+    with pytest.raises(ValueError):
+        router._count_pre_call_check_tokens(messages=None, input=None)
+
+
 def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
     """
     When neither messages nor input is provided (e.g. endpoints without prompt text),
