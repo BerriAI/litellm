@@ -961,7 +961,7 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
 
         agent_id_from_header = headers.get("x-litellm-agent-id")
-        # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
+        # Use the header chain ID only for values the request body did not provide.
         chain_id = get_chain_id_from_headers(dict(headers))
 
         if agent_id_from_header:
@@ -969,11 +969,18 @@ class LiteLLMProxyRequestSetup:
             verbose_proxy_logger.debug(f"Extracted agent_id from header: {agent_id_from_header}")
 
         if chain_id:
-            metadata_from_headers["trace_id"] = chain_id
-            metadata_from_headers["session_id"] = chain_id
-            data["litellm_session_id"] = chain_id
-            data["litellm_trace_id"] = chain_id
-            verbose_proxy_logger.debug(f"Extracted chain_id from header (trace-id/session-id): {chain_id}")
+        if chain_id:
+            request_metadata = data.get(_metadata_variable_name) or {}
+            session_id = data.get("litellm_session_id") or request_metadata.get("session_id") or chain_id
+            trace_id = data.get("litellm_trace_id") or request_metadata.get("trace_id") or chain_id
+            metadata_from_headers["trace_id"] = trace_id
+            metadata_from_headers["session_id"] = session_id
+            data["litellm_session_id"] = session_id
+            data["litellm_trace_id"] = trace_id
+            verbose_proxy_logger.debug(
+                "Applied chain ID from header to missing trace/session IDs: "
+                f"session_id={session_id}, trace_id={trace_id}"
+            )
         else:
             body_metadata = data.get("metadata")
             session_id = _get_anthropic_session_id_from_metadata(body_metadata)
