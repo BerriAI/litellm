@@ -752,6 +752,7 @@ class TestMoonshotResponseSchemaSupport:
     LIVE_MODELS = [
         "moonshot/kimi-k2.5",
         "moonshot/kimi-k2.6",
+        "moonshot/kimi-k3",
         "moonshot/moonshot-v1-8k",
         "moonshot/moonshot-v1-32k",
         "moonshot/moonshot-v1-128k",
@@ -772,3 +773,149 @@ class TestMoonshotResponseSchemaSupport:
     def test_supports_response_schema_utility_reports_true(self, model_cost_map, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", model_cost_map)
         assert litellm.utils.supports_response_schema(model="moonshot/kimi-k2.5") is True
+
+
+class TestKimiK3ModelRegistry:
+    @pytest.fixture(autouse=True)
+    def model_cost_map(self):
+        return GetModelCostMap.load_local_model_cost_map()
+
+    def test_kimi_k3_in_model_cost_map(self, model_cost_map):
+        assert "moonshot/kimi-k3" in model_cost_map, "moonshot/kimi-k3 not found in model_cost"
+
+    def test_kimi_k3_pricing(self, model_cost_map):
+        model_info = model_cost_map["moonshot/kimi-k3"]
+        assert model_info["input_cost_per_token"] == pytest.approx(3e-06)
+        assert model_info["output_cost_per_token"] == pytest.approx(1.5e-05)
+        assert model_info["cache_read_input_token_cost"] == pytest.approx(3e-07)
+
+    def test_kimi_k3_context_window(self, model_cost_map):
+        model_info = model_cost_map["moonshot/kimi-k3"]
+        assert model_info["max_input_tokens"] == 1048576
+        assert model_info["max_output_tokens"] == 1048576
+        assert model_info["max_tokens"] == 1048576
+
+    def test_kimi_k3_capabilities(self, model_cost_map):
+        model_info = model_cost_map["moonshot/kimi-k3"]
+        assert model_info.get("supports_function_calling") is True
+        assert model_info.get("supports_tool_choice") is True
+        assert model_info.get("supports_vision") is True
+        assert model_info.get("supports_video_input") is True
+        assert model_info.get("supports_reasoning") is True
+        assert model_info.get("supports_max_reasoning_effort") is True
+        assert model_info.get("supports_response_schema") is True
+
+    def test_kimi_k3_provider(self, model_cost_map):
+        model_info = model_cost_map["moonshot/kimi-k3"]
+        assert model_info["litellm_provider"] == "moonshot"
+
+
+class TestKimiK3ParamHandling:
+    def test_k3_supported_params_exclude_fixed_sampling_params(self):
+        config = MoonshotChatConfig()
+        supported_params = config.get_supported_openai_params("kimi-k3")
+
+        for fixed_param in ("temperature", "top_p", "n", "presence_penalty", "frequency_penalty"):
+            assert fixed_param not in supported_params
+
+        assert "tools" in supported_params
+        assert "tool_choice" in supported_params
+
+    def test_k3_supported_params_include_reasoning_effort(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+        config = MoonshotChatConfig()
+        assert "reasoning_effort" in config.get_supported_openai_params("kimi-k3")
+
+    def test_non_k3_params_unchanged(self):
+        config = MoonshotChatConfig()
+        supported_params = config.get_supported_openai_params("kimi-k2.5")
+
+        assert "temperature" in supported_params
+        assert "reasoning_effort" not in supported_params
+
+    def test_k3_map_openai_params_drops_fixed_params_keeps_reasoning_effort(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            optional_params = config.map_openai_params(
+                non_default_params={
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "presence_penalty": 0.5,
+                    "reasoning_effort": "max",
+                    "max_tokens": 4096,
+                },
+                optional_params={},
+                model="kimi-k3",
+                drop_params=True,
+            )
+
+        assert optional_params.get("reasoning_effort") == "max"
+        assert optional_params.get("max_tokens") == 4096
+        assert "temperature" not in optional_params
+        assert "top_p" not in optional_params
+        assert "presence_penalty" not in optional_params
+
+    def test_k3_tool_choice_required_passed_through(self):
+        config = MoonshotChatConfig()
+
+        messages = [{"role": "user", "content": "What is the weather?"}]
+        optional_params = {"tool_choice": "required"}
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = config.transform_request(
+                model="kimi-k3",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+
+        assert len(result["messages"]) == 1
+        assert optional_params.get("tool_choice") == "required"
+
+    def test_non_k3_tool_choice_required_workaround_still_applies(self):
+        config = MoonshotChatConfig()
+
+        messages = [{"role": "user", "content": "What is the weather?"}]
+        optional_params = {"tool_choice": "required"}
+
+        result = config.transform_request(
+            model="kimi-k2.5",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        assert len(result["messages"]) == 2
+        assert "tool_choice" not in optional_params
+
+
+class TestKimiModelFamilyMatching:
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("kimi-k3", True),
+            ("moonshot/kimi-k3", True),
+            ("kimi-k3.5", False),
+            ("kimi-k4", False),
+            ("kimi-k2.5", False),
+        ],
+    )
+    def test_family_matching(self, model, expected):
+        assert MoonshotChatConfig._model_in_families(model, ("kimi-k3",)) is expected
+
+    def test_new_generation_does_not_inherit_k3_param_handling(self):
+        config = MoonshotChatConfig()
+        supported_params = config.get_supported_openai_params("kimi-k3.5")
+
+        assert "temperature" in supported_params
+        assert "reasoning_effort" not in supported_params

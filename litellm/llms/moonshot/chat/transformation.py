@@ -14,8 +14,21 @@ from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+SERVER_FIXED_SAMPLING_MODEL_FAMILIES: tuple[str, ...] = ("kimi-k3",)
+NATIVE_TOOL_CHOICE_REQUIRED_MODEL_FAMILIES: tuple[str, ...] = ("kimi-k3",)
+
 
 class MoonshotChatConfig(OpenAIGPTConfig):
+    @staticmethod
+    def _model_in_families(model: str, model_families: tuple[str, ...]) -> bool:
+        return model.split("/")[-1] in model_families
+
+    @staticmethod
+    def _supports_max_reasoning_effort(model: str) -> bool:
+        base_model = model.split("/")[-1]
+        model_info = litellm.model_cost.get(f"moonshot/{base_model}") or litellm.model_cost.get(base_model) or {}
+        return bool(model_info.get("supports_max_reasoning_effort"))
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
@@ -99,11 +112,17 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         if "kimi-thinking-preview" in model:
             excluded_params.extend(["tools", "tool_choice"])
 
+        if self._model_in_families(model, SERVER_FIXED_SAMPLING_MODEL_FAMILIES):
+            excluded_params.extend(["temperature", "top_p", "n", "presence_penalty", "frequency_penalty"])
+
         base_openai_params = super().get_supported_openai_params(model=model)
         final_params: List[str] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
+
+        if self._supports_max_reasoning_effort(model):
+            final_params.append("reasoning_effort")
 
         return final_params
 
@@ -205,7 +224,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         # Add tool_choice="required" message if needed
-        if optional_params.get("tool_choice", None) == "required":
+        if optional_params.get("tool_choice", None) == "required" and not self._model_in_families(
+            model, NATIVE_TOOL_CHOICE_REQUIRED_MODEL_FAMILIES
+        ):
             messages = self._add_tool_choice_required_message(
                 messages=messages,
                 optional_params=optional_params,
