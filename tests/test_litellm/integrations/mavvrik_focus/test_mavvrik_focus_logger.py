@@ -84,7 +84,19 @@ def test_with_token_tags_merges_prompt_and_completion_tokens() -> None:
         "model": "azure/gpt-4o-mini",
         "prompt_tokens": "57",
         "completion_tokens": "753",
+        "total_tokens": "810",
     }
+
+
+def test_with_token_tags_omits_total_when_only_one_token_column_present() -> None:
+    data = pl.DataFrame({"prompt_tokens": [57]})
+    normalized = pl.DataFrame({"Tags": [json.dumps({"model": "azure/gpt-4o-mini"})]})
+
+    result = _with_token_tags(data, normalized)
+
+    tags = json.loads(result["Tags"][0])
+    assert tags == {"model": "azure/gpt-4o-mini", "prompt_tokens": "57"}
+    assert "total_tokens" not in tags
 
 
 def test_with_token_tags_noop_when_token_columns_absent() -> None:

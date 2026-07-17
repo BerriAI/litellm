@@ -41,21 +41,23 @@ else:
 # drops prompt_tokens/completion_tokens even though the source query selects
 # them. Mavvrik carries them through as extra keys in the existing Tags JSON
 # column (the spec's own escape hatch for non-standard fields), rather than
-# changing the shared transformer used by every FOCUS destination.
+# changing the shared transformer used by every FOCUS destination. total_tokens
+# isn't a stored column at all -- it's derived here as their sum.
 _TOKEN_TAG_KEYS = ("prompt_tokens", "completion_tokens")
 
 
 def _with_token_tags(data: pl.DataFrame, normalized: pl.DataFrame) -> pl.DataFrame:
-    """Merge prompt/completion token counts from the pre-transform frame into
-    ``normalized``'s Tags column. Rows correspond 1:1 and in the same order
-    across both frames -- transform() only adds/renames columns, it never
-    filters or reorders rows.
+    """Merge prompt/completion token counts (and their sum, total_tokens) from
+    the pre-transform frame into ``normalized``'s Tags column. Rows correspond
+    1:1 and in the same order across both frames -- transform() only
+    adds/renames columns, it never filters or reorders rows.
     """
     available = [k for k in _TOKEN_TAG_KEYS if k in data.columns]
     if not available or len(data) != len(normalized):
         return normalized
 
     token_rows = data.select(available).to_dicts()
+    has_both = "prompt_tokens" in available and "completion_tokens" in available
 
     def _merge(tags_json: str, row: dict) -> str:
         tags = json.loads(tags_json) if tags_json else {}
@@ -63,6 +65,11 @@ def _with_token_tags(data: pl.DataFrame, normalized: pl.DataFrame) -> pl.DataFra
             value = row.get(key)
             if value is not None:
                 tags[key] = str(value)
+        if has_both:
+            prompt = row.get("prompt_tokens")
+            completion = row.get("completion_tokens")
+            if prompt is not None and completion is not None:
+                tags["total_tokens"] = str(prompt + completion)
         return json.dumps(tags)
 
     merged_tags = pl.Series(
