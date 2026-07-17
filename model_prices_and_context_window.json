@@ -44084,6 +44084,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 1e-07,
+        "cache_creation_input_token_cost": 1.25e-06,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true
@@ -44099,6 +44100,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 6.25e-06,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true
@@ -44114,6 +44116,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 6.25e-06,
         "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
@@ -44130,6 +44133,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 6.25e-06,
         "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
@@ -44146,6 +44150,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 6.25e-06,
         "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
@@ -44162,6 +44167,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true
@@ -44177,6 +44183,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
         "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
@@ -44193,6 +44200,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "cache_read_input_token_cost": 2e-07,
+        "cache_creation_input_token_cost": 2.5e-06,
         "supports_adaptive_thinking": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
@@ -44208,7 +44216,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 4.3e-09
+        "cache_read_input_token_cost": 4.3e-09,
+        "cache_creation_input_token_cost": 2.7e-08
     },
     "ofox/bailian/qwen-max": {
         "max_tokens": 8000,
@@ -44268,7 +44277,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 6e-08
+        "cache_read_input_token_cost": 6e-08,
+        "cache_creation_input_token_cost": 2.7e-07
     },
     "ofox/bailian/qwen3-coder-next": {
         "max_tokens": 64000,
@@ -44291,7 +44301,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 2e-07
+        "cache_read_input_token_cost": 2e-07,
+        "cache_creation_input_token_cost": 1e-06
     },
     "ofox/bailian/qwen3-max": {
         "max_tokens": 64000,
@@ -44363,7 +44374,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1e-08
+        "cache_read_input_token_cost": 1e-08,
+        "cache_creation_input_token_cost": 1.25e-07
     },
     "ofox/bailian/qwen3.5-plus": {
         "max_tokens": 64000,
@@ -44375,7 +44387,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 4e-08
+        "cache_read_input_token_cost": 4e-08,
+        "cache_creation_input_token_cost": 4e-07
     },
     "ofox/bailian/qwen3.6-27b": {
         "max_tokens": 64000,
@@ -44398,7 +44411,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2.5e-08
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 3.1e-07
     },
     "ofox/bailian/qwen3.6-max-preview": {
         "max_tokens": 64000,
@@ -44410,7 +44424,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 2e-07
+        "cache_read_input_token_cost": 2e-07,
+        "cache_creation_input_token_cost": 2e-06
     },
     "ofox/bailian/qwen3.6-plus": {
         "max_tokens": 64000,
@@ -44422,7 +44437,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 5e-08
+        "cache_read_input_token_cost": 5e-08,
+        "cache_creation_input_token_cost": 6.25e-07
     },
     "ofox/bailian/qwen3.7-max": {
         "max_tokens": 64000,
@@ -44434,7 +44450,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 2.5e-07
+        "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 3.125e-06
     },
     "ofox/bailian/qwen3.7-plus": {
         "max_tokens": 64000,
@@ -44446,7 +44463,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 8e-08
+        "cache_read_input_token_cost": 8e-08,
+        "cache_creation_input_token_cost": 5e-07
     },
     "ofox/deepseek/deepseek-v3.2": {
         "max_tokens": 32000,
@@ -44690,7 +44708,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "ofox/minimax/minimax-m2.1": {
         "max_tokens": 131000,
@@ -44702,7 +44721,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "ofox/minimax/minimax-m2.1-lightning": {
         "max_tokens": 131000,
@@ -44714,7 +44734,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "ofox/minimax/minimax-m2.5": {
         "max_tokens": 131000,
@@ -44726,7 +44747,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "ofox/minimax/minimax-m2.5-lightning": {
         "max_tokens": 131000,
@@ -44738,7 +44760,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "ofox/minimax/minimax-m2.7": {
         "max_tokens": 131000,
@@ -44750,7 +44773,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 6e-08
+        "cache_read_input_token_cost": 6e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "ofox/minimax/minimax-m2.7-highspeed": {
         "max_tokens": 131000,
@@ -44762,7 +44786,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 6e-08
+        "cache_read_input_token_cost": 6e-08,
+        "cache_creation_input_token_cost": 3.75e-07
     },
     "ofox/minimax/minimax-m3": {
         "max_tokens": 131000,
@@ -45146,7 +45171,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.4e-07
+        "cache_read_input_token_cost": 1.4e-07,
+        "cache_creation_input_token_cost": 2.4e-09
     },
     "ofox/volcengine/doubao-seed-2.0-lite": {
         "max_tokens": 32000,
@@ -45158,7 +45184,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 2.4e-09
     },
     "ofox/volcengine/doubao-seed-2.0-mini": {
         "max_tokens": 32000,
@@ -45170,7 +45197,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2e-08
+        "cache_read_input_token_cost": 2e-08,
+        "cache_creation_input_token_cost": 2.4e-09
     },
     "ofox/volcengine/doubao-seed-2.0-pro": {
         "max_tokens": 128000,
@@ -45182,7 +45210,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.4e-07
+        "cache_read_input_token_cost": 1.4e-07,
+        "cache_creation_input_token_cost": 2.4e-09
     },
     "ofox/volcengine/doubao-seed-2.1-pro": {
         "max_tokens": 256000,
@@ -45194,7 +45223,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.77e-07
+        "cache_read_input_token_cost": 1.77e-07,
+        "cache_creation_input_token_cost": 2.5e-09
     },
     "ofox/volcengine/doubao-seed-2.1-turbo": {
         "max_tokens": 256000,
@@ -45206,7 +45236,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 8.5e-08
+        "cache_read_input_token_cost": 8.5e-08,
+        "cache_creation_input_token_cost": 2.4e-09
     },
     "ofox/volcengine/doubao-seed-character": {
         "max_tokens": 256000,
@@ -45218,7 +45249,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2.4e-08
+        "cache_read_input_token_cost": 2.4e-08,
+        "cache_creation_input_token_cost": 2.5e-09
     },
     "ofox/volcengine/doubao-seed-evolving": {
         "max_tokens": 256000,
@@ -45230,7 +45262,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.77e-07
+        "cache_read_input_token_cost": 1.77e-07,
+        "cache_creation_input_token_cost": 2.5e-09
     },
     "ofox/x-ai/grok-4.1-fast": {
         "max_tokens": 30000,
@@ -45266,7 +45299,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2e-08
+        "cache_read_input_token_cost": 2e-07
     },
     "ofox/z-ai/glm-4.6": {
         "max_tokens": 128000,
