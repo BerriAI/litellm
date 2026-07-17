@@ -22713,6 +22713,8 @@ export interface components {
             field_name: string;
             /** Field Options */
             field_options?: string[] | null;
+            /** Field Tab */
+            field_tab?: string | null;
             /** Field Type */
             field_type: string;
             /** Field Value */
