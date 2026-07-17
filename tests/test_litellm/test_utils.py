@@ -4714,6 +4714,60 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
+class TestValidateEnvironmentMissingProviders:
+    """Regression: sambanova/hyperbolic/lambda_ai must not false-positive all-clear."""
+
+    def test_sambanova_reports_key_present(self):
+        with patch.dict(os.environ, {"SAMBANOVA_API_KEY": "test-key"}, clear=True):
+            result = litellm.validate_environment(
+                model="sambanova/Meta-Llama-3.1-8B-Instruct"
+            )
+        assert result["keys_in_environment"] is True
+        assert "SAMBANOVA_API_KEY" not in result["missing_keys"]
+
+    def test_sambanova_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(
+                model="sambanova/Meta-Llama-3.1-8B-Instruct"
+            )
+        assert result["keys_in_environment"] is False
+        assert "SAMBANOVA_API_KEY" in result["missing_keys"]
+
+    def test_hyperbolic_reports_key_present(self):
+        with patch.dict(
+            os.environ, {"HYPERBOLIC_API_KEY": "test-key"}, clear=True
+        ):
+            result = litellm.validate_environment(
+                model="hyperbolic/meta-llama/Meta-Llama-3.1-70B-Instruct"
+            )
+        assert result["keys_in_environment"] is True
+        assert "HYPERBOLIC_API_KEY" not in result["missing_keys"]
+
+    def test_hyperbolic_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(
+                model="hyperbolic/meta-llama/Meta-Llama-3.1-70B-Instruct"
+            )
+        assert result["keys_in_environment"] is False
+        assert "HYPERBOLIC_API_KEY" in result["missing_keys"]
+
+    def test_lambda_ai_reports_key_present(self):
+        with patch.dict(os.environ, {"LAMBDA_API_KEY": "test-key"}, clear=True):
+            result = litellm.validate_environment(
+                model="lambda_ai/llama3.1-70b-instruct-fp8"
+            )
+        assert result["keys_in_environment"] is True
+        assert "LAMBDA_API_KEY" not in result["missing_keys"]
+
+    def test_lambda_ai_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(
+                model="lambda_ai/llama3.1-70b-instruct-fp8"
+            )
+        assert result["keys_in_environment"] is False
+        assert "LAMBDA_API_KEY" in result["missing_keys"]
+
+
 
 @pytest.mark.parametrize(
     "model",
