@@ -1025,7 +1025,7 @@ if MCP_AVAILABLE:
         """
         user_mcp_management_mode = _get_user_mcp_management_mode()
 
-        def _health_entry(server: "LiteLLM_MCPServerTable") -> Dict[str, Any]:
+        def _health_entry(server: "LiteLLM_MCPServerTable") -> dict[str, Any]:
             return {
                 "server_id": server.server_id,
                 "server_name": server.server_name,
@@ -1039,7 +1039,7 @@ if MCP_AVAILABLE:
 
         auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_health_map: Dict[str, Dict[str, Any]] = {}
+        server_health_map: dict[str, dict[str, Any]] = {}
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
