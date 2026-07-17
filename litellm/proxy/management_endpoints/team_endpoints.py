@@ -118,7 +118,7 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
-    SpendAnalyticsPaginatedResponse,
+    CommonDailyActivity,
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkTeamMemberAddRequest,
@@ -128,10 +128,74 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     GetTeamMemberPermissionsResponse,
     TeamListItem,
     TeamListResponse,
+    TeamMemberAddRequest,
     TeamMemberAddResult,
     TeamMemberInfoResponse,
     UpdateTeamMemberPermissionsRequest,
 )
+
+# Locks for preventing race conditions when modifying team members concurrently.
+# Keyed by team_id to allow parallel operations on different teams while
+# serializing operations on the same team.
+_team_member_locks: Dict[str, asyncio.Lock] = {}
+_team_member_locks_lock = asyncio.Lock()
+
+# Maximum number of team locks to keep in memory before triggering cleanup.
+# This prevents unbounded memory growth in long-running proxy servers.
+_MAX_TEAM_MEMBER_LOCKS = 10000
+
+
+async def _get_team_member_lock(team_id: str) -> asyncio.Lock:
+    """
+    Get or create an asyncio.Lock for a specific team_id.
+
+    This ensures that concurrent requests to add/remove members from the same
+    team are serialized, preventing the read-modify-write race condition where
+    multiple requests read the same member list, modify it independently, and
+    overwrite each other's changes.
+
+    Args:
+        team_id: The ID of the team to lock
+
+    Returns:
+        An asyncio.Lock specific to this team_id
+    """
+    async with _team_member_locks_lock:
+        # Cleanup old locks if we've exceeded the maximum
+        if len(_team_member_locks) >= _MAX_TEAM_MEMBER_LOCKS:
+            _cleanup_team_member_locks()
+
+        if team_id not in _team_member_locks:
+            _team_member_locks[team_id] = asyncio.Lock()
+        return _team_member_locks[team_id]
+
+
+def _cleanup_team_member_locks() -> None:
+    """
+    Remove unlocked locks from the lock dictionary to prevent memory leaks.
+
+    This function removes locks that are not currently held. Locks that are
+    actively being used (locked) are preserved. This is called automatically
+    when the lock dictionary exceeds _MAX_TEAM_MEMBER_LOCKS entries.
+
+    Note: This function is not async-safe by design - it must be called while
+    holding _team_member_locks_lock to ensure thread safety.
+    """
+    # Create a list of team_ids to remove (unlocked locks)
+    to_remove = [
+        team_id
+        for team_id, lock in _team_member_locks.items()
+        if not lock.locked()
+    ]
+
+    # Remove unlocked locks
+    for team_id in to_remove:
+        del _team_member_locks[team_id]
+
+    verbose_proxy_logger.debug(
+        f"Cleaned up {len(to_remove)} unlocked team member locks. "
+        f"Remaining locks: {len(_team_member_locks)}"
+    )
 
 router = APIRouter()
 
@@ -2487,72 +2551,79 @@ async def team_member_add(
 
     prisma_client = cast(PrismaClient, prisma_client)
 
-    existing_team_row = await get_team_object(
-        team_id=data.team_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=None,
-        proxy_logging_obj=proxy_logging_obj,
-        check_cache_only=False,
-        check_db_only=True,
-    )
-    if existing_team_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": f"Team not found for team_id={getattr(data, 'team_id', None)}"
-            },
-        )
+    # Acquire a lock for this team_id to prevent race conditions when
+    # multiple concurrent requests try to add members to the same team.
+    # Without this lock, two requests could read the same member list,
+    # modify it independently, and overwrite each other's changes.
+    team_member_lock = await _get_team_member_lock(data.team_id)
 
-    complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
-
-    team_member_add_duplication_check(
-        data=data,
-        existing_team_row=complete_team_data,
-    )
-
-    # Validate permissions
-    await _validate_team_member_add_permissions(
-        user_api_key_dict=user_api_key_dict,
-        complete_team_data=complete_team_data,
-        data=data,
-    )
-
-    # Validate and populate user_email/user_id for members before processing
-    if isinstance(data.member, Member):
-        await _validate_and_populate_member_user_info(
-            member=data.member,
+    async with team_member_lock:
+        existing_team_row = await get_team_object(
+            team_id=data.team_id,
             prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            check_cache_only=False,
+            check_db_only=True,
         )
-    elif isinstance(data.member, List):
-        for m in data.member:
-            await _validate_and_populate_member_user_info(
-                member=m,
-                prisma_client=prisma_client,
+        if existing_team_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Team not found for team_id={getattr(data, 'team_id', None)}"
+                },
             )
 
-    (
-        updated_team,
-        updated_users,
-        updated_team_memberships,
-    ) = await _add_team_members_to_team(
-        data=data,
-        complete_team_data=complete_team_data,
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        litellm_proxy_admin_name=litellm_proxy_admin_name,
-    )
+        complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
-    # Check if updated_team is None
-    if updated_team is None:
-        raise HTTPException(
-            status_code=404, detail={"error": f"Team with id {data.team_id} not found"}
+        team_member_add_duplication_check(
+            data=data,
+            existing_team_row=complete_team_data,
         )
-    return TeamAddMemberResponse(
-        **updated_team.model_dump(),
-        updated_users=updated_users,
-        updated_team_memberships=updated_team_memberships,
-    )
+
+        # Validate permissions
+        await _validate_team_member_add_permissions(
+            user_api_key_dict=user_api_key_dict,
+            complete_team_data=complete_team_data,
+            data=data,
+        )
+
+        # Validate and populate user_email/user_id for members before processing
+        if isinstance(data.member, Member):
+            await _validate_and_populate_member_user_info(
+                member=data.member,
+                prisma_client=prisma_client,
+            )
+        elif isinstance(data.member, List):
+            for m in data.member:
+                await _validate_and_populate_member_user_info(
+                    member=m,
+                    prisma_client=prisma_client,
+                )
+
+        (
+            updated_team,
+            updated_users,
+            updated_team_memberships,
+        ) = await _add_team_members_to_team(
+            data=data,
+            complete_team_data=complete_team_data,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+
+        # Check if updated_team is None
+        if updated_team is None:
+            raise HTTPException(
+                status_code=404, detail={"error": f"Team with id {data.team_id} not found"}
+            )
+        return TeamAddMemberResponse(
+            **updated_team.model_dump(),
+            updated_users=updated_users,
+            updated_team_memberships=updated_team_memberships,
+        )
 
 
 def _cleanup_members_with_roles(
@@ -2624,96 +2695,101 @@ async def team_member_delete(
             detail={"error": "Either user_id or user_email needs to be passed in"},
         )
 
-    _existing_team_row = await TeamRepository(prisma_client).table.find_unique(
-        where={"team_id": data.team_id}
-    )
+    # Acquire a lock for this team_id to prevent race conditions when
+    # multiple concurrent requests try to modify members of the same team.
+    team_member_lock = await _get_team_member_lock(data.team_id)
 
-    if _existing_team_row is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Team id={} does not exist in db".format(data.team_id)},
+    async with team_member_lock:
+        _existing_team_row = await TeamRepository(prisma_client).table.find_unique(
+            where={"team_id": data.team_id}
         )
-    existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
 
-    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
+        if _existing_team_row is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Team id={} does not exist in db".format(data.team_id)},
+            )
+        existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(
-            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+        ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
+
+        if (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+            and not _is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+            )
+            and not await _is_user_org_admin_for_team(
+                user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+            )
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                        "/team/member_delete", existing_team_row.team_id
+                    )
+                },
+            )
+
+        ## DELETE MEMBER FROM TEAM
+        is_member_in_team, new_team_members = _cleanup_members_with_roles(
+            existing_team_row=existing_team_row,
+            data=data,
         )
-        and not await _is_user_org_admin_for_team(
-            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
-        )
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
-                    "/team/member_delete", existing_team_row.team_id
-                )
+
+        if not is_member_in_team:
+            raise HTTPException(status_code=400, detail={"error": "User not found in team"})
+
+        existing_team_row.members_with_roles = new_team_members
+
+        _db_new_team_members: List[dict] = [m.model_dump() for m in new_team_members]
+
+        _ = await TeamRepository(prisma_client).table.update(
+            where={
+                "team_id": data.team_id,
             },
+            data={"members_with_roles": json.dumps(_db_new_team_members)},  # type: ignore
         )
 
-    ## DELETE MEMBER FROM TEAM
-    is_member_in_team, new_team_members = _cleanup_members_with_roles(
-        existing_team_row=existing_team_row,
-        data=data,
-    )
-
-    if not is_member_in_team:
-        raise HTTPException(status_code=400, detail={"error": "User not found in team"})
-
-    existing_team_row.members_with_roles = new_team_members
-
-    _db_new_team_members: List[dict] = [m.model_dump() for m in new_team_members]
-
-    _ = await TeamRepository(prisma_client).table.update(
-        where={
-            "team_id": data.team_id,
-        },
-        data={"members_with_roles": json.dumps(_db_new_team_members)},  # type: ignore
-    )
-
-    ## DELETE TEAM ID from USER ROW, IF EXISTS ##
-    # get user row
-    key_val = {}
-    if data.user_id is not None:
-        key_val["user_id"] = data.user_id
-    elif data.user_email is not None:
-        key_val["user_email"] = data.user_email
-    existing_user_rows = await UserRepository(prisma_client).table.find_many(
-        where=key_val  # type: ignore
-    )
-
-    if existing_user_rows is not None and (
-        isinstance(existing_user_rows, list) and len(existing_user_rows) > 0
-    ):
-        for existing_user in existing_user_rows:
-            team_list = []
-            if data.team_id in existing_user.teams:
-                team_list = existing_user.teams
-                team_list.remove(data.team_id)
-                await UserRepository(prisma_client).table.update(
-                    where={
-                        "user_id": existing_user.user_id,
-                    },
-                    data={"teams": {"set": team_list}},
-                )
-
-    # Also clean up any existing team membership rows for this user and team
-    user_ids_to_delete = set()
-    if data.user_id is not None:
-        user_ids_to_delete.add(data.user_id)
-    if existing_user_rows is not None and isinstance(existing_user_rows, list):
-        for existing_user in existing_user_rows:
-            if getattr(existing_user, "user_id", None):
-                user_ids_to_delete.add(existing_user.user_id)
-
-    for _uid in user_ids_to_delete:
-        await TeamMembershipRepository(prisma_client).table.delete_many(
-            where={"team_id": data.team_id, "user_id": _uid}
+        ## DELETE TEAM ID from USER ROW, IF EXISTS ##
+        # get user row
+        key_val = {}
+        if data.user_id is not None:
+            key_val["user_id"] = data.user_id
+        elif data.user_email is not None:
+            key_val["user_email"] = data.user_email
+        existing_user_rows = await UserRepository(prisma_client).table.find_many(
+            where=key_val  # type: ignore
         )
+
+        if existing_user_rows is not None and (
+            isinstance(existing_user_rows, list) and len(existing_user_rows) > 0
+        ):
+            for existing_user in existing_user_rows:
+                team_list = []
+                if data.team_id in existing_user.teams:
+                    team_list = existing_user.teams
+                    team_list.remove(data.team_id)
+                    await UserRepository(prisma_client).table.update(
+                        where={
+                            "user_id": existing_user.user_id,
+                        },
+                        data={"teams": {"set": team_list}},
+                    )
+
+        # Also clean up any existing team membership rows for this user and team
+        user_ids_to_delete = set()
+        if data.user_id is not None:
+            user_ids_to_delete.add(data.user_id)
+        if existing_user_rows is not None and isinstance(existing_user_rows, list):
+            for existing_user in existing_user_rows:
+                if getattr(existing_user, "user_id", None):
+                    user_ids_to_delete.add(existing_user.user_id)
+
+        for _uid in user_ids_to_delete:
+            await TeamMembershipRepository(prisma_client).table.delete_many(
+                where={"team_id": data.team_id, "user_id": _uid}
+            )
 
     ## DELETE KEYS CREATED BY USER FOR THIS TEAM
     if user_ids_to_delete:

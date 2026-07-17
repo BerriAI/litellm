@@ -8404,3 +8404,259 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
             )
     assert str(exc.value.code) == "403"
     assert "allowed_passthrough_routes" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_get_team_member_lock_creates_lock_for_team():
+    """
+    Test that _get_team_member_lock creates and returns a lock for a team_id
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _get_team_member_lock,
+        _team_member_locks,
+    )
+
+    # Clear any existing locks
+    _team_member_locks.clear()
+
+    # Get lock for a team
+    lock1 = await _get_team_member_lock("team-123")
+    assert lock1 is not None
+    assert isinstance(lock1, asyncio.Lock)
+
+    # Getting lock for same team should return the same lock
+    lock2 = await _get_team_member_lock("team-123")
+    assert lock2 is lock1
+
+    # Getting lock for different team should return a different lock
+    lock3 = await _get_team_member_lock("team-456")
+    assert lock3 is not lock1
+
+
+@pytest.mark.asyncio
+async def test_get_team_member_lock_concurrent_access():
+    """
+    Test that _get_team_member_lock is thread-safe and handles concurrent access
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _get_team_member_lock,
+        _team_member_locks,
+    )
+
+    # Clear any existing locks
+    _team_member_locks.clear()
+
+    # Create multiple concurrent requests for the same team
+    async def get_lock():
+        return await _get_team_member_lock("concurrent-team")
+
+    # Run 10 concurrent requests
+    locks = await asyncio.gather(*[get_lock() for _ in range(10)])
+
+    # All should return the same lock instance
+    first_lock = locks[0]
+    for lock in locks:
+        assert lock is first_lock
+
+
+@pytest.mark.asyncio
+async def test_team_member_lock_serializes_concurrent_requests():
+    """
+    Test that the team member lock properly serializes concurrent requests
+    to prevent race conditions in read-modify-write operations.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _get_team_member_lock,
+        _team_member_locks,
+    )
+
+    # Clear any existing locks
+    _team_member_locks.clear()
+
+    team_id = "test-race-team"
+    lock = await _get_team_member_lock(team_id)
+
+    # Track execution order
+    execution_order = []
+
+    async def worker(worker_id: int, delay: float):
+        async with lock:
+            execution_order.append(f"start-{worker_id}")
+            await asyncio.sleep(delay)
+            execution_order.append(f"end-{worker_id}")
+
+    # Start 3 workers with different delays
+    await asyncio.gather(
+        worker(1, 0.05),
+        worker(2, 0.01),
+        worker(3, 0.03),
+    )
+
+    # Verify that workers executed serially (each start is followed by its end)
+    assert len(execution_order) == 6
+    for i in range(0, 6, 2):
+        start = execution_order[i]
+        end = execution_order[i + 1]
+        # Each start should be immediately followed by its corresponding end
+        worker_id = start.split("-")[1]
+        assert end == f"end-{worker_id}", f"Worker {worker_id} was interleaved"
+
+
+@pytest.mark.asyncio
+async def test_team_member_lock_allows_parallel_different_teams():
+    """
+    Test that locks for different teams allow parallel execution
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _get_team_member_lock,
+        _team_member_locks,
+    )
+
+    # Clear any existing locks
+    _team_member_locks.clear()
+
+    lock_team_a = await _get_team_member_lock("team-a")
+    lock_team_b = await _get_team_member_lock("team-b")
+
+    # Verify they are different locks
+    assert lock_team_a is not lock_team_b
+
+    # Track execution
+    execution_log = []
+
+    async def worker_team_a():
+        async with lock_team_a:
+            execution_log.append("a-start")
+            await asyncio.sleep(0.05)
+            execution_log.append("a-end")
+
+    async def worker_team_b():
+        async with lock_team_b:
+            execution_log.append("b-start")
+            await asyncio.sleep(0.01)
+            execution_log.append("b-end")
+
+    # Run both workers concurrently
+    await asyncio.gather(worker_team_a(), worker_team_b())
+
+    # Team B should finish before team A (different locks allow parallel execution)
+    assert execution_log == ["a-start", "b-start", "b-end", "a-end"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_team_member_locks_removes_unlocked():
+    """
+    Test that _cleanup_team_member_locks removes unlocked locks
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _cleanup_team_member_locks,
+        _get_team_member_lock,
+        _team_member_locks,
+    )
+
+    # Clear any existing locks
+    _team_member_locks.clear()
+
+    # Create some locks
+    lock1 = await _get_team_member_lock("team-1")
+    lock2 = await _get_team_member_lock("team-2")
+    lock3 = await _get_team_member_lock("team-3")
+
+    assert len(_team_member_locks) == 3
+
+    # Hold one lock
+    async with lock2:
+        # Cleanup should remove lock1 and lock3 (unlocked), but keep lock2 (locked)
+        _cleanup_team_member_locks()
+
+    # lock1 and lock3 should be removed, lock2 should remain
+    assert len(_team_member_locks) == 1
+    assert "team-2" in _team_member_locks
+    assert "team-1" not in _team_member_locks
+    assert "team-3" not in _team_member_locks
+
+
+@pytest.mark.asyncio
+async def test_cleanup_team_member_locks_empty_dict():
+    """
+    Test that _cleanup_team_member_locks handles empty dictionary gracefully
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _cleanup_team_member_locks,
+        _team_member_locks,
+    )
+
+    # Clear any existing locks
+    _team_member_locks.clear()
+
+    # Should not raise any errors
+    _cleanup_team_member_locks()
+    assert len(_team_member_locks) == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_team_member_locks_all_locked():
+    """
+    Test that _cleanup_team_member_locks preserves all locks when all are locked
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _cleanup_team_member_locks,
+        _get_team_member_lock,
+        _team_member_locks,
+    )
+
+    # Clear any existing locks
+    _team_member_locks.clear()
+
+    # Create locks and hold all of them
+    locks = []
+    for i in range(5):
+        lock = await _get_team_member_lock(f"team-{i}")
+        await lock.acquire()
+        locks.append(lock)
+
+    assert len(_team_member_locks) == 5
+
+    # Cleanup should not remove any locks (all are locked)
+    _cleanup_team_member_locks()
+
+    assert len(_team_member_locks) == 5
+
+    # Release all locks
+    for lock in locks:
+        lock.release()
+
+
+@pytest.mark.asyncio
+async def test_get_team_member_lock_triggers_cleanup_when_full():
+    """
+    Test that _get_team_member_lock triggers cleanup when max locks is reached
+    """
+    from litellm.proxy.management_endpoints import team_endpoints
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _get_team_member_lock,
+        _team_member_locks,
+    )
+
+    # Clear any existing locks and temporarily reduce max for testing
+    _team_member_locks.clear()
+    original_max = team_endpoints._MAX_TEAM_MEMBER_LOCKS
+    team_endpoints._MAX_TEAM_MEMBER_LOCKS = 5
+
+    try:
+        # Create 5 locks (at max capacity)
+        for i in range(5):
+            await _get_team_member_lock(f"team-{i}")
+
+        assert len(_team_member_locks) == 5
+
+        # Creating one more should trigger cleanup (but all are unlocked, so they'll be removed)
+        await _get_team_member_lock("team-new")
+
+        # After cleanup, only the new lock should remain
+        assert len(_team_member_locks) == 1
+        assert "team-new" in _team_member_locks
+
+    finally:
+        # Restore original max
+        team_endpoints._MAX_TEAM_MEMBER_LOCKS = original_max
