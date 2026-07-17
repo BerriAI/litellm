@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 from e2e_gateway import Gateway, build_gateway
 from e2e_http import NoBody, ProbeResult, Result, StreamingResponse, Success, UnknownApiError, unwrap
-from pydantic import BaseModel
 from models import (
     ChatBody,
     ChatMessage,
@@ -47,23 +46,6 @@ MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
 _TEAM_READY_ATTEMPTS = 15
 _TEAM_READY_SLEEP_SECONDS = 0.4
-_TRANSIENT_WRITE_ATTEMPTS = 5
-
-
-def _is_transient_control_plane_error(result: Result[BaseModel]) -> bool:
-    """True for stage control-plane blips that should be retried, not hard-failed."""
-    if not isinstance(result, UnknownApiError):
-        return False
-    if result.status_code not in (500, 502, 503, 504):
-        return False
-    lowered = result.body.lower()
-    return (
-        "all connection attempts failed" in lowered
-        or "internal server error" in lowered
-        or "connecting to redis" in lowered
-        or "name resolution" in lowered
-        or result.body.strip() == ""
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,27 +53,11 @@ class ManagementClient:
     gateway: Gateway
 
     def llm_only_key(self) -> str:
-        last_error: str | None = None
-        for attempt in range(_TRANSIENT_WRITE_ATTEMPTS):
-            try:
-                return self.gateway.generate_key(
-                    KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"])
-                )
-            except AssertionError as exc:
-                last_error = str(exc)
-                message = last_error.lower()
-                if (
-                    "all connection attempts failed" in message
-                    or "internal server error" in message
-                ) and attempt + 1 < _TRANSIENT_WRITE_ATTEMPTS:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
-                raise
-        raise AssertionError(last_error or "llm_only_key failed after retries")
+        return self.gateway.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
     def update_key_models(self, key: str, models: list[str]) -> None:
         last: Result[NoBody] | None = None
-        for attempt in range(_TRANSIENT_WRITE_ATTEMPTS):
+        for attempt in range(5):
             last = self.gateway.transport.post(
                 "/key/update",
                 headers=self.gateway.transport.master,
@@ -101,7 +67,9 @@ class ManagementClient:
             match last:
                 case Success():
                     return
-                case _ if _is_transient_control_plane_error(last):
+                case UnknownApiError(body=body) if (
+                    "connecting to redis" in body.lower() or "name resolution" in body.lower()
+                ):
                     time.sleep(0.5 * (attempt + 1))
                     continue
                 case _:
@@ -132,25 +100,16 @@ class ManagementClient:
         ).total_count
 
     def create_team(self, body: TeamNewBody) -> str:
-        last: Result[TeamNewResponse] | None = None
-        for attempt in range(_TRANSIENT_WRITE_ATTEMPTS):
-            last = self.gateway.transport.post(
+        team_id = unwrap(
+            self.gateway.transport.post(
                 "/team/new",
                 headers=self.gateway.transport.master,
                 json=body,
                 response_type=TeamNewResponse,
             )
-            match last:
-                case Success(data=data):
-                    self._wait_for_team(data.team_id)
-                    return data.team_id
-                case _ if _is_transient_control_plane_error(last):
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
-                case _:
-                    break
-        assert last is not None
-        raise AssertionError(last)
+        ).team_id
+        self._wait_for_team(team_id)
+        return team_id
 
     def delete_team(self, team_id: str) -> None:
         _ = self.gateway.transport.post(
@@ -223,24 +182,14 @@ class ManagementClient:
         )
 
     def create_user(self, body: UserNewBody) -> str:
-        last: Result[UserNewResponse] | None = None
-        for attempt in range(_TRANSIENT_WRITE_ATTEMPTS):
-            last = self.gateway.transport.post(
+        return unwrap(
+            self.gateway.transport.post(
                 "/user/new",
                 headers=self.gateway.transport.master,
                 json=body,
                 response_type=UserNewResponse,
             )
-            match last:
-                case Success(data=data):
-                    return data.user_id
-                case _ if _is_transient_control_plane_error(last):
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
-                case _:
-                    break
-        assert last is not None
-        raise AssertionError(last)
+        ).user_id
 
     def delete_user(self, user_id: str) -> None:
         _ = self.gateway.transport.post(
@@ -271,24 +220,14 @@ class ManagementClient:
         ).total
 
     def create_org(self, body: OrgNewBody) -> str:
-        last: Result[OrgNewResponse] | None = None
-        for attempt in range(_TRANSIENT_WRITE_ATTEMPTS):
-            last = self.gateway.transport.post(
+        return unwrap(
+            self.gateway.transport.post(
                 "/organization/new",
                 headers=self.gateway.transport.master,
                 json=body,
                 response_type=OrgNewResponse,
             )
-            match last:
-                case Success(data=data):
-                    return data.organization_id
-                case _ if _is_transient_control_plane_error(last):
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
-                case _:
-                    break
-        assert last is not None
-        raise AssertionError(last)
+        ).organization_id
 
     def delete_org(self, organization_id: str) -> None:
         _ = self.gateway.transport.delete(
