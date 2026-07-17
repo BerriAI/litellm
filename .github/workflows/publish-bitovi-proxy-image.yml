@@ -1,0 +1,54 @@
+name: Publish Bitovi Proxy Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - litellm_internal_staging
+    paths:
+      - ".github/workflows/publish-bitovi-proxy-image.yml"
+      - "docker/**"
+      - "litellm/**"
+      - "enterprise/**"
+      - "ui/**"
+      - "pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_AI }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_AI }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push proxy image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.LITELLM_ECR_REPOSITORY != '' && vars.LITELLM_ECR_REPOSITORY || 'claude-usage-proxy-litellm' }}
+          IMAGE_SHA: ${{ github.sha }}
+        run: |
+          IMAGE_BASE="$ECR_REGISTRY/$ECR_REPOSITORY"
+          docker build \
+            -f docker/Dockerfile.database \
+            -t "$IMAGE_BASE:latest" \
+            -t "$IMAGE_BASE:$IMAGE_SHA" \
+            .
+          docker push "$IMAGE_BASE:latest"
+          docker push "$IMAGE_BASE:$IMAGE_SHA"

@@ -1,0 +1,418 @@
+name: Fork Compatibility Check
+
+on:
+  schedule:
+    # Monday after typical Sunday stable cut
+    - cron: "0 10 * * 1"
+    # Thursday for mid-week PATCH stables
+    - cron: "0 10 * * 4"
+  workflow_dispatch:
+
+# GITHUB_TOKEN alone often cannot create PRs in org repos unless
+# Settings > Actions > "Allow GitHub Actions to create and approve pull requests"
+# is enabled. Prefer secrets.FORK_SYNC_TOKEN (see FORK.md).
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync-and-check:
+    runs-on: ubuntu-latest
+    name: Open sync PR and check Mantle
+    timeout-minutes: 45
+    env:
+      # Classic PAT with `repo`, or fine-grained: Contents + Pull requests + Issues (read/write)
+      GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
+      GH_REPO: ${{ github.repository }}
+    outputs:
+      stable_tag: ${{ steps.stable.outputs.tag }}
+      needs_sync: ${{ steps.stable.outputs.needs_sync }}
+      sync_pr_url: ${{ steps.sync-pr.outputs.pr_url }}
+      has_conflicts: ${{ steps.sync-pr.outputs.has_conflicts }}
+      mantle_ok: ${{ steps.mantle-summary.outputs.ok }}
+
+    steps:
+      - name: Verify token can open PRs
+        id: token-check
+        env:
+          FORK_SYNC_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FORK_SYNC_TOKEN}" ]; then
+            echo "::warning::FORK_SYNC_TOKEN is not set; falling back to GITHUB_TOKEN"
+            echo "::warning::If PR create fails with createPullRequest / Resource not accessible by integration, add FORK_SYNC_TOKEN (see FORK.md)"
+            echo "using_pat=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "using_pat=true" >> "$GITHUB_OUTPUT"
+            echo "Using FORK_SYNC_TOKEN for git push and PR create"
+          fi
+          # Installation tokens are not users; probe repo access instead of /user
+          gh api "repos/${GH_REPO}" --jq .full_name
+
+      - name: Checkout fork (litellm_internal_staging)
+        uses: actions/checkout@v4
+        with:
+          ref: litellm_internal_staging
+          fetch-depth: 0
+          # Same token used for push + PR create (must be able to write contents)
+          token: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/BerriAI/litellm.git || true
+          git fetch upstream --tags --force
+          git fetch origin litellm_internal_staging --force
+
+      - name: Resolve latest stable tag
+        id: stable
+        run: |
+          set -euo pipefail
+          LATEST=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ -z "$LATEST" ]; then
+            echo "No stable tags found matching vX.Y.Z"
+            exit 1
+          fi
+          TAG_SHA=$(git rev-list -n 1 "$LATEST")
+          COMMITS_BEHIND=$(git rev-list --count "HEAD..$LATEST" 2>/dev/null || echo "0")
+          if git merge-base --is-ancestor "$TAG_SHA" HEAD; then
+            NEEDS_SYNC=false
+          else
+            NEEDS_SYNC=true
+          fi
+          echo "tag=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${TAG_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "commits_behind=$COMMITS_BEHIND" >> "$GITHUB_OUTPUT"
+          echo "needs_sync=$NEEDS_SYNC" >> "$GITHUB_OUTPUT"
+          echo "Latest stable: $LATEST ($TAG_SHA)"
+          echo "Commits behind tag: $COMMITS_BEHIND"
+          echo "Needs sync: $NEEDS_SYNC"
+
+      - name: Open or refresh sync PR (tag as head; GitHub shows conflicts)
+        id: sync-pr
+        if: steps.stable.outputs.needs_sync == 'true'
+        env:
+          STABLE_TAG: ${{ steps.stable.outputs.tag }}
+          TAG_SHA: ${{ steps.stable.outputs.sha }}
+          COMMITS_BEHIND: ${{ steps.stable.outputs.commits_behind }}
+        run: |
+          set -euo pipefail
+          BRANCH="sync/upstream-${STABLE_TAG}"
+          echo "pr_url=" >> "$GITHUB_OUTPUT"
+          echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
+
+          gh label create upstream-sync --description "Upstream stable sync" --color "0E8A16" --force 2>/dev/null || true
+          gh label create fork-compatibility --description "Fork Mantle compatibility" --color "D93F0B" --force 2>/dev/null || true
+          gh label create ci-alert --description "CI alert" --color "B60205" --force 2>/dev/null || true
+          gh label create needs-conflict-resolution --description "GitHub reports merge conflicts on this sync PR" --color "E4E669" --force 2>/dev/null || true
+
+          SHORTLOG=$(git log --oneline "origin/litellm_internal_staging..${STABLE_TAG}" | head -40 || true)
+
+          # Preview conflicts without committing markers (markers hide conflicts from GitHub UI).
+          HAS_CONFLICTS=false
+          CONFLICT_FILES=""
+          git checkout -B "_conflict_preview" origin/litellm_internal_staging
+          if git merge --no-commit --no-ff "$STABLE_TAG"; then
+            echo "Trial merge is clean"
+            git merge --abort || git reset --hard HEAD
+          else
+            HAS_CONFLICTS=true
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U | grep -v '^\.github/workflows/' || true)
+            echo "Trial merge has conflicts:"
+            echo "$CONFLICT_FILES"
+            git merge --abort || git reset --hard HEAD
+          fi
+          echo "has_conflicts=${HAS_CONFLICTS}" >> "$GITHUB_OUTPUT"
+
+          # Sync branch starts at the stable tag so GitHub can show real merge conflicts
+          # against staging. We do NOT want BerriAI's CI workflows on Bitovi: restore
+          # staging's .github/workflows on top of the tag (requires PAT `workflow` scope
+          # to push, but the PR will not replace Bitovi Actions with upstream's).
+          git checkout -B "$BRANCH" "$STABLE_TAG"
+          rm -rf .github/workflows
+          git checkout origin/litellm_internal_staging -- .github/workflows
+          git add -A .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: keep Bitovi GitHub Actions workflows on sync branch"
+          fi
+          git push -u origin "$BRANCH" --force
+
+          if [ "$HAS_CONFLICTS" = "true" ]; then
+            TITLE="chore: sync upstream ${STABLE_TAG} (conflicts; resolve in GitHub UI)"
+            CONFLICT_SECTION=$(cat <<EOF
+          ### Conflicts (resolve in GitHub before merging)
+
+          GitHub should show **This branch has conflicts that must be resolved**.
+          Use **Resolve conflicts** on the PR (or merge locally). Do not merge until that banner is gone.
+
+          Likely conflicted paths (from trial merge; \`.github/workflows\` is forced to Bitovi and omitted here):
+
+          \`\`\`
+          ${CONFLICT_FILES}
+          \`\`\`
+
+          #### What to keep
+
+          | Path pattern | Prefer |
+          |--------------|--------|
+          | \`litellm/llms/bedrock_mantle/**\` | Bitovi (staging / current) |
+          | \`litellm/proxy/auth/**\`, key/team/budget proxy code | Bitovi when both changed; read both sides |
+          | \`tests/e2e/budgets/**\`, VK/budget UI under \`ui/litellm-dashboard/**/key_*\` | Bitovi |
+          | \`deploy/**\`, Bitovi workflows under \`.github/workflows/publish-*.yml\` | Bitovi |
+          | \`ui/**/eslint-metrics.json\`, \`litellm/proxy/_experimental/out/**\` | Upstream / regenerate (noise) |
+          | Everything else | Prefer upstream unless you know it is a Bitovi change |
+
+          In the GitHub conflict editor, **staging is the branch you are merging into**; keep Bitovi lines for the rows above.
+          EOF
+            )
+          else
+            TITLE="chore: sync upstream ${STABLE_TAG}"
+            CONFLICT_SECTION="### Conflicts
+
+          Trial merge was clean. Review the diff (large UI \`_experimental/out\` churn is normal), wait for checks, then merge."
+          fi
+          CONFLICT_SECTION=$(printf '%s\n' "$CONFLICT_SECTION" | sed 's/^          //')
+
+          BODY=$(cat <<EOF
+          ## Upstream stable sync
+
+          Stable tag: [\`${STABLE_TAG}\`](https://github.com/BerriAI/litellm/releases/tag/${STABLE_TAG})
+
+          - Tag SHA: \`${TAG_SHA}\`
+          - Commits not yet in staging: ${COMMITS_BEHIND}
+          - Sync source: stable tag only (not \`upstream/main\` or BerriAI staging)
+          - Head is the stable tag tip, plus Bitovi \`.github/workflows\` retained (we do not adopt BerriAI CI)
+          - Docs: [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md)
+
+          **This Action never merges into \`litellm_internal_staging\`.** A human must resolve conflicts (if any) and merge.
+
+          ${CONFLICT_SECTION}
+
+          ### Shortlog (first 40)
+
+          \`\`\`
+          ${SHORTLOG}
+          \`\`\`
+
+          ### Checklist (do not merge until all are done)
+
+          - [ ] No GitHub banner: "This branch has conflicts that must be resolved"
+          - [ ] Bitovi paths above kept correctly (Mantle / auth / VK / budgets / deploy)
+          - [ ] Checks understood if red
+          - [ ] Merge this PR into \`litellm_internal_staging\` (manual)
+          EOF
+          )
+          BODY=$(printf '%s\n' "$BODY" | sed 's/^          //')
+
+          EXISTING_NUM=$(gh api "repos/${GH_REPO}/pulls" --paginate \
+            --jq ".[] | select(.head.ref == \"${BRANCH}\" and .base.ref == \"litellm_internal_staging\" and .state == \"open\") | .number" \
+            | head -1 || true)
+
+          if [ -n "${EXISTING_NUM}" ]; then
+            PR_JSON=$(jq -n --arg title "$TITLE" --arg body "$BODY" '{title:$title, body:$body}' \
+              | gh api "repos/${GH_REPO}/pulls/${EXISTING_NUM}" --method PATCH --input -)
+            PR_URL=$(echo "$PR_JSON" | jq -r .html_url)
+            PR_NUM="$EXISTING_NUM"
+            echo "Refreshed PR: $PR_URL"
+          else
+            set +e
+            PR_JSON=$(jq -n \
+              --arg title "$TITLE" \
+              --arg body "$BODY" \
+              --arg head "$BRANCH" \
+              --arg base "litellm_internal_staging" \
+              '{title:$title, body:$body, head:$head, base:$base}' \
+              | gh api "repos/${GH_REPO}/pulls" --method POST --input - 2>pr_create_err.txt)
+            CREATE_STATUS=$?
+            set -e
+            if [ "$CREATE_STATUS" -ne 0 ]; then
+              echo "::error::Failed to create pull request (HTTP/API)."
+              cat pr_create_err.txt || true
+              echo "::error::Fix: create repo secret FORK_SYNC_TOKEN (see FORK.md)."
+              echo "::error::Branch was pushed: https://github.com/${GH_REPO}/tree/${BRANCH}"
+              exit 1
+            fi
+            PR_URL=$(echo "$PR_JSON" | jq -r .html_url)
+            PR_NUM=$(echo "$PR_JSON" | jq -r .number)
+            echo "Created PR: $PR_URL"
+          fi
+
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+          jq -n '{labels:["upstream-sync"]}' \
+            | gh api --method POST "repos/${GH_REPO}/issues/${PR_NUM}/labels" --input - 2>/dev/null || true
+          if [ "$HAS_CONFLICTS" = "true" ]; then
+            jq -n '{labels:["needs-conflict-resolution"]}' \
+              | gh api --method POST "repos/${GH_REPO}/issues/${PR_NUM}/labels" --input - 2>/dev/null || true
+          else
+            gh api --method DELETE "repos/${GH_REPO}/issues/${PR_NUM}/labels/needs-conflict-resolution" 2>/dev/null || true
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "0.11.7"
+          enable-cache: true
+
+      - name: Install dependencies with bedrock extras
+        run: |
+          uv pip install -e ".[bedrock]" --system
+          uv pip install pytest pytest-asyncio boto3 --system
+
+      - name: Run Bedrock Mantle tests on staging tip
+        id: bedrock-staging
+        continue-on-error: true
+        run: |
+          git checkout litellm_internal_staging
+          pytest tests/test_litellm/llms/bedrock_mantle/ -v --tb=short --junit-xml=test-results-staging.xml
+
+      - name: Auth contract check on staging tip
+        id: auth-staging
+        continue-on-error: true
+        run: |
+          python3 << 'EOF'
+          import sys
+          try:
+              from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthMixin
+          except ImportError as e:
+              print(f"Failed to import BedrockMantleAuthMixin: {e}")
+              sys.exit(1)
+          if not hasattr(BedrockMantleAuthMixin, "_resolve_bearer_token"):
+              print("Missing _resolve_bearer_token")
+              sys.exit(1)
+          if not hasattr(BedrockMantleAuthMixin, "_resolve_region"):
+              print("Missing _resolve_region")
+              sys.exit(1)
+          print("Auth contract OK on staging")
+          EOF
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-mantle-test-results
+          path: test-results-staging.xml
+          if-no-files-found: ignore
+
+      - name: Summarize Mantle results
+        id: mantle-summary
+        if: always()
+        run: |
+          OK=true
+          if [ "${{ steps.bedrock-staging.outcome }}" = "failure" ] || [ "${{ steps.auth-staging.outcome }}" = "failure" ]; then
+            OK=false
+          fi
+          echo "ok=$OK" >> "$GITHUB_OUTPUT"
+          echo "Mantle OK: $OK"
+
+      - name: Comment on sync PR if Mantle failed
+        if: |
+          always() &&
+          steps.mantle-summary.outputs.ok == 'false' &&
+          steps.sync-pr.outputs.pr_url != ''
+        run: |
+          PR_URL="${{ steps.sync-pr.outputs.pr_url }}"
+          PR_NUM="${PR_URL##*/}"
+          jq -n --arg body "$(cat <<EOF
+          ## Mantle compatibility alert
+
+          Bedrock Mantle checks failed on this run ([logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})).
+
+          - Staging tip Mantle tests: ${{ steps.bedrock-staging.outcome }}
+          - Staging auth contract: ${{ steps.auth-staging.outcome }}
+
+          See [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md).
+          EOF
+          )" '{body:$body}' | gh api "repos/${GH_REPO}/issues/${PR_NUM}/comments" --method POST --input -
+
+      - name: Create or update Mantle failure issue
+        if: always() && steps.mantle-summary.outputs.ok == 'false'
+        env:
+          STABLE_TAG: ${{ steps.stable.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TITLE="fork-compatibility: Mantle failed [${STABLE_TAG}]"
+          BODY=$(cat <<EOF
+          # Fork Mantle compatibility failed
+
+          - Stable tag under review: \`${STABLE_TAG}\`
+          - Staging Mantle tests: ${{ steps.bedrock-staging.outcome }}
+          - Auth contract: ${{ steps.auth-staging.outcome }}
+          - Sync PR: ${{ steps.sync-pr.outputs.pr_url || 'n/a' }}
+          - [Action run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+          See [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md).
+          EOF
+          )
+          EXISTING_NUM=$(gh api "repos/${GH_REPO}/issues?state=open&labels=fork-compatibility" \
+            --jq ".[] | select(.title | contains(\"Mantle failed\")) | .number" | head -1 || true)
+          if [ -n "$EXISTING_NUM" ]; then
+            jq -n --arg body "$BODY" '{body:$body}' \
+              | gh api "repos/${GH_REPO}/issues/${EXISTING_NUM}/comments" --method POST --input -
+            echo "Updated issue #${EXISTING_NUM}"
+          else
+            ISSUE_JSON=$(jq -n --arg title "$TITLE" --arg body "$BODY" '{title:$title, body:$body}' \
+              | gh api "repos/${GH_REPO}/issues" --method POST --input -)
+            ISSUE_NUM=$(echo "$ISSUE_JSON" | jq -r .number)
+            gh api --method POST "repos/${GH_REPO}/issues/${ISSUE_NUM}/labels" --input - <<< '{"labels":["fork-compatibility"]}' 2>/dev/null || true
+            gh api --method POST "repos/${GH_REPO}/issues/${ISSUE_NUM}/labels" --input - <<< '{"labels":["ci-alert"]}' 2>/dev/null || true
+            echo "Created issue #${ISSUE_NUM}"
+          fi
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Fork sync / Mantle check"
+            echo ""
+            echo "- Latest stable: \`${{ steps.stable.outputs.tag }}\`"
+            echo "- Needs sync: \`${{ steps.stable.outputs.needs_sync }}\`"
+            echo "- Has conflicts on sync branch: \`${{ steps.sync-pr.outputs.has_conflicts }}\`"
+            echo "- Sync PR (review + merge manually): ${{ steps.sync-pr.outputs.pr_url || 'none' }}"
+            echo "- Mantle OK: \`${{ steps.mantle-summary.outputs.ok }}\`"
+            echo "- Token: FORK_SYNC_TOKEN preferred over GITHUB_TOKEN (see FORK.md)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  notify-slack:
+    runs-on: ubuntu-latest
+    name: Notify Slack
+    needs: [sync-and-check]
+    if: always()
+    steps:
+      - name: Check Slack webhook
+        id: slack-check
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -n "${SLACK_WEBHOOK_URL}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "SLACK_WEBHOOK_URL not set; skipping Slack notify"
+          fi
+
+      - name: Send Slack notification
+        if: steps.slack-check.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: "LiteLLM fork sync: stable ${{ needs.sync-and-check.outputs.stable_tag }} (needs_sync=${{ needs.sync-and-check.outputs.needs_sync }}, conflicts=${{ needs.sync-and-check.outputs.has_conflicts }}, mantle_ok=${{ needs.sync-and-check.outputs.mantle_ok }})"
+            blocks:
+              - type: section
+                text:
+                  type: mrkdwn
+                  text: "*LiteLLM fork sync PR* (review and merge manually)\n• Stable: `${{ needs.sync-and-check.outputs.stable_tag }}`\n• Needs sync: `${{ needs.sync-and-check.outputs.needs_sync }}`\n• Conflicts: `${{ needs.sync-and-check.outputs.has_conflicts }}`\n• Mantle OK: `${{ needs.sync-and-check.outputs.mantle_ok }}`\n• PR: ${{ needs.sync-and-check.outputs.sync_pr_url || 'none' }}\n• <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Logs>"
