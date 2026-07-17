@@ -254,3 +254,35 @@ tests:
           content:
             name: sidecar-tpl
             image: "ghcr.io/berriai/litellm-database:test"
+
+  - it: should mount environmentSecrets and environmentConfigMaps via envFrom
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      masterkeySecretName: existing-masterkey
+      environmentSecrets:
+        - litellm-env-secret
+      environmentConfigMaps:
+        - litellm-env-configmap
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: litellm-env-secret
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: litellm-env-configmap
+
+  - it: should not render envFrom when no environmentSecrets or environmentConfigMaps
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      masterkeySecretName: existing-masterkey
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
