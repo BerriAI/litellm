@@ -802,7 +802,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router.get_fully_blocked_model_names.return_value = set()
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
-    router.get_model_group_info.return_value = None
+    router._cached_get_model_group_info.return_value = None
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
@@ -849,7 +849,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     router.get_model_list.return_value = [team_dep]
     # Fallbacks are keyed on the internal routing name, as the router stores them.
     router.fallbacks = [{"model_name_teamX_uuid9": ["gpt-4o-backup"]}]
-    router.get_model_group_info.return_value = None
+    router._cached_get_model_group_info.return_value = None
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
@@ -907,7 +907,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
         {"model_name_teamX_uuid9": ["teamX-backup"]},
         {"model_name_teamY_uuidZ": ["teamY-backup"]},
     ]
-    router.get_model_group_info.return_value = None
+    router._cached_get_model_group_info.return_value = None
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "user_model", None)
