@@ -488,8 +488,8 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
     if not file_bytes:
         raise ValueError("File is empty or could not be read")
 
-    explicit_mime = document.get("mime_type")
-    explicit_mime = explicit_mime if isinstance(explicit_mime, str) else None
+    raw_mime = document.get("mime_type")
+    explicit_mime = raw_mime if isinstance(raw_mime, str) else None
     resolved_mime = next(
         (
             candidate

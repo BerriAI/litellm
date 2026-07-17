@@ -17,6 +17,8 @@ import httpx
 import pytest
 import yaml
 
+from litellm.proxy.ocr_endpoints.endpoints import _build_document_from_upload
+
 TEST_PDF_URL = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
     "@d769e81c90d453240c61fc572cdb27fae06a89d0"
@@ -27,6 +29,15 @@ TEST_IMAGE_URL = (
     "@d769e81c90d453240c61fc572cdb27fae06a89d0"
     "/tests/image_gen_tests/test_image.png"
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+FIXTURE_PDF = REPO_ROOT / "tests" / "llm_translation" / "fixtures" / "dummy.pdf"
+FIXTURE_IMAGE = REPO_ROOT / "tests" / "image_gen_tests" / "test_image.png"
+
+RUST_OCR_UPLOAD_CASES = [
+    pytest.param(FIXTURE_PDF, "application/pdf", "document_url", id="pdf_octet_stream"),
+    pytest.param(FIXTURE_IMAGE, "image/png", "image_url", id="image_octet_stream"),
+]
 
 RUST_OCR_GATEWAY_CASES = [
     pytest.param(
@@ -92,6 +103,17 @@ class OcrGateway:
                 json={"model": model, "document": document},
             )
 
+    def ocr_upload(self, model: str, content: bytes, upload_name: str) -> httpx.Response:
+        with httpx.Client(
+            timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120"))
+        ) as client:
+            return client.post(
+                f"{self.base_url.rstrip('/')}/v1/ocr",
+                headers={"Authorization": f"Bearer {self.master_key}"},
+                data={"model": model},
+                files={"file": (upload_name, content, "application/octet-stream")},
+            )
+
 
 @dataclass(frozen=True)
 class OcrResources:
@@ -143,6 +165,30 @@ class TestRustOcrGateway:
         self, resources: OcrResources, model: str, document: dict[str, str]
     ) -> None:
         response = resources.gateway.ocr(model, document)
+
+        assert response.status_code == 200, response.text
+        _assert_ocr_response_shape(response.json())
+
+    @pytest.mark.parametrize(
+        ("fixture_path", "expected_mime", "expected_document_type"),
+        RUST_OCR_UPLOAD_CASES,
+    )
+    def test_rust_ocr_octet_stream_upload_response(
+        self,
+        resources: OcrResources,
+        fixture_path: Path,
+        expected_mime: str,
+        expected_document_type: str,
+    ) -> None:
+        if not fixture_path.is_file():
+            pytest.skip(f"Missing OCR fixture: {fixture_path}")
+
+        content = fixture_path.read_bytes()
+        document = _build_document_from_upload(content, "document", "application/octet-stream")
+        assert document["type"] == expected_document_type
+        assert document[expected_document_type].startswith(f"data:{expected_mime};base64,")
+
+        response = resources.gateway.ocr_upload("rust-ocr-mistral", content, "document")
 
         assert response.status_code == 200, response.text
         _assert_ocr_response_shape(response.json())
