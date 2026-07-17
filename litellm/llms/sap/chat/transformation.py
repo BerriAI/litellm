@@ -15,10 +15,10 @@ from typing import (
     FrozenSet,
 )
 from functools import cached_property
-import litellm
 import httpx
+import litellm
 
-
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -177,21 +177,47 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     @cached_property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
+        return self._resolve_deployment_url()
+
+    def _resolve_deployment_url(self) -> str:
+        """Discover the orchestration deployment URL from SAP AI Core.
+
+        Lists all deployments, filters to those with scenarioId and
+        executableId both equal to "orchestration", picks the one with
+        the most recent createdAt timestamp.  Warns when more than one
+        candidate is found.  Raises if none found.
+        """
         client = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
         deployments = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
-        valid: List[Tuple[str, str]] = []
+        valid: List[Tuple[str, str, str]] = []  # (url, createdAt, name)
         for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
-                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+            if dep.get("scenarioId") != "orchestration":
+                continue
+            cfg = client.get(
+                f"{self.base_url}/lm/configurations/{dep['configurationId']}",
+                headers=self.headers,
+            ).json()
+            if cfg.get("executableId") == "orchestration":
+                valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.get("name", "")))
+
+        if not valid:
+            raise GenAIHubOrchestrationError(
+                status_code=404,
+                message="No orchestration deployment found in SAP AI Core.",
+            )
+
+        sorted_valid = sorted(valid, key=lambda x: x[1], reverse=True)
+
+        if len(sorted_valid) > 1:
+            chosen = sorted_valid[0]
+            others = [v[2] or v[0] for v in sorted_valid[1:]]
+            verbose_logger.warning(
+                f"SAP: {len(sorted_valid)} orchestration deployments found; "
+                f"using newest (name={chosen[2]!r}, url={chosen[0]!r}). "
+                f"Others ignored: {others}."
+            )
+
+        return sorted_valid[0][0]
 
     @classmethod
     def get_config(cls):
