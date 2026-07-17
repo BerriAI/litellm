@@ -30,9 +30,11 @@ ROUTER_MODEL = "complexity-smart-router"
 # Lexically simple (heuristic -> SIMPLE) but a hard reasoning question (LLM -> above SIMPLE).
 LEXICALLY_SIMPLE_HARD_PROMPT = "Is P equal to NP?"
 # SIMPLE tier backend; served only when the classifier silently falls back to heuristic.
-HEURISTIC_TIER_MODEL = "openai/gpt-5.5"
+# Spend logs may store the alias (gpt-5.5) or the provider-prefixed form depending on
+# how the deployment is registered (compose vs /model/new).
+HEURISTIC_TIER_MODELS = frozenset({"openai/gpt-5.5", "gpt-5.5"})
 # MEDIUM/COMPLEX/REASONING tier backend; served only when the LLM classifier runs.
-LLM_TIER_MODEL = "anthropic/claude-haiku-4-5"
+LLM_TIER_MODELS = frozenset({"anthropic/claude-haiku-4-5", "claude-haiku-4-5"})
 
 
 class TestComplexityRouterLlmClassifier:
@@ -54,9 +56,9 @@ class TestComplexityRouterLlmClassifier:
 
         rows = client.gateway.poll_logs_for_key(scoped_key, min_rows=1)
         served = [row.model for row in rows]
-        assert served == [LLM_TIER_MODEL], (
-            f"expected the request to be served by {LLM_TIER_MODEL!r} (the higher-tier "
-            f"backend the LLM classifier picks for a hard prompt), but the spend log shows "
-            f"{served!r}. {HEURISTIC_TIER_MODEL!r} means the LLM classifier silently failed "
-            f"and the router fell back to heuristic scoring (SIMPLE) - the pre-fix regression"
+        assert served and all(model in LLM_TIER_MODELS for model in served), (
+            f"expected the request to be served by one of {sorted(LLM_TIER_MODELS)!r} "
+            f"(higher-tier backend the LLM classifier picks for a hard prompt), but the "
+            f"spend log shows {served!r}. One of {sorted(HEURISTIC_TIER_MODELS)!r} means "
+            f"the LLM classifier silently failed or scored SIMPLE (heuristic/fallback path)"
         )

@@ -25,14 +25,15 @@ model_list:
     litellm_params:
       model: anthropic/claude-sonnet-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
+  # 1M-context sonnet for long_context_1m only (sonnet-4-5 is capped at 200k).
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: claude-opus-4-7
     litellm_params:
       model: anthropic/claude-opus-4-7
       api_key: os.environ/ANTHROPIC_API_KEY
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Bedrock (InvokeModel) ----
   - model_name: claude-haiku-4-5-bedrock-invoke
@@ -43,14 +44,14 @@ model_list:
     litellm_params:
       model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
       aws_region_name: us-east-1
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
+  - model_name: claude-sonnet-4-6-bedrock-invoke
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+      aws_region_name: us-east-1
   - model_name: claude-opus-4-7-bedrock-invoke
     litellm_params:
       model: bedrock/us.anthropic.claude-opus-4-7
       aws_region_name: us-east-1
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Bedrock (Converse) ----
   - model_name: claude-haiku-4-5-bedrock-converse
@@ -61,14 +62,14 @@ model_list:
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0
       aws_region_name: us-east-1
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
+  - model_name: claude-sonnet-4-6-bedrock-converse
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-6
+      aws_region_name: us-east-1
   - model_name: claude-opus-4-7-bedrock-converse
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-opus-4-7
       aws_region_name: us-east-1
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Vertex AI ----
   # `use_in_pass_through: true` registers each deployment's
@@ -90,16 +91,18 @@ model_list:
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       use_in_pass_through: true
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
+  - model_name: claude-sonnet-4-6-vertex
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: global
+      use_in_pass_through: true
   - model_name: claude-opus-4-7-vertex
     litellm_params:
       model: vertex_ai/claude-opus-4-7
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       use_in_pass_through: true
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Microsoft Foundry (Anthropic deployments on Azure) ----
   - model_name: claude-haiku-4-5-azure
@@ -112,15 +115,16 @@ model_list:
       model: azure_ai/claude-sonnet-4-5
       api_base: os.environ/AZURE_AI_API_BASE
       api_key: os.environ/AZURE_AI_API_KEY
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
+  - model_name: claude-sonnet-4-6-azure
+    litellm_params:
+      model: azure_ai/claude-sonnet-4-6
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
   - model_name: claude-opus-4-7-azure
     litellm_params:
       model: azure_ai/claude-opus-4-7
       api_base: os.environ/AZURE_AI_API_BASE
       api_key: os.environ/AZURE_AI_API_KEY
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
 
 general_settings:
   # Claude Code sends provider-specific headers (e.g. anthropic-beta) we

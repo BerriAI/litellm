@@ -82,10 +82,11 @@ def test_yaml_has_no_unused_declarations() -> None:
     )
 
 
-def test_load_returns_fifteen_deployments() -> None:
-    """The compat matrix is 3 tiers x 5 provider surfaces = 15. Pin the
-    count so a future edit to the yaml can't silently drop a tier."""
-    assert len(load_all_deployments()) == 15
+def test_load_returns_expected_deployment_count() -> None:
+    """3 tiers x 5 surfaces = 15 base deployments, plus sonnet-4-6 on each
+    surface for long_context_1m (sonnet-4-5 is 200k-capped). Pin the count
+    so a future edit to the yaml can't silently drop a tier."""
+    assert len(load_all_deployments()) == 20
 
 
 def test_deployments_are_hashable_and_frozen() -> None:
