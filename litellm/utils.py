@@ -6141,6 +6141,21 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
+        elif custom_llm_provider == "compactifai":
+            if "COMPACTIFAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("COMPACTIFAI_API_KEY")
+        elif custom_llm_provider == "clarifai":
+            if "CLARIFAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("CLARIFAI_API_KEY")
+        elif custom_llm_provider == "ovhcloud":
+            if "OVHCLOUD_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("OVHCLOUD_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
