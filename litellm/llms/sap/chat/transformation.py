@@ -287,7 +287,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ):
         # Step 1: per-request override via optional_params
         base = optional_params.get("deployment_url")
-        # Step 2: operator-level env var (no discovery needed)
+        # Step 2: operator-level env var (no discovery needed).
+        # An empty string is treated as unset and falls through to discovery;
+        # export AICORE_ORCHESTRATION_DEPLOYMENT_URL= has no effect.
         if not base:
             base = os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL")
         # Step 3: auto-discovery (cached; one network round-trip per instance)
