@@ -7,6 +7,7 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -331,74 +332,67 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
         assert result == "body-user"
 
 
-def _register_custom_pass_through_route(monkeypatch, route_key: str, path: str, route_type: str):
-    from litellm.proxy.pass_through_endpoints.route_registry import (
-        registered_pass_through_routes,
+def _request_dispatched_to(endpoint) -> Request:
+    """Build a minimal Request whose FastAPI-resolved endpoint is ``endpoint``,
+    mirroring what Starlette sets in ``scope`` once routing has matched."""
+    return Request(scope={"type": "http", "headers": [], "endpoint": endpoint})
+
+
+def _pass_through_endpoint():
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     )
 
-    monkeypatch.setitem(
-        registered_pass_through_routes,
-        route_key,
-        {
-            "endpoint_id": "test-endpoint",
-            "path": path,
-            "type": route_type,
-            "methods": ["POST"],
-            "auth": True,
-            "passthrough_params": {},
-        },
-    )
+    def endpoint():  # stand-in for create_pass_through_route's handler
+        ...
+
+    setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return endpoint
 
 
-def test_get_model_from_request_skips_user_defined_pass_through_route(monkeypatch):
-    """The body of a user-defined pass-through request is forwarded verbatim, so a
-    `model` field there names an upstream model and must not be treated as a
-    LiteLLM model for allowlist/budget enforcement."""
-    _register_custom_pass_through_route(
-        monkeypatch, "test-endpoint:exact:/my-custom-endpoint:POST", "/my-custom-endpoint", "exact"
-    )
-
+def test_get_model_from_request_skips_pass_through_dispatched_request():
+    """When FastAPI dispatched the request to a user-defined pass-through handler,
+    the body `model` names an upstream model and must not be treated as a LiteLLM
+    model for allowlist/budget enforcement."""
     assert (
         get_model_from_request(
             request_data={"model": "upstream-special-model"},
             route="/my-custom-endpoint",
+            request=_request_dispatched_to(_pass_through_endpoint()),
         )
         is None
     )
 
 
-def test_get_model_from_request_skips_user_defined_pass_through_subpath(monkeypatch):
-    _register_custom_pass_through_route(
-        monkeypatch, "test-endpoint:subpath:/my-custom-endpoint:POST", "/my-custom-endpoint", "subpath"
-    )
+def test_get_model_from_request_enforces_when_builtin_handler_dispatched():
+    """A custom pass-through path that collides with a built-in route resolves to the
+    built-in handler (no marker), so the body `model` must still be extracted and
+    enforced. Same request path as above, but dispatched to a non-pass-through
+    endpoint: the model must NOT be suppressed."""
+
+    def builtin_chat_completions():
+        ...
 
     assert (
         get_model_from_request(
-            request_data={"model": "upstream-special-model"},
-            route="/my-custom-endpoint/v1/generate",
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            request=_request_dispatched_to(builtin_chat_completions),
         )
-        is None
+        == "gpt-4o"
     )
 
 
-def test_get_model_from_request_unrelated_route_unaffected_by_pass_through_registry(monkeypatch):
-    _register_custom_pass_through_route(
-        monkeypatch, "test-endpoint:exact:/my-custom-endpoint:POST", "/my-custom-endpoint", "exact"
-    )
-
+def test_get_model_from_request_no_request_extracts_model():
+    """Callers without a request object (e.g. budget reservation) still extract the
+    model; the pass-through suppression only applies to a dispatched pass-through
+    handler."""
     assert (
         get_model_from_request(
             request_data={"model": "gpt-4o"},
             route="/v1/chat/completions",
         )
         == "gpt-4o"
-    )
-    assert (
-        get_model_from_request(
-            request_data={"model": "upstream-special-model"},
-            route="/my-custom-endpoint-other",
-        )
-        == "upstream-special-model"
     )
 
 

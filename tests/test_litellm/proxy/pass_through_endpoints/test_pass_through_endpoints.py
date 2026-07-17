@@ -24,14 +24,12 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    _registered_pass_through_routes,
     create_pass_through_route,
     initialize_pass_through_endpoints,
     pass_through_request,
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
-)
-from litellm.proxy.pass_through_endpoints.route_registry import (
-    registered_pass_through_routes as _registered_pass_through_routes,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -615,7 +613,7 @@ async def test_pass_through_handler_rejects_unregistered_method():
             return_value=({}, {}, None, False),
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             {
                 "test-endpoint-id:exact:/test/path:POST": {
                     "endpoint_id": "test-endpoint-id",
@@ -1583,7 +1581,7 @@ async def test_create_pass_through_endpoint_auth_true_enforces_allowlist():
         ) as mock_get_config,
         patch("litellm.proxy.proxy_server.update_config_general_settings"),
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             registry,
         ),
     ):
@@ -1678,7 +1676,7 @@ async def test_update_pass_through_endpoint_auth_true_enforces_allowlist():
         ) as mock_get_config,
         patch("litellm.proxy.proxy_server.update_config_general_settings"),
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             registry,
         ),
     ):
@@ -1759,7 +1757,7 @@ async def test_update_pass_through_endpoint_preserves_auth_false():
             "litellm.proxy.proxy_server.update_config_general_settings"
         ) as mock_update_config,
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             registry,
         ),
     ):
@@ -3238,9 +3236,7 @@ def test_is_registered_pass_through_route_with_custom_root():
     """
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         InitPassThroughEndpointHelpers,
-    )
-    from litellm.proxy.pass_through_endpoints.route_registry import (
-        registered_pass_through_routes as _registered_pass_through_routes,
+        _registered_pass_through_routes,
     )
 
     # Clear the registry first
@@ -3294,9 +3290,7 @@ def test_get_registered_pass_through_route_with_custom_root():
     """
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         InitPassThroughEndpointHelpers,
-    )
-    from litellm.proxy.pass_through_endpoints.route_registry import (
-        registered_pass_through_routes as _registered_pass_through_routes,
+        _registered_pass_through_routes,
     )
 
     # Clear the registry first
@@ -3367,9 +3361,7 @@ def test_db_registered_pass_through_route_bare_path_convention(
     """
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         InitPassThroughEndpointHelpers,
-    )
-    from litellm.proxy.pass_through_endpoints.route_registry import (
-        registered_pass_through_routes as _registered_pass_through_routes,
+        _registered_pass_through_routes,
     )
 
     _registered_pass_through_routes.clear()

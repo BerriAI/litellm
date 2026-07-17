@@ -4,9 +4,7 @@ import asyncio
 # Import the specific components we need to test
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     InitPassThroughEndpointHelpers,
-)
-from litellm.proxy.pass_through_endpoints.route_registry import (
-    registered_pass_through_routes as _registered_pass_through_routes,
+    _registered_pass_through_routes,
 )
 
 

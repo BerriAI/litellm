@@ -797,7 +797,7 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             mock_registered_routes,
         ),
         patch(
@@ -863,7 +863,7 @@ def test_virtual_key_llm_api_routes_allows_non_auth_enforced_pass_through_endpoi
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             mock_registered_routes,
         ),
         patch(
@@ -913,7 +913,7 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             mock_registered_routes,
         ),
         patch(
@@ -957,7 +957,7 @@ def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             mock_registered_routes,
         ),
         patch(
@@ -1012,7 +1012,7 @@ def test_non_proxy_admin_denies_auth_pass_through_without_allowlist():
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             mock_registered_routes,
         ),
         patch(
@@ -1051,7 +1051,7 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             mock_registered_routes,
         ),
         patch(
@@ -1085,7 +1085,7 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
 
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.route_registry.registered_pass_through_routes",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
             mock_registered_routes,
         ),
         patch(
