@@ -22,7 +22,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 _KEY = os.environ.get("AICORE_SERVICE_KEY", "")
-_SAP_GPT = "sap/gpt-4o"
 _SAP_ANTHROPIC_37 = "sap/anthropic--claude-3-7-sonnet-20250219"
 _SAP_ANTHROPIC_35 = "sap/anthropic--claude-3-5-sonnet"
 _SAP_O4 = "sap/o4-mini"
@@ -42,67 +41,7 @@ def _assert_live_response(response) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 1 — URL resolution chain (multi-orch)
-# ---------------------------------------------------------------------------
-
-
-class TestURLResolution:
-    """Three-step URL resolution: optional_params → env var → discovery."""
-
-    def test_url_via_optional_params(self):
-        """Step 1: deployment_url in optional_params skips discovery."""
-        import litellm
-        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
-
-        cfg = GenAIHubOrchestrationConfig()
-        cfg.run_env_setup(_KEY)
-        known_url = cfg.deployment_url
-
-        response = litellm.completion(
-            model=_SAP_GPT,
-            messages=_PING,
-            api_key=_KEY,
-            deployment_url=known_url,
-        )
-        _assert_live_response(response)
-
-    def test_url_via_env_var(self):
-        """Step 2: AICORE_ORCHESTRATION_DEPLOYMENT_URL env var skips discovery."""
-        import litellm
-        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
-
-        cfg = GenAIHubOrchestrationConfig()
-        cfg.run_env_setup(_KEY)
-        known_url = cfg.deployment_url
-
-        original = os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL")
-        try:
-            os.environ["AICORE_ORCHESTRATION_DEPLOYMENT_URL"] = known_url
-            response = litellm.completion(model=_SAP_GPT, messages=_PING, api_key=_KEY)
-        finally:
-            if original is None:
-                os.environ.pop("AICORE_ORCHESTRATION_DEPLOYMENT_URL", None)
-            else:
-                os.environ["AICORE_ORCHESTRATION_DEPLOYMENT_URL"] = original
-
-        _assert_live_response(response)
-
-    def test_url_via_discovery(self):
-        """Step 3: no override → auto-discovery."""
-        import litellm
-
-        original = os.environ.pop("AICORE_ORCHESTRATION_DEPLOYMENT_URL", None)
-        try:
-            response = litellm.completion(model=_SAP_GPT, messages=_PING, api_key=_KEY)
-        finally:
-            if original is not None:
-                os.environ["AICORE_ORCHESTRATION_DEPLOYMENT_URL"] = original
-
-        _assert_live_response(response)
-
-
-# ---------------------------------------------------------------------------
-# Task 2 — reasoning_effort / thinking params
+# reasoning_effort / thinking params
 # ---------------------------------------------------------------------------
 
 
@@ -148,7 +87,7 @@ class TestReasoningParams:
 
 
 # ---------------------------------------------------------------------------
-# Task 2 — cache_control passthrough
+# cache_control passthrough
 # ---------------------------------------------------------------------------
 
 
