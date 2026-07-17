@@ -14,6 +14,14 @@
 #   - claude-{tier}-bedrock-converse        → Bedrock Converse API
 #   - claude-{tier}-vertex                  → GCP Vertex AI
 #   - claude-{tier}-azure                   → Microsoft Foundry (Anthropic deployments)
+#   - gpt-5-6-{tier}-openai                 → OpenAI API
+#   - gpt-5-6-{tier}-azure-openai           → Azure OpenAI deployments
+#   - gpt-5-6-{tier}-bedrock-mantle         → Bedrock Mantle (Responses API)
+#
+# GPT-5.6 tiers are sol / terra / luna. There are no GPT aliases for
+# GCP: Vertex AI does not offer the closed-weight GPT-5.6 family, so
+# the matrix's `vertex_ai_gpt` column reports not_applicable without
+# ever reaching the proxy.
 
 model_list:
   # ---- Anthropic ----
@@ -121,6 +129,54 @@ model_list:
       api_key: os.environ/AZURE_AI_API_KEY
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
+
+  # ---- OpenAI (GPT-5.6) ----
+  - model_name: gpt-5-6-sol-openai
+    litellm_params:
+      model: openai/gpt-5.6-sol
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-5-6-terra-openai
+    litellm_params:
+      model: openai/gpt-5.6-terra
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-5-6-luna-openai
+    litellm_params:
+      model: openai/gpt-5.6-luna
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ---- Azure OpenAI (GPT-5.6) ----
+  - model_name: gpt-5-6-sol-azure-openai
+    litellm_params:
+      model: azure/gpt-5.6-sol
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+  - model_name: gpt-5-6-terra-azure-openai
+    litellm_params:
+      model: azure/gpt-5.6-terra
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+  - model_name: gpt-5-6-luna-azure-openai
+    litellm_params:
+      model: azure/gpt-5.6-luna
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+
+  # ---- Bedrock Mantle (GPT-5.6, Responses API) ----
+  # Sol is only served from us-east-1 / us-east-2 as of 2026-07;
+  # Terra and Luna additionally have us-west-2. One region keeps the
+  # column comparable across tiers.
+  - model_name: gpt-5-6-sol-bedrock-mantle
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.6-sol
+      aws_region_name: us-east-1
+  - model_name: gpt-5-6-terra-bedrock-mantle
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.6-terra
+      aws_region_name: us-east-1
+  - model_name: gpt-5-6-luna-bedrock-mantle
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.6-luna
+      aws_region_name: us-east-1
 
 general_settings:
   # Claude Code sends provider-specific headers (e.g. anthropic-beta) we
