@@ -36,6 +36,11 @@ on:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: true
         type: string
+      apt-packages:
+        description: "Optional space-separated apt packages installed before dependencies (e.g. xmlsec1 libxmlsec1-dev for the SAML signing tests)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -76,6 +81,12 @@ jobs:
           key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
           restore-keys: |
             ${{ runner.os }}-uv-
+
+      - name: Install system packages
+        if: ${{ inputs.apt-packages != '' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ inputs.apt-packages }}
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
