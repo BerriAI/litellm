@@ -4,7 +4,7 @@
     "description": "Detects the user's language and publishes a routing signal.",
     "author": "Jean Nuñez",
     "repo": "https://github.com/jeann2013/language-detector",
-    "pypi": "litellm-plugin-language-detector",
+    "commit": "9e712819269173fc25a16f59ca3e9890f7864ac1",
     "litellm_version": ">=1.94.0",
     "tags": ["language", "classification", "routing"]
   }
