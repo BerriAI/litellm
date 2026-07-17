@@ -65,6 +65,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+  const [showFilters, setShowFilters] = useState(false);
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
