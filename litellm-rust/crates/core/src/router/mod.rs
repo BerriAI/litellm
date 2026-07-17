@@ -14,7 +14,7 @@
 mod deployment;
 mod strategy;
 
-pub use deployment::{Deployment, LiteLLMParams};
+pub use deployment::{resolve_deployment_provider, Deployment, LiteLLMParams};
 pub use strategy::RoutingStrategy;
 
 /// Load-balancing router over a `model_list`.
@@ -69,6 +69,7 @@ mod tests {
                 model: model.to_string(),
                 api_key: None,
                 api_base: None,
+                custom_llm_provider: None,
             },
         }
     }
