@@ -139,7 +139,8 @@ quota_management.<behavior>.<variant>.<assertion>
                                | spend_calculate | pagination
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
-              | isolates_per_model | routes_to_fallback | reseed_matches_db | logs_cost | zero_cost
+              | isolates_per_model | isolates_per_member | enforced_across_keys | routes_to_fallback
+              | reseed_matches_db | logs_cost | zero_cost
               | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
               | writes_failure_row | returns_cost | keeps_total
   e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
