@@ -12,27 +12,11 @@ The (feature, provider) for this cell is inferred from the file path by
                        ^^^^^^^^^^^^      ^^^^^^^^^
                        feature_id        provider
 
-Why HTTP probe instead of CLI:
-
-Claude Code calls `count_tokens` internally to compute budget /
-context-window usage display, but the result is consumed by the CLI
-in-process and never appears in stream-json events. There is no CLI
-flag that emits the count to stdout in a way our existing
-stream-json parser can pick up, so we can't test the endpoint round
-trip through the CLI surface.
-
-The proxy *is* expected to expose `/v1/messages/count_tokens` for
-every Claude-style provider it routes to -- LiteLLM has historically
-had provider-specific bugs in this endpoint (Vertex AI `count_tokens`
-returned 400 to proxy gateways; see Claude Code release notes 2.1.121).
-Treating it as a matrix row keeps regressions in the cron's daily
-diff.
-
-The cell goes red if *any* tier's probe fails the minimal shape
-check; the matrix's per-cell aggregator handles that automatically.
-Three tiers run sequentially because count_tokens is cheap (<100ms
-per request typical) and the parallelization that matters for the
-CLI rows isn't useful here.
+Vertex Claude currently returns 400 "is not supported for token counting"
+for several tiers (haiku/sonnet at least). Those rows are recorded as
+`not_applicable` so the matrix does not treat an upstream capability gap
+as a LiteLLM regression. A real proxy transform bug (5xx, wrong shape)
+still fails the cell.
 """
 
 from __future__ import annotations
@@ -53,6 +37,11 @@ VERTEX_AI_MODELS = [
 ]
 
 
+def _is_upstream_token_count_unsupported(error: str) -> bool:
+    lowered = error.lower()
+    return "not supported for token counting" in lowered
+
+
 @pytest.mark.covers("llm.messages.vertex.count_tokens.nonstream.works")
 def test_count_tokens_vertex_ai(compat_result):
     """Probe `/v1/messages/count_tokens` for each Vertex AI tier and
@@ -66,6 +55,14 @@ def test_count_tokens_vertex_ai(compat_result):
         )
         shape_error = assert_count_tokens_shape(result)
         if shape_error is not None:
+            if _is_upstream_token_count_unsupported(shape_error):
+                compat_result.add(
+                    {
+                        "status": "not_applicable",
+                        "reason": f"[{model}] Vertex does not support count_tokens: {shape_error}",
+                    }
+                )
+                continue
             error = f"[{model}] count_tokens probe failed: {shape_error}"
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)

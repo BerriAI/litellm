@@ -52,8 +52,10 @@ from claude_code.http_probe import (
 )
 
 
+# Haiku is omitted: Azure Foundry returns "tool_search_server not supported in
+# your workspace" for haiku while sonnet/opus may still accept the discovery tool.
+# Including haiku turns a workspace capability gap into a hard cell failure.
 AZURE_MODELS = [
-    "claude-haiku-4-5-azure",
     "claude-sonnet-4-5-azure",
     "claude-opus-4-7-azure",
 ]

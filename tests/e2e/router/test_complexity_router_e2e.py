@@ -40,11 +40,11 @@ LLM_TIER_MODELS = frozenset({"anthropic/claude-haiku-4-5", "claude-haiku-4-5"})
 class TestComplexityRouterLlmClassifier:
     @pytest.mark.covers("reliability.routing.complexity_llm_classifier.routes_by_llm_tier")
     def test_llm_classifier_runs_and_routes_by_semantic_tier(
-        self, client: ComplexityRouterClient, scoped_key: str
+        self, client: ComplexityRouterClient, complexity_key: str
     ) -> None:
         chat = unwrap(
             client.gateway.chat(
-                scoped_key,
+                complexity_key,
                 ChatBody(
                     model=ROUTER_MODEL,
                     messages=[ChatMessage(role="user", content=LEXICALLY_SIMPLE_HARD_PROMPT)],
@@ -54,7 +54,7 @@ class TestComplexityRouterLlmClassifier:
         )
         assert chat.choices, f"router returned no choices: {chat}"
 
-        rows = client.gateway.poll_logs_for_key(scoped_key, min_rows=1)
+        rows = client.gateway.poll_logs_for_key(complexity_key, min_rows=1)
         served = [row.model for row in rows]
         assert served and all(model in LLM_TIER_MODELS for model in served), (
             f"expected the request to be served by one of {sorted(LLM_TIER_MODELS)!r} "

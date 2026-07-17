@@ -67,5 +67,13 @@ def test_short_window_blocks_then_resets(
                 f"reset took {elapsed:.0f}s - too long for a {WINDOW_SECONDS}s window"
             )
             return
-        assert is_budget_block(result), f"non-budget error during reset wait: {result.body[:200]}"
+        if is_budget_block(result):
+            continue
+        # Stage ALB occasionally returns 502/503 while the data plane reloads;
+        # treat those as transient and keep waiting for the budget reset.
+        if result.status_code in (502, 503, 504):
+            continue
+        raise AssertionError(
+            f"non-budget error during reset wait: status={result.status_code} body={result.body[:200]}"
+        )
     pytest.fail(f"{WINDOW_SECONDS}s window never reset within 150s")
