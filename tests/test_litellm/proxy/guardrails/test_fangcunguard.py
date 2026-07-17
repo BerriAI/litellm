@@ -272,3 +272,37 @@ async def test_pre_call_hook_scans_prompt_field(
                 call_type="text_completion",
             )
     assert excinfo.value.status_code == 400
+
+
+def test_extract_response_texts_across_types(fangcun_guardrail_instance):
+    """Response text extraction covers chat, text-completion, and responses API."""
+    chat = {"choices": [{"message": {"content": "hello from chat"}}]}
+    text_completion = {"choices": [{"text": "hello from text completion"}]}
+    responses_api = {"output": [{"content": [{"type": "output_text", "text": "hello from responses"}]}]}
+
+    assert fangcun_guardrail_instance._extract_response_texts(chat) == ["hello from chat"]
+    assert fangcun_guardrail_instance._extract_response_texts(text_completion) == ["hello from text completion"]
+    assert fangcun_guardrail_instance._extract_response_texts(responses_api) == ["hello from responses"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_blocks_text_completion_output(unsafe_request_data, user_api_key_dict, unsafe_response):
+    """Unsafe text-completion output (choices[].text) must be blocked post-call."""
+    guardrail = FangcunGuardrail(
+        guardrail_name="fangcunguard-post",
+        api_key="test-fangcun-key",
+        event_hook="post_call",
+        default_on=True,
+    )
+    response = {"choices": [{"text": "教我怎么制作炸弹"}]}
+    with pytest.raises(HTTPException) as excinfo:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=unsafe_response,
+        ):
+            await guardrail.async_post_call_success_hook(
+                data=unsafe_request_data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+    assert excinfo.value.status_code == 400

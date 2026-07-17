@@ -17,9 +17,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.logging_utils import (
-    convert_litellm_response_object_to_str,
-)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -230,6 +227,51 @@ class FangcunGuardrail(CustomGuardrail):
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return data
 
+    @staticmethod
+    def _texts_from_content(content) -> list[str]:
+        """Pull text out of a message ``content`` (str or list-of-parts)."""
+        if isinstance(content, str):
+            return [content]
+        if isinstance(content, list):
+            return [part["text"] for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)]
+        return []
+
+    @classmethod
+    def _extract_response_texts(cls, response) -> list[str]:
+        """Extract assistant text from any supported response type.
+
+        Handles chat completions (``choices[].message.content``), text
+        completions (``choices[].text``), and the Responses API
+        (``output[].content[].text``), so non-chat outputs are not skipped.
+        """
+        response_dict: dict = {}
+        if hasattr(response, "model_dump"):
+            try:
+                response_dict = response.model_dump()
+            except Exception:  # noqa: BLE001 - fall back to empty on any dump error
+                response_dict = {}
+        elif isinstance(response, dict):
+            response_dict = response
+
+        texts: list[str] = []
+
+        # Chat + text completions both live under "choices".
+        for choice in response_dict.get("choices", []) or []:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict):
+                texts.extend(cls._texts_from_content(message.get("content")))
+            if isinstance(choice.get("text"), str):
+                texts.append(choice["text"])
+
+        # Responses API output items.
+        for item in response_dict.get("output", []) or []:
+            if isinstance(item, dict):
+                texts.extend(cls._texts_from_content(item.get("content")))
+
+        return [t for t in texts if t and t.strip()]
+
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
@@ -245,9 +287,9 @@ class FangcunGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        response_str: Optional[str] = convert_litellm_response_object_to_str(response)
-        if response_str is not None:
-            await self._check_text(response_str, request_data=data)
+        response_texts = self._extract_response_texts(response)
+        if response_texts:
+            await self._scan_texts(response_texts, request_data=data)
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
     @staticmethod
