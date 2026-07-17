@@ -76,6 +76,7 @@ guardrails:
 
 class SupportedGuardrailIntegrations(Enum):
     APORIA = "aporia"
+    FANGCUNGUARD = "fangcunguard"
     BEDROCK = "bedrock"
     DYNAMOAI = "dynamoai"
     GUARDRAILS_AI = "guardrails_ai"
