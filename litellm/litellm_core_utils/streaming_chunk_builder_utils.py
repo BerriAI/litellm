@@ -7,6 +7,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioDelta,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionAudioResponse,
     ChatCompletionMessageToolCall,
     Choices,
@@ -466,6 +467,7 @@ class ChunkProcessor:
         cache_read_input_tokens: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        cost: Optional[float] = None
 
         if "prompt_tokens" in usage_chunk:
             prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
@@ -475,6 +477,8 @@ class ChunkProcessor:
             cache_creation_input_tokens = usage_chunk.get("cache_creation_input_tokens")
         if "cache_read_input_tokens" in usage_chunk:
             cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
+        if "cost" in usage_chunk:
+            cost = usage_chunk.get("cost")
         if hasattr(usage_chunk, "completion_tokens_details"):
             if isinstance(usage_chunk.completion_tokens_details, dict):
                 completion_tokens_details = CompletionTokensDetails(**usage_chunk.completion_tokens_details)
@@ -493,6 +497,7 @@ class ChunkProcessor:
             "cache_read_input_tokens": cache_read_input_tokens,
             "completion_tokens_details": completion_tokens_details,
             "prompt_tokens_details": prompt_tokens_details,
+            "cost": cost,
         }
 
     def count_reasoning_tokens(self, response: ModelResponse) -> Optional[int]:
@@ -510,6 +515,22 @@ class ChunkProcessor:
                 )
 
         return reasoning_tokens
+
+    @staticmethod
+    def _extract_usage_chunk(chunk: dict[str, Any] | ModelResponse | ModelResponseStream) -> Usage | None:
+        usage_chunk: Usage | dict[str, Any] | None = None
+        if hasattr(chunk, "usage") and chunk.usage is not None:
+            usage_chunk = chunk.usage
+        elif "usage" in chunk:
+            usage_chunk = chunk["usage"]
+        elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
+            chunk, "_hidden_params"
+        ):
+            usage_chunk = chunk._hidden_params.get("usage", None)
+
+        if isinstance(usage_chunk, dict):
+            return Usage(**usage_chunk)
+        return usage_chunk
 
     def _calculate_usage_per_chunk(
         self,
@@ -541,18 +562,18 @@ class ChunkProcessor:
         web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        # Anthropic emits the cache-creation TTL breakdown (5m/1h split) only on
+        # the `message_start` event; the later `message_delta` carries the flat
+        # cache-creation count but drops the nested breakdown. prompt_tokens_details
+        # is last-wins, so without preserving this separately the 1h breakdown is
+        # lost and 1h cache writes get billed at the 5m rate.
+        cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
+        cost: Optional[float] = None
+
         for chunk in chunks:
-            usage_chunk: Optional[Usage] = None
-            if "usage" in chunk:
-                usage_chunk = chunk["usage"]
-            elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
-                chunk, "_hidden_params"
-            ):
-                usage_chunk = chunk._hidden_params.get("usage", None)
+            usage_chunk = self._extract_usage_chunk(chunk)
 
             if usage_chunk is not None:
-                if isinstance(usage_chunk, dict):
-                    usage_chunk = Usage(**usage_chunk)
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
                 if usage_chunk_dict["prompt_tokens"] is not None and usage_chunk_dict["prompt_tokens"] > 0:
                     prompt_tokens = usage_chunk_dict["prompt_tokens"]
@@ -594,7 +615,21 @@ class ChunkProcessor:
                         "web_search_requests",
                     )
 
-                prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
+                prompt_tokens_details = cast(
+                    Optional[PromptTokensDetailsWrapper],
+                    usage_chunk_dict["prompt_tokens_details"],
+                )
+
+                cache_creation_token_details = self._capture_cache_creation_token_details(
+                    prompt_tokens_details, cache_creation_token_details
+                )
+
+                if usage_chunk_dict["cost"] is not None:
+                    cost = usage_chunk_dict["cost"]
+
+        prompt_tokens_details = self._attach_cache_creation_token_details(
+            prompt_tokens_details, cache_creation_token_details
+        )
 
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
@@ -611,7 +646,36 @@ class ChunkProcessor:
             web_search_requests=web_search_requests,
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
+            cost=cost,
         )
+
+    @staticmethod
+    def _capture_cache_creation_token_details(
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper],
+        current: Optional[CacheCreationTokenDetails],
+    ) -> Optional[CacheCreationTokenDetails]:
+        incoming = cast(
+            Optional[CacheCreationTokenDetails],
+            getattr(prompt_tokens_details, "cache_creation_token_details", None),
+        )
+        if incoming is not None:
+            return incoming
+        return current
+
+    @staticmethod
+    def _attach_cache_creation_token_details(
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper],
+        cache_creation_token_details: Optional[CacheCreationTokenDetails],
+    ) -> Optional[PromptTokensDetailsWrapper]:
+        if prompt_tokens_details is None or cache_creation_token_details is None:
+            return prompt_tokens_details
+        existing = cast(
+            Optional[CacheCreationTokenDetails],
+            getattr(prompt_tokens_details, "cache_creation_token_details", None),
+        )
+        if existing is not None:
+            return prompt_tokens_details
+        return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
@@ -681,6 +745,7 @@ class ChunkProcessor:
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = calculated_usage_per_chunk[
             "prompt_tokens_details"
         ]
+        cost: Optional[float] = calculated_usage_per_chunk["cost"]
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
@@ -737,6 +802,9 @@ class ChunkProcessor:
                 )
             else:
                 returned_usage.prompt_tokens_details.web_search_requests = web_search_requests
+
+        if cost is not None:
+            setattr(returned_usage, "cost", cost)
 
         # Return a new usage object with the new values
 

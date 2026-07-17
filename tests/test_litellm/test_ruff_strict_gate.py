@@ -94,3 +94,19 @@ def test_introduced_keeps_only_violations_on_changed_lines():
 @pytest.mark.parametrize("hunk", ["@@ -1 +1 @@", "@@ -1,0 +1,2 @@"])
 def test_parse_changed_lines_handles_single_and_ranged_hunks(hunk):
     assert gate.parse_changed_lines(f"+++ b/litellm/a.py\n{hunk}\n")["litellm/a.py"]
+
+
+def test_over_ceiling_flags_only_counts_above_the_limit():
+    budget = rule("C901", 10)
+    assert gate.over_ceiling({"C901": 10}, budget) == frozenset()
+    assert gate.over_ceiling({"C901": 11}, budget) == frozenset({"C901"})
+    assert gate.over_ceiling({}, budget) == frozenset()
+
+
+def test_over_ceiling_ignores_rules_missing_from_the_budget():
+    assert gate.over_ceiling({"NEW99": 100}, rule("C901", 10)) == frozenset()
+
+
+def test_over_ceiling_is_independent_across_rules():
+    budget = {**rule("ANN001", 150), **rule("C901", 10)}
+    assert gate.over_ceiling({"ANN001": 130, "C901": 11}, budget) == frozenset({"C901"})

@@ -33,6 +33,12 @@ model_list:
       model: anthropic/claude-sonnet-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # ---------- Embeddings (for complexity router semantic keyword matching) ----------
+  - model_name: voyage-4-large
+    litellm_params:
+      model: voyage/voyage-4-large
+      api_key: os.environ/VOYAGE_API_KEY
+
   # ---------- Bedrock Invoke ----------
   - model_name: bedrock-invoke-haiku-4-5
     litellm_params:
@@ -193,6 +199,10 @@ model_list:
 
 general_settings:
   master_key: sk-1234
+  # Opt-in: let CheckBatchCost track cost for unmanaged batches created with a raw
+  # gs:// (Vertex) or s3:// (Bedrock) input_file_id. Requires a matching deployment
+  # configured for the batched model. Defaults to false.
+  # track_unmanaged_batch_cost: true
 
 sandbox_tools:
   - sandbox_tool_name: e2b_sandbox

@@ -76,9 +76,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
-        await manager._fetch_tools_with_timeout(
-            mock_client, passthrough_server.name, server=passthrough_server
-        )
+        await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate == (
@@ -113,9 +111,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
-        await manager._fetch_tools_with_timeout(
-            mock_client, delegated_server.name, server=delegated_server
-        )
+        await manager._fetch_tools_with_timeout(mock_client, delegated_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate == (
@@ -126,7 +122,10 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
 
 
 @pytest.mark.asyncio
-async def test_fetch_tools_from_client_credentials_oauth2_keeps_swallow_behavior():
+async def test_fetch_tools_from_client_credentials_oauth2_surfaces_upstream_401():
+    """The auth_type carve-out was removed: a client_credentials (M2M) server now
+    surfaces an upstream 401 as MCPUpstreamAuthError too, instead of swallowing it
+    to an empty list, so single-server routes can return a 401 challenge."""
     manager = MCPServerManager()
     m2m_server = MCPServer(
         server_id="oauth-m2m",
@@ -150,12 +149,12 @@ async def test_fetch_tools_from_client_credentials_oauth2_keeps_swallow_behavior
     mock_client = MagicMock()
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
-    tools = await manager._fetch_tools_with_timeout(
-        mock_client, m2m_server.name, server=m2m_server
-    )
+    with pytest.raises(MCPUpstreamAuthError) as exc_info:
+        await manager._fetch_tools_with_timeout(mock_client, m2m_server.name)
 
-    assert tools == []
-    mock_client.list_tools.assert_awaited_with(raise_on_error=False)
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.server_name == "m2m_docs"
+    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
 
 
 @pytest.mark.asyncio
@@ -176,9 +175,7 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
     mock_client = MagicMock()
     mock_client.list_tools = AsyncMock(return_value=[tool])
 
-    tools = await manager._fetch_tools_with_timeout(
-        mock_client, passthrough_server.name, server=passthrough_server
-    )
+    tools = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
     assert tools == [tool]
 
 
@@ -238,8 +235,11 @@ def test_to_http_exception_skips_challenge_for_non_401_status():
 
 
 @pytest.mark.asyncio
-async def test_fetch_tools_from_gateway_managed_swallows_errors():
-    """Regression guard: non-pass-through servers keep returning [] on errors."""
+async def test_fetch_tools_from_gateway_managed_surfaces_upstream_401():
+    """An oauth2 server that is neither pass-through nor delegate now surfaces an
+    upstream 401 as MCPUpstreamAuthError as well; the auth_type carve-out that
+    swallowed it to [] was removed. A missing upstream WWW-Authenticate is carried
+    through as None (the single-server route fabricates one from the gateway URL)."""
     manager = MCPServerManager()
     oauth2_server = MCPServer(
         server_id="o1",
@@ -260,17 +260,20 @@ async def test_fetch_tools_from_gateway_managed_swallows_errors():
     mock_client = MagicMock()
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
-    tools = await manager._fetch_tools_with_timeout(
-        mock_client, oauth2_server.name, server=oauth2_server
-    )
-    assert tools == []
-    mock_client.list_tools.assert_awaited_with(raise_on_error=False)
+    with pytest.raises(MCPUpstreamAuthError) as exc_info:
+        await manager._fetch_tools_with_timeout(mock_client, oauth2_server.name)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.www_authenticate is None
+    assert exc_info.value.server_name == "keycloak_whoami"
+    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
 
 
 def _http_server(server_id: str, name: str, **kwargs) -> MCPServer:
     return MCPServer(
         server_id=server_id,
         name=name,
+        alias=name,
         url=f"https://{name}/mcp",
         transport=MCPTransport.http,
         **kwargs,
@@ -282,7 +285,8 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     """Regression: across the aggregate (/mcp), a delegate/passthrough server that raises
     MCPUpstreamAuthError must not empty every other server's tools. Re-raising it on the
     aggregate path (introduced with the passthrough feature) zeroed the whole list because the
-    fan-out gather propagated it."""
+    fan-out gather propagated it. The failed server now contributes an "auth_required" outcome
+    instead of vanishing, so it stays distinguishable from a healthy server with no tools."""
     from unittest.mock import patch
 
     from mcp.types import Tool as MCPTool
@@ -310,22 +314,24 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     ), patch.object(
         mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
-        tools = await mcp_server._get_tools_from_mcp_servers(
+        listing = await mcp_server._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
             mcp_auth_header=None,
             mcp_servers=None,
         )
 
-    assert [t.name for t in tools] == ["working_docs-read"]
+    assert [t.name for t in listing.tools] == ["working_docs-read"]
+    assert listing.outcomes["delegate_docs"].tag == "auth_required"
+    assert listing.outcomes["working_docs"].tag == "ok"
 
 
 @pytest.mark.asyncio
 async def test_single_server_route_also_absorbs_upstream_auth_error():
     """A single-server route (/<server>/mcp) absorbs an upstream-auth error just like the aggregate:
-    the failing server is omitted (empty list) rather than re-raised. Surfacing it to the client as a
-    401 + WWW-Authenticate challenge cannot be done from this list handler — the MCP session manager
-    serializes a raise into a JSON-RPC error, not an HTTP 401 — so re-auth surfacing is handled by a
-    request-scope preemptive check, tracked separately."""
+    the failing server contributes no tools and an "auth_required" outcome rather than re-raising.
+    Surfacing it to the client as a 401 + WWW-Authenticate challenge cannot be done from this list
+    handler — the MCP session manager serializes a raise into a JSON-RPC error, not an HTTP 401 — so
+    re-auth surfacing is handled by a request-scope preemptive check, tracked separately."""
     from unittest.mock import patch
 
     from litellm.proxy._experimental.mcp_server import server as mcp_server
@@ -349,12 +355,13 @@ async def test_single_server_route_also_absorbs_upstream_auth_error():
         ), patch.object(
             mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
         ):
-            tools = await mcp_server._get_tools_from_mcp_servers(
+            listing = await mcp_server._get_tools_from_mcp_servers(
                 user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
                 mcp_auth_header=None,
                 mcp_servers=["delegate_docs"],
             )
-        assert tools == []
+        assert listing.tools == []
+        assert listing.outcomes["delegate_docs"].tag == "auth_required"
     finally:
         _mcp_gateway_server_name.reset(token)
 
@@ -386,10 +393,11 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
         mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
         # Aggregate route: no explicit server filter, even though only one server is accessible.
-        tools = await mcp_server._get_tools_from_mcp_servers(
+        listing = await mcp_server._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
             mcp_auth_header=None,
             mcp_servers=None,
         )
 
-    assert tools == []
+    assert listing.tools == []
+    assert listing.outcomes["delegate_docs"].tag == "auth_required"

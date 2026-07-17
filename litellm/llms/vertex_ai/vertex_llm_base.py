@@ -9,6 +9,7 @@ import json
 import os
 import threading
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from urllib.parse import urlparse
 
 import litellm
 from litellm._logging import verbose_logger
@@ -315,6 +316,9 @@ class VertexBase:
             api_base=api_base,
         )
 
+        if partner == VertexPartnerProvider.llama:
+            return default_api_base
+
         if len(default_api_base.split(":")) > 1:
             endpoint = default_api_base.split(":")[-1]
         else:
@@ -615,7 +619,8 @@ class VertexBase:
 
         Handles custom api_base for:
         1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}
-        2. Vertex AI with standard proxies - constructs {api_base}:{endpoint}
+        2. Vertex AI with standard proxies - constructs {api_base}:{endpoint};
+           if api_base has no path (bare host), grafts the default vertex URL path onto it
         3. Vertex AI with PSC endpoints - constructs full path structure
            {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
            (only when use_psc_endpoint_format=True)
@@ -660,8 +665,9 @@ class VertexBase:
                         model_for_url,
                         endpoint,
                     )
+                elif urlparse(api_base).path in ("", "/"):
+                    url = api_base.rstrip("/") + urlparse(url).path
                 else:
-                    # Fallback to simple format if we don't have all parameters
                     url = "{}:{}".format(api_base, endpoint)
             if stream is True:
                 url = url + "?alt=sse"

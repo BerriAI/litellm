@@ -1,8 +1,9 @@
 import { EditOutlined, InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
 import { TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
-import { Badge, Button, Icon } from "@tremor/react";
+import { Badge, Icon } from "@tremor/react";
 import { Divider, Flex, Popover, Space, Switch, Tooltip, Typography } from "antd";
+import { DateCell, IdCell, StatusBadge } from "@/components/shared/table_cells";
 import { ModelData } from "../../model_dashboard/types";
 import { ProviderLogo } from "./ProviderLogo";
 
@@ -65,19 +66,9 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       return (
-        <Tooltip title={model.model_info.id}>
-          <Text
-            ellipsis
-            className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer w-full block"
-            style={{ fontSize: 14, padding: "1px 8px" }}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedModelId(model.model_info.id);
-            }}
-          >
-            {model.model_info.id}
-          </Text>
-        </Tooltip>
+        <div onClick={(e) => e.stopPropagation()}>
+          <IdCell value={model.model_info.id} onClick={setSelectedModelId} />
+        </div>
       );
     },
   },
@@ -137,7 +128,7 @@ export const columns = (
           }}
         >
           <div className="flex items-start space-x-2 min-w-0 w-full cursor-pointer">
-            <div className="flex-shrink-0 mt-0.5">
+            <div className="shrink-0 mt-0.5">
               {model.provider ? (
                 <ProviderLogo provider={model.provider} />
               ) : (
@@ -180,14 +171,14 @@ export const columns = (
         <div className="flex items-center space-x-2 min-w-0 w-full">
           {isReusable ? (
             <>
-              <SyncOutlined className="flex-shrink-0" style={{ color: "#1890ff", fontSize: 14 }} />
+              <SyncOutlined className="shrink-0" style={{ color: "#1890ff", fontSize: 14 }} />
               <span className="text-xs truncate text-blue-600" title={credentialName}>
                 {credentialName}
               </span>
             </>
           ) : (
             <>
-              <EditOutlined className="flex-shrink-0" style={{ color: "#8c8c8c", fontSize: 14 }} />
+              <EditOutlined className="shrink-0" style={{ color: "#8c8c8c", fontSize: 14 }} />
               <span className="text-xs text-gray-500">Manual</span>
             </>
           )}
@@ -235,11 +226,7 @@ export const columns = (
     minSize: 80,
     cell: ({ row }) => {
       const model = row.original;
-      return (
-        <span className="text-xs">
-          {model.model_info.updated_at ? new Date(model.model_info.updated_at).toLocaleDateString() : "-"}
-        </span>
-      );
+      return <DateCell value={model.model_info.updated_at} precision="date" />;
     },
   },
   {
@@ -282,20 +269,8 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       return model.model_info.team_id ? (
-        <div className="overflow-hidden w-full">
-          <Tooltip title={model.model_info.team_id}>
-            <Button
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate w-full"
-              onClick={(e: React.MouseEvent) => {
-                e.stopPropagation();
-                setSelectedTeamId(model.model_info.team_id);
-              }}
-            >
-              {model.model_info.team_id.slice(0, 7)}...
-            </Button>
-          </Tooltip>
+        <div onClick={(e) => e.stopPropagation()}>
+          <IdCell value={model.model_info.team_id} onClick={setSelectedTeamId} />
         </div>
       ) : (
         "-"
@@ -332,7 +307,7 @@ export const columns = (
 
       return (
         <div className="flex items-center gap-1 overflow-hidden w-full">
-          <Badge size="xs" color="blue" className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0">
+          <Badge size="xs" color="blue" className="text-xs px-1.5 py-0.5 h-5 leading-tight shrink-0">
             {accessGroups[0]}
           </Badge>
 
@@ -342,7 +317,7 @@ export const columns = (
                 key={index + 1}
                 size="xs"
                 color="blue"
-                className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
+                className="text-xs px-1.5 py-0.5 h-5 leading-tight shrink-0"
               >
                 {group}
               </Badge>
@@ -354,7 +329,7 @@ export const columns = (
                 e.stopPropagation();
                 toggleExpanded();
               }}
-              className="text-xs text-blue-600 hover:text-blue-800 px-1 py-0.5 rounded hover:bg-blue-50 h-5 leading-tight flex-shrink-0 whitespace-nowrap"
+              className="text-xs text-blue-600 hover:text-blue-800 px-1 py-0.5 rounded-sm hover:bg-blue-50 h-5 leading-tight shrink-0 whitespace-nowrap"
             >
               {isExpanded ? "−" : `+${accessGroups.length - 1}`}
             </button>
@@ -370,15 +345,10 @@ export const columns = (
     minSize: 80,
     cell: ({ row }) => {
       const model = row.original;
-      return (
-        <div
-          className={`
-          inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-          ${model.model_info.db_model ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-600"}
-        `}
-        >
-          {model.model_info.db_model ? "DB Model" : "Config Model"}
-        </div>
+      return model.model_info.db_model ? (
+        <StatusBadge tone="info" label="DB Model" />
+      ) : (
+        <StatusBadge tone="neutral" label="Config Model" />
       );
     },
   },

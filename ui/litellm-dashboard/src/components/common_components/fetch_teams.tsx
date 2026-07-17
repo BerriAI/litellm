@@ -14,7 +14,5 @@ export const fetchTeams = async (
     givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || null);
   }
 
-  console.log(`givenTeams: ${givenTeams}`);
-
   setTeams(givenTeams);
 };
