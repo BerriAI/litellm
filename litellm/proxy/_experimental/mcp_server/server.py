@@ -2627,6 +2627,13 @@ if MCP_AVAILABLE:
             server_name=server_name,
             session_id=_mcp_session_id_from_headers(raw_headers),
         )
+        # Dual attribution: on a validated delegation the agent key stays the primary
+        # spend/audit identity; record the delegated user it acted on behalf of so
+        # per-user visibility is not lost. This is the single chokepoint both the
+        # streamable and REST call paths funnel through.
+        delegated_user_id = getattr(user_api_key_auth, "delegated_user_id", None) if user_api_key_auth else None
+        if delegated_user_id:
+            standard_logging_mcp_tool_call["mcp_on_behalf_of_user_id"] = delegated_user_id
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj", None)
         if litellm_logging_obj:
             litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = standard_logging_mcp_tool_call
