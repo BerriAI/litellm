@@ -1713,13 +1713,19 @@ if MCP_AVAILABLE:
         mcp_servers: Optional[List[str]],
         client_ip: Optional[str],
         scoped_server_endpoint: bool = False,
+        prefetch_upstream_instructions: bool = True,
     ) -> AsyncIterator[None]:
         allowed = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        if allowed:
+        if allowed and prefetch_upstream_instructions:
+            # Only the `initialize` response carries these instructions, so
+            # opening upstream sessions to fetch them for any other method
+            # (e.g. `tools/list`) just adds latency to that request. The merge
+            # below still surfaces anything already cached by a prior probe.
+            #
             # return_exceptions=True: a per-server probe failure (incl. CancelledError
             # bubbled from anyio task group teardown on connection refused) must not
             # cancel sibling probes or 500 the gateway initialize request.
@@ -4174,6 +4180,7 @@ if MCP_AVAILABLE:
                     mcp_servers,
                     _client_ip,
                     scoped_server_endpoint=scoped_server_endpoint,
+                    prefetch_upstream_instructions=is_initialize,
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
