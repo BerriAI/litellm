@@ -27,7 +27,7 @@ from typing import (
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache, RedisCache
+from litellm.caching import RedisCache
 from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
@@ -44,7 +44,6 @@ from litellm.proxy._types import (
     DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
     Litellm_EntityType,
-    LiteLLM_UserTable,
     SpendLogsMetadata,
     SpendLogsPayload,
     SpendUpdateQueueItem,
@@ -137,7 +136,6 @@ class DBSpendUpdateWriter:
             disable_spend_logs,
             litellm_proxy_budget_name,
             prisma_client,
-            user_api_key_cache,
         )
         from litellm.proxy.utils import ProxyUpdateSpend, hash_token
 
@@ -195,7 +193,6 @@ class DBSpendUpdateWriter:
                     org_id=org_id,
                     end_user_id=end_user_id,
                     prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
                 )
@@ -326,7 +323,6 @@ class DBSpendUpdateWriter:
         org_id: Optional[str],
         end_user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
         payload: SpendLogsPayload,
     ):
@@ -345,7 +341,6 @@ class DBSpendUpdateWriter:
                 response_cost=response_cost,
                 user_id=user_id,
                 prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
                 litellm_proxy_budget_name=litellm_proxy_budget_name,
                 end_user_id=end_user_id,
             )
@@ -510,7 +505,6 @@ class DBSpendUpdateWriter:
         response_cost: Optional[float],
         user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
         end_user_id: Optional[str] = None,
     ):
@@ -518,10 +512,6 @@ class DBSpendUpdateWriter:
         - Update that user's row
         - Update litellm-proxy-budget row (global proxy spend)
         """
-        ## if an end-user is passed in, do an upsert - we can't guarantee they already exist in db
-        existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
-        if existing_user_obj is not None and isinstance(existing_user_obj, dict):
-            existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
         try:
             if prisma_client is not None:  # update
                 user_ids = [user_id]

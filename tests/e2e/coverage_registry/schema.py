@@ -54,13 +54,20 @@ LlmRoute = Literal[
 
 LlmCapability = Literal[
     "basic",
+    "count_tokens",
+    "long_context_1m",
     "mid_conversation_system",
+    "pdf_input",
+    "prompt_cache_1h",
     "prompt_cache_5m",
     "service_tier",
     "structured_output",
     "thinking",
+    "thinking_with_tool_use",
+    "tool_search",
     "tool_use",
     "vision",
+    "web_search",
 ]
 
 

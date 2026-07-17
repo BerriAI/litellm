@@ -81,6 +81,7 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
     client_id: credentials.client_id ?? null,
     client_secret: credentials.client_secret ?? null,
     scopes: credentials.scopes ?? null,
+    issuer: values.issuer ?? null,
     authorization_url: values.authorization_url ?? null,
     token_url: values.token_url ?? null,
     registration_url: values.registration_url ?? null,
@@ -341,6 +342,7 @@ export interface MCPServer {
   transport?: string | null;
   auth_type?: string | null;
   oauth2_flow?: string | null;
+  issuer?: string | null;
   authorization_url?: string | null;
   token_url?: string | null;
   registration_url?: string | null;

@@ -56,11 +56,13 @@ class TierClassification(BaseModel):
 
 _CLASSIFICATION_PROMPT_TEMPLATE = """Classify the complexity of the following user request into exactly one tier.
 
+Judge the intellectual difficulty of answering correctly, not how short the request is.
+
 Tiers:
-- SIMPLE: factual lookups, greetings, short direct questions with no reasoning or code involved.
-- MEDIUM: everyday requests needing some explanation or minor code/technical content.
-- COMPLEX: requests involving non-trivial code, architecture, or multi-step technical work.
-- REASONING: requests explicitly requiring step-by-step reasoning, analysis, or weighing tradeoffs.
+- SIMPLE: greetings, chitchat, or factual lookups with a short known answer. Do not use SIMPLE for unsolved problems, proofs, deep theory, multi-step analysis, or non-trivial code, even if the request is only one sentence.
+- MEDIUM: everyday requests that need some explanation, light reasoning, or minor code/technical content.
+- COMPLEX: non-trivial code, architecture, multi-step technical work, or specialized domain depth.
+- REASONING: open-ended analysis, proofs, famous hard problems, step-by-step reasoning, tradeoffs, or anything where a correct answer requires careful thought rather than a quick lookup.
 
 {system_context}Request:
 {prompt}"""

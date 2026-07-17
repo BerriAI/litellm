@@ -117,6 +117,7 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
     model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
+    enable_tag_filtering: Optional[bool] = None
 
     model_config = ConfigDict(protected_namespaces=())
 

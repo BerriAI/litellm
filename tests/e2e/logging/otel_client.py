@@ -53,6 +53,8 @@ class JaegerSpan(BaseModel):
     span_id: str = Field(alias="spanID")
     operation_name: str = Field(alias="operationName")
     start_time: int = Field(default=0, alias="startTime")
+    #: Span duration in microseconds, as reported by the Jaeger query API.
+    duration: int = 0
     references: list[JaegerReference] = []
     tags: list[JaegerTag] = []
 

@@ -23,7 +23,7 @@ configs:
         # (PHOENIX_COLLECTOR_HTTP_ENDPOINT below points it at the jaeger service),
         # so gen-AI spans export through a preset-owned provider - the code path
         # where trace splits actually happen - with no cloud credentials needed.
-        callbacks: ["arize_phoenix"]
+        callbacks: ["arize_phoenix", "datadog"]
 
       router_settings:
         routing_strategy: simple-shuffle
@@ -97,6 +97,12 @@ services:
     environment:
       LITELLM_MASTER_KEY: sk-1234
       STORE_MODEL_IN_DB: "True"
+      # Real DataDog delivery (no local sink): the key comes from the
+      # environment - the cluster's secret manager injects it, locally
+      # tests/e2e/.env provides it. Tests read delivery back via the DataDog
+      # Logs Search API (DD_APP_KEY, test-side only - see logging/datadog_reader.py).
+      DD_API_KEY: ${DD_API_KEY:-}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
       LITELLM_OTEL_V2: "true"
       PHOENIX_COLLECTOR_HTTP_ENDPOINT: http://jaeger:4318/v1/traces
       PHOENIX_API_KEY: local-jaeger-noauth
@@ -116,6 +122,8 @@ services:
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       AZURE_API_BASE: ${AZURE_API_BASE:-}
       AZURE_API_KEY: ${AZURE_API_KEY:-}
+      AZURE_AI_API_BASE: ${AZURE_AI_API_BASE:-}
+      AZURE_AI_API_KEY: ${AZURE_AI_API_KEY:-}
     ports:
       - "4000:4000"
     configs:

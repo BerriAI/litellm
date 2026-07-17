@@ -367,15 +367,18 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               </Form.Item>
 
               {/* Embedding Model */}
-              <Form.Item label="Embedding Model" name="auto_router_embedding_model">
+              <Form.Item
+                label="Embedding Model"
+                name="auto_router_embedding_model"
+                rules={[{ required: true, message: "Embedding model is required" }]}
+              >
                 <AntdSelect
-                  placeholder="Select an embedding model (optional)"
+                  placeholder="Select an embedding model"
                   onChange={(value) => {
                     setShowCustomEmbeddingModel(value === "custom");
                   }}
                   options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
                   showSearch={true}
-                  allowClear
                 />
               </Form.Item>
             </>

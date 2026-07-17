@@ -44,7 +44,7 @@ from claude_code._passthrough import foundry_extra_env, run_passthrough_cell
 
 AZURE_MODELS = [
     "claude-haiku-4-5",
-    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
     "claude-opus-4-7",
 ]
 
