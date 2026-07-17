@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from typing_extensions import Protocol, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -233,6 +234,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         None  # timeout when making stream=True calls, if str, pass in as os.environ/
     )
     max_retries: Optional[int] = None
+    drop_params: Optional[bool] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: Optional[str] = None
@@ -310,6 +312,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
                 filtered["max_retries"] = int(filtered["max_retries"])
             return filtered
         return data
+
+    @field_validator("drop_params", mode="before")
+    @classmethod
+    def coerce_drop_params(cls, value: object) -> Optional[bool]:
+        return normalize_drop_params(value)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator

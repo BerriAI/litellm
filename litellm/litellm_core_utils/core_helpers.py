@@ -36,6 +36,18 @@ def safe_divide_seconds(seconds: float, denominator: float, default: Optional[fl
     return float(seconds / denominator)
 
 
+def normalize_drop_params(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return None
+
+
 def safe_divide(
     numerator: Union[int, float],
     denominator: Union[int, float],
