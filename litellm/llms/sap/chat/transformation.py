@@ -15,6 +15,7 @@ from typing import (
     FrozenSet,
 )
 from functools import cached_property
+import os
 import httpx
 import litellm
 
@@ -284,8 +285,15 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ):
-        api_base_ = f"{self.deployment_url}/v2/completion"
-        return api_base_
+        # Step 1: per-request override via optional_params
+        base = optional_params.get("deployment_url")
+        # Step 2: operator-level env var (no discovery needed)
+        if not base:
+            base = os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL")
+        # Step 3: auto-discovery (cached; one network round-trip per instance)
+        if not base:
+            base = self.deployment_url
+        return f"{base}/v2/completion"
 
     def _build_prompt_module(
         self,
