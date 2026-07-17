@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code._env import require_proxy
+from claude_code._env import require_gateway
 from claude_code.http_probe import (
     assert_tool_search_shape,
     probe_tool_search,
@@ -64,11 +64,11 @@ def test_tool_search_anthropic(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Anthropic
     tier."""
-    base_url, api_key = require_proxy(compat_result)
+    gateway = require_gateway(compat_result)
 
     failures = []
     for model in ANTHROPIC_MODELS:
-        result = probe_tool_search(base_url=base_url, api_key=api_key, model=model)
+        result = probe_tool_search(gateway=gateway, model=model)
         shape_error = assert_tool_search_shape(result)
         if shape_error is not None:
             error = f"[{model}] tool_search probe failed: {shape_error}"

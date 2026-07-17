@@ -13,6 +13,8 @@ from typing import Mapping, NamedTuple
 
 import pytest
 
+from e2e_gateway import Gateway, build_gateway
+
 
 class ProxyConfig(NamedTuple):
     base_url: str
@@ -72,3 +74,29 @@ def require_proxy(
     if cfg is None:
         _fail_missing_proxy_env(compat_result)
     return cfg
+
+
+def gateway_from(cfg: ProxyConfig) -> Gateway:
+    """Build the shared e2e Gateway from a resolved proxy config.
+
+    The compat suite talks to a single monolithic proxy, so the data and control
+    planes share ``cfg.base_url`` and the master key is ``cfg.api_key``. Probes
+    inject the returned Gateway and issue their requests through its transport,
+    reusing the shared routing, timeout, and error normalization."""
+    return build_gateway(
+        base_url=cfg.base_url,
+        master_key=cfg.api_key,
+        control_plane_base_url=cfg.base_url,
+    )
+
+
+def require_gateway(
+    compat_result,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> Gateway:
+    """Return the shared Gateway for the resolved proxy, or hard-fail the test.
+
+    Wraps ``require_proxy`` so HTTP-probe cells can depend on the shared transport
+    with the same missing-env failure behavior as the CLI-driven cells."""
+    return gateway_from(require_proxy(compat_result, env=env))
