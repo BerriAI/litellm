@@ -786,3 +786,144 @@ class TestSAPTransformationIntegration:
             )
             assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello."
             assert config["config"]["modules"][1]["translation"]["input"]["type"] == "sap_document_translation"
+
+
+class TestCapabilityPatterns:
+    """Unit tests for the SAP-internal regex capability registry.
+
+    Each test probes a single pattern/function in isolation so a regression
+    is immediately traceable to a specific model family or capability.
+    """
+
+    # --- _REASONING_MODELS pattern ---
+
+    def test_reasoning_pattern_matches_anthropic_claude4(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert _REASONING_MODELS.match("anthropic--claude-4.5-sonnet")
+        assert _REASONING_MODELS.match("anthropic--claude-4-opus")
+
+    def test_reasoning_pattern_matches_anthropic_claude37(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert _REASONING_MODELS.match("anthropic--claude-3-7-sonnet-20250219")
+
+    def test_reasoning_pattern_does_not_match_anthropic_claude3(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert not _REASONING_MODELS.match("anthropic--claude-3-haiku")
+        assert not _REASONING_MODELS.match("anthropic--claude-3-5-sonnet")
+
+    def test_reasoning_pattern_matches_o_series(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert _REASONING_MODELS.match("o1")
+        assert _REASONING_MODELS.match("o3")
+        assert _REASONING_MODELS.match("o4-mini")
+
+    def test_reasoning_pattern_does_not_match_oceanai(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert not _REASONING_MODELS.match("oceanai-model")
+
+    def test_reasoning_pattern_matches_gpt5_family(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert _REASONING_MODELS.match("gpt-5")
+        assert _REASONING_MODELS.match("gpt-5-mini")
+        assert _REASONING_MODELS.match("gpt-5.3-codex")
+
+    def test_reasoning_pattern_does_not_match_gpt4(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert not _REASONING_MODELS.match("gpt-4o")
+        assert not _REASONING_MODELS.match("gpt-4")
+
+    def test_reasoning_pattern_matches_cohere_reasoning(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert _REASONING_MODELS.match("cohere--command-a-reasoning")
+
+    def test_reasoning_pattern_does_not_match_cohere_non_reasoning(self):
+        from litellm.llms.sap.chat.transformation import _REASONING_MODELS
+        assert not _REASONING_MODELS.match("cohere-reranker")
+        assert not _REASONING_MODELS.match("cohere--command-r-plus")
+
+    # --- _CACHE_CONTROL_MODELS pattern ---
+
+    def test_cache_control_pattern_matches_all_anthropic(self):
+        from litellm.llms.sap.chat.transformation import _CACHE_CONTROL_MODELS
+        assert _CACHE_CONTROL_MODELS.match("anthropic--claude-3-5-sonnet")
+        assert _CACHE_CONTROL_MODELS.match("anthropic--claude-4-opus")
+        assert _CACHE_CONTROL_MODELS.match("anthropic--claude-3-haiku")
+
+    def test_cache_control_pattern_does_not_match_others(self):
+        from litellm.llms.sap.chat.transformation import _CACHE_CONTROL_MODELS
+        assert not _CACHE_CONTROL_MODELS.match("gpt-4o")
+        assert not _CACHE_CONTROL_MODELS.match("o4-mini")
+        assert not _CACHE_CONTROL_MODELS.match("cohere--command-a-reasoning")
+        assert not _CACHE_CONTROL_MODELS.match("mistralai--mistral-large")
+
+    # --- helper function contracts ---
+
+    def test_cohere_reasoning_supports_thinking_not_reasoning_effort(self):
+        from litellm.llms.sap.chat.transformation import (
+            _sap_supports_reasoning_effort,
+            _sap_supports_thinking,
+        )
+        assert not _sap_supports_reasoning_effort("cohere--command-a-reasoning")
+        assert _sap_supports_thinking("cohere--command-a-reasoning")
+
+    def test_anthropic_claude3_haiku_supports_cache_control_not_reasoning(self):
+        from litellm.llms.sap.chat.transformation import (
+            _sap_supports_cache_control,
+            _sap_supports_reasoning_effort,
+        )
+        assert _sap_supports_cache_control("anthropic--claude-3-haiku")
+        assert not _sap_supports_reasoning_effort("anthropic--claude-3-haiku")
+
+
+class TestCacheControlPassthrough:
+    """Verify cache_control on message content parts survives transform_request."""
+
+    @pytest.fixture
+    def cfg(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        c = GenAIHubOrchestrationConfig()
+        c.token_creator = lambda: "Bearer T"
+        c._base_url = "https://api.test-sap.com"
+        c._resource_group = "test-group"
+        return c
+
+    def test_cache_control_preserved_for_anthropic(self, cfg):
+        msg = {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+        }
+        result = cfg.transform_request(
+            "anthropic--claude-3-5-sonnet", [msg], {}, {}, {}
+        )
+        content = result["config"]["modules"]["prompt_templating"]["prompt"]["template"][0]["content"]
+        assert isinstance(content, list)
+        assert content[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_cache_control_not_in_model_params(self, cfg):
+        """cache_control is message-level metadata, never a top-level model param."""
+        msg = {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}],
+        }
+        result = cfg.transform_request(
+            "anthropic--claude-3-5-sonnet", [msg], {}, {}, {}
+        )
+        model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
+        assert "cache_control" not in model_params
+
+    def test_plain_text_message_still_validated_for_anthropic(self, cfg):
+        """Messages without cache_control still go through pydantic validation."""
+        msg = {"role": "user", "content": "plain text"}
+        result = cfg.transform_request(
+            "anthropic--claude-3-5-sonnet", [msg], {}, {}, {}
+        )
+        template = result["config"]["modules"]["prompt_templating"]["prompt"]["template"]
+        assert template[0] == {"role": "user", "content": "plain text"}
+
+    def test_cache_control_in_supported_params_for_anthropic(self, cfg):
+        params = cfg.get_supported_openai_params("anthropic--claude-3-5-sonnet")
+        assert "cache_control" in params
+
+    def test_cache_control_not_in_supported_params_for_gpt(self, cfg):
+        params = cfg.get_supported_openai_params("gpt-4o")
+        assert "cache_control" not in params

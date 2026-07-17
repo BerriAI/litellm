@@ -25,6 +25,7 @@ def validate_different_content(v: Union[str, dict, list]) -> str:
 
 
 class TextContent(BaseModel):
+    model_config = {"extra": "allow"}
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
 

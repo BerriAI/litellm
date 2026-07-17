@@ -48,6 +48,8 @@ from .models import (
     SAPUserMessage,
 )
 
+import re as _re
+
 _SAP_VENDOR_PREFIXES = (
     "anthropic--",
     "amazon--",
@@ -56,6 +58,27 @@ _SAP_VENDOR_PREFIXES = (
     "nvidia--",
     "alephalpha--",
 )
+
+# ---------------------------------------------------------------------------
+# SAP-internal capability registry
+# Maintained only in this file — do NOT add SAP models to
+# model_prices_and_context_window.json.
+# ---------------------------------------------------------------------------
+
+# Models that accept reasoning_effort (Anthropic claude-3-7+/claude-4+,
+# OpenAI o-series, gpt-5 family) or thinking (same set plus Cohere reasoning).
+_REASONING_MODELS: _re.Pattern[str] = _re.compile(
+    r"^"
+    r"(?:"
+    r"anthropic--claude-(?:4|3-7)"  # Anthropic: claude-4.x, claude-3-7
+    r"|o\d"                          # OpenAI o-series on SAP: o1, o3, o4-mini …
+    r"|gpt-5(?:[.\-]|$)"             # gpt-5 family on SAP
+    r"|cohere--\S*reasoning\S*"       # Cohere reasoning variants
+    r")"
+)
+
+# Models that support Anthropic-style cache_control on message content parts.
+_CACHE_CONTROL_MODELS: _re.Pattern[str] = _re.compile(r"^anthropic--")
 
 
 def _vendor(model: str) -> str:
@@ -71,25 +94,25 @@ def _canonical_model_name(model: str) -> str:
 
 
 def _sap_supports_reasoning_effort(model: str) -> bool:
-    vendor = _vendor(model)
-    if vendor == "anthropic":
-        canonical = _canonical_model_name(model)
-        return canonical.startswith("claude-4") or canonical.startswith("claude-3-7")
-    if vendor:
+    """True when the model accepts ``reasoning_effort`` as a model param.
+
+    Cohere reasoning models accept ``thinking`` but not ``reasoning_effort``;
+    they are matched by ``_REASONING_MODELS`` but excluded here.
+    """
+    if not _REASONING_MODELS.match(model):
         return False
-    # no vendor prefix: bare model names from Azure OpenAI / OpenAI on SAP
-    # o-series (o1, o3, o4-mini, …) and gpt-5* family both support reasoning_effort
-    canonical = model
-    if len(canonical) > 1 and canonical[0] == "o" and canonical[1].isdigit():
-        return True
-    return canonical == "gpt-5" or canonical.startswith("gpt-5-") or canonical.startswith("gpt-5.")
+    # Cohere reasoning models only support thinking, not reasoning_effort
+    return not model.startswith("cohere--")
 
 
 def _sap_supports_thinking(model: str) -> bool:
-    vendor = _vendor(model)
-    if vendor == "cohere":
-        return "reasoning" in _canonical_model_name(model)
-    return _sap_supports_reasoning_effort(model)
+    """True when the model accepts ``thinking`` as a model param."""
+    return bool(_REASONING_MODELS.match(model))
+
+
+def _sap_supports_cache_control(model: str) -> bool:
+    """True when message content parts may carry ``cache_control`` metadata."""
+    return bool(_CACHE_CONTROL_MODELS.match(model))
 
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
@@ -109,14 +132,32 @@ def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
-def _messages_to_sap_template(messages: List[Dict[str, str]]) -> list:  # type: ignore[type-arg]
+def _content_has_cache_control(content: Any) -> bool:
+    """Return True if any content part carries a cache_control key."""
+    if not isinstance(content, list):
+        return False
+    return any(isinstance(p, dict) and "cache_control" in p for p in content)
+
+
+def _messages_to_sap_template(messages: List[Dict[str, str]], model: str = "") -> list:  # type: ignore[type-arg]
     template = []
     for message in messages:
-        if message["role"] == "user":
+        role = message["role"]
+        content = message.get("content")
+        # Preserve cache_control on content parts for models that support it.
+        # pydantic TextContent strips unknown fields, so we bypass validation
+        # for list-content messages that carry cache_control metadata.
+        if (
+            role == "user"
+            and _sap_supports_cache_control(model)
+            and _content_has_cache_control(content)
+        ):
+            template.append({"role": "user", "content": content})
+        elif role == "user":
             template.append(validate_dict(message, SAPUserMessage))
-        elif message["role"] == "assistant":
+        elif role == "assistant":
             template.append(validate_dict(message, SAPAssistantMessage))
-        elif message["role"] == "tool":
+        elif role == "tool":
             template.append(validate_dict(message, SAPToolChatMessage))
         else:
             template.append(validate_dict(message, SAPMessage))
@@ -275,6 +316,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             params.append("reasoning_effort")
         if _sap_supports_thinking(model):
             params.append("thinking")
+        if _sap_supports_cache_control(model):
+            params.append("cache_control")
         # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
             model.startswith("amazon")
@@ -379,7 +422,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
 
-        template = _messages_to_sap_template(messages)
+        template = _messages_to_sap_template(messages, model=model)
 
         placeholder_values = optional_params.pop("placeholder_values", None)
         fallback_modules = optional_params.pop("fallback_sap_modules", [])
