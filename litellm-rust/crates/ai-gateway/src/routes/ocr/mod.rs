@@ -13,7 +13,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use litellm_core::error::CoreError;
 use litellm_core::CoreResult;
-use serde_json::{json, Value};
+use serde::Serialize;
 
 use crate::auth::RequireMasterKey;
 use crate::constants::MAX_OCR_REQUEST_BYTES;
@@ -69,7 +69,7 @@ async fn read_body(body: Body) -> CoreResult<Vec<u8>> {
     to_bytes(body, MAX_OCR_REQUEST_BYTES)
         .await
         .map(|bytes| bytes.to_vec())
-        .map_err(|err| CoreError::InvalidRequest(format!("could not read request body: {err}")))
+        .map_err(|_| CoreError::InvalidRequest("could not read the request body".to_string()))
 }
 
 async fn parse_multipart(request: Request, state: &AppState) -> CoreResult<OcrCall> {
@@ -123,22 +123,50 @@ async fn parse_multipart(request: Request, state: &AppState) -> CoreResult<OcrCa
     transport::assemble_multipart_call(document, &text_fields)
 }
 
+#[derive(Serialize)]
+struct ErrorEnvelope {
+    error: ErrorDetail,
+}
+
+#[derive(Serialize)]
+struct ErrorDetail {
+    message: String,
+    #[serde(rename = "type")]
+    error_type: &'static str,
+}
+
 fn error_response(error: &CoreError) -> Response {
-    let (status, error_type, message) = match error {
-        CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_)
-        | CoreError::InvalidProvider(_) => (
+    let (status, error_type, message): (StatusCode, &'static str, String) = match error {
+        CoreError::InvalidRequest(message) => (
             StatusCode::BAD_REQUEST,
             "invalid_request_error",
-            error.to_string(),
+            message.clone(),
+        ),
+        CoreError::MissingField(field) => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            format!("missing required field: {field}"),
+        ),
+        CoreError::InvalidType { .. } => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "a field in the request body has the wrong type".to_string(),
+        ),
+        CoreError::InvalidProvider(_) => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "the requested model resolves to an unsupported provider".to_string(),
         ),
         CoreError::Auth(_) => (
             StatusCode::UNAUTHORIZED,
             "authentication_error",
             "authentication failed".to_string(),
         ),
-        CoreError::Routing(_) => (StatusCode::NOT_FOUND, "not_found_error", error.to_string()),
+        CoreError::Routing(_) => (
+            StatusCode::NOT_FOUND,
+            "not_found_error",
+            "no deployment was found for the requested model".to_string(),
+        ),
         CoreError::Http { status, .. } => {
             let status = StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY);
             (
@@ -161,14 +189,11 @@ fn error_response(error: &CoreError) -> Response {
             "the OCR provider returned an unexpected response".to_string(),
         ),
     };
-    (status, Json(error_body(&message, error_type))).into_response()
-}
-
-fn error_body(message: &str, error_type: &str) -> Value {
-    json!({
-        "error": {
-            "message": message,
-            "type": error_type,
-        }
-    })
+    let envelope = ErrorEnvelope {
+        error: ErrorDetail {
+            message,
+            error_type,
+        },
+    };
+    (status, Json(envelope)).into_response()
 }

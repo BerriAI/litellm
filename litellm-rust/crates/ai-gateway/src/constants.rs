@@ -51,7 +51,9 @@ pub(crate) const OCR_RESERVED_PARAM_KEYS: &[&str] = &[
     "vertex_ai_location",
 ];
 
-pub(crate) const OCR_MULTIPART_UNIQUE_FIELDS: &[&str] = &["model", "timeout", "document"];
+pub(crate) const OCR_MULTIPART_UNIQUE_FIELDS: &[&str] = &["model", "timeout"];
+
+pub(crate) const OCR_MULTIPART_RESERVED_TEXT_FIELDS: &[&str] = &["document"];
 
 pub(crate) const MAX_OCR_REQUEST_BYTES: usize = 100 * 1024 * 1024;
 

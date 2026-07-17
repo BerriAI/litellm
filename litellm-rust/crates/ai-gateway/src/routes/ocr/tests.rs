@@ -11,20 +11,12 @@ use crate::state::AppState;
 
 const MASTER_KEY: &str = "sk-master-test";
 
-async fn read_http_request(socket: &mut TcpStream) -> String {
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 2048];
-    loop {
-        let n = socket.read(&mut buffer).await.expect("reads request");
-        if n == 0 {
-            break;
-        }
-        request.extend_from_slice(&buffer[..n]);
-        if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
+struct ServerGuard(tokio::task::JoinHandle<()>);
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        self.0.abort();
     }
-    String::from_utf8_lossy(&request).into_owned()
 }
 
 async fn read_full_http_request(socket: &mut TcpStream) -> String {
@@ -89,7 +81,7 @@ async fn spawn_mock_upstream() -> (String, tokio::task::JoinHandle<String>) {
     let addr = listener.local_addr().expect("upstream addr");
     let handle = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accepts one request");
-        let request = read_http_request(&mut socket).await;
+        let request = read_full_http_request(&mut socket).await;
         let body = r#"{"pages":[{"index":0,"markdown":"hello ocr"}],"model":"mistral-ocr-latest","usage_info":{"pages_processed":1}}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -105,14 +97,14 @@ async fn spawn_mock_upstream() -> (String, tokio::task::JoinHandle<String>) {
     (format!("http://{addr}"), handle)
 }
 
-async fn spawn_mock_upstream_error() -> String {
+async fn spawn_mock_upstream_error() -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("binds upstream");
     let addr = listener.local_addr().expect("upstream addr");
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accepts one request");
-        let _ = read_http_request(&mut socket).await;
+        let _ = read_full_http_request(&mut socket).await;
         let body = r#"{"error":"invalid_api_key: sk-leaked-secret-value"}"#;
         let response = format!(
             "HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -124,7 +116,7 @@ async fn spawn_mock_upstream_error() -> String {
             .await
             .expect("writes response");
     });
-    format!("http://{addr}")
+    (format!("http://{addr}"), handle)
 }
 
 fn app_with_deployment(api_base: &str) -> axum::Router {
@@ -150,22 +142,22 @@ fn app_with_params(model: &str, custom_llm_provider: Option<&str>, api_base: &st
     crate::routes::app(state)
 }
 
-async fn serve(app: axum::Router) -> SocketAddr {
+async fn serve(app: axum::Router) -> (SocketAddr, ServerGuard) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("binds gateway");
     let addr = listener.local_addr().expect("gateway addr");
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serves");
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
     });
-    addr
+    (addr, ServerGuard(handle))
 }
 
 #[tokio::test]
 async fn json_document_url_returns_normalized_ocr_on_both_paths() {
     for path in ["/v1/ocr", "/ocr"] {
         let (upstream, upstream_handle) = spawn_mock_upstream().await;
-        let addr = serve(app_with_deployment(&upstream)).await;
+        let (addr, _server) = serve(app_with_deployment(&upstream)).await;
 
         let response = reqwest::Client::new()
             .post(format!("http://{addr}{path}"))
@@ -196,7 +188,7 @@ async fn json_document_url_returns_normalized_ocr_on_both_paths() {
 #[tokio::test]
 async fn explicit_custom_llm_provider_resolves_model_without_prefix() {
     let (upstream, upstream_handle) = spawn_mock_upstream().await;
-    let addr = serve(app_with_params(
+    let (addr, _server) = serve(app_with_params(
         "mistral-ocr-latest",
         Some("mistral"),
         &upstream,
@@ -226,7 +218,7 @@ async fn explicit_custom_llm_provider_resolves_model_without_prefix() {
 #[tokio::test]
 async fn multipart_upload_returns_normalized_ocr() {
     let (upstream, upstream_handle) = spawn_mock_upstream().await;
-    let addr = serve(app_with_deployment(&upstream)).await;
+    let (addr, _server) = serve(app_with_deployment(&upstream)).await;
 
     let form = reqwest::multipart::Form::new()
         .text("model", "rust-ocr-mistral")
@@ -258,7 +250,7 @@ async fn multipart_upload_returns_normalized_ocr() {
 #[tokio::test]
 async fn multipart_unnamed_octet_stream_pdf_is_sniffed() {
     let (upstream, upstream_handle) = spawn_mock_upstream_capture().await;
-    let addr = serve(app_with_deployment(&upstream)).await;
+    let (addr, _server) = serve(app_with_deployment(&upstream)).await;
 
     let form = reqwest::multipart::Form::new()
         .text("model", "rust-ocr-mistral")
@@ -288,7 +280,7 @@ async fn multipart_unnamed_octet_stream_pdf_is_sniffed() {
 #[tokio::test]
 async fn multipart_unnamed_octet_stream_image_is_sniffed() {
     let (upstream, upstream_handle) = spawn_mock_upstream_capture().await;
-    let addr = serve(app_with_deployment(&upstream)).await;
+    let (addr, _server) = serve(app_with_deployment(&upstream)).await;
 
     let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01];
     let form = reqwest::multipart::Form::new()
@@ -318,8 +310,8 @@ async fn multipart_unnamed_octet_stream_image_is_sniffed() {
 
 #[tokio::test]
 async fn upstream_error_status_is_propagated_without_leaking_provider_body() {
-    let upstream = spawn_mock_upstream_error().await;
-    let addr = serve(app_with_deployment(&upstream)).await;
+    let (upstream, upstream_handle) = spawn_mock_upstream_error().await;
+    let (addr, _server) = serve(app_with_deployment(&upstream)).await;
 
     let response = reqwest::Client::new()
         .post(format!("http://{addr}/v1/ocr"))
@@ -340,11 +332,12 @@ async fn upstream_error_status_is_propagated_without_leaking_provider_body() {
         !message.contains("sk-leaked-secret-value") && !message.contains("invalid_api_key"),
         "provider body must not leak into the public error: {message}"
     );
+    upstream_handle.await.expect("upstream served");
 }
 
 #[tokio::test]
 async fn missing_master_key_is_unauthorized() {
-    let addr = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
     let response = reqwest::Client::new()
         .post(format!("http://{addr}/v1/ocr"))
         .json(&serde_json::json!({
@@ -359,7 +352,7 @@ async fn missing_master_key_is_unauthorized() {
 
 #[tokio::test]
 async fn unknown_model_is_not_found() {
-    let addr = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
     let response = reqwest::Client::new()
         .post(format!("http://{addr}/v1/ocr"))
         .bearer_auth(MASTER_KEY)
@@ -377,7 +370,7 @@ async fn unknown_model_is_not_found() {
 
 #[tokio::test]
 async fn file_document_over_json_is_rejected() {
-    let addr = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
     let response = reqwest::Client::new()
         .post(format!("http://{addr}/v1/ocr"))
         .bearer_auth(MASTER_KEY)
@@ -395,7 +388,7 @@ async fn file_document_over_json_is_rejected() {
 
 #[tokio::test]
 async fn json_reserved_control_param_is_rejected() {
-    let addr = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
     let response = reqwest::Client::new()
         .post(format!("http://{addr}/v1/ocr"))
         .bearer_auth(MASTER_KEY)
@@ -419,7 +412,7 @@ async fn json_reserved_control_param_is_rejected() {
 
 #[tokio::test]
 async fn multipart_reserved_control_param_is_rejected() {
-    let addr = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
     let form = reqwest::multipart::Form::new()
         .text("model", "rust-ocr-mistral")
         .text("vertex_credentials", "/etc/gcp/service-account.json")
@@ -444,7 +437,7 @@ async fn multipart_reserved_control_param_is_rejected() {
 
 #[tokio::test]
 async fn duplicate_file_multipart_is_rejected() {
-    let addr = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
     let form = reqwest::multipart::Form::new()
         .text("model", "rust-ocr-mistral")
         .part(
@@ -475,7 +468,7 @@ async fn duplicate_file_multipart_is_rejected() {
 
 #[tokio::test]
 async fn non_positive_timeout_is_rejected() {
-    let addr = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
     let response = reqwest::Client::new()
         .post(format!("http://{addr}/v1/ocr"))
         .bearer_auth(MASTER_KEY)
@@ -484,6 +477,75 @@ async fn non_positive_timeout_is_rejected() {
             "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"},
             "timeout": -1
         }))
+        .send()
+        .await
+        .expect("request sent");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: Value = response.json().await.expect("json body");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
+async fn malformed_json_response_never_echoes_attacker_text() {
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/ocr"))
+        .bearer_auth(MASTER_KEY)
+        .header("content-type", "application/json")
+        .body(r#"{"model":"m","document":{"type":"/etc/creds/CREDMARKER.json?token=QUERYMARKER"}}"#)
+        .send()
+        .await
+        .expect("request sent");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: Value = response.json().await.expect("json body");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    let message = body["error"]["message"].as_str().expect("message string");
+    for needle in ["CREDMARKER", "QUERYMARKER", "/etc/creds"] {
+        assert!(
+            !message.contains(needle),
+            "parse error must not echo attacker text ({needle}): {message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn blank_model_is_rejected_before_routing() {
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/ocr"))
+        .bearer_auth(MASTER_KEY)
+        .json(&serde_json::json!({
+            "model": "   ",
+            "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
+        }))
+        .send()
+        .await
+        .expect("request sent");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: Value = response.json().await.expect("json body");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
+async fn multipart_document_form_field_is_rejected() {
+    let (addr, _server) = serve(app_with_deployment("http://127.0.0.1:1")).await;
+    let form = reqwest::multipart::Form::new()
+        .text("model", "rust-ocr-mistral")
+        .text(
+            "document",
+            r#"{"type":"document_url","document_url":"reducto://smuggled"}"#,
+        )
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"%PDF-1.7 minimal".to_vec())
+                .file_name("doc.pdf")
+                .mime_str("application/pdf")
+                .expect("mime"),
+        );
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/ocr"))
+        .bearer_auth(MASTER_KEY)
+        .multipart(form)
         .send()
         .await
         .expect("request sent");
