@@ -59,8 +59,6 @@ from litellm.integrations.otel.model.spans import SpanRole, span_role_for_servic
 from litellm.integrations.otel.model.utils import to_ns
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
-
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.utils import (
         StandardLoggingGuardrailInformation,
@@ -637,7 +635,7 @@ class OpenTelemetryV2(CustomLogger):
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: "str | None" = None,
-    ) -> "HTTPException | None":
+    ) -> None:
         """Stamp error.* on the request's root SERVER span for a proxy-level
         failure that never reached an LLM call (empty body rejected in the
         endpoint, auth failure), so the failed request carries the same error keys
