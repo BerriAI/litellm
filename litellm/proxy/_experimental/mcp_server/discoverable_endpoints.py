@@ -1161,10 +1161,15 @@ async def register_client_with_server(
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
     current_redirect_uri = f"{request_base_url}/callback"
+    # In the short-circuit arm the gateway is the client's authorization server and loops the
+    # authorization code back through /callback, so the client-facing registration must echo the
+    # client's own redirect_uris. Echoing current_redirect_uri (the gateway callback) instead makes
+    # a spec-compliant DCR client adopt /callback as its own redirect_uri and self-redirect loop.
+    client_facing_redirect_uris = client_redirect_uris or [current_redirect_uri]
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
         "client_secret": "dummy",
-        "redirect_uris": [current_redirect_uri],
+        "redirect_uris": client_facing_redirect_uris,
     }
 
     if mcp_server.client_id and not (
@@ -1231,6 +1236,9 @@ async def register_client_with_server(
         persistence_result = await _persist_dcr_client_registration(mcp_server, token_response, current_redirect_uri)
         if persistence_result == "reused":
             return dummy_return
+
+    if client_redirect_uris and not bridge_relay and isinstance(token_response, dict):
+        token_response = {**token_response, "redirect_uris": client_facing_redirect_uris}
 
     return JSONResponse(token_response)
 
@@ -1986,7 +1994,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     dummy_return = {
         "client_id": mcp_server_name or "dummy_client",
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": data.get("redirect_uris") or [f"{request_base_url}/callback"],
     }
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:
