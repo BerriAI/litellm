@@ -5293,8 +5293,10 @@ def test_bedrock_tool_message_openai_file_pdf_becomes_document():
 
     tool_result = translated_msg[-1]["content"][-1]["toolResult"]
     assert tool_result["toolUseId"] == "tooluse_pdf_1"
-    assert len(tool_result["content"]) == 1
-    block = tool_result["content"][0]
+    # Bedrock requires a sibling text block when documents are present.
+    assert len(tool_result["content"]) == 2
+    assert "text" in tool_result["content"][0]
+    block = tool_result["content"][1]
     assert "document" in block, f"expected document block, got {block}"
     assert block["document"]["format"] == "pdf"
     assert block["document"]["source"]["bytes"] == pdf_b64
@@ -5337,8 +5339,9 @@ def test_bedrock_tool_message_image_url_pdf_data_uri_becomes_document():
 
     tool_result = translated_msg[-1]["content"][-1]["toolResult"]
     assert tool_result["toolUseId"] == "tooluse_pdf_img_1"
-    assert len(tool_result["content"]) == 1
-    block = tool_result["content"][0]
+    assert len(tool_result["content"]) == 2
+    assert "text" in tool_result["content"][0]
+    block = tool_result["content"][1]
     assert "document" in block, f"expected document block, got {block}"
     assert block["document"]["format"] == "pdf"
     assert block["document"]["source"]["bytes"] == pdf_b64
