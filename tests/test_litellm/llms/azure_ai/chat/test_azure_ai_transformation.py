@@ -309,6 +309,11 @@ def test_transform_request_drops_thinking_blocks_for_fireworks_model():
     The outgoing request payload built by ``transform_request`` must not carry
     it, or the Fireworks backend 400s with
     ``Extra inputs are not permitted, field: 'messages[2].thinking_blocks'``.
+    Also covers the nested ``tool_calls[].function.provider_specific_fields``
+    signature the Anthropic ``/v1/messages`` adapter attaches on tool-use
+    replays, which otherwise 400s with
+    ``Extra inputs are not permitted, field:
+    'messages[n].tool_calls[m].function.provider_specific_fields'``.
     """
     config = AzureAIStudioConfig()
     messages = [
@@ -324,6 +329,17 @@ def test_transform_request_drops_thinking_blocks_for_fireworks_model():
                     "cache_control": {},
                 }
             ],
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "foo.txt"}',
+                        "provider_specific_fields": {"thought_signature": "sig"},
+                    },
+                }
+            ],
         },
         {"role": "user", "content": "go ahead"},
     ]
@@ -336,8 +352,56 @@ def test_transform_request_drops_thinking_blocks_for_fireworks_model():
         headers={},
     )
 
+    def _assert_no_unsupported_fields(node):
+        if isinstance(node, dict):
+            assert "thinking_blocks" not in node
+            assert "reasoning_content" not in node
+            assert "provider_specific_fields" not in node
+            assert "cache_control" not in node
+            for value in node.values():
+                _assert_no_unsupported_fields(value)
+        elif isinstance(node, list):
+            for item in node:
+                _assert_no_unsupported_fields(item)
+
     for message in payload["messages"]:
-        assert "thinking_blocks" not in message
-        assert "reasoning_content" not in message
-        assert "provider_specific_fields" not in message
-        assert "cache_control" not in message
+        _assert_no_unsupported_fields(message)
+
+
+def test_transform_messages_strips_nested_tool_call_provider_specific_fields():
+    """Regression: the Anthropic ``/v1/messages`` adapter attaches the thought
+    signature at ``tool_calls[].function.provider_specific_fields``
+    (``adapters/transformation.py``). A top-level ``pop`` of
+    ``provider_specific_fields`` from the message misses the nested copy, so
+    strict upstreams (Fireworks-on-Azure) still 400 with
+    ``Extra inputs are not permitted, field:
+    'messages[1].tool_calls[0].function.provider_specific_fields'``.
+    ``_transform_messages`` must strip it recursively.
+    """
+    config = AzureAIStudioConfig()
+    messages = [
+        {"role": "user", "content": "Run the tool."},
+        {
+            "role": "assistant",
+            "content": "Calling the tool now.",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "foo.txt"}',
+                        "provider_specific_fields": {"thought_signature": "sig"},
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "show me the result"},
+    ]
+
+    out = config._transform_messages(messages, model="glm-5.2")
+
+    tool_call = out[1]["tool_calls"][0]
+    assert "provider_specific_fields" not in tool_call
+    assert "provider_specific_fields" not in tool_call["function"]
+    assert tool_call["function"]["name"] == "read_file"

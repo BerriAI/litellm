@@ -29,9 +29,28 @@ class AzureFoundryErrorStrings(str, enum.Enum):
     SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
 
 
-_OUTPUT_ONLY_MESSAGE_FIELDS: Tuple[str, ...] = (
+# Fields that only ever appear at the top level of a chat message and are
+# removed with a plain ``pop``. ``thinking_blocks`` and ``reasoning_content``
+# are output-only reasoning fields; the Fireworks backend accepts
+# ``reasoning_content`` on input, but the direct ``fireworks_ai`` provider
+# strips ``thinking_blocks`` and Azure AI Foundry fronts multiple backends, so
+# drop both as a defensive default for a generic multi-backend provider.
+_TOP_LEVEL_OUTPUT_ONLY_FIELDS: Tuple[str, ...] = (
     "thinking_blocks",
     "reasoning_content",
+)
+
+# Fields that can nest inside a message (e.g. inside ``tool_calls[].function``
+# or content blocks) and must be removed recursively. ``cache_control`` is an
+# Anthropic prompt-caching annotation; ``provider_specific_fields`` carries
+# Anthropic thought signatures and is attached by the Anthropic
+# ``/v1/messages`` adapter at ``tool_calls[].function.provider_specific_fields``
+# (``adapters/transformation.py``), so a top-level ``pop`` misses it and
+# strict upstreams still reject it with
+# ``Extra inputs are not permitted, field:
+# 'messages[n].tool_calls[m].function.provider_specific_fields'``.
+_RECURSIVELY_STRIPPED_FIELDS: Tuple[str, ...] = (
+    "cache_control",
     "provider_specific_fields",
 )
 
@@ -46,14 +65,15 @@ def _strip_unsupported_message_fields(message: AllMessageValues) -> None:
     ``/v1/messages`` adapter attaches when replaying assistant turns from an
     Anthropic-format client (e.g. Claude Code) are not part of that schema and
     trigger ``400 Extra inputs are not permitted, field:
-    'messages[n].<field>'``. ``cache_control`` is an Anthropic prompt-caching
-    annotation with the same problem. ``thinking_blocks`` and
-    ``reasoning_content`` are output-only; ``provider_specific_fields`` carries
-    Anthropic thought signatures. None are valid OpenAI input, so drop them.
+    'messages[n].<field>'``. Top-level output-only fields are popped; fields
+    that can nest (``cache_control``, and ``provider_specific_fields`` which
+    the adapter attaches inside ``tool_calls[].function``) are stripped
+    recursively so nested tool-call signatures are removed too.
     """
-    filter_value_from_dict(cast(dict, message), "cache_control")
     m = cast(dict, message)
-    for field in _OUTPUT_ONLY_MESSAGE_FIELDS:
+    for field in _RECURSIVELY_STRIPPED_FIELDS:
+        filter_value_from_dict(m, field)
+    for field in _TOP_LEVEL_OUTPUT_ONLY_FIELDS:
         m.pop(field, None)
 
 
