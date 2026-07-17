@@ -666,10 +666,12 @@ async def test_anthropic_messages_marks_litellm_params_async():
     from litellm.integrations.custom_logger import CustomLogger
 
     captured = {}
+    logged = asyncio.Event()
 
     class CaptureLogger(CustomLogger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
             captured["litellm_params"] = kwargs.get("litellm_params", {})
+            logged.set()
 
     logger = CaptureLogger()
     logger.log_success_event = MagicMock()
@@ -682,7 +684,7 @@ async def test_anthropic_messages_marks_litellm_params_async():
             model="anthropic/claude-sonnet-4-5",
             mock_response="Hello, world!",
         )
-        await asyncio.sleep(1)
+        await asyncio.wait_for(logged.wait(), timeout=10)
 
         assert captured["litellm_params"].get("aanthropic_messages") is True
         assert LitellmLogging._is_sync_litellm_request(captured["litellm_params"]) is False
