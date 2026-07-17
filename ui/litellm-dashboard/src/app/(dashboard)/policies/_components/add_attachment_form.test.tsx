@@ -18,6 +18,10 @@ vi.mock("./impact_preview_alert", () => ({
     React.createElement("div", { "data-testid": "impact-preview" }, `${impactResult.affected_keys_count} keys`),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ userId: "admin-user-id", userRole: "Admin", accessToken: "test-token" }),
+}));
+
 const makePolicy = (overrides: Partial<Policy> = {}): Policy => ({
   policy_id: "policy-id-1",
   policy_name: "test-policy",
@@ -69,6 +73,12 @@ describe("AddAttachmentForm", () => {
       expect(networking.keyListCall).toHaveBeenCalled();
       expect(networking.modelAvailableCall).toHaveBeenCalled();
     });
+  });
+
+  it("fetches all teams, not just teams the caller is a member of (LIT-4199)", async () => {
+    renderWithProviders(<AddAttachmentForm {...defaultProps} />);
+    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
+    expect(networking.teamListCall).toHaveBeenCalledWith("test-token", null, null);
   });
 
   it("should not fetch teams, keys, or models when accessToken is null", () => {
