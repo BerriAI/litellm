@@ -29,7 +29,9 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    sanitize_input_schema_for_anthropic,
+)
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -634,7 +636,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         mcp_server: Optional[AnthropicMcpServerTool] = None
 
         if tool["type"] == "function" or tool["type"] == "custom":
-            _input_schema: dict = tool["function"].get(
+            _input_schema = tool["function"].get(
                 "parameters",
                 {
                     "type": "object",
@@ -642,28 +644,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 },
             )
 
-            # Anthropic requires input_schema.type to be "object". Normalize
-            # schemas from external sources (MCP servers, OpenAI callers) that
-            # may omit the type field or use a non-object type.
-            if _input_schema.get("type") != "object":
-                litellm.verbose_logger.debug(
-                    "_map_tool_helper: coercing input_schema type from %r to "
-                    "'object' for Anthropic compatibility (tool: %s)",
-                    _input_schema.get("type"),
-                    tool["function"].get("name"),
-                )
-                _input_schema = dict(_input_schema)  # avoid mutating caller's dict
-                _input_schema["type"] = "object"
-                if "properties" not in _input_schema:
-                    _input_schema["properties"] = {}
-
-            # Inline legacy / OpenAPI $refs before the allow-list filter strips
-            # their backing def blocks (https://github.com/BerriAI/litellm/issues/26692).
-            _input_schema = unpack_legacy_defs(_input_schema, copy=True)
-
-            _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
-            input_schema_filtered = {k: v for k, v in _input_schema.items() if k in _allowed_properties}
-            input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(**input_schema_filtered)
+            input_anthropic_schema = sanitize_input_schema_for_anthropic(_input_schema)
 
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
