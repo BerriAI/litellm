@@ -81,6 +81,28 @@ replicaCount: 1
 # Keep fewer ReplicaSets than the Kubernetes default (10).
 revisionHistoryLimit: 5
 
+# LiteLLM runs prisma migrate before binding :4000 (USE_PRISMA_MIGRATE).
+# Without a startupProbe, readiness sees connection refused and the new
+# pod never joins the Service during rollouts. Startup allows ~5 minutes
+# before liveness/readiness begin.
+probes:
+  startup:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 30
+  liveness:
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 10
+  readiness:
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
 autoscaling:
   enabled: true
   minReplicas: 1

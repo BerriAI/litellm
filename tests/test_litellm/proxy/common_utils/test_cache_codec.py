@@ -23,9 +23,25 @@ class TestCacheCodecSerialize:
         out = CacheCodec.serialize(m)
         assert out == {"name": "a", "count": 1}
 
-    def test_without_model_type_dict_unchanged(self):
-        d = {"name": "x"}
-        assert CacheCodec.serialize(d) is d
+    def test_without_model_type_dict_json_sanitized(self):
+        from datetime import datetime, timezone
+
+        d = {
+            "name": "x",
+            "budget_reset_at": datetime(2026, 8, 1, tzinfo=timezone.utc),
+        }
+        out = CacheCodec.serialize(d)
+        assert out == {
+            "name": "x",
+            "budget_reset_at": "2026-08-01T00:00:00+00:00",
+        }
+        assert out is not d
+
+    def test_without_model_type_plain_dict_values_preserved(self):
+        d = {"name": "x", "count": 1}
+        out = CacheCodec.serialize(d)
+        assert out == d
+        assert out is not d
 
     def test_without_model_type_primitive_unchanged(self):
         assert CacheCodec.serialize(42) == 42
