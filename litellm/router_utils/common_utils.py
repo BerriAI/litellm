@@ -11,6 +11,26 @@ from litellm.types.router import CredentialLiteLLMParams
 from litellm._logging import verbose_logger
 
 
+def get_anthropic_session_id_from_metadata(metadata: Mapping[str, object]) -> str | None:
+    if "session_id" in metadata:
+        return None
+
+    user_id = metadata.get("user_id")
+    if not isinstance(user_id, str):
+        return None
+
+    session_marker = "_session_"
+    marker_index = user_id.rfind(session_marker)
+    if marker_index == -1:
+        return None
+
+    session_id = user_id[marker_index + len(session_marker) :]
+    valid_characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+    if not session_id or any(character not in valid_characters for character in session_id):
+        return None
+    return session_id
+
+
 def _is_proxy_admin_request(request_kwargs: Optional[Mapping[str, object]]) -> bool:
     if request_kwargs is None:
         return False

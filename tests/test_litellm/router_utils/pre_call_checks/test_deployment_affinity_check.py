@@ -27,6 +27,35 @@ class MockResponse:
         return self._json_data
 
 
+@pytest.mark.parametrize(
+    ("request_kwargs", "expected_session_id"),
+    [
+        (
+            {
+                "metadata": {
+                    "user_id": "user_abc_account_uuid_session_e96634a3-fa28-4083-b354-55542e2dca01"
+                }
+            },
+            "e96634a3-fa28-4083-b354-55542e2dca01",
+        ),
+        (
+            {
+                "litellm_metadata": {"user_id": "user_abc_account_uuid_session_fallback"},
+                "metadata": {"session_id": "explicit-session"},
+            },
+            "explicit-session",
+        ),
+        ({"metadata": {"user_id": "user_abc_account_uuid"}}, None),
+        ({"metadata": {"user_id": "user_abc_account_uuid_session_"}}, None),
+        ({"metadata": {"user_id": "user_abc_account_uuid_session_invalid!"}}, None),
+    ],
+)
+def test_resolves_anthropic_metadata_user_id_session(
+    request_kwargs: dict[str, object], expected_session_id: str | None
+):
+    assert DeploymentAffinityCheck._get_session_id_from_request_kwargs(request_kwargs) == expected_session_id
+
+
 @pytest.mark.asyncio
 async def test_async_user_key_affinity_routes_to_same_deployment():
     """
