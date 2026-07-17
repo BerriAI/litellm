@@ -472,7 +472,7 @@ model LiteLLM_JWTKeyMapping {
     updated_at        DateTime @default(now()) @updatedAt
     updated_by        String?
 
-    litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token])
+    litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token], onDelete: Cascade)
 
     @@unique([jwt_claim_name, jwt_claim_value])
     @@index([jwt_claim_name, jwt_claim_value, is_active])
