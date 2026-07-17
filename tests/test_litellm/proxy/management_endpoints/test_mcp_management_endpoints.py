@@ -5376,3 +5376,155 @@ async def test_edit_mcp_server_snapshot_failure_skips_purge_but_edit_succeeds():
 
     assert result.server_id == server_id
     mock_purge.assert_not_awaited()
+
+
+class TestDelegationListScoping:
+    """GET /v1/mcp/delegation must not leak other users' consent records to a
+    non-admin key with no user association (user_id=None)."""
+
+    def _client_and_table(self, auth):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        table = MagicMock()
+        table.find_many = AsyncMock(return_value=[])
+        prisma = MagicMock()
+        prisma.db.litellm_useragentdelegationtable = table
+
+        client = create_mcp_router_test_client()
+        client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+        return client, table, prisma
+
+    def test_non_admin_key_without_user_id_never_queries_and_returns_empty(self):
+        from unittest.mock import patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        auth = UserAPIKeyAuth(api_key="team-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id=None)
+        client, table, prisma = self._client_and_table(auth)
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma,
+        ):
+            resp = client.get("/v1/mcp/delegation")
+
+        assert resp.status_code == 200
+        assert resp.json() == []
+        table.find_many.assert_not_awaited()
+
+    def test_non_admin_key_with_user_id_is_scoped_to_that_user(self):
+        from unittest.mock import patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        auth = UserAPIKeyAuth(api_key="user-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+        client, table, prisma = self._client_and_table(auth)
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma,
+        ):
+            resp = client.get("/v1/mcp/delegation")
+
+        assert resp.status_code == 200
+        table.find_many.assert_awaited_once()
+        assert table.find_many.await_args.kwargs["where"] == {"user_id": "alice"}
+
+    def test_admin_key_lists_all_unscoped(self):
+        from unittest.mock import patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        auth = UserAPIKeyAuth(api_key="admin-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id=None)
+        client, table, prisma = self._client_and_table(auth)
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma,
+        ):
+            resp = client.get("/v1/mcp/delegation")
+
+        assert resp.status_code == 200
+        table.find_many.assert_awaited_once()
+        assert table.find_many.await_args.kwargs["where"] == {}
+
+
+class TestDelegationGrantAuthz:
+    """The consolidated authz gate: non-admins act only on themselves and never
+    trigger an email lookup (no enumeration oracle); admin user_id targets are
+    checked for existence so a typo cannot create a phantom consent record."""
+
+    def _client(self, auth):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        client = create_mcp_router_test_client()
+        client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+        return client
+
+    def test_non_admin_targeting_by_email_is_forbidden_without_lookup(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        auth = UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+        client = self._client(auth)
+        email_lookup = AsyncMock(return_value="someone")
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._resolve_single_user_id_by_email",
+                email_lookup,
+            ),
+        ):
+            resp = client.post("/v1/mcp/delegation", json={"user_email": "victim@x.com", "agent_id": "a1"})
+
+        assert resp.status_code == 403
+        email_lookup.assert_not_awaited()
+
+    def test_non_admin_targeting_foreign_user_id_is_forbidden(self):
+        from unittest.mock import MagicMock, patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        auth = UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+        client = self._client(auth)
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ):
+            resp = client.post("/v1/mcp/delegation", json={"user_id": "bob", "agent_id": "a1"})
+
+        assert resp.status_code == 403
+
+    def test_admin_grant_with_nonexistent_user_id_is_404_not_phantom(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        auth = UserAPIKeyAuth(api_key="admin", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+        client = self._client(auth)
+        prisma = MagicMock()
+        prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+        grant_spy = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=prisma,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.delegation_db.grant_user_agent_delegation",
+                grant_spy,
+            ),
+        ):
+            resp = client.post("/v1/mcp/delegation", json={"user_id": "ghost", "agent_id": "a1"})
+
+        assert resp.status_code == 404
+        grant_spy.assert_not_awaited()

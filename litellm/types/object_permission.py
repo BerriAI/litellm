@@ -25,3 +25,4 @@ class ObjectPermissionDict(TypedDict, total=False):
     models: Optional[list[str]]
     search_tools: Optional[list[str]]
     mcp_tool_search_enabled: Optional[bool]
+    mcp_can_delegate: Optional[bool]

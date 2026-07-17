@@ -3,7 +3,7 @@
 These edge functions translate v1's request objects into the resolver's typed inputs and map
 its typed errors onto the proxy's public exception contract. They import v1 and live outside the
 package's public surface so the resolver core (``resolver.py`` / ``types.py``) stays v1-free.
-Nothing wires them into ``_create_mcp_client`` yet.
+``_create_mcp_client`` wires them in via ``_resolve_v2_auth`` for every migrated mode.
 
 ``to_server_spec`` maps only the modes the resolver has gone live for, returning ``None`` for
 every other mode so the caller defers to v1 (parity-safe); it grows one branch per migrated mode.
@@ -40,14 +40,17 @@ def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optio
     """Map v1's authenticated principal onto the resolver's Subject.
 
     tenant_id / subject_id are empty for an unauthenticated caller; the per-user arms must reject
-    an empty subject rather than share one credential slot across callers.
+    an empty subject rather than share one credential slot across callers. A validated delegation
+    assertion (UserAPIKeyAuth.delegated_user_id, stamped at MCP admission after the consent check)
+    replaces the credential subject so per-user upstream credentials resolve as the delegated
+    user; admission, permissions, and attribution stay on the calling key.
     """
     inbound = SecretStr(subject_token) if subject_token else None
     if user_api_key_auth is None:
         return Subject(tenant_id="", subject_id="", inbound_token=inbound)
     return Subject(
         tenant_id=user_api_key_auth.org_id or user_api_key_auth.team_id or "",
-        subject_id=user_api_key_auth.user_id or "",
+        subject_id=user_api_key_auth.delegated_user_id or user_api_key_auth.user_id or "",
         inbound_token=inbound,
     )
 

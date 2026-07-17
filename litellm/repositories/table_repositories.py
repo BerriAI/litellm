@@ -113,6 +113,10 @@ class MCPToolsetRepository(PrismaTableRepository):
     table_name = "litellm_mcptoolsettable"
 
 
+class UserAgentDelegationRepository(PrismaTableRepository):
+    table_name = "litellm_useragentdelegationtable"
+
+
 class ToolRepository(PrismaTableRepository):
     table_name = "litellm_tooltable"
 

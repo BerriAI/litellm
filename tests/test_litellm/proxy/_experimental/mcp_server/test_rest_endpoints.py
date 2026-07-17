@@ -2699,9 +2699,7 @@ class TestRestListToolsetFiltering:
 
         mock_manager = MagicMock()
         mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
-        mock_manager.resolve_toolset_tool_permissions = AsyncMock(
-            return_value={"server-a": ["lookup_status"]}
-        )
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value={"server-a": ["lookup_status"]})
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
@@ -2725,3 +2723,91 @@ class TestRestListToolsetFiltering:
             )
 
         assert [tool.name for tool in result] == ["lookup_status"]
+
+
+class TestRestDelegationWiring:
+    """Pins that both REST runtime endpoints route auth through the delegation
+    resolver before any permission or credential resolution."""
+
+    @pytest.mark.asyncio
+    async def test_list_tools_uses_delegation_resolved_auth(self, monkeypatch):
+        from unittest.mock import patch
+
+        original = UserAPIKeyAuth(api_key="hashed", user_id="agent-svc-user", agent_id="agent-1")
+        delegated = original.model_copy(update={"delegated_user_id": "alice-id"})
+        seen_auth = {}
+
+        async def fake_contexts(auth):
+            seen_auth["auth"] = auth
+            return [auth]
+
+        async def fake_get_allowed(user_api_key_auth=None):
+            return []
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed,
+            raising=False,
+        )
+
+        request = _build_request(
+            path="/mcp-rest/tools/list",
+            method="GET",
+            headers={"x-litellm-delegated-user": "alice@example.com"},
+        )
+        with patch.object(auth_mcp.MCPRequestHandler, "resolve_delegated_user_auth", AsyncMock(return_value=delegated)):
+            await rest_endpoints.list_tool_rest_api(request, user_api_key_dict=original)
+
+        assert seen_auth["auth"] is delegated
+
+    @pytest.mark.asyncio
+    async def test_call_tool_rejection_propagates_before_any_resolution(self):
+        from unittest.mock import patch
+
+        from fastapi import HTTPException
+
+        original = UserAPIKeyAuth(api_key="hashed", user_id="agent-svc-user", agent_id="agent-1")
+        sentinel = HTTPException(status_code=403, detail={"error": "delegation-sentinel"})
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "lookup_status", "arguments": {}},
+            headers={"x-litellm-delegated-user": "alice@example.com"},
+        )
+        with patch.object(auth_mcp.MCPRequestHandler, "resolve_delegated_user_auth", AsyncMock(side_effect=sentinel)):
+            with pytest.raises(HTTPException) as exc_info:
+                await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=original)
+
+        assert exc_info.value.status_code == 403
+        assert "delegation-sentinel" in str(exc_info.value.detail)
+
+
+class TestRestListDelegationPropagates:
+    @pytest.mark.asyncio
+    async def test_list_tools_delegation_403_is_not_swallowed_into_200(self):
+        """A delegation rejection on tools/list must surface as a 403, not be
+        caught by the endpoint's broad except-HTTPException handler and returned
+        as a 200 empty-tools response."""
+        from unittest.mock import patch
+
+        from fastapi import HTTPException
+
+        original = UserAPIKeyAuth(api_key="hashed", user_id="agent-svc-user", agent_id="agent-1")
+        sentinel = HTTPException(status_code=403, detail={"error": "delegation-denied"})
+
+        request = _build_request(
+            path="/mcp-rest/tools/list",
+            method="GET",
+            headers={"x-litellm-delegated-user": "alice@example.com"},
+        )
+        with patch.object(
+            auth_mcp.MCPRequestHandler, "resolve_delegated_user_auth", AsyncMock(side_effect=sentinel)
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await rest_endpoints.list_tool_rest_api(request, user_api_key_dict=original)
+
+        assert exc_info.value.status_code == 403
+        assert "delegation-denied" in str(exc_info.value.detail)

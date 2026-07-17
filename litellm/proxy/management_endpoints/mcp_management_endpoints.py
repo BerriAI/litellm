@@ -2774,3 +2774,173 @@ if MCP_AVAILABLE:
 
         global_mcp_server_manager.invalidate_toolset_cache(toolset_id)
         return Response(status_code=status.HTTP_202_ACCEPTED)
+
+    # ---------------------------------------------------------------------------
+    # User -> agent delegation (consent records for MCP on-behalf-of resolution)
+    # ---------------------------------------------------------------------------
+
+    from litellm.proxy._experimental.mcp_server.delegation_db import (
+        grant_user_agent_delegation,
+        list_user_agent_delegations,
+        revoke_user_agent_delegation,
+    )
+    from litellm.types.mcp_server.user_agent_delegation import (
+        NewUserAgentDelegationRequest,
+        RevokeUserAgentDelegationRequest,
+    )
+
+    # Module-scope dependency/header singletons so route defaults reference a name
+    # rather than calling Depends()/Header() inline (B008); FastAPI resolves them
+    # the same way. The changed-by header keeps audit attribution consistent with
+    # the other management endpoints.
+    _delegation_user_auth = Depends(user_api_key_auth)
+    _delegation_changed_by = Header(None)
+
+    async def _authorized_delegation_target_user_id(
+        prisma_client: Any,
+        user_api_key_dict: UserAPIKeyAuth,
+        payload_user_id: str | None,
+        payload_user_email: str | None,
+        action: str,
+    ) -> str:
+        """Single authorization + resolution gate shared by grant/revoke.
+
+        A non-admin may only manage its own delegations, and is resolved to its
+        own user_id WITHOUT ever running an email lookup, so this path cannot be
+        used to probe which emails exist. An admin may target any user by id or
+        email; a user_id target is checked for existence so a typo cannot create
+        a phantom, never-usable consent record.
+        """
+        forbidden = HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": f"Only proxy admins or the user themselves can {action} a delegation."},
+        )
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            caller_user_id = user_api_key_dict.user_id
+            if not caller_user_id:
+                raise forbidden
+            if payload_user_email is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": "Only proxy admins may target a user by email; use your own user_id."},
+                )
+            if payload_user_id is not None and payload_user_id != caller_user_id:
+                raise forbidden
+            return caller_user_id
+
+        if payload_user_id:
+            existing = await prisma_client.db.litellm_usertable.find_unique(where={"user_id": payload_user_id})
+            if existing is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": f"User '{payload_user_id}' not found."},
+                )
+            return payload_user_id
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        resolved = await MCPRequestHandler._resolve_single_user_id_by_email(payload_user_email or "")
+        if resolved is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "user_email did not resolve to exactly one user."},
+            )
+        return resolved
+
+    @router.post(
+        "/delegation",
+        description="Grant consent for an agent to act on behalf of a user on MCP routes",
+        status_code=status.HTTP_201_CREATED,
+    )
+    @management_endpoint_wrapper
+    async def grant_delegation(
+        payload: NewUserAgentDelegationRequest,
+        user_api_key_dict: UserAPIKeyAuth = _delegation_user_auth,
+        litellm_changed_by: str | None = _delegation_changed_by,
+    ):
+        prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        target_user_id = await _authorized_delegation_target_user_id(
+            prisma_client, user_api_key_dict, payload.user_id, payload.user_email, "grant"
+        )
+
+        agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+            where={"agent_id": payload.agent_id}, include={"object_permission": True}
+        )
+        if agent_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Agent '{payload.agent_id}' not found."},
+            )
+        if not getattr(getattr(agent_row, "object_permission", None), "mcp_can_delegate", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": f"Agent '{payload.agent_id}' does not have mcp_can_delegate; grant the capability before consenting."
+                },
+            )
+
+        granted_by = (
+            get_audit_log_changed_by(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+            or LITELLM_PROXY_ADMIN_NAME
+        )
+        return await grant_user_agent_delegation(
+            prisma_client, user_id=target_user_id, agent_id=payload.agent_id, granted_by=granted_by
+        )
+
+    @router.post(
+        "/delegation/revoke",
+        description="Revoke an agent's consent to act on behalf of a user",
+    )
+    @management_endpoint_wrapper
+    async def revoke_delegation(
+        payload: RevokeUserAgentDelegationRequest,
+        user_api_key_dict: UserAPIKeyAuth = _delegation_user_auth,
+        litellm_changed_by: str | None = _delegation_changed_by,
+    ):
+        prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        target_user_id = await _authorized_delegation_target_user_id(
+            prisma_client, user_api_key_dict, payload.user_id, None, "revoke"
+        )
+
+        revoked_by = (
+            get_audit_log_changed_by(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+            or LITELLM_PROXY_ADMIN_NAME
+        )
+        revoked = await revoke_user_agent_delegation(
+            prisma_client, user_id=target_user_id, agent_id=payload.agent_id, revoked_by=revoked_by
+        )
+        if revoked is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "No delegation found for that user and agent."},
+            )
+        return revoked
+
+    @router.get(
+        "/delegation",
+        description="List delegation consent records (admins see all; users see their own)",
+    )
+    @management_endpoint_wrapper
+    async def list_delegations(
+        user_id: str | None = None,
+        user_api_key_dict: UserAPIKeyAuth = _delegation_user_auth,
+    ):
+        prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        if LitellmUserRoles.PROXY_ADMIN == user_api_key_dict.user_role:
+            return await list_user_agent_delegations(prisma_client, user_id=user_id)
+        # A non-admin caller may only see its own consents. A key with no user
+        # association (e.g. a team key, user_id=None) owns none; return empty
+        # rather than passing None through, which the store would read as an
+        # unscoped "list all" and leak every user's records.
+        if not user_api_key_dict.user_id:
+            return []
+        return await list_user_agent_delegations(prisma_client, user_id=user_api_key_dict.user_id)
