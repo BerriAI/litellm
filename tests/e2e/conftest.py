@@ -1,9 +1,11 @@
 """Shared fixtures for all live e2e suites under tests/e2e/.
 
-Design rule: hard failures only. Live tests (marked `e2e`) fail when no proxy
-answers or when credentials/env are missing; they never skip. Pure unit coverage
-of the harness itself carries no `e2e` marker and runs regardless of whether a
-proxy is up.
+Design rule: a test marked `e2e` skips when no proxy answers its liveness probe,
+but once a request reaches the proxy any wrong behavior is a hard failure, never
+a skip. The `logging/` suite is the deliberate exception: it hard-fails instead
+of skipping when its proxy or credentials are missing. Pure coverage of the
+harness itself carries no `e2e` marker and runs regardless of whether a proxy is
+up.
 
 Lifecycle: the `resources` fixture maps the init -> run -> teardown contract
 (lifecycle.E2ECase) onto pytest - setup is init(), the test body is run(), and
@@ -64,15 +66,29 @@ def _proxy_fail_reason() -> str | None:
     return None
 
 
+_LOGGING_SUITE_DIR = Path(__file__).parent / "logging"
+
+
+def _hard_fails_on_dead_proxy(item: pytest.Item) -> bool:
+    """The `logging/` suite deliberately hard-fails (never skips) when its proxy or
+    credentials are missing; every other suite skips when no proxy answers."""
+    return _LOGGING_SUITE_DIR in item.path.parents
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Hard-fail `e2e`-marked tests unless a proxy answers its liveness probe.
-    Unmarked tests (unit coverage of the harness) don't touch the proxy, so they
-    run even when none is up. Never skip for a missing proxy."""
+    """Skip `e2e`-marked tests when no proxy answers its liveness probe, so an
+    absent proxy is a skip rather than a failure. Wrong behavior once a request
+    reaches the proxy is still a hard failure. The `logging/` suite hard-fails
+    instead of skipping. Unmarked tests (coverage of the harness) don't touch the
+    proxy, so they run even when none is up."""
     if item.get_closest_marker("e2e") is None:
         return
     reason = _proxy_fail_reason()
-    if reason is not None:
+    if reason is None:
+        return
+    if _hard_fails_on_dead_proxy(item):
         pytest.fail(reason)
+    pytest.skip(reason)
 
 
 def pytest_runtest_call(item: pytest.Item) -> None:

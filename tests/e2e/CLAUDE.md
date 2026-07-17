@@ -173,7 +173,7 @@ other.<area>.<case>.<assertion>
 ```
 
 ## Hard Rules
-- no monkeypatching, mock tests or unit tests of any kind. if a contributor asks you to write an end to end test, do NOT stage a unit test with it. if you find a product gap, call it out in the PR description
+- no monkeypatching or mock tests, and do not substitute unit tests for e2e feature coverage. if a contributor asks you to write an end to end test, do NOT stage a unit test alongside it; if you find a product gap, call it out in the PR description instead. tests that cover the harness itself (the coverage_registry collector, the claude_code drivers, and similar tooling under tests/e2e/) are allowed, carry no `e2e` marker, and run regardless of whether a proxy is up
 
 - use model management endpoints to create new models for a test. this could be in a conftest / inline for each test. ask the user what they want.
 
