@@ -1766,6 +1766,7 @@ class ProxyBaseLLMRequestProcessing:
                         return StreamingResponse(
                             content=generator,  # type: ignore[arg-type]
                             status_code=status.HTTP_200_OK,
+                            media_type=self._passthrough_event_stream_media_type(),
                             headers=custom_headers,
                         )
                     else:
@@ -2216,10 +2217,15 @@ class ProxyBaseLLMRequestProcessing:
 
     def _passthrough_event_stream_media_type(self) -> Optional[str]:
         """
-        Content-type for a buffered passthrough event-stream response, resolved
-        from the provider handler so the proxy stays provider-agnostic. Mirrors
-        the upstream content-type the non-streaming path forwards, since the
-        buffered streaming generator carries no headers of its own.
+        Content-type for a passthrough event-stream response, resolved from the
+        provider handler so the proxy stays provider-agnostic. Mirrors the
+        upstream content-type the non-streaming path forwards, since the
+        streaming generator carries no headers of its own. Used for both the
+        buffered (guardrail-rewritten) and the unbuffered relay paths so
+        clients that enforce the event-stream content-type (e.g. Claude Code on
+        Bedrock invoke-with-response-stream) see the correct header instead of
+        Starlette's application/octet-stream default. Returns None for providers
+        with no event-stream media type, leaving the response default unchanged.
         """
         from litellm.llms.pass_through.guardrail_translation.handler import (
             LlmPassthroughRouteHandler,

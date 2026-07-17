@@ -4137,6 +4137,61 @@ class TestAllmPassthroughStreamingProviderGate:
         assert streamed == chunks
         mock_handler.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_bedrock_invoke_stream_sets_event_stream_content_type(self, monkeypatch):
+        """
+        Regression for LIT-4561. The unbuffered Bedrock event-stream relay
+        (invoke-with-response-stream, no post-call guardrail rewriting) must set
+        content-type: application/vnd.amazon.eventstream instead of leaving it to
+        Starlette's application/octet-stream default, which trips Claude Code's
+        content-type guard added in 2.1.208
+        """
+        processing_obj = self._build_processing_obj(
+            "bedrock", "model/us.anthropic.claude-sonnet-4-20250514-v1:0/invoke-with-response-stream"
+        )
+        chunks = [b"raw-1", b"raw-2"]
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails_for_passthrough",
+            return_value=False,
+        ):
+            result = await self._run(processing_obj, monkeypatch, chunks)
+
+        assert isinstance(result, StreamingResponse)
+        assert result.media_type == "application/vnd.amazon.eventstream"
+        assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
+        streamed = [chunk async for chunk in result.body_iterator]
+        assert streamed == chunks
+
+    @pytest.mark.asyncio
+    async def test_non_bedrock_stream_keeps_default_content_type(self, monkeypatch):
+        """
+        A provider with no registered event-stream media type must not have one
+        forced onto its unbuffered stream, so the response default is unchanged
+        """
+        processing_obj = self._build_processing_obj("anthropic")
+        chunks = [b"chunk-1", b"chunk-2"]
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails_for_passthrough",
+            return_value=False,
+        ):
+            result = await self._run(processing_obj, monkeypatch, chunks)
+
+        assert isinstance(result, StreamingResponse)
+        assert result.media_type is None
+        assert result.headers.get("content-type") != "application/vnd.amazon.eventstream"
+
 
 class TestResponseCostHeaderForTypedDictResponses:
     """
