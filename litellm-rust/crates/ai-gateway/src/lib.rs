@@ -13,6 +13,9 @@
 
 pub mod io;
 
+mod config;
+mod constants;
+
 /// Shared reqwest-failure classification into typed [`litellm_core::error::CoreError`]
 /// contracts. Always available — every I/O endpoint maps transport failures here.
 mod errors;
@@ -31,8 +34,6 @@ pub mod state;
 // Realtime request logging. Only the server serves realtime, so these are
 // `server`-gated; `io::realtime` exposes the generic `observe` hook while the
 // collector and callback fan-out live here.
-#[cfg(feature = "server")]
-mod constants;
 #[cfg(feature = "server")]
 pub mod integrations;
 #[cfg(feature = "server")]

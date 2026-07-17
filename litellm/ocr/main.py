@@ -201,9 +201,17 @@ def _resolve_ocr_call_context(
 
     verbose_logger.debug(f"OCR call - model: {model}, provider: {custom_llm_provider}")
 
+    forwarded_kwargs = {
+        **filter_out_litellm_params(kwargs=kwargs),
+        **{
+            key: kwargs[key]
+            for key in _OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM
+            if kwargs.get(key) is not None
+        },
+    }
     optional_params = {
         key: value
-        for key, value in filter_out_litellm_params(kwargs=kwargs).items()
+        for key, value in forwarded_kwargs.items()
         if key not in _RUST_BRIDGE_INTERNAL_PARAMS
     }
 
@@ -474,6 +482,8 @@ async def aocr(
 _MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
 
 _RUST_BRIDGE_INTERNAL_PARAMS = {"original_generic_function"}
+
+_OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM: frozenset[str] = frozenset({"id"})
 
 _MIME_TYPE_MAP = {
     ".pdf": "application/pdf",
