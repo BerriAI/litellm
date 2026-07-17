@@ -14,6 +14,8 @@ use litellm_core::ocr::transformation::{
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
 
+use crate::config::resolve_env_reference;
+
 mod common_utils;
 
 use common_utils::{
@@ -73,6 +75,14 @@ pub struct OcrRequest<'a> {
 ///
 /// Async: intended to be awaited directly by the Python bridge's async entrypoint.
 pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
+    let env_lookup = |key: &str| std::env::var(key).ok();
+    ocr_with_env(request, &env_lookup).await
+}
+
+async fn ocr_with_env(
+    request: OcrRequest<'_>,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> CoreResult<Value> {
     let model = request.model;
     let config = ocr_provider_config(request.custom_llm_provider, model).ok_or_else(|| {
         CoreError::InvalidProvider(format!(
@@ -80,18 +90,19 @@ pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
             request.custom_llm_provider
         ))
     })?;
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let api_key = resolve_env_reference(request.api_key, env_lookup);
+    let api_base = resolve_env_reference(request.api_base, env_lookup);
 
     let headers = string_headers(request.extra_headers)?;
     let auth_strategy = config.auth_strategy();
     let api_key = (!has_header(&headers, auth_strategy.header_name()))
-        .then(|| config.resolve_api_key(request.api_key, &env_lookup))
+        .then(|| config.resolve_api_key(api_key.as_deref(), env_lookup))
         .transpose()?;
     let url = config.complete_url(
-        request.api_base,
+        api_base.as_deref(),
         model,
         &request.optional_params,
-        &env_lookup,
+        env_lookup,
     )?;
     let filtered_params = config.map_ocr_params(&request.optional_params);
     let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
