@@ -22,6 +22,7 @@ pytestmark = pytest.mark.e2e
 MODEL = "gpt-5.5"
 TINY_CAP = 3e-6
 RECORDED_SPEND_DEADLINE_SECONDS = 90
+SECOND_KEY_BLOCK_ATTEMPTS = 6
 
 
 def _call(client: BudgetClient, key: str) -> StreamingResponse:
@@ -38,6 +39,23 @@ def _drive_to_block(client: BudgetClient, key: str, subject: str) -> None:
     pytest.fail(f"user budget never enforced on {subject} within the call budget")
 
 
+def _expect_prompt_block(client: BudgetClient, key: str, subject: str) -> None:
+    """The shared user budget is already exhausted before this key makes a single
+    call, so a key with no budget of its own must be rejected promptly. The small
+    bounded retry only absorbs spend-propagation lag between the two keys; it is far
+    below the spend a key-scoped budget would need to accumulate to block itself, so
+    a block here can only come from the shared user budget."""
+    for _ in range(SECOND_KEY_BLOCK_ATTEMPTS):
+        result = _call(client, key)
+        if is_budget_block(result):
+            return
+        require_successful_call(result)
+        time.sleep(2)
+    pytest.fail(
+        f"{subject} was not blocked by the shared user budget within {SECOND_KEY_BLOCK_ATTEMPTS} calls"
+    )
+
+
 class TestUserBudgetAcrossKeys:
     @pytest.mark.covers("quota_management.budget.internal_user.enforced_across_keys")
     def test_user_budget_blocks_a_second_key(self, client: BudgetClient, resources: ResourceManager) -> None:
@@ -50,7 +68,7 @@ class TestUserBudgetAcrossKeys:
         resources.defer(lambda: client.delete_key(second_key))
 
         _drive_to_block(client, first_key, "the first key")
-        _drive_to_block(client, second_key, "the second key")
+        _expect_prompt_block(client, second_key, "the second key")
 
         deadline = time.monotonic() + RECORDED_SPEND_DEADLINE_SECONDS
         while time.monotonic() < deadline:
