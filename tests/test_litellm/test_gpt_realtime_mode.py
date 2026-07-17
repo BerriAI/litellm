@@ -22,6 +22,25 @@ REALTIME_ONLY_GPT_MODELS = (
     "gpt-realtime-mini-2025-12-15",
 )
 
+REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS = (
+    "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17",
+    "azure/eu/gpt-4o-realtime-preview-2024-10-01",
+    "azure/eu/gpt-4o-realtime-preview-2024-12-17",
+    "azure/gpt-4o-mini-realtime-preview-2024-12-17",
+    "azure/gpt-4o-realtime-preview-2024-10-01",
+    "azure/gpt-4o-realtime-preview-2024-12-17",
+    "azure/us/gpt-4o-mini-realtime-preview-2024-12-17",
+    "azure/us/gpt-4o-realtime-preview-2024-10-01",
+    "azure/us/gpt-4o-realtime-preview-2024-12-17",
+    "gpt-4o-mini-realtime-preview",
+    "gpt-4o-mini-realtime-preview-2024-12-17",
+    "gpt-4o-realtime-preview",
+    "gpt-4o-realtime-preview-2024-12-17",
+    "gpt-4o-realtime-preview-2025-06-03",
+)
+
+ALL_REALTIME_ONLY_GPT_MODELS = REALTIME_ONLY_GPT_MODELS + REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS
+
 
 def _load_cost_map() -> dict:
     json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
@@ -43,6 +62,12 @@ def test_realtime_only_gpt_models_are_mode_realtime(model):
     assert info["mode"] == "realtime"
 
 
+@pytest.mark.parametrize("model", REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS)
+def test_realtime_only_gpt_4o_models_are_mode_realtime(model):
+    """gpt-4o(-mini)-realtime-preview are realtime-only and must not be mode=chat."""
+    assert _load_cost_map()[model]["mode"] == "realtime"
+
+
 def test_get_model_info_reports_realtime_mode():
     assert litellm.get_model_info("gpt-realtime-mini")["mode"] == "realtime"
 
@@ -53,5 +78,5 @@ def test_backup_matches_main_for_realtime_models():
         main_cost = json.load(f)
     with open(repo_root / "litellm" / "model_prices_and_context_window_backup.json") as f:
         backup_cost = json.load(f)
-    for model in REALTIME_ONLY_GPT_MODELS:
+    for model in ALL_REALTIME_ONLY_GPT_MODELS:
         assert backup_cost.get(model) == main_cost.get(model)
