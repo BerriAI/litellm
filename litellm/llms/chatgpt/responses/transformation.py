@@ -19,7 +19,7 @@ from litellm.types.llms.openai import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..authenticator import Authenticator, get_chatgpt_auth_file
+from ..authenticator import Authenticator, get_cached_authenticator, get_chatgpt_auth_file
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
@@ -41,7 +41,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _resolve_authenticator(self, litellm_params: GenericLiteLLMParams | None) -> Authenticator:
         auth_file = get_chatgpt_auth_file(litellm_params)
         if auth_file:
-            return Authenticator(auth_file=auth_file)
+            return get_cached_authenticator(auth_file)
         return self.authenticator
 
     def validate_environment(

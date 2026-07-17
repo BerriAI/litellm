@@ -5,7 +5,11 @@ from unittest.mock import mock_open, patch
 
 import pytest
 
-from litellm.llms.chatgpt.authenticator import Authenticator, get_chatgpt_auth_file
+from litellm.llms.chatgpt.authenticator import (
+    Authenticator,
+    get_cached_authenticator,
+    get_chatgpt_auth_file,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -116,6 +120,15 @@ class TestChatGPTMultiAccountAuthenticator:
         assert authenticator_a.get_account_id() == "acct-a"
         assert authenticator_b.get_access_token() == "token-b"
         assert authenticator_b.get_account_id() == "acct-b"
+
+    def test_get_cached_authenticator_reuses_instance_per_path(self, tmp_path):
+        file_a = tmp_path / "account-a.json"
+        file_b = tmp_path / "account-b.json"
+
+        authenticator_a = get_cached_authenticator(str(file_a))
+
+        assert get_cached_authenticator(str(file_a)) is authenticator_a
+        assert get_cached_authenticator(str(file_b)) is not authenticator_a
 
     def test_get_chatgpt_auth_file(self):
         assert get_chatgpt_auth_file(None) is None

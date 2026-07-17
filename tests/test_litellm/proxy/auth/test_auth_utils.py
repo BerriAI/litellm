@@ -1724,6 +1724,40 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         )
 
 
+class TestIsRequestBodySafeBlocksChatGPTAuthFileOverride:
+    """``chatgpt_auth_file`` selects which ChatGPT OAuth credential file a
+    deployment uses. A caller-supplied value would let an ordinary proxy user
+    route requests through any other configured ChatGPT account's auth file
+    (and have the proxy write refreshed tokens back to a caller-chosen path),
+    so it must only come from the admin's deployment config."""
+
+    def test_chatgpt_auth_file_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "chatgpt-account-a",
+                    "chatgpt_auth_file": "/tokens/account-b/auth.json",
+                },
+                general_settings={},
+                llm_router=None,
+                model="chatgpt-account-a",
+            )
+        assert "chatgpt_auth_file" in str(exc.value)
+
+    def test_chatgpt_auth_file_in_extra_body_is_rejected(self):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "chatgpt-account-a",
+                    "extra_body": {"chatgpt_auth_file": "/tokens/account-b/auth.json"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="chatgpt-account-a",
+            )
+        assert "chatgpt_auth_file" in str(exc.value)
+
+
 class TestIsRequestBodySafeBlocksBedrockProjectOverride:
     """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
     that project's data-retention policy applies to its requests. A
