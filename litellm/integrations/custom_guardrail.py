@@ -113,6 +113,7 @@ class CustomGuardrail(CustomLogger):
         on_sensitive_data: Optional[str] = None,
         sensitive_data_route_to_model: Optional[str] = None,
         sticky_session_routing: bool = True,
+        run_in_parallel: bool = False,
         **kwargs,
     ):
         """
@@ -131,6 +132,8 @@ class CustomGuardrail(CustomLogger):
             on_sensitive_data: Action when sensitive data is detected. 'block' (default) or 'route'
             sensitive_data_route_to_model: Model to route to when on_sensitive_data='route'
             sticky_session_routing: When True, all subsequent requests in the session use the same model
+            run_in_parallel: When True, this pre_call guardrail runs concurrently with other opted-in
+                pre_call guardrails. Only safe for block-only guardrails that do not mutate the payload.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -145,6 +148,7 @@ class CustomGuardrail(CustomLogger):
         self.on_sensitive_data: Optional[str] = on_sensitive_data
         self.sensitive_data_route_to_model: Optional[str] = sensitive_data_route_to_model
         self.sticky_session_routing: bool = sticky_session_routing
+        self.run_in_parallel: bool = run_in_parallel
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks

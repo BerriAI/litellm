@@ -489,6 +489,7 @@ class InMemoryGuardrailHandler:
                 "skip_tool_message_in_guardrail",
                 getattr(litellm_params, "skip_tool_message_in_guardrail", None),
             )
+            custom_guardrail_callback.run_in_parallel = bool(getattr(litellm_params, "run_in_parallel", None))
 
         parsed_guardrail = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),

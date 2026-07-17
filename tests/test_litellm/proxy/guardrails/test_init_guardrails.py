@@ -62,3 +62,27 @@ def test_initialize_guardrail_preserves_guardrail_info():
     assert result["guardrail_info"] == {"type": "PII", "description": "masks PII"}
     stored = guardrail_handler.IN_MEMORY_GUARDRAILS[result["guardrail_id"]]
     assert stored["guardrail_info"] == {"type": "PII", "description": "masks PII"}
+
+
+@pytest.mark.parametrize(
+    "config_value, expected",
+    [(True, True), (False, False), (None, False)],
+)
+def test_initialize_guardrail_sets_run_in_parallel(config_value, expected):
+    """run_in_parallel from litellm_params must reach the built guardrail instance."""
+    litellm_params = {
+        "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+        "mode": "pre_call",
+        "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+        "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+    }
+    if config_value is not None:
+        litellm_params["run_in_parallel"] = config_value
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(
+        guardrail={"guardrail_name": "test_parallel_flag", "litellm_params": litellm_params},
+    )
+
+    custom_guardrail = guardrail_handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+    assert custom_guardrail.run_in_parallel is expected

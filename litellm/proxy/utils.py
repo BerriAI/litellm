@@ -1397,6 +1397,14 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
+            parallel_guardrails: Tuple[CustomGuardrail, ...] = tuple(
+                cb
+                for cb in caps.resolved_callbacks
+                if isinstance(cb, CustomGuardrail)
+                and cb.run_in_parallel
+                and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
+            )
+
             deferred_route_exc: Optional[SensitiveDataRouteException] = None
             for _callback in caps.resolved_callbacks:
                 start_time = time.time()
@@ -1404,6 +1412,9 @@ class ProxyLogging:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
                         # Skip guardrails managed by a pipeline
                         if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
+                            continue
+
+                        if _callback.run_in_parallel:
                             continue
 
                         result = await self._process_guardrail_callback(
@@ -1462,6 +1473,14 @@ class ProxyLogging:
             if deferred_route_exc is not None and data is not None:
                 data = await self._handle_sensitive_data_route_exception(deferred_route_exc, data, user_api_key_dict)
 
+            if parallel_guardrails and data is not None:
+                await self._run_parallel_pre_call_guardrails(
+                    guardrails=parallel_guardrails,
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+
             if data is not None:
                 self._process_guardrail_metadata(data)
 
@@ -1473,6 +1492,35 @@ class ProxyLogging:
             return data
         except Exception as e:
             raise e
+
+    async def _run_parallel_pre_call_guardrails(
+        self,
+        guardrails: Tuple[CustomGuardrail, ...],
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        """
+        Run opted-in pre_call guardrails concurrently against one shared payload
+        snapshot. These guardrails are declared block-only, so any modified data
+        they return is discarded; they run for their blocking side effect (raising
+        to reject the request before it reaches the LLM). The first guardrail to
+        raise propagates out and blocks the request, preserving the pre-call
+        barrier that ``during_call`` guardrails cannot provide. Per-guardrail
+        latency is recorded by ``_process_guardrail_callback``'s own metrics.
+        """
+        await asyncio.gather(
+            *(
+                self._process_guardrail_callback(
+                    callback=callback,
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    event_type=GuardrailEventHooks.pre_call,
+                )
+                for callback in guardrails
+            )
+        )
 
     async def _handle_sensitive_data_route_exception(
         self,
