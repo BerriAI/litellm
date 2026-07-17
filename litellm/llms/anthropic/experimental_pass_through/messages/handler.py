@@ -36,6 +36,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
 from ..utils import is_reasoning_auto_summary_enabled
@@ -463,6 +464,9 @@ def anthropic_messages_handler(
             "model": original_model,
             "custom_llm_provider": custom_llm_provider,
         }
+        litellm_logging_obj.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = (
+            is_async
+        )
 
         # Check if stream was converted for WebSearch interception
         # This is set in the async wrapper above when stream=True is converted to stream=False
