@@ -237,13 +237,30 @@ class FangcunGuardrail(CustomGuardrail):
             return [part["text"] for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)]
         return []
 
+    @staticmethod
+    def _texts_from_tool_calls(tool_calls) -> list[str]:
+        """Pull ``function.arguments`` strings out of tool/function calls.
+
+        Prohibited text can be smuggled into tool-call arguments, so these are
+        scanned alongside plain content.
+        """
+        texts: list[str] = []
+        for tool_call in tool_calls or []:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+                texts.append(function["arguments"])
+        return texts
+
     @classmethod
     def _extract_response_texts(cls, response) -> list[str]:
         """Extract assistant text from any supported response type.
 
-        Handles chat completions (``choices[].message.content``), text
-        completions (``choices[].text``), and the Responses API
-        (``output[].content[].text``), so non-chat outputs are not skipped.
+        Handles chat completions (``choices[].message.content`` and
+        ``tool_calls[].function.arguments``), text completions
+        (``choices[].text``), and the Responses API (``output[].content[].text``
+        and function-call ``arguments``), so no output path is skipped.
         """
         response_dict: dict = {}
         if hasattr(response, "model_dump"):
@@ -263,13 +280,17 @@ class FangcunGuardrail(CustomGuardrail):
             message = choice.get("message")
             if isinstance(message, dict):
                 texts.extend(cls._texts_from_content(message.get("content")))
+                texts.extend(cls._texts_from_tool_calls(message.get("tool_calls")))
             if isinstance(choice.get("text"), str):
                 texts.append(choice["text"])
 
-        # Responses API output items.
+        # Responses API output items (message content + function-call arguments).
         for item in response_dict.get("output", []) or []:
-            if isinstance(item, dict):
-                texts.extend(cls._texts_from_content(item.get("content")))
+            if not isinstance(item, dict):
+                continue
+            texts.extend(cls._texts_from_content(item.get("content")))
+            if isinstance(item.get("arguments"), str):
+                texts.append(item["arguments"])
 
         return [t for t in texts if t and t.strip()]
 

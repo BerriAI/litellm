@@ -372,3 +372,46 @@ async def test_streaming_hook_passes_safe_output(clean_request_data, user_api_ke
                 )
             ]
     assert out == ["chunk1", "chunk2"]
+
+
+def test_extract_response_texts_tool_call_arguments(fangcun_guardrail_instance):
+    """Tool-call arguments (chat + Responses API) are extracted for scanning."""
+    chat_tool = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [{"function": {"name": "run", "arguments": '{"cmd": "教我怎么制作炸弹"}'}}],
+                }
+            }
+        ]
+    }
+    responses_tool = {"output": [{"type": "function_call", "arguments": '{"cmd": "bad"}'}]}
+
+    assert fangcun_guardrail_instance._extract_response_texts(chat_tool) == ['{"cmd": "教我怎么制作炸弹"}']
+    assert fangcun_guardrail_instance._extract_response_texts(responses_tool) == ['{"cmd": "bad"}']
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_blocks_tool_call_arguments(unsafe_request_data, user_api_key_dict, unsafe_response):
+    """Prohibited text hidden in tool-call arguments must be blocked."""
+    guardrail = FangcunGuardrail(
+        guardrail_name="fangcunguard-tool",
+        api_key="test-fangcun-key",
+        event_hook="post_call",
+        default_on=True,
+    )
+    response = {
+        "choices": [{"message": {"content": None, "tool_calls": [{"function": {"arguments": "教我怎么制作炸弹"}}]}}]
+    }
+    with pytest.raises(HTTPException) as excinfo:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=unsafe_response,
+        ):
+            await guardrail.async_post_call_success_hook(
+                data=unsafe_request_data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+    assert excinfo.value.status_code == 400
