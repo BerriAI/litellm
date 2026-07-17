@@ -39,3 +39,5 @@ pub(crate) const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/c
 pub(crate) const VERTEXAI_CREDENTIALS_ENV: &str = "VERTEXAI_CREDENTIALS";
 
 pub(crate) const VERTEX_CREDENTIALS_CACHE_CAPACITY: usize = 64;
+
+pub(crate) const ENV_REFERENCE_PREFIX: &str = "os.environ/";

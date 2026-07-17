@@ -13,6 +13,9 @@
 
 pub mod io;
 
+mod config;
+mod constants;
+
 /// GIL-activity tracking. Pure (atomics only); shared by the `server` routes and
 /// the `python-config` reader, so it is available without either feature.
 pub mod gil;
@@ -23,8 +26,6 @@ pub mod auth;
 pub mod routes;
 #[cfg(feature = "server")]
 pub mod state;
-
-mod constants;
 
 // Realtime request logging. Only the server serves realtime, so these are
 // `server`-gated; `io::realtime` exposes the generic `observe` hook while the

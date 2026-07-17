@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -126,10 +128,17 @@ class OcrResponseEnvelope(BaseModel):
     usage_info: OcrUsageInfo | None = None
 
 
+class ModelInfoDetail(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    id: str | None = None
+
+
 class ModelInfoEntry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="allow")
 
     model_name: str
+    model_info: ModelInfoDetail = Field(default_factory=ModelInfoDetail)
 
 
 class ModelInfoResponse(BaseModel):
@@ -148,7 +157,6 @@ class GatewayConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="allow")
 
     model_list: tuple[GatewayConfigEntry, ...]
-
 
 TEST_PDF_URL = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
@@ -322,6 +330,55 @@ class OcrGateway:
                 content=_wire_payload(model, document, params),
             )
 
+    def create_model(
+        self, model_name: str, litellm_params: dict[str, str]
+    ) -> httpx.Response:
+        with self._client() as client:
+            return client.post(
+                f"{self.base_url.rstrip('/')}/model/new",
+                headers={"Authorization": f"Bearer {self.master_key}"},
+                json={"model_name": model_name, "litellm_params": litellm_params},
+            )
+
+    def delete_model(self, model_id: str) -> httpx.Response:
+        with self._client() as client:
+            return client.post(
+                f"{self.base_url.rstrip('/')}/model/delete",
+                headers={"Authorization": f"Bearer {self.master_key}"},
+                json={"id": model_id},
+            )
+
+    def model_id(self, model_name: str) -> str | None:
+        with self._client() as client:
+            response = client.get(
+                f"{self.base_url.rstrip('/')}/model/info",
+                headers={"Authorization": f"Bearer {self.master_key}"},
+            )
+        assert response.status_code == 200, response.text
+        parsed = ModelInfoResponse.model_validate_json(response.content)
+        for entry in parsed.data:
+            if entry.model_name == model_name:
+                return entry.model_info.id
+        return None
+
+    def wait_for_model(self, model_name: str, attempts: int = 20) -> None:
+        for _ in range(attempts):
+            if model_name in self.model_names():
+                return
+            time.sleep(1)
+        raise AssertionError(
+            f"{model_name} did not appear on /model/info within {attempts}s"
+        )
+
+    def wait_for_model_absent(self, model_name: str, attempts: int = 20) -> None:
+        for _ in range(attempts):
+            if model_name not in self.model_names():
+                return
+            time.sleep(1)
+        raise AssertionError(
+            f"{model_name} still present on /model/info after {attempts}s"
+        )
+
 
 @dataclass(frozen=True)
 class OcrResources:
@@ -410,3 +467,40 @@ def test_rust_ocr_proxy_forwards_full_contract_to_capture_endpoint(
         capture_proxy.captures.get(timeout=10)
     )
     assert captured == EXPECTED_UPSTREAM
+
+
+class TestRustOcrDynamicDeployment:
+    def test_os_environ_api_key_deployment_lifecycle(
+        self, resources: OcrResources
+    ) -> None:
+        if not os.getenv("MISTRAL_API_KEY"):
+            pytest.skip("Set MISTRAL_API_KEY on the proxy for the live OCR lifecycle")
+
+        gateway = resources.gateway
+        model_name = f"rust-ocr-env-e2e-{uuid.uuid4().hex[:8]}"
+
+        create = gateway.create_model(
+            model_name=model_name,
+            litellm_params={
+                "model": "mistral/mistral-ocr-latest",
+                "api_key": "os.environ/MISTRAL_API_KEY",
+            },
+        )
+        assert create.status_code == 200, create.text
+
+        try:
+            gateway.wait_for_model(model_name)
+
+            response = gateway.ocr(
+                model_name,
+                OcrDocument(type="document_url", document_url=TEST_PDF_URL),
+            )
+            assert response.status_code == 200, response.text
+            OcrResponseEnvelope.model_validate_json(response.content)
+            assert "os.environ/MISTRAL_API_KEY" not in response.text
+        finally:
+            deployed_id = gateway.model_id(model_name)
+            if deployed_id is not None:
+                delete = gateway.delete_model(deployed_id)
+                assert delete.status_code == 200, delete.text
+                gateway.wait_for_model_absent(model_name)

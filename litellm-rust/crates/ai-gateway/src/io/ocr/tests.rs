@@ -199,6 +199,68 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
 }
 
 #[tokio::test]
+async fn ocr_resolves_api_key_and_base_references_in_rust() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    let resolved_base = format!("http://{addr}");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts one request");
+        let request = read_http_headers(&mut socket).await;
+        let response_body = r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-latest","usage_info":{"pages_processed":1}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+
+    let env_lookup = |name: &str| match name {
+        "OCR_TEST_API_KEY" => Some("sk-resolved".to_string()),
+        "OCR_TEST_API_BASE" => Some(resolved_base.clone()),
+        _ => None,
+    };
+
+    let response = ocr_with_env(
+        OcrRequest {
+            model: "mistral-ocr-latest",
+            document: json!({
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf"
+            }),
+            api_key: Some("os.environ/OCR_TEST_API_KEY"),
+            api_base: Some("os.environ/OCR_TEST_API_BASE"),
+            custom_llm_provider: "mistral",
+            extra_headers: None,
+            optional_params: Map::new(),
+            timeout: Some(Duration::from_secs(5)),
+        },
+        &env_lookup,
+    )
+    .await
+    .expect("ocr request succeeds");
+
+    assert_eq!(response["pages"][0]["markdown"], "ok");
+
+    let request = server.await.expect("server task completes");
+    assert!(request.starts_with("POST /v1/ocr HTTP/1.1"), "{request}");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer sk-resolved"),
+        "{request}"
+    );
+    assert!(!request.contains("os.environ/"), "{request}");
+}
+
+#[tokio::test]
 async fn ocr_forwards_full_mistral_contract_and_filters_internal_params() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
