@@ -98,6 +98,15 @@ class ExplodingAsyncMessages:
         raise AssertionError("bridge must not be called")
 
 
+class RaisingAsyncMessages:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, **kwargs: object) -> dict[str, object]:
+        self.calls += 1
+        raise RuntimeError("upstream request failed with status 400: bad request")
+
+
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     litellm.use_litellm_rust(False, messages=None, amessages=None)
@@ -240,6 +249,17 @@ async def test_gate_invokes_rust_and_marks_response_header():
     assert call["api_base"] == "https://resource.services.ai.azure.com/anthropic"
     assert call["extra_headers"] == {"x-api-key": "sk-azure", "anthropic-version": "2023-06-01"}
     assert call["timeout_seconds"] == 30.0
+
+
+@pytest.mark.asyncio
+async def test_gate_falls_back_to_python_when_bridge_raises():
+    bridge = RaisingAsyncMessages()
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    response = await _gate()
+
+    assert response is None
+    assert bridge.calls == 1
 
 
 @pytest.mark.asyncio

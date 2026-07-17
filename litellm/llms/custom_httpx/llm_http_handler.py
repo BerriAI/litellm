@@ -2269,15 +2269,22 @@ class BaseLLMHTTPHandler:
         from litellm.rust_bridge import messages as rust_messages_bridge
 
         upstream_body = {key: value for key, value in request_body.items() if key != "stream"}
-        rust_response = await rust_messages_bridge.amessages(
-            model=model,
-            body=upstream_body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=headers,
-            timeout=timeout,
-        )
+        try:
+            rust_response = await rust_messages_bridge.amessages(
+                model=model,
+                body=upstream_body,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=headers,
+                timeout=timeout,
+            )
+        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
+            verbose_logger.debug(
+                "Rust Anthropic messages bridge raised %s; falling back to Python path",
+                type(rust_error).__name__,
+            )
+            return None
         if rust_response is None:
             return None
 

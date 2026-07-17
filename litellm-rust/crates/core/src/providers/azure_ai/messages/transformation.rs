@@ -7,11 +7,14 @@ use crate::messages::types::{
 use crate::providers::anthropic::messages::transformation::{
     non_empty, AnthropicMessagesConfig, ANTHROPIC_MESSAGES_CONFIG,
 };
+use serde_json::{Map, Value};
 
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
 const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
+const SYSTEM_ROLE: &str = "system";
+const TEXT_BLOCK_TYPE: &str = "text";
 
 pub struct AzureAnthropicMessagesConfig {
     anthropic: AnthropicMessagesConfig,
@@ -83,6 +86,61 @@ fn strip_scope_from_message(message: &mut AnthropicMessage) {
     }
 }
 
+fn text_content_block(text: String) -> ContentBlock {
+    let extra = Map::from_iter([
+        (
+            "type".to_string(),
+            Value::String(TEXT_BLOCK_TYPE.to_string()),
+        ),
+        ("text".to_string(), Value::String(text)),
+    ]);
+    ContentBlock {
+        cache_control: None,
+        extra,
+    }
+}
+
+fn content_into_blocks(content: MessageContent) -> Vec<ContentBlock> {
+    match content {
+        MessageContent::Text(text) => vec![text_content_block(text)],
+        MessageContent::Blocks(blocks) => blocks,
+    }
+}
+
+fn system_into_blocks(system: Option<SystemPrompt>) -> Vec<ContentBlock> {
+    match system {
+        None => Vec::new(),
+        Some(SystemPrompt::Text(text)) => vec![text_content_block(text)],
+        Some(SystemPrompt::Blocks(blocks)) => blocks,
+    }
+}
+
+fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMessagesRequest {
+    if !request.messages.iter().any(|msg| msg.role == SYSTEM_ROLE) {
+        return request;
+    }
+
+    let (system_messages, chat_messages): (Vec<AnthropicMessage>, Vec<AnthropicMessage>) = request
+        .messages
+        .into_iter()
+        .partition(|msg| msg.role == SYSTEM_ROLE);
+
+    let folded_system: Vec<ContentBlock> = system_into_blocks(request.system)
+        .into_iter()
+        .chain(
+            system_messages
+                .into_iter()
+                .flat_map(|msg| content_into_blocks(msg.content)),
+        )
+        .collect();
+
+    AnthropicMessagesRequest {
+        messages: chat_messages,
+        system: (!folded_system.is_empty()).then_some(SystemPrompt::Blocks(folded_system)),
+        ..request
+    }
+}
+
 impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
     fn complete_url(
         &self,
@@ -111,8 +169,9 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
 
     fn transform_request(
         &self,
-        mut request: AnthropicMessagesRequest,
+        request: AnthropicMessagesRequest,
     ) -> CoreResult<AnthropicMessagesRequest> {
+        let mut request = fold_system_role_messages(request);
         if let Some(system) = request.system.as_mut() {
             strip_scope_from_system(system);
         }
@@ -336,6 +395,83 @@ mod tests {
             "speed": "fast",
             "inference_geo": "us",
             "litellm_metadata": {"trace": "abc"}
+        });
+        let transformed = to_value(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG
+                .transform_request(request_from(body.clone()))
+                .expect("request transforms"),
+        );
+        assert_eq!(transformed, body);
+    }
+
+    #[test]
+    fn transform_request_folds_system_role_message_into_top_level_system() {
+        let request = request_from(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 256,
+            "system": [{"type": "text", "text": "base system"}],
+            "messages": [
+                {"role": "user", "content": "fix the bug"},
+                {"role": "system", "content": "Available agent types: claude"}
+            ]
+        }));
+
+        let transformed = to_value(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG
+                .transform_request(request)
+                .expect("request transforms"),
+        );
+
+        assert_eq!(
+            transformed["messages"],
+            json!([{"role": "user", "content": "fix the bug"}])
+        );
+        assert_eq!(
+            transformed["system"],
+            json!([
+                {"type": "text", "text": "base system"},
+                {"type": "text", "text": "Available agent types: claude"}
+            ])
+        );
+    }
+
+    #[test]
+    fn transform_request_folds_system_role_when_no_top_level_system() {
+        let request = request_from(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 256,
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {"role": "system", "content": [{"type": "text", "text": "sys block"}]}
+            ]
+        }));
+
+        let transformed = to_value(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG
+                .transform_request(request)
+                .expect("request transforms"),
+        );
+
+        assert_eq!(
+            transformed["messages"],
+            json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
+        );
+        assert_eq!(
+            transformed["system"],
+            json!([{"type": "text", "text": "sys block"}])
+        );
+    }
+
+    #[test]
+    fn transform_request_leaves_requests_without_system_role_untouched() {
+        let body = json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 256,
+            "system": "be terse",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"}
+            ]
         });
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
