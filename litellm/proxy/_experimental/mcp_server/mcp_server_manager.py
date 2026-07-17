@@ -101,6 +101,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     is_short_mcp_tool_prefix_enabled,
     is_tool_name_prefixed,
     iter_known_server_prefixes,
+    lookup_mcp_server_auth_in_headers,
     merge_mcp_headers,
     normalize_server_name,
     parse_admin_env_vars,
@@ -509,6 +510,53 @@ def _openapi_forwarded_extra_headers(
         if value is not None:
             forwarded[header_name] = value
     return forwarded or None
+
+
+def _resolve_openapi_tool_auth(
+    mcp_server: MCPServer,
+    mcp_auth_header: Optional[str],
+    mcp_server_auth_headers: Optional[dict[str, dict[str, str]]],
+    raw_headers: Optional[dict[str, str]],
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> tuple[Optional[str], Optional[dict[str, str]]]:
+    """Resolve the ``Authorization`` value and forwarded extra headers for an
+    OpenAPI-backed MCP tool call.
+
+    A per-server ``x-mcp-{alias}-authorization`` header (carried in
+    ``mcp_server_auth_headers``) takes precedence over the deprecated global /
+    BYOK ``mcp_auth_header``, matching how ``_call_regular_mcp_tool`` resolves the
+    upstream credential for managed servers. Per-server header values are already
+    full header values and are forwarded verbatim; a raw BYOK credential is
+    formatted with the server's auth-type prefix.
+    """
+    forwarded = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
+
+    per_server_auth_header = (
+        lookup_mcp_server_auth_in_headers(
+            mcp_server_auth_headers,
+            alias=mcp_server.alias,
+            server_name=mcp_server.server_name,
+        )
+        if mcp_server_auth_headers
+        else None
+    )
+
+    if isinstance(per_server_auth_header, dict):
+        auth_value: Optional[str] = None
+        extra = dict(forwarded) if forwarded else {}
+        for header_key, header_val in per_server_auth_header.items():
+            if header_key.lower() == "authorization":
+                auth_value = header_val
+            else:
+                extra[header_key] = header_val
+        if auth_value is None and mcp_auth_header:
+            auth_value = _format_byok_openapi_auth_header(mcp_server, mcp_auth_header)
+        return auth_value, (extra or None)
+    if isinstance(per_server_auth_header, str) and per_server_auth_header:
+        return per_server_auth_header, forwarded
+    if mcp_auth_header:
+        return _format_byok_openapi_auth_header(mcp_server, mcp_auth_header), forwarded
+    return None, forwarded
 
 
 async def _resolve_byok_mcp_auth_header(
@@ -4733,10 +4781,13 @@ class MCPServerManager:
                     server_name,
                 )
 
-            auth_header_value = (
-                _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+            auth_header_value, forwarded_headers = _resolve_openapi_tool_auth(
+                mcp_server=mcp_server,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
-            forwarded_headers = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
 
             async def _call_openapi_via_handler():
                 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (

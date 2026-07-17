@@ -33,6 +33,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _deserialize_json_dict,
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
+    _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
     _without_authorization,
 )
@@ -8496,3 +8497,112 @@ def test_build_mcp_server_table_carries_null_oauth2_flow():
     table = manager._build_mcp_server_table(server)
 
     assert table.oauth2_flow is None
+
+
+class TestResolveOpenAPIToolAuth:
+    """Regression for #33344: OpenAPI-backed MCP tools must forward the caller's
+    per-server ``x-mcp-{alias}-authorization`` header (carried in
+    ``mcp_server_auth_headers``) to the upstream backend. Pre-fix both OpenAPI
+    dispatch paths resolved the upstream credential only from the deprecated
+    global/BYOK ``mcp_auth_header`` and dropped the per-server credential."""
+
+    def _server(self, **overrides) -> MCPServer:
+        kwargs: Dict[str, Any] = dict(
+            server_id="openapi-srv",
+            name="report_openapi",
+            server_name="report_openapi",
+            alias="report_openapi",
+            url="https://backend.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.authorization,
+            spec_path="/tmp/spec.json",
+        )
+        kwargs.update(overrides)
+        return MCPServer(**kwargs)
+
+    def test_per_server_authorization_forwarded_verbatim(self):
+        auth_value, forwarded = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"report_openapi": {"Authorization": "Bearer upstream-token"}},
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+        assert auth_value == "Bearer upstream-token"
+        assert forwarded is None
+
+    def test_per_server_non_auth_header_forwarded_as_extra(self):
+        auth_value, forwarded = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=None,
+            mcp_server_auth_headers={
+                "report_openapi": {"Authorization": "Bearer tok", "X-Tenant-Id": "acme"}
+            },
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+        assert auth_value == "Bearer tok"
+        assert forwarded == {"X-Tenant-Id": "acme"}
+
+    def test_per_server_takes_precedence_over_byok_auth_header(self):
+        auth_value, _ = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header="byok-raw-token",
+            mcp_server_auth_headers={"report_openapi": {"Authorization": "Bearer upstream-token"}},
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+        assert auth_value == "Bearer upstream-token"
+
+    def test_falls_back_to_byok_auth_header_with_bearer_prefix(self):
+        auth_value, _ = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header="byok-raw-token",
+            mcp_server_auth_headers=None,
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+        assert auth_value == "Bearer byok-raw-token"
+
+    def test_falls_back_to_byok_auth_header_with_apikey_prefix(self):
+        auth_value, _ = _resolve_openapi_tool_auth(
+            mcp_server=self._server(auth_type=MCPAuth.api_key),
+            mcp_auth_header="byok-raw-token",
+            mcp_server_auth_headers=None,
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+        assert auth_value == "ApiKey byok-raw-token"
+
+    def test_per_server_non_auth_only_falls_back_to_byok_auth_header(self):
+        auth_value, forwarded = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header="byok-raw-token",
+            mcp_server_auth_headers={"report_openapi": {"X-Tenant-Id": "acme"}},
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+        assert auth_value == "Bearer byok-raw-token"
+        assert forwarded == {"X-Tenant-Id": "acme"}
+
+    def test_no_credential_returns_none(self):
+        auth_value, forwarded = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+        assert auth_value is None
+        assert forwarded is None
+
+    def test_extra_headers_config_forwards_raw_authorization(self):
+        auth_value, forwarded = _resolve_openapi_tool_auth(
+            mcp_server=self._server(extra_headers=["Authorization"]),
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            raw_headers={"Authorization": "Bearer caller-token"},
+            user_api_key_auth=None,
+        )
+        assert auth_value is None
+        assert forwarded == {"Authorization": "Bearer caller-token"}
