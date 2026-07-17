@@ -68,6 +68,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
@@ -1771,6 +1772,7 @@ def create_pass_through_route(
                 if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
                     delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
 
+    setattr(endpoint_func, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
     return endpoint_func
 
 

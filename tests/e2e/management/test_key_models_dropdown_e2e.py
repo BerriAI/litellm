@@ -14,7 +14,7 @@ proxy under test does not serve it.
 
 import pytest
 
-from e2e_config import PROXY_BASE_URL, unique_marker
+from e2e_config import UI_BASE_URL, unique_marker
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, TeamNewBody
@@ -46,8 +46,14 @@ def _models_dropdown_texts(page: Page, must_contain: str) -> list[str]:
 
 
 def _open_create_key_modal(page: Page) -> None:
-    page.goto(f"{PROXY_BASE_URL}/ui/api-keys/?create=true")
-    expect(page.locator(".ant-modal").first).to_be_visible()
+    # Avoid /ui/api-keys/?create=true: on stage the SPA auth redirect often
+    # aborts that navigation mid-flight ("interrupted by another navigation").
+    # Land on the list, wait for the shell, then open create via the button.
+    page.goto(f"{UI_BASE_URL}/ui/api-keys/", wait_until="domcontentloaded")
+    create_btn = page.get_by_role("button", name="+ Create New Key")
+    expect(create_btn).to_be_visible(timeout=60_000)
+    create_btn.click()
+    expect(page.locator(".ant-modal").first).to_be_visible(timeout=15_000)
 
 
 def _select_team(page: Page, alias: str) -> None:
@@ -69,8 +75,21 @@ def _submit_create_modal(page: Page, sentinel_label: str) -> str:
 
 
 def _open_key_edit_form(page: Page, key_alias: str) -> None:
-    page.goto(f"{PROXY_BASE_URL}/ui/api-keys/")
-    page.get_by_text(key_alias).first.click()
+    page.goto(f"{UI_BASE_URL}/ui/api-keys/")
+    # The list is async; wait for the provisioned row before opening detail.
+    row = page.locator("tr").filter(has_text=key_alias).first
+    expect(row).to_be_visible(timeout=60_000)
+    # Key Alias is plain text. KeyInfoView opens from the Key ID control in the
+    # same row (mono hash button on the tremor table / IdCell on the newer
+    # DataTable). Prefer that button; fall back to the alias text for layouts
+    # where the Key column itself is the click target.
+    key_id_button = row.locator("button.font-mono").first
+    if key_id_button.count() == 0:
+        key_id_button = row.locator("button").first
+    if key_id_button.count() > 0:
+        key_id_button.click()
+    else:
+        row.get_by_text(key_alias, exact=True).click()
     page.get_by_role("tab", name="Settings").click()
     page.get_by_role("button", name="Edit Settings").click()
     expect(_form_item(page, "Models")).to_be_visible()
@@ -155,7 +174,10 @@ class TestKeyModelsDropdownUI:
 
         _open_key_edit_form(ui_page, key_alias)
 
-        options = _models_dropdown_texts(ui_page, must_contain="All Team Models")
-        assert "gpt-5.5" in options, f"team key edit lost the team's own model: {options}"
+        # Wait on a real team model: All Team Models is rendered immediately while
+        # availableModels is still fetching, so requiring only the sentinel races
+        # the async team-model load and can read an incomplete dropdown.
+        options = _models_dropdown_texts(ui_page, must_contain="gpt-5.5")
+        assert "All Team Models" in options, f"team key edit lost 'All Team Models': {options}"
         assert "All Proxy Models" not in options, f"team key edit offered 'All Proxy Models': {options}"
         assert "all-proxy-models" not in options, f"team key edit offered the raw sentinel: {options}"

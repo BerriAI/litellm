@@ -865,14 +865,17 @@ async def test_semantic_filter_hook_filters_expanded_litellm_proxy_tools():
     )
 
     assert result is not None, "Hook should return modified data"
-    filtered = result["tools"]
+    mcp_references = [tool for tool in result["tools"] if tool.get("type") == "mcp"]
+    assert len(mcp_references) == 1, "The litellm_proxy MCP reference must be preserved for the MCP gateway to expand"
 
-    assert len(filtered) <= 2, f"Expanded tools should be filtered to top_k=2, got {len(filtered)}"
-    assert len(filtered) < len(expanded_tools), (
-        f"Hook must not forward all {len(expanded_tools)} expanded tools unfiltered, got {len(filtered)}"
+    allowed_tools = mcp_references[0]["allowed_tools"]
+    assert len(allowed_tools) <= 2, f"Expanded tools should be filtered to top_k=2, got {len(allowed_tools)}"
+    assert len(allowed_tools) < len(expanded_tools), (
+        f"Hook must not forward all {len(expanded_tools)} expanded tools unfiltered, got {len(allowed_tools)}"
     )
-    for tool in filtered:
-        assert tool in expanded_tools, "Filtered tools must be the original expanded tool dicts"
+    expanded_names = {tool["name"] for tool in expanded_tools}
+    for name in allowed_tools:
+        assert name in expanded_names, "Selected tool names must come from the expanded tools"
 
     assert (
         "litellm_semantic_filter_stats" in result["metadata"]
@@ -880,9 +883,246 @@ async def test_semantic_filter_hook_filters_expanded_litellm_proxy_tools():
     stats = result["metadata"]["litellm_semantic_filter_stats"]
     total, selected = stats.split("->")
     assert int(total) == 5, f"Stats 'from' should be pre-filter expanded count (5), got {total}"
-    assert int(selected) == len(filtered), f"Stats 'to' should match post-filter count, got {selected}"
+    assert int(selected) == len(allowed_tools), f"Stats 'to' should match post-filter count, got {selected}"
 
-    print(f"✅ Expanded litellm_proxy tools filtered: {len(expanded_tools)} -> {len(filtered)}, stats={stats}")
+    print(f"✅ Expanded litellm_proxy tools filtered: {len(expanded_tools)} -> {len(allowed_tools)}, stats={stats}")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_narrows_mcp_reference_for_chat_completions():
+    """
+    Regression test (LIT-4451): the hook must narrow the litellm_proxy MCP
+    reference instead of replacing it with expanded tool definitions.
+
+    Given: A /chat/completions request whose tools are a single
+           {"type": "mcp", "server_url": "litellm_proxy"} reference that
+           expands to 5 tools, with the semantic filter selecting top_k=2
+    When:  The hook processes the request with call_type="acompletion"
+    Then:  The MCP reference survives in data["tools"], carrying the selected
+           tools in allowed_tools, and no expanded function definitions are
+           written into the request.
+
+    Replacing the reference made the hook write Responses-API-shaped tools
+    ({"type": "function", "name": ...}) into /chat/completions, which expects
+    {"type": "function", "function": {...}}. The provider transformation then
+    rejected every MCP tool (Anthropic raised KeyError: 'function') or dropped
+    it silently (Bedrock), so the model saw no MCP tools at all. Replacing the
+    reference also removed the marker the MCP gateway matches on, which
+    disabled tool auto-execution for require_approval="never".
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    registry_tools = [
+        MCPTool(
+            name=f"srv-tool_{i}",
+            description=f"Registry tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(5)
+    ]
+    filter_instance._build_router(registry_tools)
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(5)
+    ]
+
+    hook = SemanticToolFilterHook(filter_instance)
+    hook._expand_mcp_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=expanded_tools
+    )
+
+    mcp_reference = {
+        "type": "mcp",
+        "server_url": "litellm_proxy",
+        "require_approval": "never",
+    }
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Send an email"}],
+        "tools": [mcp_reference],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="acompletion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    forwarded = result["tools"]
+
+    assert [tool.get("type") for tool in forwarded] == ["mcp"], (
+        "The MCP reference must be the only forwarded tool; writing expanded function "
+        f"definitions into a chat completion loses every MCP tool. Got: {forwarded}"
+    )
+    assert forwarded[0]["server_url"] == "litellm_proxy", "The MCP reference must keep routing to the gateway"
+    assert forwarded[0]["require_approval"] == "never", "The MCP reference must keep its auto-execute marker"
+
+    allowed_tools = forwarded[0]["allowed_tools"]
+    assert allowed_tools, "The narrowed reference must still carry the selected tools"
+    assert len(allowed_tools) <= 2, f"Selection must narrow the reference to top_k=2, got {allowed_tools}"
+    assert len(allowed_tools) < len(expanded_tools), (
+        f"Hook must not forward all {len(expanded_tools)} expanded tools unfiltered, got {allowed_tools}"
+    )
+    assert set(allowed_tools) <= {tool["name"] for tool in expanded_tools}, (
+        f"Selected names must come from the expanded tools, got {allowed_tools}"
+    )
+
+    print(f"✅ chat completions: MCP reference preserved, narrowed to {allowed_tools}")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_zero_matches_exposes_all_tools_on_both_paths():
+    """
+    A query that matches nothing must expose every MCP tool, whether the request
+    carries a litellm_proxy MCP reference or plain MCP tool objects.
+
+    Given: A router that returns no matches for the query
+    When:  The hook processes an MCP reference request and a plain MCP tool request
+    Then:  Both expose all 3 tools, because filter_tools owns the undecidable-selection
+           policy and returns the full set rather than an empty one
+
+    The two paths narrow through different mechanisms (allowed_tools on the reference
+    versus dropping unmatched entries), so they could drift into opposite fail
+    behaviours. Pinning both here keeps that single policy honest: flipping
+    filter_tools to fail closed must fail this test on both paths at once, instead of
+    silently hard-limiting one surface and not the other.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    registry_tools = [
+        MCPTool(
+            name=f"srv-tool_{i}",
+            description=f"Registry tool {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(3)
+    ]
+
+    def build_hook():
+        filter_instance = SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=mock_router,
+            top_k=2,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+        filter_instance._build_router(registry_tools)
+        zero_match_router = Mock(return_value=[])
+        zero_match_router.top_k = 2
+        filter_instance.tool_router = zero_match_router
+        return SemanticToolFilterHook(filter_instance)
+
+    expanded_tools = [
+        {
+            "type": "function",
+            "name": f"srv-tool_{i}",
+            "description": f"Registry tool {i}",
+            "parameters": {"type": "object", "properties": {}},
+        }
+        for i in range(3)
+    ]
+
+    reference_hook = build_hook()
+    reference_hook._expand_mcp_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=expanded_tools
+    )
+    reference_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "something entirely unrelated"}],
+        "tools": [{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+        "metadata": {},
+    }
+    reference_result = await reference_hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=reference_data,
+        call_type="acompletion",
+    )
+
+    reference_tools = (reference_result or reference_data)["tools"]
+    mcp_references = [tool for tool in reference_tools if tool.get("type") == "mcp"]
+    assert len(mcp_references) == 1, "The MCP reference must survive a zero-match query"
+    assert set(mcp_references[0].get("allowed_tools") or []) == {tool["name"] for tool in expanded_tools}, (
+        "A zero-match query must leave every expanded tool reachable through the reference"
+    )
+
+    plain_hook = build_hook()
+    plain_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "something entirely unrelated"}],
+        "tools": list(registry_tools),
+        "metadata": {},
+    }
+    plain_result = await plain_hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=plain_data,
+        call_type="acompletion",
+    )
+
+    plain_tools = (plain_result or plain_data)["tools"]
+    assert len(plain_tools) == len(registry_tools), (
+        f"A zero-match query must not drop plain MCP tools, got {len(plain_tools)} of {len(registry_tools)}"
+    )
+
+    print("✅ zero matches: both the MCP reference path and the plain tool path expose every tool")
 
 
 @pytest.mark.asyncio
@@ -958,8 +1198,9 @@ async def test_semantic_filter_hook_filters_expanded_tools_with_string_input():
 async def test_semantic_filter_hook_expansion_skips_filter_when_disabled():
     """
     When the filter is disabled at runtime (e.g. via the UI toggle), the
-    expansion path must forward all expanded tools and emit NO filter
-    stats, mirroring the generic path's enabled guard.
+    expansion path must leave the MCP reference untouched and emit NO filter
+    stats, mirroring the generic path's enabled guard. The MCP gateway then
+    expands the reference itself, so no tool is narrowed away.
     """
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
@@ -1009,13 +1250,19 @@ async def test_semantic_filter_hook_expansion_skips_filter_when_disabled():
         call_type="aresponses",
     )
 
-    assert result is not None, "Hook should still expand MCP references when the filter is disabled"
-    assert len(result["tools"]) == 5, f"All expanded tools must be forwarded when disabled, got {len(result['tools'])}"
+    assert result is None, "Hook must not modify the request when the filter is disabled"
+    assert data["tools"] == [
+        {
+            "type": "mcp",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+        }
+    ], "The MCP reference must be left intact for the MCP gateway to expand"
     assert (
-        "litellm_semantic_filter_stats" not in result["metadata"]
+        "litellm_semantic_filter_stats" not in data["metadata"]
     ), "No filter stats may be emitted when the filter is disabled"
 
-    print("✅ Disabled filter: expansion preserved, no spurious stats")
+    print("✅ Disabled filter: MCP reference untouched, no spurious stats")
 
 
 @pytest.mark.asyncio
@@ -1664,3 +1911,252 @@ def test_is_context_window_error_detection_variants():
     assert _is_context_window_error(ValueError("Invalid 'input[0]': maximum input length is 8192 tokens."))
     assert not _is_context_window_error(ValueError("A generic API error occurred."))
     assert not _is_context_window_error(None)
+
+
+def _make_keyword_embedding_router(recorded_inputs):
+    """
+    Mock litellm Router whose embeddings are deterministic keyword one-hots:
+    texts mentioning linear/issue/ticket embed to [1, 0], everything else to
+    [0, 1]. Lets tests assert real similarity ranking through the actual
+    semantic-router index. Every embedding input batch is appended to
+    recorded_inputs.
+    """
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    def _vector(text):
+        lowered = text.lower()
+        if "kanban" in lowered:
+            return [0.6, 0.8]
+        if "linear" in lowered or "issue" in lowered or "ticket" in lowered:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+
+    def mock_embedding_sync(*args, **kwargs):
+        texts = kwargs["input"]
+        recorded_inputs.append(list(texts))
+        return EmbeddingResponse(
+            data=[Embedding(embedding=_vector(t), index=i, object="embedding") for i, t in enumerate(texts)],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync(*args, **kwargs)
+
+    mock_router = Mock()
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+    return mock_router
+
+
+def _make_keyword_filter(recorded_inputs, top_k: int = 3):
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    return SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=_make_keyword_embedding_router(recorded_inputs),
+        top_k=top_k,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+
+def _linear_issue_tool():
+    return MCPTool(
+        name="linear_stub-get_issue",
+        description="Get a Linear issue (ticket) by its identifier such as LIT-1234",
+        inputSchema={"type": "object"},
+    )
+
+
+def _linear_list_tool():
+    return MCPTool(
+        name="linear_stub-list_issues",
+        description="List Linear issues (tickets) in the workspace",
+        inputSchema={"type": "object"},
+    )
+
+
+def _weather_tool():
+    return MCPTool(
+        name="weather_stub-get_weather",
+        description="Get the current weather conditions for a city",
+        inputSchema={"type": "object"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_filter_indexes_request_tools_when_startup_index_is_empty():
+    """
+    Regression test: the startup index is built by listing every MCP server
+    WITHOUT per-user credentials, so a gateway whose servers all require
+    per-user auth (e.g. interactive OAuth) starts with an empty index
+    (tool_router is None). filter_tools then failed open and returned all N
+    tools unfiltered (customer-visible as an N->N header and, past 128 tools,
+    an OpenAI 400 "tools array too long"). The authed request-time tools must
+    instead be indexed on first sight so filtering actually runs.
+    """
+    filter_instance = _make_keyword_filter([])
+    assert filter_instance.tool_router is None
+
+    tools = [_linear_issue_tool(), _weather_tool()]
+    filtered = await filter_instance.filter_tools(
+        query="what is Linear ticket LIT-3794 about",
+        available_tools=tools,
+    )
+
+    assert [t.name for t in filtered] == ["linear_stub-get_issue"]
+    print("✅ Empty startup index is built from authed request-time tools")
+
+
+@pytest.mark.asyncio
+async def test_filter_indexes_tools_missing_from_partial_index():
+    """
+    Regression test: servers whose tools/list needs per-user auth contribute
+    zero routes to the startup index while anonymously listable servers are
+    indexed. Tools reaching the filter through the authed request-time
+    expansion must be added to the existing router (and only embedded once;
+    repeat requests embed just the query).
+    """
+    recorded_inputs = []
+    filter_instance = _make_keyword_filter(recorded_inputs)
+    filter_instance._build_router([_weather_tool()])
+    assert filter_instance.tool_router is not None
+
+    tools = [_linear_issue_tool(), _weather_tool()]
+    query = "what is Linear ticket LIT-3794 about"
+
+    filtered = await filter_instance.filter_tools(query=query, available_tools=tools)
+    assert [t.name for t in filtered] == ["linear_stub-get_issue"]
+
+    calls_after_first = len(recorded_inputs)
+    filtered_again = await filter_instance.filter_tools(query=query, available_tools=tools)
+    assert [t.name for t in filtered_again] == ["linear_stub-get_issue"]
+    assert len(recorded_inputs) == calls_after_first + 1
+
+    print("✅ Partial startup index is completed from request-time tools, embedding each tool once")
+
+
+@pytest.mark.asyncio
+async def test_filter_fails_open_when_matches_are_not_in_available_tools():
+    """
+    Regression test: when the semantic router's matches are all tools that are
+    NOT in the request's available_tools (an index/request mismatch), the
+    filter returned an empty list, stripping every tool from the request and
+    breaking it outright (observed live as a 3->0 header followed by a
+    provider 400). It must fail open with the full tool list instead, matching
+    the zero-match fallback.
+    """
+    filter_instance = _make_keyword_filter([])
+    filter_instance._build_router([_weather_tool()])
+
+    tools = [_linear_issue_tool(), _linear_list_tool()]
+    filtered = await filter_instance.filter_tools(
+        query="current weather in San Francisco",
+        available_tools=tools,
+    )
+
+    assert [t.name for t in filtered] == ["linear_stub-get_issue", "linear_stub-list_issues"]
+    print("✅ Matches outside available_tools fail open instead of dropping every tool")
+
+
+@pytest.mark.asyncio
+async def test_request_time_context_window_error_is_request_scoped():
+    """
+    Regression test: an oversized tool description hitting the embedding
+    context window while lazily indexing request-time tools must fail only
+    the requesting call. Previously the lazy path reused the startup build
+    and recorded the overflow in the shared context_window_error, after
+    which EVERY user's MCP requests on the worker were blocked with a 400
+    until restart (index poisoning via a single request).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticToolFilterContextWindowError,
+    )
+
+    state = {"raise_context_error": True}
+    filter_instance = _make_context_window_filter(state)
+    tools = [
+        MCPTool(name="tool_a", description="Tool A", inputSchema={"type": "object"}),
+        MCPTool(name="tool_b", description="Tool B", inputSchema={"type": "object"}),
+    ]
+
+    with pytest.raises(SemanticToolFilterContextWindowError):
+        await filter_instance.filter_tools(query="send an email", available_tools=tools)
+
+    assert filter_instance.context_window_error is None
+    assert filter_instance.tool_router is None
+
+    state["raise_context_error"] = False
+    filtered = await filter_instance.filter_tools(query="send an email", available_tools=tools)
+
+    assert len(filtered) > 0
+    assert filter_instance.context_window_error is None
+    assert filter_instance.tool_router is not None
+    print("✅ Request-time context window overflow is scoped to the request, not the worker")
+
+
+@pytest.mark.asyncio
+async def test_foreign_index_routes_cannot_displace_available_tools():
+    """
+    Regression test: routes indexed from OTHER principals' tool listings must
+    not occupy the match candidate set for this request. Previously the
+    router matched over the whole shared index, so foreign routes that
+    embedded closer to the query displaced the caller's own tools from
+    top_k, degrading results to the fail-open list (or, before the
+    empty-result guard, stripping every tool). Matching is now scoped to the
+    request's own tool names via route_filter.
+    """
+    filter_instance = _make_keyword_filter([], top_k=1)
+    foreign_tools = [
+        MCPTool(
+            name=f"other_user-linear_tool_{i}",
+            description=f"Get a Linear issue variant {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(6)
+    ]
+    filter_instance._build_router(foreign_tools)
+
+    my_kanban = MCPTool(
+        name="mine-kanban_board",
+        description="Manage kanban board cards",
+        inputSchema={"type": "object"},
+    )
+    filtered = await filter_instance.filter_tools(
+        query="what is Linear ticket LIT-3794 about",
+        available_tools=[my_kanban, _weather_tool()],
+    )
+
+    assert [t.name for t in filtered] == ["mine-kanban_board"]
+    print("✅ Foreign index routes cannot displace the caller's own tools")
+
+
+@pytest.mark.asyncio
+async def test_top_k_above_router_default_is_respected():
+    """
+    Regression test: semantic-router's SemanticRouter defaults to top_k=5 at
+    the index-query layer, silently capping any configured filter top_k
+    above 5 regardless of the limit passed to __call__. The router must be
+    sized (and resized) to honor the configured top_k.
+    """
+    filter_instance = _make_keyword_filter([], top_k=6)
+    tools = [
+        MCPTool(
+            name=f"linear_stub-tool_{i}",
+            description=f"Work with Linear issues part {i}",
+            inputSchema={"type": "object"},
+        )
+        for i in range(6)
+    ]
+
+    filtered = await filter_instance.filter_tools(
+        query="Linear ticket work",
+        available_tools=tools,
+    )
+
+    assert len(filtered) == 6
+    print("✅ Configured top_k above the semantic-router default of 5 is honored")

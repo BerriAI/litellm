@@ -72,7 +72,7 @@ def display_teams_table(teams: List[Dict[str, Any]]) -> None:
     console = Console()
 
     if not teams:
-        console.print("❌ No teams found for your user.")
+        console.print("No teams found for your user.")
         return
 
     table = Table(title="Available Teams")
@@ -162,7 +162,7 @@ def display_interactive_team_selection(teams: List[Dict[str, Any]], selected_ind
     # Clear the screen using Rich's method
     console.clear()
 
-    console.print("🎯 Select a Team (Use ↑↓ arrows, Enter to select, 'q' to skip):\n")
+    console.print("Select a Team (Use up/down arrows, Enter to select, 'q' to skip):\n")
 
     for i, team in enumerate(teams):
         team_alias = team.get("team_alias") or "N/A"
@@ -184,7 +184,7 @@ def display_interactive_team_selection(teams: List[Dict[str, Any]], selected_ind
 
         # Highlight the selected item
         if i == selected_index:
-            console.print(f"➤ [bold cyan]{team_alias}[/bold cyan] ({team_id})")
+            console.print(f"> [bold cyan]{team_alias}[/bold cyan] ({team_id})")
             console.print(f"   Models: [yellow]{models_str}[/yellow]")
             console.print(f"   Budget: [blue]{budget_str}[/blue]\n")
         else:
@@ -220,15 +220,13 @@ def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any
                 # Clear screen and show selection
                 console = Console()
                 console.clear()
-                click.echo(
-                    f"✅ Selected team: {selected_team.get('team_alias', 'N/A')} ({selected_team.get('team_id')})"
-                )
+                click.echo(f"Selected team: {selected_team.get('team_alias', 'N/A')} ({selected_team.get('team_id')})")
                 return selected_team
             elif key == "quit" or key == "escape":
                 # Clear screen
                 console = Console()
                 console.clear()
-                click.echo("ℹ️ Team selection skipped.")
+                click.echo("Team selection skipped.")
                 return None
             elif key is None:
                 # If we can't get key input, fall back to simple selection
@@ -237,7 +235,7 @@ def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any
     except KeyboardInterrupt:
         console = Console()
         console.clear()
-        click.echo("\n❌ Team selection cancelled.")
+        click.echo("\nTeam selection cancelled.")
         return None
     except Exception:
         # If interactive mode fails, fall back to simple selection
@@ -265,16 +263,38 @@ def prompt_team_selection_fallback(
             if 0 <= index < len(teams):
                 selected_team = teams[index]
                 click.echo(
-                    f"\n✅ Selected team: {selected_team.get('team_alias', 'N/A')} ({selected_team.get('team_id')})"
+                    f"\nSelected team: {selected_team.get('team_alias', 'N/A')} ({selected_team.get('team_id')})"
                 )
                 return selected_team
             else:
-                click.echo(f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}")
+                click.echo(f"Invalid selection. Please enter a number between 1 and {len(teams)}")
         except ValueError:
-            click.echo("❌ Invalid input. Please enter a number or 'skip'")
+            click.echo("Invalid input. Please enter a number or 'skip'")
         except KeyboardInterrupt:
-            click.echo("\n❌ Team selection cancelled.")
+            click.echo("\nTeam selection cancelled.")
             return None
+
+
+def _response_error_detail(response: requests.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, str) and detail:
+        return detail
+    return None
+
+
+def _polling_error_message(response: requests.Response) -> str:
+    detail = _response_error_detail(response)
+    if detail:
+        return f"Polling error: HTTP {response.status_code}: {detail}"
+    return f"Polling error: HTTP {response.status_code}"
+
+
+def _is_permanent_polling_error(status_code: int) -> bool:
+    return 400 <= status_code < 500 and status_code != 429
 
 
 # Polling-based authentication - no local server needed
@@ -308,8 +328,14 @@ def _poll_for_ready_data(
                         click.echo(pending_message)
                 elif other_status_message and other_status_log_every > 0 and attempt % other_status_log_every == 0:
                     click.echo(other_status_message)
+            elif _is_permanent_polling_error(response.status_code):
+                detail = _response_error_detail(response)
+                raise ValueError(
+                    f"The proxy rejected the login session with HTTP {response.status_code}"
+                    + (f": {detail}" if detail else f" and no error detail (from {url})")
+                )
             elif http_error_log_every > 0 and attempt % http_error_log_every == 0:
-                click.echo(f"Polling error: HTTP {response.status_code}")
+                click.echo(_polling_error_message(response))
         except requests.RequestException as e:
             if connection_error_log_every > 0 and attempt % connection_error_log_every == 0:
                 click.echo(f"Connection error (will retry): {e}")
@@ -342,12 +368,45 @@ def _normalize_teams(teams, team_details):
 
 
 def _start_cli_sso_flow(base_url: str) -> Dict[str, Any]:
-    response = requests.post(f"{base_url}/sso/cli/start", timeout=10)
-    response.raise_for_status()
-    data = response.json()
+    start_url = f"{base_url}/sso/cli/start"
+    try:
+        response = requests.post(start_url, timeout=10)
+    except requests.RequestException as e:
+        raise ValueError(
+            f"Could not reach the proxy at {start_url}: {e}. "
+            "Check that the proxy is running and that --base-url points at it."
+        ) from e
+
+    if response.status_code in (404, 405):
+        raise ValueError(
+            f"POST {start_url} returned HTTP {response.status_code}. "
+            "Either --base-url is wrong, or the proxy is older than this CLI and does not support "
+            "the CLI SSO login flow; upgrade the proxy or use a CLI version that matches it."
+        )
+    if response.status_code != 200:
+        detail = _response_error_detail(response)
+        raise ValueError(
+            f"Starting CLI login failed: HTTP {response.status_code} from {start_url}"
+            + (f": {detail}" if detail else "")
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        content_type = response.headers.get("content-type", "unknown")
+        raise ValueError(
+            f"The proxy returned a non-JSON response from {start_url} (content-type: {content_type}). "
+            "A proxy, load balancer, or auth gateway in front of LiteLLM may be intercepting the request. "
+            f"Response starts with: {response.text[:200]!r}"
+        )
+
     required_fields = ("login_id", "poll_secret", "user_code")
-    if not all(isinstance(data.get(field), str) for field in required_fields):
-        raise ValueError("Invalid CLI SSO start response")
+    missing_fields = tuple(field for field in required_fields if not isinstance(data.get(field), str))
+    if missing_fields:
+        raise ValueError(
+            f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
+            "The proxy version may not match this CLI; upgrade whichever is older."
+        )
     return data
 
 
@@ -376,7 +435,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
         user_id = data.get("user_id")
         normalized_teams: List[Dict[str, Any]] = _normalize_teams(teams, team_details)
         if not normalized_teams:
-            click.echo("⚠️ No teams available for selection.")
+            click.echo("Warning: No teams available for selection.")
             return None
 
         # User has multiple teams - let them select
@@ -396,7 +455,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
                 "team_id": None,  # Set by server in JWT
             }
 
-        click.echo("❌ Team selection cancelled or JWT generation failed.")
+        click.echo("Team selection cancelled or JWT generation failed.")
         return None
 
     # JWT is ready (single team or team already selected)
@@ -407,7 +466,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Op
 
     # Show which team was assigned
     if team_id and len(teams) == 1:
-        click.echo(f"\n✅ Automatically assigned to team: {team_id}")
+        click.echo(f"\nAutomatically assigned to team: {team_id}")
 
     if api_key:
         return {
@@ -433,19 +492,19 @@ def _handle_team_selection_during_polling(
         The JWT token with the selected team, or None if selection was skipped
     """
     if not teams:
-        click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
+        click.echo("No teams found. You can create or join teams using the web interface.")
         return None
 
     click.echo("\n" + "=" * 60)
-    click.echo("📋 Select a team for your CLI session...")
+    click.echo("Select a team for your CLI session...")
 
     team_id = _render_and_prompt_for_team_selection(teams)
 
     if not team_id:
-        click.echo("ℹ️ No team selected.")
+        click.echo("No team selected.")
         return None
 
-    click.echo(f"\n🔄 Generating JWT for team: {team_id}")
+    click.echo(f"\nGenerating JWT for team: {team_id}")
 
     poll_url = f"{base_url}/sso/cli/poll/{key_id}?team_id={team_id}"
     data = _poll_for_ready_data(
@@ -459,7 +518,7 @@ def _handle_team_selection_during_polling(
         return None
     jwt_token = data.get("key")
     if jwt_token:
-        click.echo(f"✅ Successfully generated JWT for team: {team_id}")
+        click.echo(f"Successfully generated JWT for team: {team_id}")
         return jwt_token
 
     return None
@@ -507,14 +566,14 @@ def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Option
                 selected_team = teams[index]
                 team_id = str(selected_team.get("team_id"))
                 team_alias = selected_team.get("team_alias") or team_id
-                click.echo(f"\n✅ Selected team: {team_alias} ({team_id})")
+                click.echo(f"\nSelected team: {team_alias} ({team_id})")
                 return team_id
 
-            click.echo(f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}")
+            click.echo(f"Invalid selection. Please enter a number between 1 and {len(teams)}")
         except ValueError:
-            click.echo("❌ Invalid input. Please enter a number or 'skip'")
+            click.echo("Invalid input. Please enter a number or 'skip'")
         except KeyboardInterrupt:
-            click.echo("\n❌ Team selection cancelled.")
+            click.echo("\nTeam selection cancelled.")
             return None
 
 
@@ -567,7 +626,7 @@ def login(ctx: click.Context):
                 }
             )
 
-            click.echo("\n✅ Login successful!")
+            click.echo("\nLogin successful!")
             click.echo(f"JWT Token: {api_key[:20]}...")
             click.echo("You can now use the CLI without specifying --api-key")
 
@@ -576,14 +635,18 @@ def login(ctx: click.Context):
             show_commands()
             return
         else:
-            click.echo("❌ Authentication timed out. Please try again.")
+            click.echo("Authentication timed out. Please try again.")
+            click.echo(
+                "The proxy never reported the browser sign-in as finished. If you did complete it, "
+                "check the proxy logs for /sso/callback errors and confirm SSO is configured on the proxy."
+            )
             return
 
     except KeyboardInterrupt:
-        click.echo("\n❌ Authentication cancelled by user.")
+        click.echo("\nAuthentication cancelled by user.")
         return
     except Exception as e:
-        click.echo(f"❌ Authentication failed: {e}")
+        click.echo(f"Authentication failed: {e}")
         return
 
 
@@ -591,7 +654,7 @@ def login(ctx: click.Context):
 def logout():
     """Logout and clear stored authentication"""
     clear_token()
-    click.echo("✅ Logged out successfully. Authentication token cleared.")
+    click.echo("Logged out successfully. Authentication token cleared.")
 
 
 @click.command(name="print-token")
@@ -638,10 +701,10 @@ def whoami():
     token_data = load_token()
 
     if not token_data:
-        click.echo("❌ Not authenticated. Run 'lite login' to authenticate.")
+        click.echo("Not authenticated. Run 'lite login' to authenticate.")
         return
 
-    click.echo("✅ Authenticated")
+    click.echo("Authenticated")
     click.echo(f"User Email: {token_data.get('user_email', 'Unknown')}")
     click.echo(f"User ID: {token_data.get('user_id', 'Unknown')}")
     click.echo(f"User Role: {token_data.get('user_role', 'Unknown')}")
@@ -652,7 +715,7 @@ def whoami():
     click.echo(f"Token age: {age_hours:.1f} hours")
 
     if age_hours > CLI_JWT_EXPIRATION_HOURS:
-        click.echo(f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+        click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
 
 
 @click.group(name="auth")
