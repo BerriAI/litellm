@@ -605,3 +605,45 @@ def test_completion_with_function_tools_works_without_fastapi_installed():
         timeout=120,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_extract_tool_call_details_reads_anthropic_tool_use_input():
+    """
+    Regression test (LIT-4517): an Anthropic tool_use block carries its arguments
+    under `input`, not `arguments`.
+
+    Given: A tool_use content block as /v1/messages returns it
+    When:  The shared extractor reads it
+    Then:  The arguments come back, so the MCP tool is called with them
+
+    Reading only `arguments` fails silently rather than loudly: _parse_tool_arguments
+    turns the resulting None into {}, so the tool still executes, just with every
+    argument dropped.
+    """
+    tool_use_block = {
+        "type": "tool_use",
+        "id": "toolu_01ABC",
+        "name": "read_wiki_structure",
+        "input": {"repoName": "BerriAI/litellm"},
+    }
+
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_use_block)
+
+    assert name == "read_wiki_structure"
+    assert call_id == "toolu_01ABC"
+    assert arguments == {"repoName": "BerriAI/litellm"}
+    assert LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(arguments) == {"repoName": "BerriAI/litellm"}
+
+
+def test_extract_tool_call_details_still_prefers_openai_arguments():
+    """The OpenAI chat shape must keep winning; `input` is only the fallback."""
+    openai_tool_call = {
+        "id": "call_123",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
+
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(openai_tool_call)
+
+    assert name == "get_weather"
+    assert call_id == "call_123"
+    assert arguments == '{"city": "Paris"}'
