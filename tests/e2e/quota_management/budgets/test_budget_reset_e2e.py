@@ -1,13 +1,4 @@
-"""Live e2e: each budget level resets (zeroes spend) after its budget_duration.
-
-Short budget_duration (30s) + the fast-rescheduled reset job: an entity blocked
-for exceeding its max_budget starts serving again once the duration elapses and
-the reset job zeroes its spend. Walks the reset diagonal - bare key, team, org,
-internal user (personal key), and the #32005 team-member-key-frozen-by-user-budget
-interplay - with each case isolating the cap to exactly one entity. The member
-per-team reset lives in test_team_member_budget_reset_e2e.py; the strict
-budget_reset_at before<after guards live in test_budget_reset_advances_e2e.py.
-"""
+"""Live e2e: an entity blocked over its max_budget serves again after its budget_duration window."""
 
 import time
 
