@@ -29,6 +29,10 @@ export interface BuildMcpToolBlocksArgs {
  * server_name is used for both routing and labelling because it is the unique
  * registered identifier; aliases can collide across servers, and a duplicated
  * server_label causes silent tool-routing failures.
+ *
+ * The name is not percent-encoded: the gateway resolves it with a raw
+ * `server_url.split("/")[-1]` and never url-decodes, so an encoded name would
+ * fail server lookup rather than round-trip.
  */
 export function buildMcpToolBlocks({
   selectedMCPServers,
@@ -59,7 +63,7 @@ export function buildMcpToolBlocks({
       return {
         type: "mcp",
         server_label: toolsetName,
-        server_url: `litellm_proxy/mcp/${encodeURIComponent(toolsetName)}`,
+        server_url: `litellm_proxy/mcp/${toolsetName}`,
         require_approval: "never",
       };
     }
@@ -71,7 +75,7 @@ export function buildMcpToolBlocks({
     return {
       type: "mcp",
       server_label: routeName,
-      server_url: `litellm_proxy/mcp/${encodeURIComponent(routeName)}`,
+      server_url: `litellm_proxy/mcp/${routeName}`,
       require_approval: "never",
       ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
     };

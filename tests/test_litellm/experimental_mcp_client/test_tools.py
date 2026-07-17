@@ -299,3 +299,45 @@ def test_transform_mcp_tool_to_anthropic_tool_normalizes_empty_schema():
     assert anthropic_tool["description"] == ""
     assert anthropic_tool["input_schema"]["type"] == "object"
     assert anthropic_tool["input_schema"]["properties"] == {}
+
+
+def test_transform_mcp_tool_to_anthropic_tool_strips_keys_anthropic_rejects():
+    """
+    Regression test (LIT-4517): an MCP schema with keys Anthropic does not accept
+    must be sanitized, so the same tool cannot succeed on /chat/completions and 400
+    on /v1/messages.
+
+    Given: An MCP tool whose inputSchema carries $schema, legacy definitions and oneOf
+    When:  It is transformed for the Anthropic Messages API
+    Then:  Only keys in AnthropicInputSchema survive, matching the chat path
+
+    The chat path runs the schema through the same sanitizer, so before this the two
+    routes diverged: a clean-schema server (deepwiki) worked on both, but a server
+    with a richer schema would be rejected only on messages.
+    """
+    from litellm.types.llms.anthropic import AnthropicInputSchema
+
+    tool = MCPTool(
+        name="rich",
+        description="tool with a dirty schema",
+        inputSchema={
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"],
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {"D": {"type": "string"}},
+            "oneOf": [{"required": ["q"]}],
+        },
+    )
+
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(tool)
+    schema_keys = set(anthropic_tool["input_schema"].keys())
+
+    assert schema_keys <= set(AnthropicInputSchema.__annotations__.keys()), (
+        f"schema must only carry keys Anthropic accepts, got {schema_keys}"
+    )
+    assert "$schema" not in schema_keys
+    assert "definitions" not in schema_keys
+    assert "oneOf" not in schema_keys
+    assert anthropic_tool["input_schema"]["properties"] == {"q": {"type": "string"}}
+    assert anthropic_tool["input_schema"]["required"] == ["q"]
