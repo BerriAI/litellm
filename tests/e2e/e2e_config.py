@@ -61,6 +61,18 @@ POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
 
+# Locust throughput load test (tests/e2e/load). Defaults mirror the concurrency
+# and pass criterion the load test is meant to guard; every knob is overridable
+# so the same test can be pointed at any deployment (a beefy stage cluster wants
+# more users and a higher RPS floor than a laptop compose stack). LOAD_MIN_RPS is
+# the SLO the run must clear and LOAD_MAX_FAILURE_RATIO caps the share of requests
+# allowed to error before the throughput number is considered meaningless.
+LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "750"))
+LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
+LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
+LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "355"))
+LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
+
 
 def unique_marker() -> str:
     """A short unique token per call/run, so concurrent runs and the shared

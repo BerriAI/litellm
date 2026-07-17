@@ -16,6 +16,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)
+- `load/` - throughput/performance under concurrency: drives real concurrent traffic through the whole stack with Locust and asserts a throughput SLO. Marked `load` so it is collected last (see the parent conftest) and never perturbs latency-sensitive suites
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
 - `claude_code/` - the Claude Code compatibility matrix: drives the real `claude` CLI (and HTTP probes) against a proxy for each feature x provider cell, reporting tagged-union outcomes via the `compat_result` fixture; ships its own driver/builder/publisher plus `_*_unit_tests/` trees, and does not use the shared transport harness
 

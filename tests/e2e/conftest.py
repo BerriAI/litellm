@@ -38,6 +38,17 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "covers(cell_id, *, exercised_on=()): coverage-registry cell(s) this test covers",
     )
+    config.addinivalue_line(
+        "markers",
+        "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
+    )
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Run `load`-marked tests last. A load test saturates the shared proxy, so
+    letting it run before a latency- or rate-limit-sensitive suite would skew that
+    suite; ordering it last keeps a whole-tree `pytest tests/e2e` run honest."""
+    items.sort(key=lambda item: item.get_closest_marker("load") is not None)
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
