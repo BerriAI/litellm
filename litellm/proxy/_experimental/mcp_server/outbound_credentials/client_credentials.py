@@ -340,6 +340,7 @@ class ClientCredentialsBearerAuth(httpx.Auth):
         fresh = await self._refetch(token)
         if fresh is None:
             return
+        self._access_token = SecretStr(fresh)
         request.headers[self.header_name] = f"Bearer {fresh}"
         yield request
 

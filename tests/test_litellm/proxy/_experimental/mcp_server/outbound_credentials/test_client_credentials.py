@@ -341,6 +341,27 @@ async def test_bearer_auth_retries_a_401_once_with_a_fresh_token():
 
 
 @pytest.mark.asyncio
+async def test_bearer_auth_remembers_the_rotated_token_for_later_requests():
+    # The auth object lives for the whole MCP session (it is the httpx client's auth), so after a
+    # 401 recovery it must send the fresh token first on subsequent requests; re-sending the
+    # rejected one would burn a 401 round trip and the single retry on every call.
+    transport, seen = _upstream([httpx.Response(401), httpx.Response(200), httpx.Response(200)])
+    refetched: "list[str]" = []
+
+    async def refetch(failed: str) -> "str | None":
+        refetched.append(failed)
+        return "fresh-token"
+
+    auth = ClientCredentialsBearerAuth("stale-token", refetch)
+    async with httpx.AsyncClient(transport=transport, auth=auth) as client:
+        first = await client.get("https://upstream.example.com/mcp")
+        second = await client.get("https://upstream.example.com/mcp")
+    assert first.status_code == 200 and second.status_code == 200
+    assert refetched == ["stale-token"]
+    assert seen == ["Bearer stale-token", "Bearer fresh-token", "Bearer fresh-token"]
+
+
+@pytest.mark.asyncio
 async def test_bearer_auth_surfaces_the_401_when_the_refetch_fails():
     transport, seen = _upstream([httpx.Response(401)])
 
