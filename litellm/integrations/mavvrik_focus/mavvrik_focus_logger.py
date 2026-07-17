@@ -60,7 +60,10 @@ def _with_token_tags(data: pl.DataFrame, normalized: pl.DataFrame) -> pl.DataFra
     has_both = "prompt_tokens" in available and "completion_tokens" in available
 
     def _merge(tags_json: str, row: dict) -> str:
-        tags = json.loads(tags_json) if tags_json else {}
+        try:
+            tags = json.loads(tags_json) if tags_json else {}
+        except (TypeError, ValueError):
+            tags = {}
         for key in available:
             value = row.get(key)
             if value is not None:
