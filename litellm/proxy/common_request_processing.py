@@ -161,7 +161,7 @@ def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
     )
 
 
-def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> None:
+async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> None:
     """
     A client disconnect throws GeneratorExit/CancelledError into the streaming
     generator, so neither the success nor the failure logging callback fires
@@ -170,6 +170,10 @@ def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: obj
     response from the wrapper's collected chunks and dispatch success logging
     for it; dispatch_success_handlers dedups against a natural end-of-stream
     dispatch via has_dispatched_final_stream_success.
+
+    Awaited directly by the shielded cleanup rather than scheduled with
+    create_task: the client is already gone so the extra latency is harmless,
+    and an unrooted task could be garbage-collected before it bills.
     """
     if litellm.disable_streaming_logging is True:
         return
@@ -198,15 +202,16 @@ def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: obj
         return
     if partial_response is None:
         return
-    asyncio.create_task(
-        logging_obj.dispatch_success_handlers(
+    try:
+        await logging_obj.dispatch_success_handlers(
             partial_response,
             cache_hit=False,
             start_time=None,
             end_time=None,
             prefer_async_handlers=True,
         )
-    )
+    except Exception as e:  # noqa: BLE001  # partial billing is best-effort; never break stream teardown
+        verbose_proxy_logger.debug("Failed to dispatch disconnect billing event: %s", e)
 
 
 async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
@@ -2647,7 +2652,7 @@ class ProxyBaseLLMRequestProcessing:
                 deferred_stream_logging_armed = _deferred_stream_logging_is_armed(request_data)
                 ProxyLogging._fire_deferred_stream_logging(request_data)
                 if not deferred_stream_logging_armed:
-                    _bill_partial_streamed_spend_on_disconnect(request_data, response)
+                    await _bill_partial_streamed_spend_on_disconnect(request_data, response)
 
             if hasattr(response, "aclose"):
                 try:
