@@ -18,9 +18,11 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    azure_proxy_route,
     bedrock_llm_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
@@ -3022,3 +3024,133 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
             assert result["id"] == "bc_abc123"
             assert result["status"] == "CREATING"
+
+
+class TestGetAzureAISearchIndexFromEndpoint:
+    """The operable index is only the segment right after ``indexes``.
+
+    A doc-write path ends in ``.../docs/index``; the trailing ``index`` must not
+    be mistaken for the target, otherwise a caller could be authorized on one
+    index while Azure applies the write to another.
+    """
+
+    @pytest.mark.parametrize(
+        "endpoint, expected",
+        [
+            ("indexes/my-index/docs/index", "my-index"),
+            ("indexes/my-index/docs/search", "my-index"),
+            ("indexes/my-index", "my-index"),
+            ("indexes/my-index?api-version=2024-07-01", "my-index"),
+            ("/indexes/my-index/docs/index", "my-index"),
+            ("indexes/victim/docs/index", "victim"),
+            ("openai/deployments/gpt-4o/chat/completions", None),
+            ("indexes", None),
+            ("indexes/", None),
+        ],
+    )
+    def test_extracts_positional_index_only(self, endpoint, expected):
+        assert get_azure_ai_search_index_from_endpoint(endpoint) == expected
+
+
+class TestAzureProxyRouteCrossIndexAuthorization:
+    """Regression tests: the passthrough must authorize the index that the request
+    actually targets (the ``/indexes/{name}`` segment), never a different segment
+    that merely happens to match a managed index the caller can access.
+    """
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.headers = {"content-type": "application/json"}
+        request.url = MagicMock()
+        request.url.path = path
+        return request
+
+    @pytest.mark.asyncio
+    async def test_authorizes_the_targeted_index(self):
+        index_object = MagicMock()
+        index_object.litellm_params.vector_store_name = "my-store"
+        vector_store = {"litellm_params": {"api_base": "https://svc.search.windows.net"}}
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+                return_value=False,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.ProviderConfigManager.get_provider_vector_stores_config"
+            ) as mock_get_config,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
+            ) as mock_is_allowed,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.assert_user_can_access_vector_store",
+                new=AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ),
+            patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
+            patch.object(litellm, "vector_store_registry") as mock_vector_registry,
+        ):
+            mock_get_config.return_value.get_auth_credentials.return_value = {"headers": {"api-key": "k"}}
+            mock_index_registry.is_vector_store_index.side_effect = lambda vector_store_index_name: (
+                vector_store_index_name == "my-index"
+            )
+            mock_index_registry.get_vector_store_index_by_name.return_value = index_object
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = vector_store
+
+            await azure_proxy_route(
+                endpoint="indexes/my-index/docs/index",
+                request=self._request("POST", "/azure_ai/indexes/my-index/docs/index"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+            mock_is_allowed.assert_called_once()
+            assert mock_is_allowed.call_args.kwargs["index_name"] == "my-index"
+            mock_index_registry.get_vector_store_index_by_name.assert_called_once_with(
+                vector_store_index_name="my-index"
+            )
+
+    @pytest.mark.asyncio
+    async def test_trailing_index_segment_does_not_authorize_a_different_index(self):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+                return_value=False,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
+            ) as mock_is_allowed,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="https://azure-openai.example.com",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="azure-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ) as mock_handler,
+            patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
+        ):
+            mock_index_registry.is_vector_store_index.side_effect = lambda vector_store_index_name: (
+                vector_store_index_name == "index"
+            )
+
+            await azure_proxy_route(
+                endpoint="indexes/victim/docs/index",
+                request=self._request("POST", "/azure_ai/indexes/victim/docs/index"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+            mock_is_allowed.assert_not_called()
+            mock_handler.assert_awaited_once()
+            assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE
