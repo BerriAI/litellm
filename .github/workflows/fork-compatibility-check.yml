@@ -123,17 +123,24 @@ jobs:
             git merge --abort || git reset --hard HEAD
           else
             HAS_CONFLICTS=true
-            CONFLICT_FILES=$(git diff --name-only --diff-filter=U || true)
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U | grep -v '^\.github/workflows/' || true)
             echo "Trial merge has conflicts:"
             echo "$CONFLICT_FILES"
             git merge --abort || git reset --hard HEAD
           fi
           echo "has_conflicts=${HAS_CONFLICTS}" >> "$GITHUB_OUTPUT"
 
-          # Point the sync branch at the stable tag. PR base = staging, head = tag tip.
-          # GitHub then shows native "This branch has conflicts" UI for juniors to resolve.
-          # Do NOT commit conflict markers into the branch.
+          # Sync branch starts at the stable tag so GitHub can show real merge conflicts
+          # against staging. We do NOT want BerriAI's CI workflows on Bitovi: restore
+          # staging's .github/workflows on top of the tag (requires PAT `workflow` scope
+          # to push, but the PR will not replace Bitovi Actions with upstream's).
           git checkout -B "$BRANCH" "$STABLE_TAG"
+          rm -rf .github/workflows
+          git checkout origin/litellm_internal_staging -- .github/workflows
+          git add -A .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: keep Bitovi GitHub Actions workflows on sync branch"
+          fi
           git push -u origin "$BRANCH" --force
 
           if [ "$HAS_CONFLICTS" = "true" ]; then
@@ -144,7 +151,7 @@ jobs:
           GitHub should show **This branch has conflicts that must be resolved**.
           Use **Resolve conflicts** on the PR (or merge locally). Do not merge until that banner is gone.
 
-          Likely conflicted paths (from trial merge):
+          Likely conflicted paths (from trial merge; \`.github/workflows\` is forced to Bitovi and omitted here):
 
           \`\`\`
           ${CONFLICT_FILES}
@@ -180,7 +187,7 @@ jobs:
           - Tag SHA: \`${TAG_SHA}\`
           - Commits not yet in staging: ${COMMITS_BEHIND}
           - Sync source: stable tag only (not \`upstream/main\` or BerriAI staging)
-          - Head branch is **the tag tip** so GitHub can show real merge conflicts
+          - Head is the stable tag tip, plus Bitovi \`.github/workflows\` retained (we do not adopt BerriAI CI)
           - Docs: [FORK.md](https://github.com/bitovi/litellm/blob/litellm_internal_staging/FORK.md)
 
           **This Action never merges into \`litellm_internal_staging\`.** A human must resolve conflicts (if any) and merge.

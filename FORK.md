@@ -71,8 +71,8 @@ Do not branch from `upstream/main` or a stable tag for Bitovi-only work; that dr
 
 `.github/workflows/fork-compatibility-check.yml` runs Mondays and Thursdays (and on `workflow_dispatch`). When a newer stable tag exists than our staging tip contains, it:
 
-1. Points `sync/upstream-vX.Y.Z` at the **stable tag tip** (not a pre-merged branch with conflict markers)
-2. Opens (or refreshes) a PR **into** `litellm_internal_staging` so GitHub can show real merge conflicts
+1. Points `sync/upstream-vX.Y.Z` at the **stable tag tip**, then restores Bitovi’s `.github/workflows` (so we do not adopt BerriAI CI)
+2. Opens (or refreshes) a PR **into** `litellm_internal_staging` so GitHub can show real merge conflicts on product code
 3. Labels `upstream-sync` (and `needs-conflict-resolution` when a trial merge finds conflicts)
 4. Runs Bedrock Mantle checks on the current staging tip
 5. Notifies via the PR and optional Slack (`SLACK_WEBHOOK_URL` secret)
@@ -101,7 +101,7 @@ Large diffs (often 1000+ files) are normal for a weekly stable: release tags are
 
 3. When the conflict banner is gone and the PR looks right, merge into `litellm_internal_staging`
 
-The Action points the sync branch at the **stable tag tip** (not a pre-merged branch), so GitHub can show real conflicts. It does not commit conflict markers.
+The Action points the sync branch at the **stable tag tip** for product code, then restores Bitovi’s `.github/workflows`. GitHub can show real product conflicts; we do not merge BerriAI’s CI into Bitovi.
 
 ### Required: `FORK_SYNC_TOKEN` (PR create)
 
@@ -113,9 +113,11 @@ The Action points the sync branch at the **stable tag tip** (not a pre-merged br
 
 This Action creates PRs via the **REST** API and expects a PAT:
 
-1. Create a **classic** PAT with `repo` scope (simplest), or a fine-grained PAT on `bitovi/litellm` with **Contents**, **Pull requests**, and **Issues** read/write
+1. Create a **classic** PAT with `repo` **and** `workflow` (needed to push the sync branch while keeping Bitovi’s `.github/workflows` instead of BerriAI’s), or a fine-grained PAT on `bitovi/litellm` with Contents, Pull requests, Issues, and Actions/workflows write
 2. Add it as repo secret `FORK_SYNC_TOKEN` (Settings → Secrets and variables → Actions)
 3. Re-run the workflow
+
+We do **not** intend to take upstream’s CI. The sync branch is the stable tag for product code, then staging’s workflows are restored so the PR does not replace Bitovi Actions. GitHub still requires `workflow` scope to push that workflows commit.
 
 Optional (only helps `GITHUB_TOKEN` fallback; PAT is still recommended):
 
