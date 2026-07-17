@@ -266,6 +266,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "responses",
             "ocr",
+            "realtime",
         ]
     ]
     tpm: Optional[int]
