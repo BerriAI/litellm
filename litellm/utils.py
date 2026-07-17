@@ -2611,8 +2611,11 @@ _BEDROCK_REGION_PREFIXES = (
 
 _CACHE_PRICING_FIELDS = (
     "cache_creation_input_token_cost",
+    "cache_creation_input_token_cost_flex",
+    "cache_creation_input_token_cost_priority",
     "cache_creation_input_token_cost_above_1hr",
     "cache_creation_input_token_cost_above_200k_tokens",
+    "cache_creation_input_token_cost_above_272k_tokens",
     "cache_read_input_token_cost",
     "cache_read_input_token_cost_above_200k_tokens",
 )
@@ -5399,8 +5402,15 @@ def _get_model_info_helper(
                 input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
                 input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
                 cache_creation_input_token_cost=_model_info.get("cache_creation_input_token_cost", None),
+                cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
+                cache_creation_input_token_cost_priority=_model_info.get(
+                    "cache_creation_input_token_cost_priority", None
+                ),
                 cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_creation_input_token_cost_above_200k_tokens", None
+                ),
+                cache_creation_input_token_cost_above_272k_tokens=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens", None
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
