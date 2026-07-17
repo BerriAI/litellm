@@ -3074,17 +3074,6 @@ async def _apply_team_member_update(
     )
 
 
-_BULK_MEMBER_RESPONSE_FIELDS = frozenset(
-    {
-        "max_budget_in_team",
-        "tpm_limit",
-        "rpm_limit",
-        "budget_duration",
-        "allowed_models",
-    }
-)
-
-
 def _successful_member_update_response(
     *,
     team_id: str,
@@ -3095,7 +3084,7 @@ def _successful_member_update_response(
     return TeamMemberUpdateResponse(
         team_id=team_id,
         user_id=user_id,
-        **{field: getattr(update_fields, field) for field in _BULK_MEMBER_RESPONSE_FIELDS if field in fields_set},
+        **{field: getattr(update_fields, field) for field in _MEMBER_BUDGET_PATCH_FIELDS if field in fields_set},
     )
 
 
