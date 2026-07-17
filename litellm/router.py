@@ -30,6 +30,7 @@ from typing import (
     Generator,
     List,
     Literal,
+    NoReturn,
     Optional,
     Set,
     Tuple,
@@ -270,11 +271,8 @@ def _completion_matches_refusal_patterns(response: ModelResponse) -> bool:
     Empty/unset env => inert (vanilla behavior). A malformed regex is skipped, never
     raised, so it can't turn a successful completion into a request failure.
     """
-    import json
-    import os
-
-    raw = os.environ.get("LITELLM_REFUSAL_FALLBACK_PATTERNS", "").strip()
-    if not raw:
+    patterns = _get_refusal_fallback_patterns()
+    if not patterns:
         return False
 
     # StreamingChoices has no `.message`; getattr keeps this total for either choice
@@ -286,22 +284,152 @@ def _completion_matches_refusal_patterns(response: ModelResponse) -> bool:
     if not content or not isinstance(content, str):
         return False
 
+    return _text_matches_refusal_patterns(content, patterns)
+
+
+def _get_refusal_fallback_patterns() -> List[str]:
+    """Parse LITELLM_REFUSAL_FALLBACK_PATTERNS into a list of regex strings.
+    Empty/unset env => [] (feature inert). A non-JSON value is tolerated as a
+    single pattern rather than raising."""
+    import json
+    import os
+
+    raw = os.environ.get("LITELLM_REFUSAL_FALLBACK_PATTERNS", "").strip()
+    if not raw:
+        return []
+
     try:
         patterns = json.loads(raw)
     except (ValueError, TypeError):
         patterns = [raw]
     if not isinstance(patterns, list):
         patterns = [raw]
+    return [p for p in patterns if isinstance(p, str) and p.strip()]
 
+
+def _text_matches_refusal_patterns(text: str, patterns: List[str]) -> bool:
+    """A malformed regex is skipped, never raised, so it can't turn a successful
+    completion into a request failure."""
     for pattern in patterns:
-        if not isinstance(pattern, str) or not pattern.strip():
-            continue
         try:
-            if re.search(pattern, content, re.IGNORECASE):
+            if re.search(pattern, text, re.IGNORECASE):
                 return True
         except re.error:
             continue
     return False
+
+
+_REFUSAL_STREAM_HOLD_CHARS_DEFAULT = 400
+
+
+def _refusal_stream_hold_chars() -> int:
+    """Max chars of streamed text held back while a refusal is ruled out.
+    Overridable via LITELLM_REFUSAL_FALLBACK_STREAM_HOLD_CHARS; 0 disables the
+    stream hold (streamed refusals then pass through unrescued)."""
+    import os
+
+    raw = os.environ.get("LITELLM_REFUSAL_FALLBACK_STREAM_HOLD_CHARS", "").strip()
+    if not raw:
+        return _REFUSAL_STREAM_HOLD_CHARS_DEFAULT
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _REFUSAL_STREAM_HOLD_CHARS_DEFAULT
+
+
+class _RefusalStreamHold:
+    """Holds back the head of a streaming response until a model-level refusal
+    can be ruled out, so content_policy_fallbacks can replace the stream before
+    the client has seen any refusal text (same idea as Bedrock Guardrails'
+    synchronous stream-processing mode).
+
+    Once `hold_chars` of text accumulate with no pattern match — or a tool-call
+    delta arrives (refusals are plain text) — all buffered chunks are flushed
+    and the rest of the stream passes through unchecked, so long responses only
+    pay the hold cost on their head. On a match, raises MidStreamFallbackError
+    wrapping a ContentPolicyViolationError with is_pre_first_chunk=True:
+    nothing has been yielded yet, so the router reruns the original messages
+    against the content-policy fallback group and streams a clean answer.
+
+    Async-only: wired into _acompletion_streaming_iterator (the proxy path). The
+    sync handler re-invokes the primary without exception-type dispatch, so a
+    deterministic refusal there would retry the primary in an unbounded loop."""
+
+    def __init__(self, patterns: List[str], hold_chars: int, model: str):
+        self.patterns = patterns
+        self.hold_chars = hold_chars
+        self.model = model
+        self.active = bool(patterns) and hold_chars > 0
+        self._held: List[Any] = []
+        self._text = ""
+        # Reasoning deltas can't contain the client-visible refusal text but must
+        # still advance the hold window, otherwise a reasoning model's whole
+        # thinking phase (and thus its entire response) would be buffered.
+        self._reasoning_len = 0
+
+    def process(self, item: Any) -> List[Any]:
+        """Return the chunks safe to emit for this stream item (possibly []).
+        Raises MidStreamFallbackError when the held text matches a pattern."""
+        if not self.active:
+            return [item]
+        self._held.append(item)
+        delta_text, reasoning_len, saw_tool_call = self._delta_state(item)
+        self._reasoning_len += reasoning_len
+        if delta_text:
+            self._text += delta_text
+            if _text_matches_refusal_patterns(self._text, self.patterns):
+                self._raise_refusal()
+        if saw_tool_call or len(self._text) + self._reasoning_len >= self.hold_chars:
+            return self._release()
+        return []
+
+    def flush(self) -> List[Any]:
+        """End of stream: a short completion held to the end never matched."""
+        if not self.active:
+            return []
+        return self._release()
+
+    def _release(self) -> List[Any]:
+        self.active = False
+        held, self._held = self._held, []
+        return held
+
+    @staticmethod
+    def _delta_state(item: Any) -> Tuple[str, int, bool]:
+        """(matchable text, reasoning char count, saw tool/function call) for one
+        stream item. delta.refusal (OpenAI structured-output refusals) counts as
+        matchable text alongside delta.content."""
+        choices = getattr(item, "choices", None) or []
+        if not choices:
+            return "", 0, False
+        delta = getattr(choices[0], "delta", None)
+        content = getattr(delta, "content", None)
+        refusal = getattr(delta, "refusal", None)
+        reasoning = getattr(delta, "reasoning_content", None)
+        text = (content if isinstance(content, str) else "") + (
+            refusal if isinstance(refusal, str) else ""
+        )
+        saw_tool_call = bool(getattr(delta, "tool_calls", None)) or bool(
+            getattr(delta, "function_call", None)
+        )
+        return text, len(reasoning) if isinstance(reasoning, str) else 0, saw_tool_call
+
+    def _raise_refusal(self) -> "NoReturn":
+        from litellm.exceptions import MidStreamFallbackError
+
+        message = "Streamed response matched a refusal fallback pattern."
+        raise MidStreamFallbackError(
+            message=message,
+            model=self.model,
+            llm_provider="",
+            original_exception=litellm.ContentPolicyViolationError(
+                message=message,
+                model=self.model,
+                llm_provider="",
+            ),
+            generated_content="",
+            is_pre_first_chunk=True,
+        )
 
 
 class Router:
@@ -2025,11 +2153,30 @@ class Router:
 
         async def stream_with_fallbacks():
             fallback_response = None  # Track for cleanup in finally
+            refusal_hold = self._refusal_stream_hold_for_call(initial_kwargs)
             try:
                 async for item in model_response:
-                    yield item
+                    for released_item in refusal_hold.process(item):
+                        yield released_item
+                for released_item in refusal_hold.flush():
+                    yield released_item
             except MidStreamFallbackError as e:
                 from litellm.main import stream_chunk_builder
+
+                if isinstance(e.original_exception, litellm.ContentPolicyViolationError) and hasattr(
+                    model_response, "aclose"
+                ):
+                    # A refusal hold abandons the primary stream by design; release
+                    # its HTTP connection now instead of holding it through the
+                    # (possibly long) fallback stream. The finally re-close is a no-op.
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            await model_response.aclose()
+                        except BaseException as close_err:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks: error closing refused model_response: %s",
+                                close_err,
+                            )
 
                 complete_response_object = stream_chunk_builder(chunks=model_response.chunks)
                 complete_response_object_usage = cast(
@@ -2047,11 +2194,15 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    if e.is_pre_first_chunk or not e.generated_content:
+                    if e.is_pre_first_chunk or not e.generated_content or refusal_hold.active:
                         # No content was generated before the error (e.g. a
                         # rate-limit 429 on the very first chunk).  Retry with
                         # the original messages — adding a continuation prompt
                         # would waste tokens and confuse the model.
+                        # refusal_hold.active covers a provider error arriving while
+                        # the refusal hold still buffers the stream head: e.generated_content
+                        # is wrapper-relative, but the CLIENT has seen nothing, so a
+                        # continuation would silently skip the held (never-delivered) text.
                         initial_kwargs["messages"] = messages
                     else:
                         initial_kwargs["messages"] = messages + [
@@ -2066,8 +2217,14 @@ class Router:
                             },
                         ]
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
+                    # Fallback selection dispatches on isinstance(e, ...): unwrap a
+                    # content-policy violation (e.g. the refusal stream hold) so it
+                    # reaches content_policy_fallbacks instead of generic fallbacks.
+                    dispatch_exception: Exception = e
+                    if isinstance(e.original_exception, litellm.ContentPolicyViolationError):
+                        dispatch_exception = e.original_exception
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=dispatch_exception,
                         disable_fallbacks=False,
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -2579,6 +2736,11 @@ class Router:
         router_self = self
 
         def stream_with_fallbacks():
+            # NOTE: no refusal stream hold here (async-only). This sync handler has
+            # no exception-type dispatch: it re-invokes the primary via
+            # function_with_fallbacks, which on a deterministic HTTP-200 refusal
+            # would re-refuse and re-raise forever (an unbounded retry loop of paid
+            # calls). Sync streaming keeps vanilla passthrough behavior.
             fallback_response = None
             try:
                 for item in model_response:
@@ -7137,6 +7299,37 @@ class Router:
                 if "*" in fallback:
                     return True
         return False
+
+    def _refusal_stream_hold_for_call(self, initial_kwargs: dict) -> _RefusalStreamHold:
+        """Build the refusal stream hold for one streaming call. Armed only when
+        refusal patterns are configured AND the model group has a
+        content_policy_fallbacks entry — holding delays time-to-first-chunk, so
+        groups with no rescue route must stream untouched."""
+        patterns = _get_refusal_fallback_patterns()
+        model_group = initial_kwargs.get("model")
+        hold_chars = 0
+        try:
+            n_choices = int(initial_kwargs.get("n") or 1)
+        except (TypeError, ValueError):
+            n_choices = 1
+        if n_choices > 1:
+            # Multi-choice deltas interleave by StreamingChoices.index; a single
+            # accumulated buffer can't match reliably, so stream vanilla instead
+            # of half-working detection.
+            patterns = []
+        if patterns and isinstance(model_group, str):
+            content_policy_fallbacks = initial_kwargs.get(
+                "content_policy_fallbacks", self.content_policy_fallbacks
+            )
+            if content_policy_fallbacks and self._get_fallback_model_group_from_fallbacks(
+                fallbacks=content_policy_fallbacks, model_group=model_group
+            ):
+                hold_chars = _refusal_stream_hold_chars()
+        return _RefusalStreamHold(
+            patterns=patterns,
+            hold_chars=hold_chars,
+            model=model_group if isinstance(model_group, str) else "",
+        )
 
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
         """
