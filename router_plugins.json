@@ -1,8 +1,11 @@
-{
-  "language-detector": {
-    "name": "litellm-plugin-language-detector",
-    "github_package": "https://github.com/jeann2013/language-detector",
-    "author": "jeann2013",
-    "description": "LiteLLM routing plugin for detecting the user's language."
+[
+  {
+    "name": "language-detector",
+    "description": "Detects the user's language and publishes a routing signal.",
+    "author": "Jean Nuñez",
+    "repo": "https://github.com/jeann2013/language-detector",
+    "pypi": "litellm-plugin-language-detector",
+    "litellm_version": ">=1.94.0",
+    "tags": ["language", "classification", "routing"]
   }
-}
+]
