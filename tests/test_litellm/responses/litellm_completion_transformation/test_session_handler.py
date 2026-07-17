@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import types
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,6 +17,19 @@ from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+
+
+@contextmanager
+def _patched_prisma_client(mock_prisma_client):
+    """
+    Expose a stub ``litellm.proxy.proxy_server`` module carrying ``prisma_client`` so the
+    handler's local ``from litellm.proxy.proxy_server import prisma_client`` resolves
+    without importing the full (heavy, optional-dependency-laden) proxy server module.
+    """
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.prisma_client = mock_prisma_client
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_module}):
+        yield
 
 
 @pytest.mark.asyncio
@@ -435,3 +450,44 @@ async def test_get_chat_completion_message_history_empty_response_dict():
 
         # Verify the session was still created correctly
         assert result["litellm_session_id"] == "test-session"
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_bounds_query_with_limit():
+    """
+    Regression test for issue #33666: the session-reconstruction query must not run an
+    unbounded ``SELECT *`` over "LiteLLM_SpendLogs" (which OOM'd production pods). The
+    query must carry a LIMIT bound by DEFAULT_MAX_SPEND_LOGS_PER_RESPONSES_SESSION.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
+
+    with _patched_prisma_client(mock_prisma_client):
+        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            "resp_previous_id"
+        )
+
+    mock_prisma_client.db.query_raw.assert_awaited_once()
+    call_args = mock_prisma_client.db.query_raw.await_args
+    executed_query = call_args.args[0]
+    assert "LIMIT $2" in executed_query
+    assert call_args.args[2] == litellm.constants.DEFAULT_MAX_SPEND_LOGS_PER_RESPONSES_SESSION
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_returns_most_recent_in_ascending_order():
+    """
+    When a session has more rows than the cap, the newest rows must be kept (so the tail
+    of the conversation survives) and returned in ascending endTime order for replay.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
+
+    with _patched_prisma_client(mock_prisma_client):
+        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            "resp_previous_id"
+        )
+
+    executed_query = mock_prisma_client.db.query_raw.await_args.args[0]
+    assert 'ORDER BY "endTime" DESC' in executed_query
+    assert executed_query.rstrip().rstrip(";").endswith('ORDER BY "endTime" ASC')
