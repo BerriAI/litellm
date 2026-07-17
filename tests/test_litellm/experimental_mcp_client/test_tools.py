@@ -18,6 +18,7 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 
 from litellm.experimental_mcp_client.tools import (
+    transform_mcp_tool_to_anthropic_tool,
     _get_function_arguments,
     _normalize_mcp_input_schema,
     call_mcp_tool,
@@ -250,3 +251,51 @@ def test_transform_mcp_tool_to_openai_responses_api_tool():
     assert "query" in openai_tool["parameters"]["properties"]
     assert openai_tool["parameters"]["required"] == ["query"]
     assert openai_tool["parameters"]["additionalProperties"] == False
+
+
+def test_transform_mcp_tool_to_anthropic_tool():
+    """
+    Regression test (LIT-4517): MCP tools must reach /v1/messages in Anthropic's
+    own tool shape.
+
+    Given: An MCP tool
+    When:  It is transformed for the Anthropic Messages API
+    Then:  It carries name/description/input_schema, the shape that endpoint
+           accepts, rather than an OpenAI function block
+
+    /v1/messages rejects an OpenAI-shaped tool outright ("Input tag 'function'
+    does not match any of the expected tags"), so reusing either OpenAI
+    transform here loses every MCP tool.
+    """
+    tool = MCPTool(
+        name="read_wiki_structure",
+        description="Get a list of documentation topics",
+        inputSchema={
+            "type": "object",
+            "properties": {"repoName": {"type": "string"}},
+            "required": ["repoName"],
+        },
+    )
+
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(tool)
+
+    assert anthropic_tool["name"] == "read_wiki_structure"
+    assert anthropic_tool["description"] == "Get a list of documentation topics"
+    assert anthropic_tool["type"] == "custom"
+    assert anthropic_tool["input_schema"]["type"] == "object"
+    assert "repoName" in anthropic_tool["input_schema"]["properties"]
+    assert anthropic_tool["input_schema"]["required"] == ["repoName"]
+    assert "function" not in anthropic_tool, "Anthropic tools must not carry an OpenAI function block"
+    assert "parameters" not in anthropic_tool, "Anthropic names the schema input_schema, not parameters"
+
+
+def test_transform_mcp_tool_to_anthropic_tool_normalizes_empty_schema():
+    """A tool with no declared arguments must still present a valid object schema."""
+    anthropic_tool = transform_mcp_tool_to_anthropic_tool(
+        MCPTool(name="noargs", description=None, inputSchema={})
+    )
+
+    assert anthropic_tool["name"] == "noargs"
+    assert anthropic_tool["description"] == ""
+    assert anthropic_tool["input_schema"]["type"] == "object"
+    assert anthropic_tool["input_schema"]["properties"] == {}

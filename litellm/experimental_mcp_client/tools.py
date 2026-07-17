@@ -9,6 +9,7 @@ from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
+from litellm.types.llms.anthropic import AnthropicInputSchema, AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
 
 
@@ -72,6 +73,18 @@ def transform_mcp_tool_to_openai_responses_api_tool(
         strict=False,
         type="function",
         description=mcp_tool.description or "",
+    )
+
+
+def transform_mcp_tool_to_anthropic_tool(mcp_tool: MCPTool) -> AnthropicMessagesTool:
+    """Convert an MCP tool to an Anthropic Messages API tool."""
+    normalized_parameters = _normalize_mcp_input_schema(mcp_tool.inputSchema)
+
+    return AnthropicMessagesTool(
+        name=mcp_tool.name,
+        description=mcp_tool.description or "",
+        input_schema=AnthropicInputSchema(**normalized_parameters),
+        type="custom",
     )
 
 

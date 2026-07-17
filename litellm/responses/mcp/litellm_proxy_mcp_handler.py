@@ -541,7 +541,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 tool_arguments = function_block.get("arguments")
             else:
                 tool_name = tool_call.get("name")
+                # Anthropic tool_use blocks carry the arguments under `input`
                 tool_arguments = tool_call.get("arguments")
+                if tool_arguments is None:
+                    tool_arguments = tool_call.get("input")
         else:
             tool_call_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", None)
 
@@ -552,6 +555,8 @@ class LiteLLM_Proxy_MCP_Handler:
             else:
                 tool_name = getattr(tool_call, "name", None)
                 tool_arguments = getattr(tool_call, "arguments", None)
+                if tool_arguments is None:
+                    tool_arguments = getattr(tool_call, "input", None)
 
         return tool_name, tool_arguments, tool_call_id
 
