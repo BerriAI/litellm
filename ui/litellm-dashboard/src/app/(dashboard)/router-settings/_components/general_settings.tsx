@@ -120,11 +120,6 @@ const PromptCachingPanel: React.FC<{
   return (
     <Card>
       <Title>Prompt Caching</Title>
-      <Text className="mt-2">
-        Automatically inject Anthropic prompt caching for every Anthropic and Bedrock Claude model, so clients that
-        never set <span className="font-mono">cache_control</span> themselves still get cached prompts. This is a single
-        gateway-wide switch; there is no per-model setup.
-      </Text>
 
       <div className="mt-6 flex items-start justify-between gap-8">
         <div className="max-w-2xl">

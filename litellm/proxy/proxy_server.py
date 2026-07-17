@@ -14825,25 +14825,15 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec
         "type": "Boolean",
         "tab": "prompt_caching",
         "description": (
-            "Automatically add Anthropic cache_control breakpoints to the system prompt and the "
-            "trailing turn, for Anthropic and Bedrock Claude models that support prompt caching. "
-            "Lets clients that never set cache_control themselves still get cached prompts. "
-            "Requests that already carry their own cache_control are left untouched. "
-            "The provider caches a prefix against the upstream credentials that sent it, not per "
-            "end user, so this makes every caller's prompts cacheable on that shared account. "
-            "Leave this off if callers sharing a set of credentials must not learn whether "
-            "another caller recently sent a given prompt."
+            "Auto-adds cache_control to the system prompt and trailing turn for supported Anthropic "
+            "and Bedrock Claude models. The cache is shared across callers on the same upstream credentials."
         ),
     },
     "anthropic_prompt_caching_ttl": {
         "type": "Select",
         "options": ("5m", "1h"),
         "tab": "prompt_caching",
-        "description": (
-            "Cache lifetime for the breakpoints added by 'enable_anthropic_prompt_caching'. "
-            "Leave empty for Anthropic's 5m default. 1h suits long agentic sessions but doubles "
-            "the cache write premium."
-        ),
+        "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
     },
 }
 
