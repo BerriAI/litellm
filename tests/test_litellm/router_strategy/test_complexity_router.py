@@ -30,6 +30,11 @@ from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfig,
     ComplexityTier,
 )
+from litellm.types.router import (
+    Deployment,
+    LiteLLM_Params,
+    TaggedPreRoutingStrategy,
+)
 
 
 @pytest.fixture
@@ -1027,6 +1032,71 @@ class TestComplexityRouterTagBasedRouting:
         )
         assert cn is not None and cn.model == "gpt-cn"
         assert us is not None and us.model == "gpt-us"
+
+
+class TestPreRoutingStrategyRegistry:
+    """Directly exercise the tag-scoped registry/selection helpers behind #33655."""
+
+    def _router(self) -> Router:
+        return Router(model_list=[{"model_name": "x", "litellm_params": {"model": "openai/gpt-4o-mini"}}])
+
+    @staticmethod
+    def _deployment(tags: list) -> Deployment:
+        return Deployment(
+            model_name="smart",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", tags=tags),
+        )
+
+    def test_deployment_tags_normalizes_to_tuple(self):
+        router = self._router()
+        assert router._deployment_tags(self._deployment(["cn", "row"])) == ("cn", "row")
+        untagged = Deployment(model_name="smart", litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini"))
+        assert router._deployment_tags(untagged) == ()
+
+    def test_register_scopes_by_tags_and_rejects_exact_duplicate(self):
+        router = self._router()
+        registry: dict = {}
+        router._register_pre_routing_strategy(
+            registry=registry, deployment=self._deployment(["cn"]), strategy="CN", strategy_label="Test"
+        )
+        router._register_pre_routing_strategy(
+            registry=registry, deployment=self._deployment(["us"]), strategy="US", strategy_label="Test"
+        )
+        assert [entry.tags for entry in registry["smart"]] == [("cn",), ("us",)]
+        assert router._has_registered_strategy(registry, "smart", ("cn",)) is True
+        assert router._has_registered_strategy(registry, "smart", ("row",)) is False
+        with pytest.raises(ValueError, match="already exists"):
+            router._register_pre_routing_strategy(
+                registry=registry, deployment=self._deployment(["cn"]), strategy="CN2", strategy_label="Test"
+            )
+
+    def test_select_prefers_request_tag_then_default_then_first(self):
+        router = self._router()
+        cn, us, fallback = object(), object(), object()
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("us",), strategy=us),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["us"]}}) is us
+        assert router._select_pre_routing_strategy("smart", {"metadata": {"tags": ["cn"]}}) is cn
+        assert router._select_pre_routing_strategy("missing", {"metadata": {"tags": ["cn"]}}) is None
+
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("default",), strategy=fallback),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {}) is fallback
+        router.complexity_routers = {
+            "smart": [
+                TaggedPreRoutingStrategy(tags=("cn",), strategy=cn),
+                TaggedPreRoutingStrategy(tags=("us",), strategy=us),
+            ]
+        }
+        assert router._select_pre_routing_strategy("smart", {}) is cn
 
 
 class TestAsyncPreRoutingHookMultiFormat:
@@ -2972,9 +3042,7 @@ class TestRoutingPlugins:
         assert result.model == "gpt-4o-nano"
 
     @pytest.mark.asyncio
-    async def test_no_user_message_prefers_default_model_over_medium_tier_without_plugins(
-        self, mock_router_instance
-    ):
+    async def test_no_user_message_prefers_default_model_over_medium_tier_without_plugins(self, mock_router_instance):
         """Regression: without plugins configured, the no-user-message path must keep its
         pre-existing default_model-first priority over the MEDIUM tier exactly as before --
         closing the plugin-bypass gap must not silently flip model selection for the (much
