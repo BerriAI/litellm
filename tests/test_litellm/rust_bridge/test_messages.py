@@ -1,12 +1,16 @@
 """Tests for the optional Rust-backed Anthropic Messages path."""
 
 import importlib
+from typing import cast
 
 import httpx
 import pytest
 
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 rust_messages = importlib.import_module("litellm.rust_bridge.messages")
@@ -207,6 +211,7 @@ def _gate(**overrides):
         "custom_llm_provider": "azure_ai",
         "litellm_params": GenericLiteLLMParams(api_key="sk-azure", rust=True),
         "stream": False,
+        "rust_stream_eligible": False,
         "model": "claude-sonnet-4-5",
         "api_key": "sk-azure",
         "api_base": "https://resource.services.ai.azure.com/anthropic",
@@ -271,14 +276,48 @@ async def test_gate_skips_rust_for_non_azure_provider():
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_when_streaming():
+async def test_gate_skips_rust_when_streaming_but_not_eligible():
     bridge = ExplodingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
 
-    response = await _gate(stream=True)
+    response = await _gate(stream=True, rust_stream_eligible=False)
 
     assert response is None
     assert bridge.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_gate_streams_through_rust_when_eligible_and_strips_stream_flag():
+    bridge = RecordingAsyncMessages()
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    streaming_body = {**REQUEST_BODY, "stream": True}
+    response = await _gate(
+        stream=True,
+        rust_stream_eligible=True,
+        request_body=streaming_body,
+    )
+
+    assert response is not None
+    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
+    assert "stream" not in bridge.calls[0]["body"]
+    assert bridge.calls[0]["body"] == REQUEST_BODY
+
+
+@pytest.mark.asyncio
+async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
+    response = cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE))
+    stream = BaseLLMHTTPHandler._rust_anthropic_messages_fake_stream(response)
+
+    assert stream._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+
+    chunks = [chunk async for chunk in stream]
+    joined = b"".join(chunks)
+
+    assert b"event: message_start" in joined
+    assert b"event: content_block_delta" in joined
+    assert b"hello world" in joined
+    assert b"event: message_stop" in joined
 
 
 @pytest.mark.asyncio
