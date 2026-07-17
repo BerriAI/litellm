@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import socket
 import subprocess
@@ -25,6 +26,7 @@ from typing import Any, Iterator
 import httpx
 import pytest
 import yaml
+from pydantic import TypeAdapter
 
 from litellm.rust_bridge import native_bridge_available
 
@@ -32,7 +34,17 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _SECRET_PATTERN = re.compile(r"(sk-[A-Za-z0-9_\-]+|Bearer\s+\S+)")
 
-MISTRAL_OCR_SUPPORTED_PARAMS: dict[str, Any] = {
+_CAPTURED_BODY_ADAPTER: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
+
+_CAPTURE_RESPONSE_BODY: bytes = json.dumps(
+    {
+        "pages": [{"index": 0, "markdown": "captured"}],
+        "model": "mistral-ocr-latest",
+        "usage_info": {"pages_processed": 1},
+    }
+).encode()
+
+MISTRAL_OCR_SUPPORTED_PARAMS: dict[str, object] = {
     "pages": [0, 2, 5],
     "include_image_base64": True,
     "include_blocks": True,
@@ -48,7 +60,7 @@ MISTRAL_OCR_SUPPORTED_PARAMS: dict[str, Any] = {
     "id": "ocr-req-parity-9",
 }
 
-LITELLM_INTERNAL_CANARIES: dict[str, Any] = {
+LITELLM_INTERNAL_CANARIES: dict[str, object] = {
     "metadata": {"trace": "internal"},
     "litellm_metadata": {"trace": "internal"},
     "num_retries": 3,
@@ -125,11 +137,13 @@ class OcrGateway:
         self,
         model: str,
         document: dict[str, str],
-        extra_params: dict[str, Any] | None = None,
+        extra_params: dict[str, object] | None = None,
     ) -> httpx.Response:
-        payload: dict[str, Any] = {"model": model, "document": document}
-        if extra_params:
-            payload.update(extra_params)
+        payload: dict[str, object] = {
+            "model": model,
+            "document": document,
+            **(extra_params or {}),
+        }
         with httpx.Client(
             timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120"))
         ) as client:
@@ -216,27 +230,23 @@ class TestRustOcrGateway:
         _assert_ocr_response_shape(response.json())
 
 
-class _CaptureHandler(BaseHTTPRequestHandler):
-    captured_body: dict[str, Any] | None = None
+def _make_capture_handler(
+    captures: queue.Queue[dict[str, object]],
+) -> type[BaseHTTPRequestHandler]:
+    class _CaptureHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("content-length", "0"))
+            captures.put(_CAPTURED_BODY_ADAPTER.validate_json(self.rfile.read(length)))
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(_CAPTURE_RESPONSE_BODY)))
+            self.end_headers()
+            self.wfile.write(_CAPTURE_RESPONSE_BODY)
 
-    def do_POST(self) -> None:
-        length = int(self.headers.get("content-length", "0"))
-        type(self).captured_body = json.loads(self.rfile.read(length))
-        body = json.dumps(
-            {
-                "pages": [{"index": 0, "markdown": "captured"}],
-                "model": "mistral-ocr-latest",
-                "usage_info": {"pages_processed": 1},
-            }
-        ).encode()
-        self.send_response(200)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        def log_message(self, format: str, *args: object) -> None:
+            return
 
-    def log_message(self, *_: Any) -> None:
-        return
+    return _CaptureHandler
 
 
 def _free_port() -> int:
@@ -252,14 +262,15 @@ def _wait_for_liveness(base_url: str, deadline: float) -> bool:
             if resp.status_code < 500:
                 return True
         except httpx.HTTPError:
-            time.sleep(0.5)
+            pass
+        time.sleep(0.5)
     return False
 
 
 @dataclass(frozen=True)
 class _CaptureProxy:
     proxy_url: str
-    capture: type[_CaptureHandler]
+    captures: queue.Queue[dict[str, object]]
 
 
 def _sanitize(text: str) -> str:
@@ -271,9 +282,11 @@ def capture_proxy(tmp_path: Path) -> Iterator[_CaptureProxy]:
     if not native_bridge_available():
         pytest.skip("compiled Rust OCR bridge is required for the capture E2E")
 
+    captures: queue.Queue[dict[str, object]] = queue.Queue()
     capture_port = _free_port()
-    capture_server = HTTPServer(("127.0.0.1", capture_port), _CaptureHandler)
-    _CaptureHandler.captured_body = None
+    capture_server = HTTPServer(
+        ("127.0.0.1", capture_port), _make_capture_handler(captures)
+    )
     threading.Thread(target=capture_server.serve_forever, daemon=True).start()
 
     proxy_port = _free_port()
@@ -322,7 +335,7 @@ def capture_proxy(tmp_path: Path) -> Iterator[_CaptureProxy]:
                 f"capture proxy did not become live while the Rust bridge is available; "
                 f"sanitized proxy log at {proxy_log_path}\n{tail}"
             )
-        yield _CaptureProxy(proxy_url=proxy_url, capture=_CaptureHandler)
+        yield _CaptureProxy(proxy_url=proxy_url, captures=captures)
     finally:
         proxy_log.close()
         proxy.terminate()
@@ -336,9 +349,13 @@ def capture_proxy(tmp_path: Path) -> Iterator[_CaptureProxy]:
 def test_rust_ocr_proxy_forwards_full_contract_to_capture_endpoint(
     capture_proxy: _CaptureProxy,
 ) -> None:
-    payload: dict[str, Any] = {
+    document: dict[str, str] = {
+        "type": "document_url",
+        "document_url": TEST_PDF_URL,
+    }
+    payload: dict[str, object] = {
         "model": "rust-ocr-mistral-capture",
-        "document": {"type": "document_url", "document_url": TEST_PDF_URL},
+        "document": document,
         **MISTRAL_OCR_SUPPORTED_PARAMS,
         **LITELLM_INTERNAL_CANARIES,
     }
@@ -349,10 +366,9 @@ def test_rust_ocr_proxy_forwards_full_contract_to_capture_endpoint(
         timeout=60,
     )
     assert response.status_code == 200, response.text
-    _assert_ocr_response_shape(response.json())
+    _assert_ocr_response_shape(_CAPTURED_BODY_ADAPTER.validate_json(response.content))
 
-    captured = capture_proxy.capture.captured_body
-    assert captured is not None, "capture endpoint never received the upstream request"
+    captured = capture_proxy.captures.get(timeout=10)
 
     for key, value in MISTRAL_OCR_SUPPORTED_PARAMS.items():
         assert captured.get(key) == value, f"supported param {key} missing/wrong upstream"
@@ -361,4 +377,4 @@ def test_rust_ocr_proxy_forwards_full_contract_to_capture_endpoint(
     assert not leaked, f"internal params leaked upstream: {leaked}"
 
     assert captured["model"] == "mistral-ocr-latest"
-    assert captured["document"] == payload["document"]
+    assert captured["document"] == document
