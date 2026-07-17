@@ -89,9 +89,15 @@ def test_supports_reasoning_effort():
         "fireworks_ai/accounts/fireworks/models/glm-4p6",
         "fireworks_ai/accounts/fireworks/models/glm-4p7",
         "fireworks_ai/accounts/fireworks/models/glm-5p1",
+        "fireworks_ai/accounts/fireworks/models/glm-5p2",
+        "fireworks_ai/accounts/fireworks/routers/glm-5p1-fast",
+        "fireworks_ai/accounts/fireworks/routers/glm-5p2-fast",
         "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
         "fireworks_ai/accounts/fireworks/models/gpt-oss-20b",
         "fireworks_ai/glm-5p1",
+        "fireworks_ai/glm-5p2",
+        "fireworks_ai/glm-5p1-fast",
+        "fireworks_ai/glm-5p2-fast",
     ]
 
     unsupported_models = [
