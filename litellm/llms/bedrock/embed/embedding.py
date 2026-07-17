@@ -401,9 +401,7 @@ class BedrockEmbedding(BaseAWSLLM):
         inference_params = {
             k: v for k, v in inference_params.items() if k.lower() not in self.aws_authentication_params
         }
-        inference_params.pop(
-            "user", None
-        )  # make sure user is not passed in for bedrock call
+        inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
         # `cache_control_injection_points` is a chat-completion-only param
         # consumed by `AnthropicCacheControlHook`. Bedrock embedding APIs
         # reject it (`extraneous key [cache_control_injection_points] is not
