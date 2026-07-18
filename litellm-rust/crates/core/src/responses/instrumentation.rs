@@ -193,6 +193,16 @@ impl ResponsesWsInstrumentation {
             .outcome
             .take()
     }
+
+    pub fn take_or_build_outcome(&self, success: bool) -> ResponsesWsLogOutcome {
+        self.take_outcome().unwrap_or_else(|| {
+            if success {
+                self.success_outcome()
+            } else {
+                self.failure_outcome()
+            }
+        })
+    }
 }
 
 type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
@@ -315,6 +325,41 @@ mod tests {
         assert!(matches!(
             instrumentation.failure_outcome(),
             ResponsesWsLogOutcome::Failure { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_records_success_outcome_for_provider_completion() {
+        let instrumentation =
+            ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
+        let result = crate::call_lifecycle::CallLifecycle::default()
+            .run(
+                crate::call_lifecycle::CallLifecycleContext::new(
+                    "responses_websocket",
+                    "gpt-5",
+                    "openai",
+                    "call-1",
+                ),
+                (),
+                &instrumentation,
+                |_| async { Ok::<(), CoreError>(()) },
+            )
+            .await;
+
+        assert!(result.is_ok());
+        assert!(matches!(
+            instrumentation.take_outcome(),
+            Some(ResponsesWsLogOutcome::Success { .. })
+        ));
+    }
+
+    #[test]
+    fn builds_outcome_when_lifecycle_did_not_record_one() {
+        let instrumentation =
+            ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
+        assert!(matches!(
+            instrumentation.take_or_build_outcome(true),
+            ResponsesWsLogOutcome::Success { .. }
         ));
     }
 }

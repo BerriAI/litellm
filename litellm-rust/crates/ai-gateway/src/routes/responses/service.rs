@@ -73,9 +73,8 @@ where
             .await
         })
         .await;
-    if let Some(outcome) = instrumentation.take_outcome() {
-        dispatch_outcome(loggers, outcome).await;
-    }
+    let outcome = instrumentation.take_or_build_outcome(result.is_ok());
+    dispatch_outcome(loggers, outcome).await;
     result
 }
 
