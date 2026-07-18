@@ -30300,6 +30300,38 @@
         "output_cost_per_token": 1.875e-06,
         "supports_tool_choice": true
     },
+    "openrouter/kwaipilot/kat-coder-air-v2.5": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 80000,
+        "max_tokens": 80000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://openrouter.ai/kwaipilot/kat-coder-air-v2.5",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "openrouter/kwaipilot/kat-coder-pro-v2.5": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 7.4e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 80000,
+        "max_tokens": 80000,
+        "mode": "chat",
+        "output_cost_per_token": 2.96e-06,
+        "source": "https://openrouter.ai/kwaipilot/kat-coder-pro-v2.5",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
     "openrouter/mancer/weaver": {
         "input_cost_per_token": 5.625e-06,
         "litellm_provider": "openrouter",

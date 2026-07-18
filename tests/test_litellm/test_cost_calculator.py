@@ -3479,3 +3479,42 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+@pytest.mark.parametrize(
+    "model_name, expected_input, expected_output, expected_cache_read",
+    [
+        ("openrouter/kwaipilot/kat-coder-air-v2.5", 1.5e-07, 6e-07, 3e-08),
+        ("openrouter/kwaipilot/kat-coder-pro-v2.5", 7.4e-07, 2.96e-06, 1.5e-07),
+    ],
+)
+def test_openrouter_kat_coder_v2_5_pricing(
+    model_name, expected_input, expected_output, expected_cache_read
+):
+    """
+    KAT-Coder-Air V2.5 and KAT-Coder-Pro V2.5 (Kwaipilot, launched 2026-07-14) are
+    served on OpenRouter but had no openrouter/ pricing entries, so cost tracking
+    could not price either model. Prices verified against the OpenRouter models API
+    (https://openrouter.ai/api/v1/models): air $0.15/M in, $0.60/M out, $0.03/M
+    cache read; pro $0.74/M in, $2.96/M out, $0.15/M cache read; both 256k context
+    and 80k max output tokens.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost.get(model_name)
+    assert model_info is not None, f"Missing model pricing entry: {model_name}"
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["input_cost_per_token"] == expected_input
+    assert model_info["output_cost_per_token"] == expected_output
+    assert model_info["cache_read_input_token_cost"] == expected_cache_read
+    assert model_info["max_input_tokens"] == 256000
+    assert model_info["max_output_tokens"] == 80000
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model_name,
+        prompt_tokens=1000,
+        completion_tokens=100,
+    )
+    assert prompt_cost == pytest.approx(1000 * expected_input)
+    assert completion_cost_value == pytest.approx(100 * expected_output)
