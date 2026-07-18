@@ -216,7 +216,11 @@ function LogDetailDialog({
 
             <div className="flex flex-col gap-1.5">
               <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Request</div>
-              {isLoading ? <Skeleton className="h-16 w-full" /> : <JsonBlock value={details?.messages} />}
+              {isLoading ? (
+                <Skeleton className="h-16 w-full" />
+              ) : (
+                <JsonBlock value={details?.proxy_server_request ?? details?.messages} />
+              )}
             </div>
             <div className="flex flex-col gap-1.5">
               <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Response</div>

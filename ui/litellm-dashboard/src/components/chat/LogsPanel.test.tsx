@@ -80,4 +80,17 @@ describe("LogsPanel", () => {
       expect(mockedDetailsCall).toHaveBeenCalledWith("tok-detail", "req-abc-123", expect.any(String)),
     );
   });
+
+  it("falls back to proxy_server_request when messages is empty for the request payload", async () => {
+    mockedDetailsCall.mockResolvedValue({
+      messages: {},
+      proxy_server_request: { body: { messages: [{ role: "user", content: "hello from proxy" }] } },
+      response: { ok: true },
+    });
+    renderWithProviders(<LogsPanel accessToken="tok-fallback" userId="user-1" />);
+
+    fireEvent.click(await screen.findByText("gpt-4o"));
+
+    expect(await screen.findByText(/hello from proxy/)).toBeInTheDocument();
+  });
 });
