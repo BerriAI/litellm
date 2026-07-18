@@ -36,6 +36,27 @@ else:
     LitellmRouter = Any
     Span = Any
 
+_ADVISOR_ORCHESTRATION_FAILURE_ATTR = "_litellm_advisor_orchestration_failure"
+
+
+def mark_advisor_orchestration_failure(exception: BaseException) -> None:
+    """Tag an exception as originating from advisor orchestration rather than the
+    health of the router-selected deployment.
+
+    Advisor orchestration failures (an advisor sub-call that targets different
+    provider/credentials, or the orchestration loop exceeding max_uses) are not
+    caused by the selected deployment, so they must not be attributed to (and
+    cool down) that otherwise-healthy deployment. The exception object is tagged
+    rather than wrapped so its type is preserved and the router's retry/fallback
+    classification and the client-facing error are unchanged.
+    """
+    setattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, True)
+
+
+def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
+    """Whether ``exception`` was tagged by ``mark_advisor_orchestration_failure``."""
+    return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
+
 
 def _is_cooldown_required(
     litellm_router_instance: LitellmRouter,

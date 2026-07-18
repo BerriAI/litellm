@@ -922,21 +922,21 @@ def test_resolve_advisor_credentials_allows_real_public_ip_address():
 
 
 # ---------------------------------------------------------------------------
-# 14. Advisor sub-call failures are tagged so the router does not cool down the
-#     (healthy) parent deployment; executor failures are NOT tagged (regression
-#     for LIT-4565).
+# 14. Advisor orchestration failures (a sub-call failure or the loop exceeding
+#     max_uses) are tagged so the router does not cool down the (healthy) parent
+#     deployment; executor failures are NOT tagged (regression for LIT-4565).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_advisor_sub_call_failure_is_tagged():
     """When the advisor sub-call raises, the exception that propagates out of
-    handle() must be tagged as an advisor sub-call failure."""
+    handle() must be tagged as an advisor orchestration failure."""
     import litellm
     from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
         AdvisorOrchestrationHandler,
-        is_advisor_sub_call_failure,
     )
+    from litellm.router_utils.cooldown_handlers import is_advisor_orchestration_failure
 
     call_count = 0
 
@@ -967,18 +967,56 @@ async def test_advisor_sub_call_failure_is_tagged():
             )
 
     assert call_count == 2
-    assert is_advisor_sub_call_failure(exc_info.value) is True
+    assert is_advisor_orchestration_failure(exc_info.value) is True
+
+
+@pytest.mark.asyncio
+async def test_advisor_max_iterations_failure_is_tagged():
+    """When the orchestration loop exceeds max_uses (the executor keeps calling
+    the advisor), the AdvisorMaxIterationsError must be tagged so the healthy
+    executor deployment is not cooled down."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorMaxIterationsError,
+        AdvisorOrchestrationHandler,
+    )
+    from litellm.router_utils.cooldown_handlers import is_advisor_orchestration_failure
+
+    advisor_tool_with_max = {**ADVISOR_TOOL, "max_uses": 1}
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        # Executor always asks for the advisor; advisor always succeeds, so the
+        # loop is driven purely by max_uses rather than any deployment failure.
+        if tools is None:
+            return _make_text_response("Here is my advice.")
+        return _make_advisor_tool_use_response()
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        with pytest.raises(AdvisorMaxIterationsError) as exc_info:
+            await h.handle(
+                model="openai/gpt-4o-mini",
+                messages=MESSAGES,
+                tools=[advisor_tool_with_max],
+                stream=False,
+                max_tokens=512,
+                custom_llm_provider="openai",
+            )
+
+    assert is_advisor_orchestration_failure(exc_info.value) is True
 
 
 @pytest.mark.asyncio
 async def test_executor_failure_is_not_tagged():
-    """A failure of the executor call (not the advisor sub-call) must NOT be
+    """A failure of the executor call (not advisor orchestration) must NOT be
     tagged — the selected deployment genuinely failed and should cool down."""
     import litellm
     from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
         AdvisorOrchestrationHandler,
-        is_advisor_sub_call_failure,
     )
+    from litellm.router_utils.cooldown_handlers import is_advisor_orchestration_failure
 
     async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
         raise litellm.AuthenticationError(  # executor (first call) fails
@@ -1002,4 +1040,4 @@ async def test_executor_failure_is_not_tagged():
                 custom_llm_provider="openai",
             )
 
-    assert is_advisor_sub_call_failure(exc_info.value) is False
+    assert is_advisor_orchestration_failure(exc_info.value) is False

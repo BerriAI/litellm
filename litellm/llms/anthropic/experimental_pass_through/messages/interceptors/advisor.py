@@ -21,6 +21,7 @@ import litellm
 import litellm.constants as _c
 from litellm.litellm_core_utils.url_utils import validate_url
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
+from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -35,26 +36,6 @@ from .base import MessagesInterceptor
 
 class AdvisorMaxIterationsError(Exception):
     """Raised when the advisor loop exceeds max_uses."""
-
-
-_ADVISOR_SUB_CALL_FAILURE_ATTR = "_litellm_advisor_sub_call_failure"
-
-
-def mark_advisor_sub_call_failure(exception: BaseException) -> None:
-    """Tag an exception as originating from an advisor sub-call.
-
-    The advisor sub-call targets a different provider/credentials than the
-    deployment the router selected, so its failure must not be attributed to
-    (and cool down) that otherwise-healthy deployment. The exception object is
-    tagged rather than wrapped so its type is preserved and the router's
-    retry/fallback classification and the client-facing error are unchanged.
-    """
-    setattr(exception, _ADVISOR_SUB_CALL_FAILURE_ATTR, True)
-
-
-def is_advisor_sub_call_failure(exception: BaseException | None) -> bool:
-    """Whether ``exception`` was tagged by ``mark_advisor_sub_call_failure``."""
-    return bool(getattr(exception, _ADVISOR_SUB_CALL_FAILURE_ATTR, False))
 
 
 class AdvisorOrchestrationHandler(MessagesInterceptor):
@@ -144,10 +125,12 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
             iteration += 1
             if iteration > max_uses:
-                raise AdvisorMaxIterationsError(
+                max_iterations_error = AdvisorMaxIterationsError(
                     f"Advisor orchestration loop exceeded max_uses={max_uses}. "
                     "Increase max_uses in the advisor tool definition or cap the request."
                 )
+                mark_advisor_orchestration_failure(max_iterations_error)
+                raise max_iterations_error
 
             # --- Build advisor context ---
             advisor_messages = _build_advisor_context(current_messages, executor_response, advisor_use_block)
@@ -170,7 +153,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                     api_base=advisor_api_base,
                 )
             except Exception as advisor_sub_call_exception:
-                mark_advisor_sub_call_failure(advisor_sub_call_exception)
+                mark_advisor_orchestration_failure(advisor_sub_call_exception)
                 raise
 
             advisor_text = _extract_response_text(advisor_response)

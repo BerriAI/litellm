@@ -125,6 +125,7 @@ from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments_with_debug_info,
     _get_cooldown_deployments,
     _set_cooldown_deployments,
+    is_advisor_orchestration_failure,
 )
 from litellm.router_utils.fallback_event_handlers import (
     _check_non_standard_fallback_format,
@@ -7002,14 +7003,10 @@ class Router:
         try:
             exception = kwargs.get("exception", None)
 
-            from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
-                is_advisor_sub_call_failure,
-            )
-
-            if is_advisor_sub_call_failure(exception):
+            if is_advisor_orchestration_failure(exception):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
-                    "Failure originated from an advisor sub-call, not the selected deployment."
+                    "Failure originated from advisor orchestration, not the selected deployment."
                 )
                 return False
 

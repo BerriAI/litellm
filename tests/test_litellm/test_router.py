@@ -5433,7 +5433,7 @@ class TestRouterRequestTimeoutPropagation:
 
 
 class TestAdvisorSubCallCooldown:
-    """Regression for LIT-4565: an advisor sub-call auth failure must not cool
+    """Regression for LIT-4565: an advisor orchestration failure must not cool
     down the selected (healthy) deployment, which would reject unrelated
     callers to the same model group."""
 
@@ -5481,16 +5481,16 @@ class TestAdvisorSubCallCooldown:
         )
         assert "dep-1" in self._cooled_down_ids(router)
 
-    def test_advisor_sub_call_failure_does_not_cool_down_deployment(self):
+    def test_advisor_orchestration_failure_does_not_cool_down_deployment(self):
         from datetime import datetime
 
-        from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
-            mark_advisor_sub_call_failure,
+        from litellm.router_utils.cooldown_handlers import (
+            mark_advisor_orchestration_failure,
         )
 
         router = self._router()
         exception = self._auth_error()
-        mark_advisor_sub_call_failure(exception)
+        mark_advisor_orchestration_failure(exception)
 
         now = datetime.now()
         assert (
