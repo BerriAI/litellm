@@ -109,16 +109,6 @@ impl ResponsesErrorFrame {
             },
         }
     }
-
-    pub fn server(message: impl Into<String>) -> Self {
-        Self {
-            frame_type: "error",
-            error: ResponsesErrorBody {
-                error_type: "server_error",
-                message: message.into(),
-            },
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

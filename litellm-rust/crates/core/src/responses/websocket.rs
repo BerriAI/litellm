@@ -1,4 +1,4 @@
-use crate::constants::{OPENAI_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
+use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
 use crate::CoreResult;
 
@@ -36,25 +36,25 @@ pub fn complete_websocket_url(
     let base = api_base
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(OPENAI_DEFAULT_API_BASE);
-    let scheme_flipped = if let Some(rest) = base.strip_prefix("https://") {
+        .unwrap_or(OPENAI_RESPONSES_DEFAULT_API_BASE);
+    let (base_without_query, query) = base
+        .split_once('?')
+        .map_or((base, None), |(value, query)| (value, Some(query)));
+    let response_url = format!(
+        "{}{}",
+        base_without_query.trim_end_matches('/'),
+        OPENAI_RESPONSES_PATH
+    );
+    let scheme_flipped = if let Some(rest) = response_url.strip_prefix("https://") {
         format!("wss://{rest}")
-    } else if let Some(rest) = base.strip_prefix("http://") {
+    } else if let Some(rest) = response_url.strip_prefix("http://") {
         format!("ws://{rest}")
     } else {
-        base.to_string()
+        response_url
     };
-    let (host, query) = scheme_flipped
-        .split_once('?')
-        .map_or((scheme_flipped.as_str(), None), |(host, query)| {
-            (host, Some(query))
-        });
-    let url = format!(
-        "{}{}{}",
-        host.trim_end_matches('/'),
-        OPENAI_RESPONSES_PATH,
-        query.map_or(String::new(), |value| format!("?{value}"))
-    );
+    let url = query.map_or(scheme_flipped.clone(), |value| {
+        format!("{scheme_flipped}?{value}")
+    });
     if !model_in_websocket_url
         || query.is_some_and(|value| {
             value
@@ -141,15 +141,15 @@ mod tests {
         );
         assert_eq!(
             complete_websocket_url(Some("http://localhost:8080/"), "gpt 5", true),
-            "ws://localhost:8080/v1/responses?model=gpt%205"
+            "ws://localhost:8080/responses?model=gpt%205"
         );
         assert_eq!(
             complete_websocket_url(Some("https://example.test/v1?foo=bar"), "gpt-5", true),
-            "wss://example.test/v1/v1/responses?foo=bar&model=gpt-5"
+            "wss://example.test/v1/responses?foo=bar&model=gpt-5"
         );
         assert_eq!(
             complete_websocket_url(Some("https://example.test?model=existing"), "gpt-5", true),
-            "wss://example.test/v1/responses?model=existing"
+            "wss://example.test/responses?model=existing"
         );
     }
 

@@ -225,13 +225,7 @@ async fn bridge(
         &mut client_out,
     )
     .await;
-    if let Err(error) = &result {
-        let frame = ResponsesErrorFrame::server(error.to_string());
-        if let Ok(value) = serde_json::to_value(frame) {
-            if let Ok(event) = serde_json::from_value::<ResponsesWsEvent>(value) {
-                let _ = client_out.send(event).await;
-            }
-        }
+    if result.is_err() {
         client_out
             .close_with_code(1011, "Internal server error")
             .await;
