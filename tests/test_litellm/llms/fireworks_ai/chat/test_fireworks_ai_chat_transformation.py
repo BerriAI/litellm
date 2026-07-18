@@ -13,6 +13,7 @@ sys.path.insert(
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
@@ -120,6 +121,15 @@ def test_validate_environment_preserves_explicit_session_affinity_header():
     )
 
     assert headers["x-session-affinity"] == "explicit-session"
+
+
+def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
+    assert (
+        get_fireworks_session_id(
+            {"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"}
+        )
+        == "session-123"
+    )
 
 
 def test_handle_message_content_with_tool_calls():
