@@ -3,19 +3,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from requests import RequestException
 
-from e2e_http import NoBody, Success
+from e2e_config import unique_marker
 from load_client import LoadClient, build_client
-from load_constants import LOAD_MODEL
-from models import KeyGenerateBody, LiteLLMParamsBody, ModelsListResponse
+from load_constants import LOAD_MOCK_PARAMS
 from lifecycle import ResourceManager
+from models import KeyGenerateBody
 from proxy_client import ProxyClient
-
-LOAD_MODEL_PARAMS = LiteLLMParamsBody(
-    model="openai/load-mock",
-    mock_response="This is a mock response for the throughput load test.",
-)
 
 
 @pytest.fixture(scope="session")
@@ -23,44 +17,27 @@ def client(proxy: ProxyClient) -> LoadClient:
     return build_client(proxy)
 
 
-def _model_is_servable(proxy: ProxyClient, model_name: str) -> bool:
-    result = proxy.transport.get(
-        "/v1/models",
-        headers=proxy.transport.master,
-        params=NoBody(),
-        response_type=ModelsListResponse,
-    )
-    return isinstance(result, Success) and any(entry.id == model_name for entry in result.data.data)
+@pytest.fixture(scope="session")
+def load_model(client: LoadClient) -> Iterator[str]:
+    """Register a fresh mock deployment for this session and delete it after.
 
-
-@pytest.fixture(scope="session", autouse=True)
-def _ensure_load_model(  # pyright: ignore[reportUnusedFunction]  # pytest autouse session fixture, wired by name
-    client: LoadClient,
-) -> Iterator[None]:
-    proxy = client.proxy
-    if _model_is_servable(proxy, LOAD_MODEL):
-        yield
-        return
-
+    A fixed name like ``load-mock`` is unsafe on a shared stage proxy: a prior
+    run (or a hand-registered row) can leave a deployment without mock_response,
+    so Locust would hit real OpenAI with an invalid model and fail ~all requests
+    while the fixture skipped /model/new because the name was already listed.
+    """
+    model_name = f"load-mock-{unique_marker()}"
+    model_id = client.proxy.create_model(model_name, LOAD_MOCK_PARAMS)
     try:
-        model_id = proxy.create_model(LOAD_MODEL, LOAD_MODEL_PARAMS)
-    except (AssertionError, RequestException) as exc:
-        if _model_is_servable(proxy, LOAD_MODEL):
-            yield
-            return
-        raise AssertionError(
-            f"failed to register {LOAD_MODEL!r} for the throughput load test "
-            f"(not listed on the data plane and /model/new failed): {exc}"
-        ) from exc
-
-    try:
-        yield
+        yield model_name
     finally:
-        proxy.delete_model(model_id)
+        client.proxy.delete_model(model_id)
 
 
 @pytest.fixture
-def load_key(resources: ResourceManager, client: LoadClient) -> str:
-    key = client.proxy.generate_key(KeyGenerateBody(models=[LOAD_MODEL], user_id="e2e-load"))
+def load_key(resources: ResourceManager, client: LoadClient, load_model: str) -> str:
+    key = client.proxy.generate_key(
+        KeyGenerateBody(models=[load_model], user_id=f"e2e-load-{unique_marker()}")
+    )
     resources.defer(lambda: client.proxy.delete_key(key))
     return key
