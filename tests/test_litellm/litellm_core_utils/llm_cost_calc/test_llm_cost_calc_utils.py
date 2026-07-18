@@ -2237,3 +2237,33 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     text_input_cost = 600 * model_info["input_cost_per_token"] * uplift
     assert text_output_cost + eu.reasoning_cost == pytest.approx(completion_cost)
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
+
+
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_effective_service_tier
+
+
+@pytest.mark.parametrize(
+    "service_tier, optional_params, completion_response, usage_object, expected",
+    [
+        ("priority", None, None, None, "priority"),
+        (None, {"service_tier": "flex"}, None, None, "flex"),
+        (None, {"service_tier": "auto"}, {"service_tier": "priority"}, None, "priority"),
+        (None, None, {"service_tier": "flex"}, None, "flex"),
+        (None, None, None, {"service_tier": "priority"}, "priority"),
+        ("auto", {"service_tier": "auto"}, {"service_tier": "auto"}, None, None),
+        (None, {"service_tier": 123}, None, None, None),
+        (None, None, None, None, None),
+    ],
+)
+def test_get_effective_service_tier_precedence(
+    service_tier, optional_params, completion_response, usage_object, expected
+):
+    assert (
+        get_effective_service_tier(
+            service_tier=service_tier,
+            optional_params=optional_params,
+            completion_response=completion_response,
+            usage_object=usage_object,
+        )
+        == expected
+    )

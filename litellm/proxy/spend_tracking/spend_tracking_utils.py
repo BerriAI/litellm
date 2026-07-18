@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_effective_service_tier
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -85,6 +86,7 @@ def _get_spend_logs_metadata(
     litellm_overhead_time_ms: Optional[float] = None,
     cost_breakdown: Optional[CostBreakdown] = None,
     litellm_call_id: Optional[str] = None,
+    service_tier: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -116,6 +118,7 @@ def _get_spend_logs_metadata(
             max_retries=None,
             cost_breakdown=None,
             litellm_call_id=litellm_call_id,
+            service_tier=service_tier,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -143,6 +146,7 @@ def _get_spend_logs_metadata(
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
     clean_metadata["litellm_call_id"] = litellm_call_id
+    clean_metadata["service_tier"] = service_tier
 
     return clean_metadata
 
@@ -363,6 +367,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         litellm_call_id=cast(
             Optional[str],
             kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
+        ),
+        service_tier=get_effective_service_tier(
+            optional_params=kwargs.get("optional_params"),
+            completion_response=response_obj,
+            usage_object=usage,
         ),
     )
 

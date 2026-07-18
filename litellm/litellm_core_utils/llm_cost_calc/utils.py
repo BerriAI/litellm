@@ -4,6 +4,8 @@
 from dataclasses import dataclass
 from typing import Any, Literal, Optional, Tuple, TypedDict, cast
 
+from pydantic import BaseModel
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.types.utils import (
@@ -191,6 +193,59 @@ def _get_service_tier_cost_key(base_key: str, service_tier: Optional[str]) -> st
 
     # For any other service tier, use standard pricing
     return base_key
+
+
+def _normalize_service_tier(service_tier: object) -> Optional[str]:
+    """
+    Reduce a service_tier value to a concrete billable tier string or None.
+
+    "auto" is a routing preference and any non-string value is not a billable
+    tier, so both defer to standard pricing (or to the tier the provider reports
+    on the response usage) instead of crashing the downstream cost-key lookup,
+    which calls service_tier.lower()
+    """
+    if not isinstance(service_tier, str) or service_tier.lower() == ServiceTier.AUTO.value:
+        return None
+    return service_tier
+
+
+def _extract_service_tier(obj: object) -> object:
+    if isinstance(obj, BaseModel):
+        return getattr(obj, "service_tier", None)  # pyright: ignore[reportAny]  # service_tier is a dynamic provider-set field, not declared on the model
+    if isinstance(obj, dict):
+        return obj.get("service_tier")
+    return None
+
+
+def get_effective_service_tier(
+    service_tier: object = None,
+    optional_params: Optional[dict] = None,
+    completion_response: object = None,
+    usage_object: object = None,
+) -> Optional[str]:
+    """
+    Resolve the effective (billed) service tier for a request.
+
+    Precedence: an explicitly passed tier, then the request `optional_params`,
+    then the tier the provider reports on the response, then the tier on the
+    usage object.  At each step "auto" and any non-string value normalize to
+    None so a routing preference like "auto" falls through to the concrete tier
+    the provider actually used
+    """
+    normalized = _normalize_service_tier(service_tier)
+    if normalized is not None:
+        return normalized
+
+    if optional_params is not None:
+        normalized = _normalize_service_tier(optional_params.get("service_tier"))
+        if normalized is not None:
+            return normalized
+
+    normalized = _normalize_service_tier(_extract_service_tier(completion_response))
+    if normalized is not None:
+        return normalized
+
+    return _normalize_service_tier(_extract_service_tier(usage_object))
 
 
 def _parse_above_token_threshold(key: str) -> float:

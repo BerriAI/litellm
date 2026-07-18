@@ -2634,3 +2634,65 @@ def test_get_logging_payload_hashes_bearer_prefixed_api_key():
     assert not metadata_dict["user_api_key"].startswith("sk-"), (
         f"metadata user_api_key contains unhashed key: {metadata_dict['user_api_key']}"
     )
+
+
+def _service_tier_kwargs(request_service_tier):
+    litellm_params = {"metadata": {"user_api_key": "sk-test-key"}}
+    optional_params = {} if request_service_tier is None else {"service_tier": request_service_tier}
+    return {
+        "model": "gpt-4.1",
+        "custom_llm_provider": "openai",
+        "call_type": "acompletion",
+        "optional_params": optional_params,
+        "litellm_params": litellm_params,
+    }
+
+
+def _run_service_tier_payload(request_service_tier, response_service_tier):
+    kwargs = _service_tier_kwargs(request_service_tier)
+    response_obj = {
+        "id": "test-response-123",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {"total_tokens": 100, "prompt_tokens": 50, "completion_tokens": 50},
+    }
+    if response_service_tier is not None:
+        response_obj["service_tier"] = response_service_tier
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    return json.loads(payload["metadata"])
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_persists_service_tier_from_request():
+    """Effective service_tier from the request lands in spend log metadata."""
+    metadata = _run_service_tier_payload(request_service_tier="priority", response_service_tier=None)
+    assert metadata["service_tier"] == "priority"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_persists_effective_service_tier_when_request_is_auto():
+    """A request 'auto' must resolve to the concrete tier the provider actually used."""
+    metadata = _run_service_tier_payload(request_service_tier="auto", response_service_tier="flex")
+    assert metadata["service_tier"] == "flex"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_persists_service_tier_from_response_only():
+    """When the request omits service_tier, the response-reported tier is persisted."""
+    metadata = _run_service_tier_payload(request_service_tier=None, response_service_tier="priority")
+    assert metadata["service_tier"] == "priority"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_service_tier_none_when_absent():
+    """No service_tier anywhere resolves to None rather than a bogus value."""
+    metadata = _run_service_tier_payload(request_service_tier=None, response_service_tier=None)
+    assert metadata["service_tier"] is None

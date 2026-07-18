@@ -3242,6 +3242,7 @@ class SpendLogsMetadata(TypedDict):
     attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    service_tier: Optional[str]  # effective (billed) service tier resolved from the request/response
 
 
 class SpendLogsPayload(TypedDict):
