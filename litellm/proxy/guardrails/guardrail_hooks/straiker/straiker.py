@@ -249,8 +249,9 @@ class StraikerGuardrail(CustomGuardrail):
 
     def _build_application(self, request_data: dict) -> StraikerWebhookApplication:
         meta = _merged_metadata(request_data)
+        agent_id = _as_optional_str(meta.get("agent_id"))
         return StraikerWebhookApplication(
-            source=self.source,
+            source=agent_id or self.source,
             name=_as_optional_str(meta.get("app_name")),
         )
 

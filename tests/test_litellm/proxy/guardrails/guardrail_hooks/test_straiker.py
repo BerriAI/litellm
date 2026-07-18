@@ -224,7 +224,7 @@ async def test_request_envelope_transport_and_shape():
     assert payload["request"]["texts"] == ["hello world"]
     assert payload["context"]["litellm_call_id"] == "call-123"
     assert payload["identity"]["litellm_key"] == "team-key"
-    assert payload["application"] == {"source": "LiteLLM Gateway", "name": "Chatbot"}
+    assert payload["application"] == {"source": "chatbot-app", "name": "Chatbot"}
     assert "session_id" not in payload["application"]
     assert "user_name" not in payload["application"]
     assert "user_role" not in payload["application"]
@@ -253,7 +253,7 @@ async def test_webhook_metadata_session_id_and_opaque_passthrough():
         logging_obj=_logging_obj(),
     )
     payload = _posted_payload(g)
-    assert payload["application"] == {"source": "LiteLLM Gateway", "name": "Chatbot"}
+    assert payload["application"] == {"source": "chatbot-app", "name": "Chatbot"}
     assert payload["identity"]["litellm_key"] == "team-key"
     assert payload["context"]["session_id"] == "sess-from-litellm"
     assert "session_id" not in payload["metadata"]
@@ -415,7 +415,7 @@ async def test_identity_end_user_absent_without_resolved_metadata():
 
 
 @pytest.mark.asyncio
-async def test_application_source_ignores_caller_supplied_agent_id():
+async def test_application_source_from_agent_id():
     g = _make_guardrail(source="litellm")
     g.async_handler.post.return_value = _mock_response("NONE")
     await g.apply_guardrail(
@@ -424,7 +424,7 @@ async def test_application_source_ignores_caller_supplied_agent_id():
         input_type="request",
         logging_obj=_logging_obj(),
     )
-    assert _posted_payload(g)["application"] == {"source": "litellm", "name": "Analytics"}
+    assert _posted_payload(g)["application"] == {"source": "analytics-app", "name": "Analytics"}
 
 @pytest.mark.asyncio
 async def test_request_block_raises_guardrail_exception_with_reason():
