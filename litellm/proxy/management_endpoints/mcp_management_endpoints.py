@@ -19,6 +19,7 @@ import functools
 import importlib
 import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Set
@@ -34,7 +35,7 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
@@ -1728,6 +1729,136 @@ if MCP_AVAILABLE:
             refresh_token=refresh_token,
             scope=scope,
         )
+
+    # Module-scope Depends singleton so the param default is a name, not a call (B008); same dep the
+    # relay OAuth routes use (Authorization header or the SSO session cookie).
+    _idp_consent_auth_dep = Depends(_mcp_oauth_user_api_key_auth)
+
+    def _idp_callback_redirect_uri(request: Request) -> str:
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: PLC0415  # lazy: avoids cycle
+            get_request_base_url,
+        )
+
+        return f"{get_request_base_url(request)}/v1/mcp/idp/callback"
+
+    @router.get("/idp/authorize", include_in_schema=False)
+    async def mcp_idp_authorize(
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth = _idp_consent_auth_dep,
+        token_url: str = "",
+    ):
+        """Start the delegated-OBO consent capture: redirect the signed-in user to their IdP to
+        authorize the gateway, so the callback can capture and store their IdP grant (Path B, 2.2)."""
+        from litellm.proxy._experimental.mcp_server.idp_consent import (  # noqa: PLC0415  # lazy: avoids cycle
+            CaptureState,
+            build_authorize_url,
+            generate_pkce,
+            seal_capture_state,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.idp_oauth_config import (  # noqa: PLC0415  # lazy: avoids cycle
+            get_idp_oauth_registry,
+        )
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,  # noqa: PLC0415  # lazy: avoids cycle
+        )
+
+        provider = get_idp_oauth_registry().get_by_token_url(token_url)
+        if provider is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "No IdP provider configured for this token endpoint"},
+            )
+        user_id = user_api_key_dict.user_id
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "No user id on the session; sign in first"}
+            )
+
+        code_verifier, code_challenge = generate_pkce()
+        state = seal_capture_state(
+            CaptureState(
+                user_id=user_id, token_url=provider.token_url, code_verifier=code_verifier, issued_at=time.time()
+            ),
+            encrypt_value_helper,
+        )
+        authorize_url = build_authorize_url(
+            provider,
+            redirect_uri=_idp_callback_redirect_uri(request),
+            state=state,
+            code_challenge=code_challenge,
+        )
+        return RedirectResponse(authorize_url)
+
+    @router.get("/idp/callback", include_in_schema=False)
+    async def mcp_idp_callback(
+        request: Request,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+    ):
+        """Terminal callback for the consent capture: the gateway itself exchanges the code for the
+        user's IdP grant and stores it (server-terminal, unlike the relay callback). The user is
+        recovered from the sealed state, so this endpoint needs no session."""
+        from litellm.proxy._experimental.mcp_server.idp_consent import (  # noqa: PLC0415  # lazy: avoids cycle
+            default_token_post,
+            exchange_code_for_grant,
+            state_is_fresh,
+            unseal_capture_state,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.idp_oauth_config import (  # noqa: PLC0415  # lazy: avoids cycle
+            get_idp_oauth_registry,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.idp_subject_provider import (  # noqa: PLC0415  # lazy: avoids cycle
+            capture_user_idp_grant,
+        )
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            decrypt_value_helper,  # noqa: PLC0415  # lazy: avoids cycle
+        )
+
+        if error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail={"error": f"IdP returned an error: {error}"}
+            )
+        if not code or not state:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "Missing code or state"})
+
+        capture_state = unseal_capture_state(state, lambda blob: decrypt_value_helper(blob, "oauth_state"))
+        if capture_state is None or not state_is_fresh(capture_state, now=time.time()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "Invalid, tampered, or expired state"}
+            )
+        provider = get_idp_oauth_registry().get_by_token_url(capture_state.token_url)
+        if provider is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail={"error": "IdP provider is no longer configured"}
+            )
+
+        grant = await exchange_code_for_grant(
+            provider,
+            code=code,
+            redirect_uri=_idp_callback_redirect_uri(request),
+            code_verifier=capture_state.code_verifier,
+            post=default_token_post,
+        )
+        if grant is None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail={"error": "IdP did not return a usable grant"}
+            )
+
+        persisted = await capture_user_idp_grant(
+            capture_state.user_id,
+            provider.token_url,
+            grant.access_token,
+            refresh_token=grant.refresh_token,
+            expires_in=grant.expires_in,
+            scopes=grant.scopes,
+        )
+        if not persisted:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "Could not store your connection; the database is unavailable. Please try again"},
+            )
+        return JSONResponse({"status": "connected", "offline_access": grant.refresh_token is not None})
 
     @router.post(
         "/server/oauth/{server_id}/register",

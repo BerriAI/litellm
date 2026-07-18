@@ -62,7 +62,7 @@ class PersistIdpGrant(Protocol):
         refresh_token: str | None,
         expires_in: int | None,
         scopes: tuple[str, ...] | None,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 def _parse_expires_in(raw: object) -> int | None:

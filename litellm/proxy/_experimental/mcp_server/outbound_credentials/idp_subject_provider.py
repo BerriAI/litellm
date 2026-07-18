@@ -54,7 +54,13 @@ async def _persist_credential(
     refresh_token: str | None,
     expires_in: int | None,
     scopes: tuple[str, ...] | None,
-) -> None:
+) -> bool:
+    """Persist the grant, returning whether it was actually stored.
+
+    A refresh treats the skipped save as best-effort (it still returns the fresh token), but the
+    first-time consent capture must surface a False so the callback never reports a connection that
+    was never stored.
+    """
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # lazy: avoids import cycle
         store_user_idp_grant,
     )
@@ -65,7 +71,7 @@ async def _persist_credential(
         # persist observable, since a refresh that rotated the IdP refresh_token then failed to save
         # it strands the user until re-consent.
         verbose_logger.warning("MCP IdP grant persist skipped: database not connected; a rotated grant may be lost")
-        return
+        return False
     await store_user_idp_grant(
         prisma_client=prisma_client,
         user_id=user_id,
@@ -75,6 +81,7 @@ async def _persist_credential(
         expires_in=expires_in,
         scopes=list(scopes) if scopes else None,
     )
+    return True
 
 
 async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> dict[str, object] | None:
@@ -134,14 +141,17 @@ async def capture_user_idp_grant(
     refresh_token: str | None = None,
     expires_in: int | None = None,
     scopes: tuple[str, ...] | None = None,
-) -> None:
+) -> bool:
     """Persist a user's IdP grant for on-behalf-of exchange, keyed by the IdP (the AS token endpoint).
 
     The store-back path the first-time consent flow calls once it has captured the user's IdP grant
     (``authorization_code + offline_access`` against the IdP). One grant serves every ``token_exchange``
     upstream that IdP fronts, since it is keyed by the IdP endpoint rather than an upstream server.
+
+    Returns whether the grant was stored, so the caller can distinguish a real connection from a
+    skipped save (database unavailable) rather than reporting a connection that never persisted.
     """
-    await _persist_credential(
+    return await _persist_credential(
         user_id,
         idp_grant_key(token_exchange_endpoint),
         access_token,
