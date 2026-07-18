@@ -5302,6 +5302,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             self._patch_user_reload(
                 return_value=MagicMock(
                     user_id="sso-user-7",
+                    organization_id=None,
                     metadata={"scim_active": True},
                     user_role=None,
                     object_permission=None,
@@ -5344,6 +5345,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             self._patch_user_reload(
                 return_value=MagicMock(
                     user_id="sso-user-7",
+                    organization_id=None,
                     metadata={"scim_active": True},
                     user_role=None,
                     object_permission=object_permission,
@@ -5421,7 +5423,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         with (
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            self._patch_user_reload(return_value=MagicMock(user_id="offboarded-user", metadata={"scim_active": False})),
+            self._patch_user_reload(return_value=MagicMock(user_id="offboarded-user", organization_id=None, metadata={"scim_active": False})),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
@@ -6131,3 +6133,402 @@ class TestMCPDcrBridgeDelegateAdmission:
                     route="/mcp/bridge_delegate_server",
                 )
         assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+class TestAggregateGatewayDcrChallenge:
+    """The mcp_gateway_dcr front door: a 401 on the aggregate /mcp scope must
+    carry the RFC 9728 resource_metadata challenge pointing at the gateway's
+    own protected-resource metadata, and must NOT fire for named-server
+    targets, explicit litellm keys, or non-401 failures."""
+
+    _AUTH_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
+    _EXPECTED_RESOURCE_METADATA = 'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp"'
+
+    def _scope(self, path="/mcp", extra_headers=()):
+        return {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"host", b"testserver"), *extra_headers],
+        }
+
+    def _auth_401(self):
+        async def _raise(api_key, request):
+            raise ProxyException(
+                message="Authentication Error: Invalid API key",
+                type="auth_error",
+                param="api_key",
+                code=401,
+            )
+
+        return _raise
+
+    async def test_challenge_on_anonymous_aggregate_mcp(self):
+        """Anonymous request to the aggregate /mcp: 401 plus
+        the bare bearer challenge (no error attribute, RFC 6750 section 3.1)."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope())
+        assert exc_info.value.status_code == 401
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert www_authenticate == f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
+
+    async def test_challenge_invalid_token_on_failed_bearer(self):
+        """A bearer that fails LiteLLM admission at aggregate scope (an expired
+        gateway session, a revoked key) re-challenges with error=invalid_token
+        so a spec client re-authorizes instead of retrying the dead token."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"authorization", b"Bearer expired-session-token"),))
+                )
+        assert exc_info.value.status_code == 401
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert www_authenticate == f'Bearer error="invalid_token", {self._EXPECTED_RESOURCE_METADATA}'
+
+    async def test_challenge_inserts_server_root_path(self):
+        """With SERVER_ROOT_PATH set the resource_metadata URL must carry the same path-inserted
+        root segment the aggregate PRM route is registered with (both derive it from
+        well_known_root_suffix), so a DCR client behind a sub-path is pointed at a route that
+        exists instead of a 404. Regression: the challenge used to hard-code /mcp and omit the
+        root path the route inserts."""
+        import os
+
+        with (
+            patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}),
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope())
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert 'resource_metadata="http://testserver/.well-known/oauth-protected-resource/litellm/mcp"' in www_authenticate
+
+    async def test_no_challenge_for_explicit_litellm_key(self):
+        """An explicit x-litellm-api-key declares a litellm-key client; a typo
+        there must surface the real auth error, never a DCR challenge that
+        would send SDKs into a sign-in flow."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"x-litellm-api-key", b"sk-typo"),))
+                )
+
+    async def test_no_challenge_for_named_servers_header(self):
+        """x-mcp-servers names explicit targets; the per-server challenge paths
+        own those, so the aggregate challenge must not fire."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"x-mcp-servers", b"github"),))
+                )
+
+    async def test_no_challenge_for_path_named_server(self):
+        """/mcp/{server} targets one server; the aggregate challenge must not
+        fire even when that server does not resolve."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(self._scope(path="/mcp/github"))
+
+    async def test_no_challenge_for_client_supplied_mcp_auth(self):
+        """Per-server x-mcp-{alias}-authorization headers mean the caller is
+        not a cold-start DCR client; keep the original error."""
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(
+                    self._scope(extra_headers=((b"x-mcp-github-authorization", b"Bearer upstream"),))
+                )
+
+    async def test_no_challenge_for_non_401_failure(self):
+        """Only genuine 401s convert to a challenge; a 500 stays a 500."""
+
+        async def _raise_500(api_key, request):
+            raise ProxyException(message="boom", type="server_error", param=None, code=500)
+
+        with (
+            patch(self._AUTH_PATCH_TARGET, side_effect=_raise_500),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope())
+        assert str(exc_info.value.code) == "500"
+
+
+@pytest.mark.asyncio
+class TestGatewaySessionAdmission:
+    """The aggregate /mcp session-bearer admission arm (mcp_gateway_dcr). A valid session
+    token admits under the LIVE litellm user it references; an invalid/expired/refresh/foreign
+    token fails closed with the aggregate invalid_token challenge; the arm fires ONLY at the
+    aggregate scope, never for named servers or per-server flows."""
+
+    _MASTER_KEY = "sk-gateway-session-admission-master-key"
+
+    def _session_bearer(self, user_id="sso-user-42", client_id="llm_dcrc_abc"):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            session_keys_from_master_key,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+            SessionPrincipal,
+            mint_session_token,
+            mint_session_refresh_token,
+        )
+
+        keys = session_keys_from_master_key(self._MASTER_KEY)
+        principal = SessionPrincipal(user_id=user_id, client_id=client_id)
+        return mint_session_token, mint_session_refresh_token, principal, keys
+
+    def _access_token(self, **kw):
+        from datetime import datetime, timezone
+
+        mint, _refresh, principal, keys = self._session_bearer(**kw)
+        return mint(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+
+    def _scope(self, bearer, path="/mcp", extra_headers=()):
+        return {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"host", b"testserver"), (b"authorization", f"Bearer {bearer}".encode()), *extra_headers],
+        }
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _patch_user_reload(*, user_id, active=True, organization_id=None):
+        get_user_object = AsyncMock(
+            return_value=MagicMock(
+                user_id=user_id,
+                organization_id=organization_id,
+                metadata={"scim_active": active} if not active else {"scim_active": True},
+                user_role=None,
+                object_permission=None,
+                object_permission_id=None,
+            )
+        )
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ):
+            yield get_user_object
+
+    async def test_session_admission_binds_org_id_so_the_org_ceiling_applies(self):
+        """The admitted auth carries the user's org_id, so get_allowed_mcp_servers keeps the
+        org-level MCP ceiling in force for a gateway session instead of skipping it."""
+        token = self._access_token(user_id="org-user")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="org-user", organization_id="org-123"),
+        ):
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert auth_result.org_id == "org-123"
+
+    async def test_valid_session_admits_under_live_user_at_aggregate_scope(self):
+        token = self._access_token(user_id="sso-user-42")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            self._patch_user_reload(user_id="sso-user-42") as get_user_object,
+        ):
+            auth_result, _h, _servers, mcp_server_auth_headers, _o, _r = await MCPRequestHandler.process_mcp_request(
+                self._scope(token)
+            )
+        assert get_user_object.await_args.kwargs["user_id"] == "sso-user-42"
+        assert auth_result.user_id == "sso-user-42"
+        mock_auth.assert_not_called()
+        # Identity-only admission injects no per-server upstream credential (unlike the
+        # bridge envelope arm); the headers dict is whatever the request carried, here empty.
+        assert not mcp_server_auth_headers
+
+    async def test_expired_session_fails_closed_with_invalid_token_challenge(self):
+        from datetime import datetime, timezone
+
+        mint, _refresh, principal, keys = self._session_bearer()
+        token = mint(principal, keys, datetime(2020, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert exc_info.value.status_code == 401
+        assert 'error="invalid_token"' in (exc_info.value.headers or {})["WWW-Authenticate"]
+
+    async def test_tampered_session_fails_closed(self):
+        token = self._access_token()
+        tampered = token[:-3] + ("aaa" if not token.endswith("aaa") else "bbb")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(tampered))
+        assert exc_info.value.status_code == 401
+
+    async def test_refresh_token_is_not_admitted_at_the_tool_edge(self):
+        from datetime import datetime, timezone
+
+        _mint, refresh, principal, keys = self._session_bearer()
+        refresh_token = refresh(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(refresh_token))
+        assert exc_info.value.status_code == 401
+
+    async def test_foreign_key_session_fails_closed(self):
+        token = self._access_token()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", "sk-a-totally-different-master-key"),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert exc_info.value.status_code == 401
+
+    async def test_arm_does_not_fire_for_named_server(self):
+        """A session-shaped bearer aimed at a named server (path scope) does not enter the
+        aggregate arm; it is treated as an ordinary bearer on that server."""
+        token = self._access_token()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                side_effect=ProxyException(message="bad key", type="auth_error", param="api_key", code=401),
+            ) as mock_auth,
+        ):
+            with pytest.raises((HTTPException, ProxyException)):
+                await MCPRequestHandler.process_mcp_request(self._scope(token, path="/mcp/github"))
+        mock_auth.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestUserSubjectTeamUnion:
+    """_get_allowed_mcp_servers_for_team unions across ALL a user's teams for a keyless
+    user-subject caller (the gateway DCR session bearer and bridge user-envelope), while a
+    key-based caller keeps its single-team behavior byte-identically."""
+
+    def _team(self, team_id, mcp_servers):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
+
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            access_group_ids=[],
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"op-{team_id}", mcp_servers=mcp_servers
+            ),
+        )
+
+    @contextlib.contextmanager
+    def _patch(self, *, teams_by_id, user_teams=None):
+        async def _get_team_object(team_id, **kw):
+            return teams_by_id.get(team_id)
+
+        async def _get_user_object(user_id, **kw):
+            return MagicMock(user_id=user_id, teams=user_teams or [])
+
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object),
+            patch("litellm.proxy.auth.auth_checks.get_user_object", _get_user_object),
+            patch("litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups", AsyncMock(return_value=[])),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        ):
+            yield
+
+    @staticmethod
+    def _admitted_subject(user_id):
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCP_ADMITTED_USER_SUBJECT_METADATA,
+        )
+
+        return UserAPIKeyAuth(user_id=user_id, api_key=None, metadata={MCP_ADMITTED_USER_SUBJECT_METADATA: True})
+
+    async def test_keyless_user_unions_servers_across_all_their_teams(self):
+        teams = {"team-a": self._team("team-a", ["srv1", "srv2"]), "team-b": self._team("team-b", ["srv2", "srv3"])}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert set(result) == {"srv1", "srv2", "srv3"}
+
+    async def test_key_based_caller_uses_single_team_only(self):
+        """A key-based caller (api_key set) with a team_id sees ONLY that team, even though the
+        same user belongs to other teams: key auth must be byte-identical to before."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2", "srv3"])}
+        auth = UserAPIKeyAuth(user_id="sso-user", api_key="sk-hash", team_id="team-a")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert set(result) == {"srv1"}
+
+    async def test_keyless_user_with_explicit_team_id_uses_that_team_only(self):
+        """A keyless caller that already pins a team_id (not the user-subject fan-out shape)
+        resolves only that team; the union is strictly for the no-team-id user-subject case."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2"])}
+        auth = UserAPIKeyAuth(user_id="sso-user", api_key=None, team_id="team-a")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert set(result) == {"srv1"}
+
+    async def test_keyless_user_with_no_teams_gets_nothing_from_teams(self):
+        auth = self._admitted_subject("lonely-user")
+        with self._patch(teams_by_id={}, user_teams=[]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert result == []
+
+    async def test_ui_session_team_id_still_resolves_to_nothing(self):
+        from litellm.proxy._types import UI_TEAM_ID
+
+        auth = UserAPIKeyAuth(user_id="dash-user", api_key="sk-hash", team_id=UI_TEAM_ID)
+        with self._patch(teams_by_id={}, user_teams=["team-a"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert result == []
+
+    async def test_team_ids_helper_gates_on_shape(self):
+        from litellm.proxy._types import UI_TEAM_ID
+
+        # key-based with team -> that team
+        assert await MCPRequestHandler._team_ids_for_mcp_grant(
+            UserAPIKeyAuth(api_key="sk", team_id="t1", user_id="u")
+        ) == ["t1"]
+        # keyless subject admitted by the gateway/bridge path (marked), no team -> resolved from record
+        with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
+            assert await MCPRequestHandler._team_ids_for_mcp_grant(self._admitted_subject("u")) == ["t2", "t3"]
+        # keyless, no user_id -> nothing
+        assert await MCPRequestHandler._team_ids_for_mcp_grant(UserAPIKeyAuth(api_key=None)) == []
+        # keyless with a user_id but NOT admission-marked (JWT auth) -> nothing (unchanged behavior)
+        with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
+            assert await MCPRequestHandler._team_ids_for_mcp_grant(
+                UserAPIKeyAuth(api_key=None, user_id="jwt-user")
+            ) == []
+        # UI sentinel -> nothing
+        assert await MCPRequestHandler._team_ids_for_mcp_grant(
+            UserAPIKeyAuth(api_key="sk", team_id=UI_TEAM_ID, user_id="u")
+        ) == []
+
+    async def test_jwt_keyless_user_without_team_claim_does_not_union(self):
+        """Regression for the review finding: a JWT-authenticated caller is also keyless with a
+        user_id and (with no team claim) no team_id, but it is NOT admission-marked, so it must
+        keep its prior behavior of inheriting no team grants rather than silently gaining the
+        union across every team the user belongs to."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2"])}
+        jwt_auth = UserAPIKeyAuth(user_id="jwt-user", api_key=None)  # no admission marker
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(jwt_auth)
+        assert result == []

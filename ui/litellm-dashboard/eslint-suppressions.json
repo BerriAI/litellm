@@ -1681,7 +1681,7 @@
   },
   "src/components/chat/MCPAppsPanel.tsx": {
     "no-nested-ternary": {
-      "count": 7
+      "count": 6
     }
   },
   "src/components/chat/MCPConnectPicker.tsx": {

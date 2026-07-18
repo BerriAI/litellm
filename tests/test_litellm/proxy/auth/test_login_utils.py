@@ -559,3 +559,58 @@ async def test_authenticate_user_database_login_with_non_ascii_password():
             assert isinstance(result, LoginResult)
             assert result.user_id == "test-user-123"
             assert result.user_email == user_email
+
+
+class TestEncodeUiSessionJwt:
+    """The UI session cookie must carry a bounded exp so it does not stay
+    signature-valid until the master key rotates, and so the session-cookie readers
+    that require a bounded lifetime (the MCP interactive sign-in) accept it."""
+
+    def _decode(self, token: str) -> dict:
+        import jwt
+
+        return jwt.decode(token, "sk-master-for-tests", algorithms=["HS256"])
+
+    def test_encoded_cookie_carries_bounded_exp(self):
+        import time
+
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        token_object = {"user_id": "u1", "key": "sk-abc", "login_method": "username_password"}
+        with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "24h"):
+            token = encode_ui_session_jwt(token_object, "sk-master-for-tests")
+        claims = self._decode(token)
+        assert claims["user_id"] == "u1"
+        assert claims["login_method"] == "username_password"
+        remaining = claims["exp"] - int(time.time())
+        assert 23 * 3600 < remaining <= 24 * 3600
+
+    def test_duration_is_honored_from_env(self):
+        import time
+
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "1h"):
+            token = encode_ui_session_jwt({"user_id": "u1"}, "sk-master-for-tests")
+        remaining = self._decode(token)["exp"] - int(time.time())
+        assert 0 < remaining <= 3600
+
+    def test_cookie_is_accepted_by_the_exp_requiring_session_reader(self):
+        """The regression this change exists for: before it, the UI cookie carried no
+        exp and _user_id_from_session_cookie (require=["exp"]) rejected every real login,
+        so the MCP interactive sign-in could never capture identity. A cookie minted by
+        this helper must now be accepted."""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+            _user_id_from_session_cookie,
+        )
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        token_object = {"user_id": "cornell-user", "key": "sk-abc", "login_method": "sso"}
+        with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "24h"):
+            token = encode_ui_session_jwt(token_object, "sk-master-for-tests")
+        request = MagicMock()
+        request.cookies = {"token": token}
+        with patch("litellm.proxy.proxy_server.master_key", "sk-master-for-tests"):
+            assert _user_id_from_session_cookie(request) == "cornell-user"

@@ -23,7 +23,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
-import { buildCallbackUrl, clearStorage } from "./mcpOAuthUtils";
+import { buildCallbackUrl, clearStorage, PERSERVER_CONNECTING_KEY } from "./mcpOAuthUtils";
 
 export type UserMcpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -135,6 +135,7 @@ export const useUserMcpOAuthFlow = ({
       returnUrl.searchParams.set("mcpOauthReturn", "apps");
       setStorage(RETURN_URL_KEY, returnUrl.toString());
 
+      sessionStorage.setItem(PERSERVER_CONNECTING_KEY, "1");
       window.location.href = authorizeUrl;
     } catch (err) {
       const msg = extractErrorMessage(err);

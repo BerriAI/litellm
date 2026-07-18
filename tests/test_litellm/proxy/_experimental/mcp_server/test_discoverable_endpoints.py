@@ -2899,19 +2899,20 @@ async def test_token_root_does_not_resolve_private_server_for_external_client():
 
 
 @pytest.mark.asyncio
-async def test_register_root_resolves_single_oauth2_server():
-    """When /register is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
-    try:
-        from fastapi import Request
+async def test_register_root_does_aggregate_dcr_not_single_server_resolution():
+    """Root /register is the aggregate DCR endpoint: it mints a stateless llm_dcrc_ client
+    from the request's redirect_uris and does NOT resolve a single configured oauth2 server
+    (a single-server deployment registers at /{server}/register instead)."""
+    import json
 
-        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            register_client,
-        )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-    except ImportError:
-        pytest.skip("MCP discoverable endpoints not available")
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
 
     global_mcp_server_manager.registry.clear()
     oauth2_server = _create_oauth2_server()
@@ -2922,33 +2923,37 @@ async def test_register_root_resolves_single_oauth2_server():
     mock_request.headers = {}
 
     try:
-        with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
-            new=AsyncMock(return_value={}),
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                new=AsyncMock(return_value={"redirect_uris": ["https://claude.ai/cb"]}),
+            ),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit3637"),
         ):
-            result = await register_client(request=mock_request, mcp_server_name=None)
+            response = await register_client(request=mock_request, mcp_server_name=None)
 
-        # Should resolve to the single server and return its name as client_id
-        assert result["client_id"] == "test_oauth"
-        assert "redirect_uris" in result
+        body = json.loads(response.body)
+        assert body["client_id"].startswith("llm_dcrc_")
+        assert body["client_id"] != "test_oauth"
+        assert body["token_endpoint_auth_method"] == "none"
     finally:
         global_mcp_server_manager.registry.clear()
 
 
 @pytest.mark.asyncio
-async def test_register_root_does_not_resolve_private_server_for_external_client():
-    """Root /register must not reveal or use a hidden MCP server."""
-    try:
-        from fastapi import Request
+async def test_register_root_does_not_leak_a_private_server():
+    """Root /register never resolves or reveals a configured server, so a private one cannot
+    leak to an external caller: it always mints the aggregate DCR client instead."""
+    import json
 
-        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            register_client,
-        )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-    except ImportError:
-        pytest.skip("MCP discoverable endpoints not available")
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
 
     global_mcp_server_manager.registry.clear()
     oauth2_server = _create_oauth2_server(available_on_public_internet=False)
@@ -2962,17 +2967,19 @@ async def test_register_root_does_not_resolve_private_server_for_external_client
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
-                new=AsyncMock(return_value={}),
+                new=AsyncMock(return_value={"redirect_uris": ["https://claude.ai/cb"]}),
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
                 return_value="198.51.100.10",
             ),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit3637"),
         ):
-            result = await register_client(request=mock_request, mcp_server_name=None)
+            response = await register_client(request=mock_request, mcp_server_name=None)
 
-        assert result["client_id"] == "dummy_client"
-        assert result["redirect_uris"] == ["https://llm.example.com/callback"]
+        body = json.loads(response.body)
+        assert body["client_id"].startswith("llm_dcrc_")
+        assert "test_oauth" not in body["client_id"]
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -7130,3 +7137,191 @@ async def test_token_exchange_unreadable_body_still_renders_oauth_fault():
     assert response.status_code == 502
     body = json.loads(response.body)
     assert body == {"error": "server_error", "error_description": "upstream token endpoint returned HTTP 400"}
+
+
+def test_aggregate_wellknown_routes_serve_gateway_metadata():
+    """Both path-appended aggregate routes serve the gateway documents. Exercises real
+    routing, so this also pins registration order: the parameterized
+    /.well-known/oauth-authorization-server/{name} route would otherwise capture the /mcp
+    suffix as a server name."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    prm = client.get("/.well-known/oauth-protected-resource/mcp")
+    asm = client.get("/.well-known/oauth-authorization-server/mcp")
+
+    assert prm.status_code == 200
+    assert prm.json()["resource"] == "http://testserver/mcp"
+    assert prm.json()["authorization_servers"] == ["http://testserver/mcp"]
+
+    assert asm.status_code == 200
+    assert asm.json()["issuer"] == "http://testserver/mcp"
+    assert asm.json()["authorization_endpoint"] == "http://testserver/authorize"
+    assert "none" in asm.json()["token_endpoint_auth_methods_supported"]
+
+
+def test_as_aggregate_route_reserves_mcp_for_the_aggregate():
+    """The single-segment /.well-known/oauth-authorization-server/mcp is reserved for the
+    aggregate even when a server is literally named ``mcp``. The aggregate protected-resource
+    document advertises {base}/mcp as its authorization server, so the document served here
+    must carry issuer {base}/mcp for the RFC 8414 issuer check to pass. Letting the per-server
+    row win (issuer {base}) breaks that chain, so the aggregate wins and the mcp-named server
+    keeps its standard two-segment discovery at /.well-known/oauth-authorization-server/mcp/mcp."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server_named_mcp = _create_oauth2_server(server_id="mcp_srv", name="mcp", server_name="mcp", alias="mcp")
+    global_mcp_server_manager.registry[server_named_mcp.server_id] = server_named_mcp
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    try:
+        asm = client.get("/.well-known/oauth-authorization-server/mcp")
+        assert asm.status_code == 200
+        # the aggregate document, whose issuer matches what the aggregate PRM advertises
+        assert asm.json()["issuer"] == "http://testserver/mcp"
+
+        prm = client.get("/.well-known/oauth-protected-resource/mcp")
+        assert prm.status_code == 200
+        assert prm.json()["authorization_servers"] == [asm.json()["issuer"]]
+
+        # the mcp-named server keeps its own document on the standard two-segment route
+        per_server = client.get("/.well-known/oauth-authorization-server/mcp/mcp")
+        assert per_server.status_code == 200
+        assert "/mcp/authorize" in per_server.json()["authorization_endpoint"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+def test_well_known_root_suffix_reflects_server_root_path():
+    """The single path segment both the discovery routes and the 401 challenges insert for RFC
+    8414/9728 path insertion: empty for a root-mounted proxy or an explicit ``/``, the configured
+    path otherwise. Sharing this one function is what keeps the advertised resource_metadata URL
+    equal to the route that serves it."""
+    import os
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.oauth_utils import well_known_root_suffix
+
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": ""}):
+        assert well_known_root_suffix() == ""
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": "/"}):
+        assert well_known_root_suffix() == ""
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}):
+        assert well_known_root_suffix() == "/litellm"
+
+
+@pytest.mark.asyncio
+async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
+    """The always-on aggregate front door must not change bare-origin discovery: with one
+    oauth2 server configured, the no-suffix /.well-known/oauth-{authorization-server,
+    protected-resource} still resolves THAT server, so an existing single-server deployment's
+    discovery is unchanged. The aggregate document lives only at the /mcp-suffixed routes."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        authorization_response = _build_oauth_authorization_server_response(
+            request=mock_request, mcp_server_name=None
+        )
+        resource_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name=None, use_standard_pattern=True
+        )
+        # per-server, not aggregate: the single server's name is in the endpoints
+        assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
+        assert authorization_response["issuer"] == "https://llm.example.com"
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+
+def test_gateway_dcr_flow_routing_engages_only_for_llm_dcrc_clients(monkeypatch):
+    """The aggregate DCR arms engage for llm_dcrc_ client_ids (register always mints one,
+    authorize/token route into the aggregate flow); a non-gateway client_id keeps the
+    per-server behavior, and /authorize/complete exists but 400s without a valid flow."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-lit3637")
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit3637", raising=False)
+    global_mcp_server_manager.registry.clear()
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    registered = client.post("/register", json={"redirect_uris": ["https://claude.ai/cb"]})
+    assert registered.status_code == 201
+    assert registered.json()["client_id"].startswith("llm_dcrc_")
+    assert registered.json()["token_endpoint_auth_method"] == "none"
+
+    authorize_params = {
+        "client_id": "llm_dcrc_bogus",
+        "redirect_uri": "https://claude.ai/cb",
+        "response_type": "code",
+        "code_challenge": "c" * 43,
+        "code_challenge_method": "S256",
+    }
+    bogus_client = client.get("/authorize", params=authorize_params)
+    assert bogus_client.status_code == 400
+    assert bogus_client.json()["error"] == "invalid_client"
+
+    no_cookie = client.post("/authorize/complete", data={"flow": "h"})
+    assert no_cookie.status_code == 400
+    assert no_cookie.json()["error"] == "invalid_request"
+
+    token_response = client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "client_id": "llm_dcrc_bogus",
+            "code": "x",
+            "redirect_uri": "https://claude.ai/cb",
+            "code_verifier": "v" * 43,
+        },
+    )
+    assert token_response.status_code == 400
+    assert token_response.json()["error"] == "invalid_grant"
+
+    upstream_shaped = client.post(
+        "/token",
+        data={"grant_type": "authorization_code", "client_id": "regular-upstream-client", "code": "x"},
+    )
+    assert upstream_shaped.status_code == 404

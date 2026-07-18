@@ -1,3 +1,4 @@
+import asyncio
 import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple, cast
@@ -10,6 +11,10 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    get_request_base_url,
+    well_known_root_suffix,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
     BridgeEnvelopeAdmitted,
     BridgeEnvelopeInvalid,
@@ -20,6 +25,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
     EnvelopeIdentity,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+    is_session_bearer_shaped,
 )
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -118,6 +126,120 @@ def _has_client_supplied_mcp_auth(
     mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
 ) -> bool:
     return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
+
+
+MCP_ADMITTED_USER_SUBJECT_METADATA = "mcp_admitted_user_subject"
+"""Marker key stamped into ``UserAPIKeyAuth.metadata`` by ``_reload_admitted_user`` for a
+subject admitted keyless through the gateway session / bridge user path. It is what lets
+``_team_ids_for_mcp_grant`` union the user's teams for exactly those admissions without also
+broadening JWT auth, which produces a structurally identical keyless auth."""
+
+
+def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth) -> bool:
+    """True when this auth is a keyless subject admitted by the gateway session / bridge user
+    path (stamped at admission), as opposed to a JWT or other keyless auth that merely lacks a
+    ``team_id``."""
+    metadata = user_api_key_auth.metadata
+    return isinstance(metadata, dict) and metadata.get(MCP_ADMITTED_USER_SUBJECT_METADATA) is True
+
+
+def _is_aggregate_mcp_scope(route: str, mcp_servers: list[str] | None) -> bool:
+    """True when a request targets the aggregate ``/mcp`` endpoint rather than any named
+    server. Named targets arrive either through ``x-mcp-servers`` (``mcp_servers``) or a
+    path segment (``/mcp/{server}`` / ``/{server}/mcp``); the aggregate scope has neither.
+    The gateway-DCR session arm and challenge fire only here, so a per-server flow is never
+    affected."""
+    if mcp_servers:
+        return False
+    return len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0
+
+
+def _is_aggregate_gateway_dcr_challenge_scope(
+    route: str,
+    mcp_servers: list[str] | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+    exc: Exception,
+) -> bool:
+    """True when an unauthenticated request to the aggregate ``/mcp`` endpoint
+    should receive the RFC 9728 401 challenge that advertises the gateway as
+    the authorization server.
+
+    Fires only for a genuine 401 on the aggregate scope: any named target
+    (path or ``x-mcp-servers``) belongs to the per-server challenge paths, and
+    client-supplied MCP auth headers mean the caller is not a cold-start DCR
+    client. Fails closed to the original admission error otherwise."""
+    if not _is_litellm_auth_admission_error(exc):
+        return False
+    if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
+        return False
+    return _is_aggregate_mcp_scope(route, mcp_servers)
+
+
+def _aggregate_gateway_dcr_challenge(request: Request, invalid_token: bool) -> HTTPException:
+    """The RFC 9728 challenge for the aggregate endpoint: points the client at
+    the gateway's own protected-resource metadata so a DCR client discovers
+    the gateway as its authorization server and starts the sign-in flow.
+
+    ``invalid_token`` adds the RFC 6750 error code for a request that DID
+    present a bearer that failed admission (expired or revoked), telling
+    spec-compliant clients to re-authorize rather than retry; a request with
+    no credentials at all gets the bare challenge per RFC 6750 section 3.1."""
+    error_attr = 'error="invalid_token", ' if invalid_token else ""
+    resource_metadata_url = (
+        f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
+    )
+    return HTTPException(
+        status_code=401,
+        detail={
+            "error": "authentication_required",
+            "message": "Authenticate with the gateway to use the MCP endpoint.",
+        },
+        headers={"WWW-Authenticate": f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"'},
+    )
+
+
+def _admission_failure_fallback(
+    request: Request,
+    request_route: str,
+    mcp_servers: list[str] | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+    exc: Exception,
+    bearer_presented: bool,
+) -> UserAPIKeyAuth:
+    """Map a failed LiteLLM admission to its anonymous fallback or challenge.
+
+    Two fallbacks exist, both gated on a genuine 401 with no client-supplied
+    MCP auth headers. The pass-through cold start (RFC 9728 / MCP
+    Authorization spec discovery return) admits anonymously so the route's
+    401 emitter can produce the per-server challenge. The aggregate
+    gateway-DCR scope converts the failure into the gateway's own
+    resource_metadata challenge, with the RFC 6750 ``invalid_token`` error
+    code when the caller DID present a bearer (an expired gateway session
+    must re-authorize, not retry a dead token). Anything else re-raises the
+    original admission error unchanged."""
+    mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route, mcp_servers)
+    if (
+        mcp_servers_from_path is not None
+        and not _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers)
+        and _is_litellm_auth_admission_error(exc)
+        and _is_mcp_passthrough_cold_start(
+            mcp_servers_from_path,
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        )
+    ):
+        verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
+        return UserAPIKeyAuth()
+    if _is_aggregate_gateway_dcr_challenge_scope(
+        route=request_route,
+        mcp_servers=mcp_servers,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        exc=exc,
+    ):
+        raise _aggregate_gateway_dcr_challenge(request, invalid_token=bearer_presented) from exc
+    raise exc
 
 
 class MCPRequestHandler:
@@ -268,59 +390,50 @@ class MCPRequestHandler:
                 request=request,
                 route=request_route,
             )
+        elif (
+            _is_aggregate_mcp_scope(request_route, mcp_servers)
+            and oauth2_headers
+            and is_session_bearer_shaped(oauth2_headers["Authorization"])
+        ):
+            # A gateway DCR session bearer at the aggregate /mcp scope: open the
+            # identity-only session token and admit under the live litellm user it
+            # references. A session-shaped bearer that does not open fails closed with
+            # the aggregate invalid_token challenge; a non-session bearer never reaches
+            # here (is_session_bearer_shaped is false) and falls through to the oauth2 arm.
+            validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
+                authorization_value=oauth2_headers["Authorization"],
+                request=request,
+                route=request_route,
+            )
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real
             # LiteLLM credential, so a failed validation is a genuine 401/403 and
-            # propagates. The sole anonymous fallback is the auth_type=none
-            # pass-through cold-start (RFC 9728 discovery return), gated on a 401
-            # so a recognized-but-forbidden key still fails closed.
-            client_ip = IPAddressUtils.get_mcp_client_ip(request)
+            # propagates unless a fallback in _admission_failure_fallback applies.
             try:
                 validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
             except (HTTPException, ProxyException) as e:
-                # ProxyException.code is normalized to str (possibly "None"), so
-                # compare both int and str forms rather than coercing.
-                status = e.status_code if isinstance(e, HTTPException) else e.code
-                is_unauthenticated = status in (401, "401")
-                mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route, mcp_servers)
-                if (
-                    is_unauthenticated
-                    and mcp_servers_from_path is not None
-                    and not _has_client_supplied_mcp_auth(
-                        mcp_auth_header,
-                        mcp_server_auth_headers,
-                    )
-                    and _is_mcp_passthrough_cold_start(mcp_servers_from_path, client_ip=client_ip)
-                ):
-                    verbose_logger.debug(
-                        "MCP pass-through return: forwarding Authorization as upstream OAuth token for delegated auth"
-                    )
-                    validated_user_api_key_auth = UserAPIKeyAuth()
-                else:
-                    raise
+                validated_user_api_key_auth = _admission_failure_fallback(
+                    request=request,
+                    request_route=request_route,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    exc=e,
+                    bearer_presented=True,
+                )
         else:
             try:
                 validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
             except (HTTPException, ProxyException) as exc:
-                # Cold-start MCP OAuth discovery: RFC 9728 / MCP Authorization spec
-                # require unauthenticated requests to protected resources to receive
-                # 401 + WWW-Authenticate. Defer to _raise_preemptive_401_for_unauthenticated_servers
-                # for pass-through servers instead of surfacing a generic admission error.
-                mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route, mcp_servers)
-                client_ip = IPAddressUtils.get_mcp_client_ip(request)
-                if (
-                    mcp_servers_from_path is not None
-                    and not _has_client_supplied_mcp_auth(
-                        mcp_auth_header,
-                        mcp_server_auth_headers,
-                    )
-                    and _is_litellm_auth_admission_error(exc)
-                    and _is_mcp_passthrough_cold_start(mcp_servers_from_path, client_ip=client_ip)
-                ):
-                    verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
-                    validated_user_api_key_auth = UserAPIKeyAuth()
-                else:
-                    raise
+                validated_user_api_key_auth = _admission_failure_fallback(
+                    request=request,
+                    request_route=request_route,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    exc=exc,
+                    bearer_presented=False,
+                )
 
         return (
             validated_user_api_key_auth,
@@ -557,6 +670,59 @@ class MCPRequestHandler:
                 assert_never(result)
 
     @staticmethod
+    async def _admit_gateway_session(
+        authorization_value: str,
+        request: Request,
+        route: str,
+    ) -> UserAPIKeyAuth:
+        """Open a gateway DCR session bearer and admit the live litellm user it references.
+
+        The custody sibling of :meth:`_admit_dcr_bridge_delegate`: the session token seals
+        no upstream credential (those are vaulted per user and resolved at egress), so this
+        admits identity only and injects no per-server header. The token's signature proves
+        the user signed in when it was minted, but authorization is resolved fresh here, the
+        sealed ``user_id`` reloads the current user record through the SAME
+        :meth:`_reload_admitted_user` the bridge user-subject path uses, and the admitted
+        identity runs through the centralized policy gate, so the user's present team, org,
+        budget, and SCIM state gate the request rather than a snapshot frozen at mint time.
+
+        Fails closed with the aggregate ``invalid_token`` challenge on an expired, tampered,
+        or foreign token, on a refresh token presented at the tool edge, and when the
+        referenced user is missing, deactivated, or rejected by the policy gate. The
+        pre-DB gates (size, IP, route allowlist) run first, mirroring the bridge arm and the
+        standard pipeline, so a caller blocked by IP or route is turned away before any
+        crypto or DB read."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            NotSessionBearer,
+            SessionBearerAdmitted,
+            SessionBearerInvalid,
+            resolve_session_bearer,
+            session_keys_from_master_key,
+        )
+        from litellm.proxy.proxy_server import master_key
+
+        if not master_key:
+            raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
+
+        await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
+
+        keys = session_keys_from_master_key(master_key)
+        result = resolve_session_bearer(authorization_value, keys, datetime.now(timezone.utc))
+        match result:
+            case SessionBearerAdmitted():
+                admitted = await MCPRequestHandler._reload_admitted_user(result.principal.user_id)
+                await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
+                return admitted
+            case SessionBearerInvalid():
+                raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
+            case NotSessionBearer():
+                # Unreachable: the arm is entered only for an is_session_bearer_shaped
+                # value. Kept for match exhaustiveness and fails closed regardless.
+                raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
+            case _:
+                assert_never(result)
+
+    @staticmethod
     async def _run_pre_db_read_auth_checks(request: Request, route: str) -> None:
         """Run the proxy-wide gates ``user_api_key_auth`` applies before any key lookup: the
         request-size and body-safety limits, the IP allowlist, and the ``general_settings``
@@ -601,12 +767,15 @@ class MCPRequestHandler:
 
         The DCR client authenticates via SSO at the bridged authorize, which yields a user
         subject rather than a virtual key, so the envelope admits under the user's own
-        identity: the reloaded ``user_id`` and the user's own MCP object permission ride on the
-        returned ``UserAPIKeyAuth``, and the SAME ``get_allowed_mcp_servers`` the key path uses then
-        computes which servers the user may reach, so the user's litellm MCP grants and access groups
-        gate the request exactly as a key's do. Only the user's OWN object permission is bound: a
-        ``UserAPIKeyAuth`` carries a single ``team_id`` while a user may belong to many teams, so
-        team-inherited MCP grants for a user are a follow-up (they need a many-teams union
+        identity: the reloaded ``user_id``, the user's own MCP object permission, and the user's
+        ``org_id`` ride on the returned ``UserAPIKeyAuth``, and the SAME ``get_allowed_mcp_servers``
+        the key path uses then computes which servers the user may reach, so the user's litellm MCP
+        grants and access groups gate the request exactly as a key's do. Binding ``org_id`` keeps the
+        org-level MCP ceiling in force for this admission rather than silently skipping it; a user's
+        primary organization is used, so a user who spans organizations is capped conservatively (the
+        ceiling can only narrow the result, never broaden it). Only the user's OWN object permission is
+        bound: a ``UserAPIKeyAuth`` carries a single ``team_id`` while a user may belong to many teams,
+        so team-inherited MCP grants for a user are a follow-up (they need a many-teams union
         ``get_allowed_mcp_servers`` does not do off one auth object). The caller's centralized policy
         gate enforces the user's live budget and org state, and a SCIM-deactivated owner fails closed.
 
@@ -654,8 +823,10 @@ class MCPRequestHandler:
         return UserAPIKeyAuth(
             user_id=user_object.user_id,
             user_role=user_object.user_role,
+            org_id=user_object.organization_id,
             object_permission=object_permission,
             object_permission_id=user_object.object_permission_id,
+            metadata={MCP_ADMITTED_USER_SUBJECT_METADATA: True},
         )
 
     @staticmethod
@@ -1467,10 +1638,91 @@ class MCPRequestHandler:
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_team(
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-    ) -> List[str]:
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> list[str]:
         """
-        Get allowed MCP servers for a team.
+        Get allowed MCP servers a caller inherits from team membership.
+
+        For a caller with a ``team_id`` (every key-based caller) the result is that one team's
+        grants, byte-identical to before this method learned about multiple teams. For a
+        subject admitted keyless through the gateway DCR session or bridge user path, a
+        ``UserAPIKeyAuth`` can only pin one team while the user may belong to many, so the
+        inherited grant is the UNION across every team the user belongs to. Without this a
+        signed-in user would see only servers granted to them directly and none granted
+        through their teams, which is how servers are meant to be shared (assign teams, not
+        individuals). The union is gated on the admission marker
+        ``_team_ids_for_mcp_grant`` checks, NOT on ``api_key is None``, so JWT auth (also
+        keyless, also possibly team-less) keeps its prior behavior and is not silently
+        broadened.
+        """
+        team_ids = await MCPRequestHandler._team_ids_for_mcp_grant(user_api_key_auth)
+        if not team_ids:
+            return []
+        per_team = await asyncio.gather(
+            *(
+                MCPRequestHandler._allowed_mcp_servers_for_single_team(team_id, user_api_key_auth)
+                for team_id in team_ids
+            )
+        )
+        return list({server for servers in per_team for server in servers})
+
+    @staticmethod
+    async def _team_ids_for_mcp_grant(user_api_key_auth: UserAPIKeyAuth | None) -> list[str]:
+        """The team ids whose MCP grants a caller inherits.
+
+        A caller with an explicit ``team_id`` (every key-based caller, and any auth that pins
+        a team) uses that single team, so key auth is byte-identical. The fan-out to the
+        user's full team list happens ONLY for a subject admitted keyless through the gateway
+        session or bridge user path, which ``_reload_admitted_user`` stamps with
+        ``MCP_ADMITTED_USER_SUBJECT_METADATA``. Gating on that positive marker rather than on
+        ``api_key is None`` is deliberate: JWT auth also produces a keyless ``user_id`` auth
+        with no ``team_id``, and it must keep its prior behavior (no team-inherited grants)
+        rather than silently gaining the union across every team the user belongs to. The
+        ``UI_TEAM_ID`` sentinel resolves to no teams exactly as before."""
+        if user_api_key_auth is None:
+            return []
+        if user_api_key_auth.team_id:
+            return [] if user_api_key_auth.team_id == UI_TEAM_ID else [user_api_key_auth.team_id]
+        if not user_api_key_auth.user_id or not _is_mcp_admitted_user_subject(user_api_key_auth):
+            return []
+        return await MCPRequestHandler._resolve_user_team_ids(user_api_key_auth.user_id, user_api_key_auth)
+
+    @staticmethod
+    async def _resolve_user_team_ids(user_id: str, user_api_key_auth: UserAPIKeyAuth) -> list[str]:
+        """The distinct team ids a user belongs to, from the live user record. Returns [] on
+        no DB, a missing user, or any resolution failure so a lookup blip narrows access
+        rather than raising; the caller's direct grants still apply."""
+        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if prisma_client is None:
+            return []
+        try:
+            user_object = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:  # noqa: BLE001  # a team-resolution blip narrows access, never raises
+            verbose_logger.warning(f"Failed to resolve user teams for MCP grant: {str(e)}")
+            return []
+        if user_object is None or not user_object.teams:
+            return []
+        return list(dict.fromkeys(t for t in user_object.teams if t and t != UI_TEAM_ID))
+
+    @staticmethod
+    async def _allowed_mcp_servers_for_single_team(
+        team_id: str,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> list[str]:
+        """Allowed MCP servers granted by ONE team.
 
         Unions two sources:
         - Legacy team.object_permission (mcp_servers, mcp_access_groups,
@@ -1494,17 +1746,15 @@ class MCPRequestHandler:
                 user_api_key_cache,
             )
 
-            if user_api_key_auth is None or not user_api_key_auth.team_id or prisma_client is None:
+            if not team_id or team_id == UI_TEAM_ID or prisma_client is None:
                 return []
 
-            if user_api_key_auth.team_id == UI_TEAM_ID:
-                return []
-
-            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
-                team_id=user_api_key_auth.team_id,
+            parent_otel_span = user_api_key_auth.parent_otel_span if user_api_key_auth is not None else None
+            team_obj: LiteLLM_TeamTable | None = await get_team_object(
+                team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth.parent_otel_span,
+                parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
             if team_obj is None:

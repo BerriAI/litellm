@@ -950,7 +950,7 @@ async def google_login(
             request=request,
         )
         if return_to is not None and sso_redirect is not None:
-            if SSOAuthenticationHandler._validate_return_to(return_to):
+            if _is_same_origin_return_path(return_to) or SSOAuthenticationHandler._validate_return_to(return_to):
                 sso_redirect.set_cookie(
                     key="litellm_cp_return_to",
                     value=return_to,
@@ -2383,6 +2383,22 @@ async def sso_readiness():
     )
 
 
+def _is_same_origin_return_path(return_to: str) -> bool:
+    """True for a strictly relative return path that stays on the gateway's own origin by
+    construction, and is therefore safe to honor without a configured ``control_plane_url``.
+    Used by the MCP gateway DCR authorize round-trip so a browser sent through login lands
+    back on the authorize request.
+
+    Requires a single leading ``/`` (not protocol-relative ``//``), no backslash (browsers
+    fold ``\\`` to ``/``, so ``/\\evil.com`` would escape the origin), and no control or
+    whitespace characters. Rejecting control chars keeps a ``\\r\\n``/tab-bearing value out
+    of the redirect ``Location`` and the ``litellm_cp_return_to`` cookie entirely, rather
+    than relying on downstream header encoding to neutralize it."""
+    if not return_to.startswith("/") or return_to.startswith("//") or "\\" in return_to:
+        return False
+    return not any(ord(ch) < 0x20 or ch in (" ", "\x7f") for ch in return_to)
+
+
 class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
@@ -3019,7 +3035,6 @@ class SSOAuthenticationHandler:
         jwt_handler: Optional[JWTHandler] = None,
         return_to: Optional[str] = None,
     ) -> RedirectResponse:
-        import jwt
 
         from litellm.proxy.proxy_server import (
             general_settings,
@@ -3180,11 +3195,18 @@ class SSOAuthenticationHandler:
             server_root_path=get_server_root_path(),
         )
 
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            master_key or "",
-            algorithm="HS256",
-        )
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, master_key or "")
+
+        # Same-origin relative return (the MCP gateway DCR authorize round-trip):
+        # set the session cookie exactly like the dashboard path, then send the
+        # browser back to where it came from instead of the dashboard.
+        if return_to is not None and _is_same_origin_return_path(return_to):
+            redirect_response = RedirectResponse(url=return_to, status_code=303)
+            redirect_response.set_cookie(key="token", value=jwt_token)
+            redirect_response.delete_cookie("litellm_cp_return_to")
+            return redirect_response
 
         # Control-plane cross-origin: store JWT behind a single-use opaque
         # code (60s TTL) so the token never appears in browser history / logs.

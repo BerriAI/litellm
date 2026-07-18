@@ -17,6 +17,14 @@ import { getProxyBaseUrl, serverRootPath } from "@/components/networking";
 export const TOOLS_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-tools-state";
 
 /**
+ * sessionStorage flag set by useUserMcpOAuthFlow right before it navigates the whole page
+ * to the upstream IdP to authorize one server. ConnectFlowBanner's auto-finish-on-close
+ * handler skips while this is set, so authorizing a server is not mistaken for the user
+ * leaving the gateway DCR connect flow.
+ */
+export const PERSERVER_CONNECTING_KEY = "litellm-mcp-perserver-connecting";
+
+/**
  * Build the OAuth callback URL for the current UI deployment.
  *
  * In the browser, derive the `/ui` prefix from the current pathname so the
