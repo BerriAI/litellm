@@ -1,9 +1,35 @@
 from typing import List, Literal, Optional
+from urllib.parse import urlparse
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+
+
+def azure_ai_use_api_key_header(api_base: str) -> bool:
+    """Whether Azure AI auth should use the `api-key` header instead of a Bearer token.
+
+    Foundry and Azure OpenAI hosts authenticate key-based requests with the
+    `api-key` header; serverless/other endpoints expect `Authorization: Bearer`.
+    """
+    host = urlparse(api_base).hostname
+    return bool(host and (host.endswith(".services.ai.azure.com") or host.endswith(".openai.azure.com")))
+
+
+def azure_ai_supports_native_responses(model: str | None) -> bool:
+    """Whether an Azure AI model should use the native Responses API rather than the chat bridge.
+
+    Foundry Models expose an OpenAI-compatible Responses endpoint at
+    `<endpoint>/openai/v1/responses`. Claude deployments speak the Anthropic
+    Messages API and the model-router/agents routes have their own surfaces, so
+    those keep the chat-completions bridge.
+    """
+    if not model:
+        return False
+    if "claude" in model.lower():
+        return False
+    return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
 
 
 class AzureFoundryModelInfo(BaseLLMModelInfo):
