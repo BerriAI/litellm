@@ -1885,16 +1885,8 @@
       "count": 1
     }
   },
-  "src/components/model_add/AddCredentialModal.tsx": {
+  "src/components/model_add/CredentialModal.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/EditCredentialModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
