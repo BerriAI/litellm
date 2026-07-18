@@ -36,6 +36,7 @@ WINDOW_SECONDS = 30  # the tight window; calls succeed again only after it elaps
 MODEL = CHEAP_OPENAI_MODEL
 SHORT_WINDOW = f"{WINDOW_SECONDS}s"
 LONG_WINDOW = "1d"
+TINY_CAP = 1e-9
 LONG_CAP = 5e-7
 RESET_DEADLINE_SECONDS = 150
 
@@ -58,7 +59,7 @@ def test_short_window_blocks_then_resets(client: BudgetClient, resources: Resour
     key = client.generate_key(
         models=[MODEL],
         budget_limits=[
-            BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=1e-9),
+            BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=TINY_CAP),
             BudgetWindow(budget_duration="1m", max_budget=1.0),  # roomy: never blocks
         ],
     )
@@ -91,7 +92,7 @@ def test_long_window_blocks_after_short_window_resets(client: BudgetClient, reso
     key = client.generate_key(
         models=[MODEL],
         budget_limits=[
-            BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=1e-9),
+            BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=TINY_CAP),
             BudgetWindow(budget_duration=LONG_WINDOW, max_budget=LONG_CAP),
         ],
     )
@@ -104,6 +105,8 @@ def test_long_window_blocks_after_short_window_resets(client: BudgetClient, reso
     blocked_long_reset_at = window_reset_at(client.key_budget_windows(key), LONG_WINDOW)
     assert blocked_long_reset_at is not None, "long window missing from /key/info budget_limits"
 
+    # wait for the reset job to roll the short (30s) window: reset_at advancing past
+    # the value recorded at block time proves that window's spend counter was zeroed
     deadline = time.monotonic() + RESET_DEADLINE_SECONDS
     while time.monotonic() < deadline:
         time.sleep(5)
@@ -115,6 +118,9 @@ def test_long_window_blocks_after_short_window_resets(client: BudgetClient, reso
             f"{SHORT_WINDOW} window's reset_at never advanced past {blocked_reset_at} within {RESET_DEADLINE_SECONDS}s"
         )
 
+    # the long (1d) window must keep blocking now that the short window is clean:
+    # every response must stay a budget 429, and we pass only once the error names
+    # the 1d window (a 200 here means the long cap failed to hold)
     deadline = time.monotonic() + RESET_DEADLINE_SECONDS
     last_body = ""
     while time.monotonic() < deadline:
