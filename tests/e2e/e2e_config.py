@@ -72,6 +72,29 @@ POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
 
+LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "750"))
+LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
+LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
+LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "355"))
+LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
+
+
+def datadog_mcp_url(*, toolsets: str = "core") -> str:
+    """Regional Datadog remote MCP endpoint for this process's DD_SITE.
+
+    US1 is mcp.datadoghq.com; every other site is mcp.<site> (e.g. us5 ->
+    mcp.us5.datadoghq.com). A fixed mcp.datadoghq.com URL 403s when the keys
+    belong to a non-US1 org.
+    """
+    site = (
+        os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
+    ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+    if site.startswith("app."):
+        site = site[len("app.") :]
+    host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"
+    base = f"https://{host}/v1/mcp"
+    return f"{base}?toolsets={toolsets}" if toolsets else base
+
 
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
     """Regional Datadog remote MCP endpoint for this process's DD_SITE.
