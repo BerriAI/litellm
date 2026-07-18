@@ -6,6 +6,7 @@ This is to prevent deadlocks and improve reliability
 
 import asyncio
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from redis.exceptions import RedisError
@@ -379,12 +380,12 @@ class RedisUpdateBuffer:
     async def restore_transactions_to_redis(
         self,
         db_spend_update_transactions: DBSpendUpdateTransactions | None = None,
-        daily_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
-        daily_team_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
-        daily_org_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
-        daily_end_user_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
-        daily_agent_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
-        daily_tag_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
+        daily_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_team_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_org_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_end_user_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_agent_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
+        daily_tag_spend_update_transactions: Mapping[str, BaseDailySpendTransaction] | None = None,
     ) -> None:
         """
         Re-push transactions that were popped from Redis but not committed to the DB.

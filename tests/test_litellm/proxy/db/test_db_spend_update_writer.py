@@ -1712,6 +1712,78 @@ async def test_commit_with_redis_no_requeue_on_success():
     mock_redis_update_buffer.restore_transactions_to_redis.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_commit_daily_tag_spend_requeues_on_db_failure():
+    """A failed daily tag commit must re-queue the popped tag transactions and release the lock."""
+    db_writer = DBSpendUpdateWriter()
+
+    daily_tag = {"tag_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis = AsyncMock()
+    mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer = AsyncMock(
+        return_value=daily_tag
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_tag_spend",
+        new=AsyncMock(side_effect=Exception("db down")),
+    ):
+        await db_writer._commit_daily_tag_spend_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once_with(
+        daily_tag_spend_update_transactions=daily_tag,
+    )
+    mock_pod_lock_manager.release_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_commit_daily_tag_spend_no_requeue_on_success():
+    """A successful daily tag commit must not re-queue anything."""
+    db_writer = DBSpendUpdateWriter()
+
+    daily_tag = {"tag_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis = AsyncMock()
+    mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer = AsyncMock(
+        return_value=daily_tag
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_tag_spend",
+        new=AsyncMock(),
+    ):
+        await db_writer._commit_daily_tag_spend_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_not_awaited()
+    mock_pod_lock_manager.release_lock.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     "bucket_name,input_dict,table_attr,method_name,where_key,expected_order",
     [
