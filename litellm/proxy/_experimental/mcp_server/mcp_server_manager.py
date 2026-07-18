@@ -50,7 +50,15 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    ServerListFault,
+    raise_classified_list_failure,
+    upstream_auth_challenge,
+)
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
@@ -85,6 +93,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
+    CredError,
+    IdJagConfig,
     PassthroughConfig,
     ServerSpec,
     TokenExchangeConfig,
@@ -613,6 +623,47 @@ def _consumes_caller_authorization(server: MCPServer) -> bool:
     )
 
 
+_REGISTRY_DUMP_SECRET_FIELDS = frozenset(
+    {"authentication_token", "client_secret", "client_private_key", "aws_secret_access_key", "aws_session_token"}
+)
+
+
+def _redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str, str]]:
+    """A JSON-safe view of the server registry with credential fields masked, for debug logging.
+
+    The registry holds long-lived secrets as plain strings (the static token, OAuth client secret,
+    the ID-JAG signing key, AWS keys); dumping them verbatim hands the gateway's client identity to
+    anyone who can read debug logs.
+    """
+    dumps: dict[str, dict[str, object]] = {server_id: server.model_dump() for server_id, server in servers.items()}
+    return {
+        server_id: {
+            field: ("**REDACTED**" if field in _REGISTRY_DUMP_SECRET_FIELDS and value is not None else str(value))
+            for field, value in dump.items()
+        }
+        for server_id, dump in dumps.items()
+    }
+
+
+def _to_server_spec_fail_closed(server: MCPServer) -> Optional[ServerSpec]:
+    """`to_server_spec`, except a half-configured `oauth2_id_jag` server refuses instead of deferring.
+
+    ID-JAG has no v1 arm, so deferring to v1 would let `resolve_mcp_auth` honor a caller x-mcp-*
+    override or fall through to the static `authentication_token`, both of which bypass the per-user
+    identity assertion the mode promises. That is an operator misconfiguration, not a fallback.
+    """
+    spec = to_server_spec(server)
+    if spec is None and server.auth_type == MCPAuth.oauth2_id_jag:
+        raise_public(
+            CredError.of_misconfigured(
+                "oauth2_id_jag requires token_exchange_endpoint, id_jag_resource_token_endpoint, "
+                "client_id, and a client_secret or client_private_key; refusing to fall back to "
+                "a static credential."
+            )
+        )
+    return spec
+
+
 def _caller_authorization_fans_out(
     server: MCPServer,
     scope_servers: Optional[list[MCPServer]],
@@ -633,49 +684,14 @@ def _caller_authorization_fans_out(
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[tuple[int, Optional[str]]]:
-    """Walk the exception tree looking for an HTTP 401/403 response from the
-    upstream MCP server.
+    """The upstream 401/403 and its ``WWW-Authenticate`` header from the exception tree, or ``None``.
 
-    The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects and
-    may chain through ``__cause__`` / ``__context__``. We inspect all of those
-    layers for an ``httpx.Response``-bearing exception (typically
-    ``httpx.HTTPStatusError``) and extract the status code and any upstream
-    ``WWW-Authenticate`` header.
-
-    Returns ``(status_code, www_authenticate)`` on match, else ``None``.
-    """
-    seen: set[int] = set()
-    stack: list[BaseException] = [exc]
-    while stack:
-        current = stack.pop()
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
-
-        response = getattr(current, "response", None)
-        if response is not None:
-            status_code = getattr(response, "status_code", None)
-            if isinstance(status_code, int) and status_code in (401, 403):
-                www_authenticate: Optional[str] = None
-                headers = getattr(response, "headers", None)
-                if headers is not None:
-                    try:
-                        www_authenticate = headers.get("www-authenticate")
-                    except Exception:
-                        www_authenticate = None
-                return status_code, www_authenticate
-
-        # anyio / PEP 654 ExceptionGroup
-        sub_exceptions = getattr(current, "exceptions", None)
-        if sub_exceptions:
-            stack.extend(sub_exceptions)
-
-        if current.__cause__ is not None:
-            stack.append(current.__cause__)
-        if current.__context__ is not None and current.__context__ is not current.__cause__:
-            stack.append(current.__context__)
-
-    return None
+    Delegates to the shared traversal in ``faults.list_outcomes`` so every consumer (tool listing,
+    tool calls, the connect-time probe) selects the same response with the same deliberate order:
+    explicit ``raise ... from`` causes first, ExceptionGroup members in raise order, the incidental
+    ``__context__`` chain last. A response raised while handling the real failure can therefore never
+    shadow the causal one."""
+    return upstream_auth_challenge(exc)
 
 
 def _warn_on_server_name_fields(
@@ -1127,6 +1143,14 @@ class MCPServerManager:
         """
         return self.config_mcp_servers | self.registry
 
+    def is_config_declared_server(self, server_id: str) -> bool:
+        """True when server_id was declared in config.yaml (present in the in-memory config map).
+        Config servers are rowless and persistent, so their DCR client belongs in the server-scoped
+        store; a rowless server that is NOT config-declared is a throwaway temp/session server whose
+        client must not be persisted. This never overrides the row-existence check: a server that has
+        a LiteLLM_MCPServerTable row is always resolved to that row first."""
+        return server_id in self.config_mcp_servers
+
     async def load_servers_from_config(
         self,
         mcp_servers_config: dict[str, Any],
@@ -1345,6 +1369,12 @@ class MCPServerManager:
                     "subject_token_type",
                     DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
+                # ID-JAG fields
+                id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
+                id_jag_resource=server_config.get("id_jag_resource", None),
+                client_private_key=server_config.get("client_private_key", None),
+                client_private_key_id=server_config.get("client_private_key_id", None),
+                client_assertion_signing_alg=server_config.get("client_assertion_signing_alg", "RS256"),
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
@@ -1365,9 +1395,35 @@ class MCPServerManager:
                     base_url=server_config.get("url", ""),
                 )
 
-        verbose_logger.debug(f"Loaded MCP Servers: {json.dumps(self.config_mcp_servers, indent=4, default=str)}")
+        verbose_logger.debug(
+            f"Loaded MCP Servers: {json.dumps(_redacted_registry_dump(self.config_mcp_servers), indent=4)}"
+        )
+
+        await self._hydrate_config_servers_dcr_clients()
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
+
+    async def _hydrate_config_servers_dcr_clients(self) -> None:
+        """Overlay each config-declared server's persisted DCR client (from the server-scoped
+        store) onto its in-memory object so token refresh authenticates after a restart. A
+        best-effort no-op when the DB is unreachable at config-load time."""
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # circular import
+            hydrate_config_server_dcr_client,
+        )
+
+        for server in self.config_mcp_servers.values():
+            try:
+                if await hydrate_config_server_dcr_client(server):
+                    verbose_logger.debug(
+                        "hydrated persisted DCR client onto config MCP server server_id=%s",
+                        server.server_id,
+                    )
+            except Exception as exc:  # noqa: BLE001  # best-effort hydration; never fail config load
+                verbose_logger.debug(
+                    "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s",
+                    server.server_id,
+                    exc,
+                )
 
     async def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
         """
@@ -1792,6 +1848,21 @@ class MCPServerManager:
             subject_token_type=mcp_server.subject_token_type
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or DEFAULT_SUBJECT_TOKEN_TYPE,
+            # ID-JAG fields — read from credentials JSON blob
+            id_jag_resource_token_endpoint=(
+                credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
+            ),
+            id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            client_private_key=self._decrypt_credential_field(
+                credentials_dict.get("client_private_key") if credentials_dict else None,
+                "client_private_key",
+                credentials_are_encrypted,
+            ),
+            client_private_key_id=(credentials_dict.get("client_private_key_id") if credentials_dict else None),
+            client_assertion_signing_alg=(
+                credentials_dict.get("client_assertion_signing_alg") if credentials_dict else None
+            )
+            or "RS256",
             token_exchange_profile=mcp_server.token_exchange_profile
             or (credentials_dict.get("token_exchange_profile") if credentials_dict else None)
             or "rfc8693",
@@ -2668,9 +2739,10 @@ class MCPServerManager:
                 )
                 if not conflicts:
                     return auth, extra_headers
-                if isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig)):
+                if isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig, IdJagConfig)):
                     # The resolver owns the per-user credential here (token_exchange's exchanged
-                    # token, authorization_code's stored token). It is authoritative: a guardrail such
+                    # token, authorization_code's stored token, id_jag's minted assertion). It is
+                    # authoritative: a guardrail such
                     # as MCPJWTSigner, static_headers, or any other injected Authorization must NOT
                     # shadow it (otherwise the upstream gets e.g. the signer's JWT instead of the
                     # exchanged token and rejects it). Drop the conflicting header so the resolved
@@ -2761,20 +2833,23 @@ class MCPServerManager:
             Configured MCP client instance.
         """
         transport = server.transport or MCPTransport.sse
-        spec = None if transport == MCPTransport.stdio else to_server_spec(server)
+        spec = None if transport == MCPTransport.stdio else _to_server_spec_fail_closed(server)
         provider = cred_provider or self._cred_provider
         # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
         # so it wins - except for the modes the v2 resolver owns per-caller (authorization_code's
-        # stored token, token_exchange's RFC 8693 minted token, and the passthrough modes'
-        # forwarded caller token). A caller must not be able to substitute another user's stored
-        # credential, nor silently disable the OBO exchange and forward an arbitrary bearer
-        # upstream, so we keep the v2 spec and ignore the override for these; the REST tools
-        # preview supplies its not-yet-persisted token through the resolver (cred_provider),
-        # never this path.
+        # stored token, token_exchange's RFC 8693 minted token, id_jag's minted assertion, and the
+        # passthrough modes' forwarded caller token). A caller must not be able to substitute another
+        # user's stored credential, nor silently disable the OBO / ID-JAG exchange and forward an
+        # arbitrary bearer upstream, so we keep the v2 spec and ignore the override for these; the
+        # REST tools preview supplies its not-yet-persisted token through the resolver
+        # (cred_provider), never this path.
         if (
             spec is not None
             and mcp_auth_header
-            and not isinstance(spec.config, (AuthorizationCodeConfig, PassthroughConfig, TokenExchangeConfig))
+            and not isinstance(
+                spec.config,
+                (AuthorizationCodeConfig, IdJagConfig, PassthroughConfig, TokenExchangeConfig),
+            )
         ):
             spec = None
         auth_value = (
@@ -3047,10 +3122,12 @@ class MCPServerManager:
                     server_name=server.name,
                 ) from e
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
-            return []
+            raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
+        except MCPServerListError:
+            raise
         except Exception as e:
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
-            return []
+            raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
     async def get_prompts_from_server(
         self,
@@ -3682,16 +3759,17 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
-        An upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
-        instead of being swallowed to an empty tool list, regardless of the
-        server's auth_type. Callers route it by surface: the single-server HTTP
-        routes turn it into a 401 + ``WWW-Authenticate`` challenge so standards-
-        compliant MCP clients trigger the upstream OAuth flow, while the
-        multi-server ``/mcp`` aggregator absorbs it to an empty list so one
-        unauthenticated server doesn't fail the whole listing. Only a 401
-        (missing/invalid credential) drives the re-auth challenge; a 403
-        (authenticated but forbidden, e.g. insufficient scope) is not a re-auth
-        signal and, like other non-auth errors, returns an empty list.
+        Failures never return an empty tool list. An upstream 401 or 403 raises
+        :class:`MCPUpstreamAuthError` carrying the upstream's own
+        ``WWW-Authenticate`` challenge when one was sent (a challenge is only
+        ever fabricated at the HTTP edge, and only for a 401: a 403 means the
+        caller is authenticated but not allowed, so prompting re-auth would be
+        wrong, while an upstream-sent 403 challenge is the RFC 6750
+        insufficient_scope step-up and relays verbatim). Every other failure
+        raises :class:`MCPServerListError` with a classified fault. Each
+        boundary then applies its own policy: single-server routes relay the
+        truthful status, the multi-server aggregator absorbs the failure into
+        that server's listing outcome.
 
         Args:
             client: MCP client instance
@@ -3705,27 +3783,18 @@ class MCPServerManager:
                 tools = await client.list_tools(raise_on_error=True)
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-        except TimeoutError:
+        except TimeoutError as e:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
-            return []
-        except asyncio.CancelledError:
+            raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
+        except asyncio.CancelledError as e:
             verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
-            return []
+            raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
         except ConnectionError as e:
             verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
-            return []
+            raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
         except Exception as e:
-            auth_info = _extract_upstream_auth_failure(e)
-            if auth_info is not None and auth_info[0] == 401:
-                _, www_authenticate = auth_info
-                verbose_logger.info(f"Upstream auth failure from MCP server {server_name}: HTTP 401")
-                raise MCPUpstreamAuthError(
-                    status_code=401,
-                    www_authenticate=www_authenticate,
-                    server_name=server_name,
-                ) from e
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
-            return []
+            raise_classified_list_failure(e, server_name)
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 
@@ -4309,10 +4378,13 @@ class MCPServerManager:
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
-        # Extract subject token for OAuth2 Token Exchange (OBO) flow
+        # Extract subject token for OAuth2 Token Exchange (OBO) and ID-JAG flows
         subject_token: Optional[str] = None
         extra_headers: Optional[dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+        if mcp_server.auth_type in (
+            MCPAuth.oauth2_token_exchange,
+            MCPAuth.oauth2_id_jag,
+        ):
             subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
         elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
@@ -4414,10 +4486,10 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange and subject_token:
-            # OBO: the exchanged token may have been revoked/rotated upstream since it was cached, so
-            # an upstream 401 gets one re-mint + retry. Gated to this mode; all others keep the plain
-            # single call below.
+        if mcp_server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag) and subject_token:
+            # OBO / ID-JAG: the exchanged token may have been revoked/rotated upstream since it was
+            # cached, so an upstream 401 gets one invalidate + re-mint + retry. Gated to these modes;
+            # all others keep the plain single call below.
             async def _obo_call_tool_limited():
                 async with self._limit_outbound_concurrency(mcp_server):
                     return await self._obo_call_tool_with_retry(
@@ -4967,6 +5039,8 @@ class MCPServerManager:
             self.initialize_tool_name_to_mcp_server_name_mapping()
 
         verbose_logger.debug("MCP registry refreshed (%s servers in registry)", len(registered_registry))
+
+        await self._hydrate_config_servers_dcr_clients()
 
     def get_mcp_servers_from_ids(self, server_ids: list[str]) -> list[MCPServer]:
         servers = []

@@ -4,6 +4,7 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 
@@ -61,6 +62,8 @@ interface ComplexityRouterConfigProps {
   onEmbeddingModelChange?: (model: string) => void;
   matchThreshold?: number;
   onMatchThresholdChange?: (threshold: number) => void;
+  escalationKeywords?: string[];
+  onEscalationKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors?: boolean;
 }
 
@@ -101,6 +104,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEmbeddingModelChange = () => {},
   matchThreshold = 0.5,
   onMatchThresholdChange = () => {},
+  escalationKeywords = [],
+  onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
   // Embedding models can't serve a chat-completion role, so they're excluded here.
@@ -213,6 +218,19 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ),
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
           },
+          ...(onEscalationKeywordsChange
+            ? [
+                {
+                  key: "escalation",
+                  label: (
+                    <Text strong style={{ color: "#374151" }}>
+                      Advanced: Escalation Keywords
+                    </Text>
+                  ),
+                  children: <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />,
+                },
+              ]
+            : []),
           ...(onKeywordTierRulesChange || onSemanticMatchingEnabledChange
             ? [
                 {

@@ -87,6 +87,15 @@ class MCPServer(BaseModel):
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
+    # ID-JAG fields (draft-ietf-oauth-identity-assertion-authz-grant).
+    # Leg 1 reuses token_exchange_endpoint (IdP org-AS), audience (resource-AS
+    # identifier), scopes, subject_token_type, client_id/client_secret. Leg 2
+    # posts the ID-JAG assertion to id_jag_resource_token_endpoint.
+    id_jag_resource_token_endpoint: Optional[str] = None
+    id_jag_resource: Optional[str] = None
+    client_private_key: Optional[str] = None
+    client_private_key_id: Optional[str] = None
+    client_assertion_signing_alg: str = "RS256"
     # Wire dialect: "rfc8693" (standard token-exchange grant) or "entra_obo" (Microsoft Entra
     # On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use extension)
     token_exchange_profile: str = "rfc8693"

@@ -2,6 +2,25 @@
 
 This file defines the rules for Rust work in LiteLLM.
 
+## Provider Coding Standards
+
+Before writing new logic, look for an existing base to extend. When a change is
+“the same behavior for one more provider/endpoint/integration”, the codebase
+almost always already has a shared abstraction for it (for example, provider
+`BaseConfig` transformation classes in `litellm/llms/base_llm/`, shared
+helpers in `litellm_core_utils/`, typed request/response models, or factory
+functions). Find it first with a search, then add the new variant by inheriting
+from or composing that base, overriding only what genuinely differs (model
+name, parameter mapping, or auth).
+
+Never copy an existing implementation and edit it in place, and never hand-roll
+a parallel version of logic a base already provides. If you catch yourself
+writing a second copy of a pattern that exists twice already, stop and extract a
+base instead: put the shared shape in one place and make both call sites thin
+variants of it. The test for a good abstraction is that adding the next provider
+is a few declarative lines, not a new file of duplicated flow. Only diverge from
+the base when behavior is genuinely different, and say so explicitly in the PR.
+
 ## Crates (exactly three — see AGENTS.md)
 
 `litellm-core` describes work; `litellm-ai-gateway` executes it; `litellm-python-bridge`
@@ -76,6 +95,26 @@ such as `ai-gateway`, router hosts, or standalone servers:
 - Do not echo raw upstream response bodies to callers. Sanitize and bound them.
 - Avoid `expect`/`unwrap` in server startup and request paths unless the panic is
   impossible by construction and documented.
+
+## Rust Style Guide
+
+All Rust in `litellm-rust/` follows the official Rust Style Guide:
+https://doc.rust-lang.org/style-guide/
+
+`rustfmt` implements the guide's formatting rules by default, so the mechanical
+side is enforced for you: run `cargo fmt` before committing and CI gates every
+PR on `cargo fmt --check` (see Checks). Do not hand-format against rustfmt or add
+a `rustfmt.toml` that diverges from the default style; the default style *is* the
+guide.
+
+The guide also covers conventions rustfmt cannot auto-apply; follow these too:
+- Naming: `snake_case` for items, functions, and modules; `UpperCamelCase` for
+  types, traits, and enum variants; `SCREAMING_SNAKE_CASE` for constants and
+  statics; acronyms count as one word (`HttpClient`, not `HTTPClient`).
+- Ordering and grouping the guide prescribes: imports grouped std / external /
+  crate-local, derives before other attributes, and consistent item order.
+- Idioms the guide recommends over the formatter fighting you (e.g. prefer
+  restructuring an over-long expression rather than forcing an awkward wrap).
 
 ## Constants
 

@@ -73,7 +73,8 @@ from litellm.constants import (
     JITTER,
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
-    MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -3197,6 +3198,12 @@ def get_optional_params_embeddings(
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
+        # OpenAI SDKs (and litellm's own client) send encoding_format="float"
+        # by default; float lists are exactly what the vertex API returns, so
+        # the param is a no-op — don't reject the provider default. Other
+        # values (e.g. "base64") stay on the unsupported-param path below.
+        if non_default_params.get("encoding_format") == "float":
+            non_default_params.pop("encoding_format")
         supported_params = get_supported_openai_params(
             model=model,
             custom_llm_provider="vertex_ai",
@@ -5402,6 +5409,7 @@ def _get_model_info_helper(
                     "cache_creation_input_token_cost_above_200k_tokens", None
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
+                prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
                 ),
@@ -9039,16 +9047,46 @@ def should_use_cohere_v1_client(api_base: Optional[str], present_version_params:
     return api_base.endswith("/v1/rerank") or (uses_v1_params and not api_base.endswith("/v2/rerank"))
 
 
+def get_prompt_cache_min_tokens(model: str) -> int:
+    """
+    Returns the smallest prefix `model` will actually cache.
+
+    Resolution order is an explicitly configured `MINIMUM_PROMPT_CACHE_TOKEN_COUNT`, then the
+    model's `prompt_cache_min_tokens` in the cost map, then the provider-agnostic default. The
+    cost map is the source of truth because the real minimum is per-model and per-platform:
+    Anthropic's ranges from 512 to 4096 and moves in both directions across releases, and the
+    same model can differ by platform.
+
+    Never raises. An unresolvable model falls back to the default rather than propagating, so a
+    caller cannot mistake "no entry for this model" for "this prompt is not cacheable".
+    """
+    if MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE is not None:
+        return MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE
+    try:
+        min_tokens = get_model_info(model=model).get("prompt_cache_min_tokens")
+    except Exception:
+        return DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+    if min_tokens is None:
+        return DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+    return min_tokens
+
+
 def is_prompt_caching_valid_prompt(
     model: str,
     messages: Optional[List[AllMessageValues]],
     tools: Optional[List[ChatCompletionToolParam]] = None,
     custom_llm_provider: Optional[str] = None,
+    min_token_count: int | None = None,
 ) -> bool:
     """
     Returns true if the prompt is valid for prompt caching.
 
-    OpenAI + Anthropic providers have a minimum token count of 1024 for prompt caching.
+    The minimum cacheable prefix is per-model, so it is resolved from `model` unless the caller
+    passes `min_token_count`. Callers that only hold a model-group alias (the router's deployment
+    checks) must resolve the threshold themselves and pass it, because an alias resolves to
+    nothing here and would silently fall back to the default.
+
+    OpenAI's minimum is a flat 1024 across models, which the default already covers.
     """
     try:
         if messages is None and tools is None:
@@ -9061,7 +9099,9 @@ def is_prompt_caching_valid_prompt(
             model=model,
             use_default_image_token_count=True,
         )
-        return token_count >= MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+        if min_token_count is None:
+            min_token_count = get_prompt_cache_min_tokens(model=model)
+        return token_count >= min_token_count
     except Exception as e:
         verbose_logger.error(f"Error in is_prompt_caching_valid_prompt: {e}")
         return False

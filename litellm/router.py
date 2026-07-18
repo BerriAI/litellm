@@ -33,6 +33,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TypeVar,
     Union,
     cast,
 )
@@ -86,7 +87,11 @@ from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
-from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+from litellm.router_strategy.tag_based_routing import (
+    _get_tags_from_request_kwargs,
+    get_deployments_for_tag,
+    is_valid_deployment_tag,
+)
 from litellm.router_utils.add_retry_fallback_headers import (
     _HiddenParamsHost,
     add_fallback_headers_to_response,
@@ -175,6 +180,7 @@ from litellm.types.router import (
     MockRouterTestingParams,
     ModelGroupInfo,
     OptionalPreCallChecks,
+    PreRoutingStrategy,
     RetryPolicy,
     RouterCacheEnum,
     RouterGeneralSettings,
@@ -186,6 +192,7 @@ from litellm.types.router import (
     RoutingPlugin,
     RoutingStrategy,
     SearchToolTypedDict,
+    TaggedPreRoutingStrategy,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -258,6 +265,9 @@ def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+_PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 
 class RoutingArgs(enum.Enum):
@@ -487,10 +497,10 @@ class Router:
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
-        self.auto_routers: Dict[str, "AutoRouter"] = {}
-        self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
-        self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
-        self.quality_routers: Dict[str, "QualityRouter"] = {}
+        self.auto_routers: dict[str, list[TaggedPreRoutingStrategy["AutoRouter"]]] = {}
+        self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy["ComplexityRouter"]]] = {}
+        self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy["AdaptiveRouter"]]] = {}
+        self.quality_routers: dict[str, list[TaggedPreRoutingStrategy["QualityRouter"]]] = {}
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
@@ -2037,6 +2047,9 @@ class Router:
                     logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
+                inner_chunks: object = getattr(model_response, "chunks", None)
+                if isinstance(inner_chunks, list):
+                    self.chunks = inner_chunks
                 # Preserve hidden params (including litellm_overhead_time_ms) from original response
                 if hasattr(model_response, "_hidden_params"):
                     self._hidden_params = model_response._hidden_params.copy()
@@ -4448,6 +4461,7 @@ class Router:
                     model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
+                    input=kwargs.get("input", None),
                     specific_deployment=kwargs.pop("specific_deployment", None),
                 )
             except Exception as e:
@@ -4595,6 +4609,7 @@ class Router:
             deployment = self.get_available_deployment(
                 model=model,
                 messages=kwargs.get("messages", None),
+                input=kwargs.get("input", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
@@ -7568,6 +7583,11 @@ class Router:
             return True
         return False
 
+    @staticmethod
+    def _deployment_tags(deployment: Deployment) -> tuple[str, ...]:
+        """Deployment tags used to disambiguate strategy registries keyed by model_name."""
+        return tuple(deployment.litellm_params.tags or ())
+
     def init_auto_router_deployment(self, deployment: Deployment):
         """
         Initialize the auto-router deployment.
@@ -7603,11 +7623,12 @@ class Router:
             embedding_model=embedding_model,
             litellm_router_instance=self,
         )
-        if deployment.model_name in self.auto_routers:
-            raise ValueError(
-                f"Auto-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-        self.auto_routers[deployment.model_name] = autor_router
+        self._register_pre_routing_strategy(
+            registry=self.auto_routers,
+            deployment=deployment,
+            strategy=autor_router,
+            strategy_label="Auto-router",
+        )
 
     def _is_complexity_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
@@ -7658,20 +7679,54 @@ class Router:
             litellm_router_instance=self,
             complexity_router_config=complexity_router_config,
         )
-        if deployment.model_name in self.complexity_routers:
-            raise ValueError(
-                f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-        self.complexity_routers[deployment.model_name] = complexity_router
+        self._register_pre_routing_strategy(
+            registry=self.complexity_routers,
+            deployment=deployment,
+            strategy=complexity_router,
+            strategy_label="Complexity-router",
+        )
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
         return litellm_params.model.startswith("auto_router/adaptive_router")
 
+    @staticmethod
+    def _has_registered_strategy(
+        registry: dict[str, list[TaggedPreRoutingStrategy[_PreRoutingStrategyT]]],
+        model_name: str,
+        tags: tuple[str, ...],
+    ) -> bool:
+        """True when a strategy for this (model_name, tags) pair is already registered."""
+        return any(existing.tags == tags for existing in registry.get(model_name, []))
+
+    def _register_pre_routing_strategy(
+        self,
+        registry: dict[str, list[TaggedPreRoutingStrategy[_PreRoutingStrategyT]]],
+        deployment: Deployment,
+        strategy: _PreRoutingStrategyT,
+        strategy_label: str,
+    ) -> None:
+        """
+        Register `strategy` under `deployment.model_name`, scoped by its tags.
+        Reusing a `model_name` is allowed when tags differ; a repeat of the same
+        (model_name, tags) pair is a misconfiguration and is rejected.
+        """
+        tags = self._deployment_tags(deployment)
+        if self._has_registered_strategy(registry, deployment.model_name, tags):
+            raise ValueError(
+                f"{strategy_label} deployment {deployment.model_name} with tags {list(tags)} already exists. "
+                "Please use a different model name or set different tags."
+            )
+        registry[deployment.model_name] = [
+            *registry.get(deployment.model_name, []),
+            TaggedPreRoutingStrategy(tags=tags, strategy=strategy),
+        ]
+
     def _finalize_adaptive_router_if_configured(self) -> None:
         """Locate every adaptive-router deployment in the finalized model_list and
         build an AdaptiveRouter for each. Safe no-op when none are configured.
-        Idempotent: skips any deployment whose model_name is already initialized."""
+        Idempotent: skips any deployment whose (model_name, tags) pair is already
+        initialized, so hot-reloads don't rebuild routers that would lose state."""
         # Drop any adaptive-router hooks left over from a previous Router
         # instance (e.g. after `/config/reload` replaced `llm_router`). Without
         # this, stale AdaptiveRouterPostCallHook callbacks from the old Router
@@ -7694,23 +7749,31 @@ class Router:
                 litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)),
                 model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
             )
-            if model_name in self.adaptive_routers:
+            if self._has_registered_strategy(self.adaptive_routers, model_name, self._deployment_tags(deployment)):
                 continue
             self.init_adaptive_router_deployment(deployment=deployment)
 
-        for model_name, complexity_router in self.complexity_routers.items():
-            if not complexity_router.config.adaptive or model_name in self.adaptive_routers:
-                continue
-            adaptive_router = complexity_router._ensure_adaptive_router()
-            if adaptive_router is not None:
-                self.adaptive_routers[model_name] = adaptive_router
+        for model_name, tagged_complexity_routers in self.complexity_routers.items():
+            for tagged in tagged_complexity_routers:
+                complexity_router = tagged.strategy
+                if not complexity_router.config.adaptive:
+                    continue
+                if self._has_registered_strategy(self.adaptive_routers, model_name, tagged.tags):
+                    continue
+                adaptive_router = complexity_router._ensure_adaptive_router()
+                if adaptive_router is not None:
+                    self.adaptive_routers[model_name] = [
+                        *self.adaptive_routers.get(model_name, []),
+                        TaggedPreRoutingStrategy(tags=tagged.tags, strategy=adaptive_router),
+                    ]
 
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
             litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
-        for adaptive_router in self.adaptive_routers.values():
-            litellm.logging_callback_manager.add_litellm_callback(
-                AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
-            )
+        for tagged_adaptive_routers in self.adaptive_routers.values():
+            for tagged in tagged_adaptive_routers:
+                litellm.logging_callback_manager.add_litellm_callback(
+                    AdaptiveRouterPostCallHook(adaptive_router=tagged.strategy)
+                )
 
     def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
         """
@@ -7763,18 +7826,18 @@ class Router:
             if cost is not None:
                 model_to_cost[name] = float(cost)
 
-        if deployment.model_name in self.adaptive_routers:
-            raise ValueError(
-                f"Adaptive-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-
         adaptive_router = AdaptiveRouter(
             router_name=deployment.model_name,
             config=config,
             model_to_prefs=model_to_prefs,
             model_to_cost=model_to_cost,
         )
-        self.adaptive_routers[deployment.model_name] = adaptive_router
+        self._register_pre_routing_strategy(
+            registry=self.adaptive_routers,
+            deployment=deployment,
+            strategy=adaptive_router,
+            strategy_label="Adaptive-router",
+        )
         litellm.logging_callback_manager.add_litellm_callback(
             AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
         )
@@ -7826,11 +7889,12 @@ class Router:
             litellm_router_instance=self,
             quality_router_config=quality_router_config,
         )
-        if deployment.model_name in self.quality_routers:
-            raise ValueError(
-                f"Quality-router deployment {deployment.model_name} already exists. Please use a different model name."
-            )
-        self.quality_routers[deployment.model_name] = quality_router
+        self._register_pre_routing_strategy(
+            registry=self.quality_routers,
+            deployment=deployment,
+            strategy=quality_router,
+            strategy_label="Quality-router",
+        )
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
@@ -7876,6 +7940,7 @@ class Router:
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
         self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        self.team_pattern_routers = {}
         self.team_public_model_names = frozenset()
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
@@ -8232,6 +8297,12 @@ class Router:
             public_model_name for _, public_model_name in self.team_model_to_deployment_indices
         )
 
+        for team_id in list(self.team_pattern_routers.keys()):
+            team_pattern_router = self.team_pattern_routers[team_id]
+            team_pattern_router.remove_deployment(model_id)
+            if not team_pattern_router.patterns:
+                del self.team_pattern_routers[team_id]
+
     def _update_team_model_index(self, model: dict, idx: int) -> None:
         """
         Helper to update team_model_to_deployment_indices for a single deployment.
@@ -8459,7 +8530,37 @@ class Router:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
 
-    def get_deployment_credentials_with_provider(self, model_id: str) -> Optional[Dict[str, Any]]:
+    def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
+        """
+        Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
+        deployment's model_info for model_name, via O(1) index lookup.
+
+        Returns (None, None) for wildcard-expanded or unknown names, and treats a
+        malformed configured value as absent rather than failing the listing. Unlike
+        get_model_group_info, this never triggers pattern matching or deep copies, so it
+        is safe to call per listed model on the /v1/models hot path.
+        """
+        deployment = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return (None, None)
+
+        def _as_int(value: object) -> "int | None":
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        model_info = deployment.model_info
+        return (
+            _as_int(model_info.get("max_input_tokens")),
+            _as_int(model_info.get("max_output_tokens")),
+        )
+
+    def get_deployment_credentials_with_provider(
+        self, model_id: str, team_id: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Get API credentials and provider info from a model name in model_list.
         Useful for passthrough endpoints (files, batches, etc.) that need credentials.
@@ -8469,6 +8570,9 @@ class Router:
 
         Args:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
+            team_id: Optional team id of the caller. When set, team-scoped
+                deployments (indexed by team public model name, including team
+                wildcard models like "openai/*") are also considered.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -8487,9 +8591,22 @@ class Router:
         if deployment is None:
             deployment = self.get_deployment_by_model_group_name(model_group_name=model_id)
 
-        # If still not found, check for wildcard pattern matches
+        # If not found, check team-scoped deployments whose team public model
+        # name exactly matches model_id (wildcard team names are matched via
+        # team_pattern_routers below).
+        if deployment is None and team_id is not None:
+            team_indices = self.team_model_to_deployment_indices.get((team_id, model_id), [])
+            if team_indices:
+                team_model = self.model_list[team_indices[0]]
+                deployment = Deployment(**team_model) if isinstance(team_model, dict) else team_model
+
+        # If still not found, check for wildcard pattern matches. Team wildcard
+        # matches take priority so a global pattern (e.g. "openai/*") doesn't
+        # shadow the team's own entry.
         if deployment is None:
-            potential_wildcard_models = self.pattern_router.route(model_id) or []
+            team_pattern_router = self.team_pattern_routers.get(team_id) if team_id is not None else None
+            team_wildcard_models = (team_pattern_router.route(model_id) or []) if team_pattern_router else []
+            potential_wildcard_models = team_wildcard_models or self.pattern_router.route(model_id) or []
             if potential_wildcard_models:
                 # Use the first matching wildcard deployment
                 deployment_dict = potential_wildcard_models[0]
@@ -9919,11 +10036,44 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, parent_otel_span=parent_otel_span)
                 return client
 
+    def _count_pre_call_check_tokens(
+        self,
+        messages: list[dict[str, str]] | None,
+        input: str | list | None,
+        instructions: str | None = None,
+    ) -> int:
+        """
+        Count input tokens for context-window pre-call checks.
+
+        Chat Completions send `messages`; the Responses API sends `input` (a string or
+        a list of Responses input items) plus an optional `instructions` system prompt.
+        The Responses payload is normalized to chat messages via the shared
+        LiteLLMCompletionResponsesConfig transform so the same token_counter path covers
+        both API surfaces and `instructions` tokens are included in the count.
+        """
+        if messages is not None:
+            return litellm.token_counter(messages=messages)
+        if input is not None:
+            from openai.types.responses.response_create_params import ResponseInputParam
+
+            from litellm.responses.litellm_completion_transformation.transformation import (
+                LiteLLMCompletionResponsesConfig,
+            )
+
+            typed_input = cast(str | ResponseInputParam, input)  # cast-ok: str | list matches transform input
+            input_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=typed_input,
+                responses_api_request={"instructions": instructions} if instructions is not None else {},
+            )
+            return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
+        raise ValueError("Either messages or input must be provided to count tokens")
+
     def _pre_call_checks(
         self,
         model: str,
         healthy_deployments: List,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
         request_kwargs: Optional[dict] = None,
     ):
         """
@@ -9953,6 +10103,10 @@ class Router:
         _rate_limit_error = False
         parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
+        raw_instructions = request_kwargs.get("instructions") if request_kwargs else None
+        instructions = raw_instructions if isinstance(raw_instructions, str) else None
+        has_countable_input = messages is not None or input is not None
+
         ## get model group RPM ##
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
@@ -9975,10 +10129,12 @@ class Router:
                 _deployment_model = base_model or _litellm_params.get("model", None)
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if isinstance(max_input_tokens, int):
+                if isinstance(max_input_tokens, int) and has_countable_input:
                     if input_tokens is None:
                         try:
-                            input_tokens = litellm.token_counter(messages=messages)
+                            input_tokens = self._count_pre_call_check_tokens(
+                                messages=messages, input=input, instructions=instructions
+                            )
                         except Exception as e:
                             verbose_router_logger.error(
                                 "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
@@ -10443,11 +10599,12 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
 
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=cast(List[Dict], healthy_deployments),
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
         # check if user wants to do tag based routing
@@ -10810,6 +10967,35 @@ class Router:
 
         return filtered
 
+    def _select_pre_routing_strategy(self, model: str, request_kwargs: Dict) -> "PreRoutingStrategy | None":
+        """
+        Resolve the pre-routing strategy for `model`, disambiguating deployments
+        that share a `model_name` by matching the request's tags against each
+        registered strategy's tags before falling back to the first registered.
+        """
+        candidates: list[TaggedPreRoutingStrategy[PreRoutingStrategy]] = [
+            *self.auto_routers.get(model, []),
+            *self.complexity_routers.get(model, []),
+            *self.adaptive_routers.get(model, []),
+            *self.quality_routers.get(model, []),
+        ]
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0].strategy
+
+        request_tags = _get_tags_from_request_kwargs(request_kwargs)
+        if request_tags:
+            for tagged in candidates:
+                if tagged.tags and is_valid_deployment_tag(
+                    list(tagged.tags), request_tags, self.tag_filtering_match_any
+                ):
+                    return tagged.strategy
+        for tagged in candidates:
+            if "default" in tagged.tags:
+                return tagged.strategy
+        return candidates[0].strategy
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -10832,12 +11018,7 @@ class Router:
         if self.routing_plugins:
             await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
 
-        router_strategy = (
-            self.auto_routers.get(model)
-            or self.complexity_routers.get(model)
-            or self.adaptive_routers.get(model)
-            or self.quality_routers.get(model)
-        )
+        router_strategy = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
         if router_strategy is None:
             return None
 
@@ -10934,11 +11115,12 @@ class Router:
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         # filter pre-call checks
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=healthy_deployments,
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
 
@@ -11088,11 +11270,12 @@ class Router:
         pass_through_deployments = self._filter_blocked_deployments(pass_through_deployments)
 
         # 5. Apply pre-call checks (if enabled)
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             pass_through_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=pass_through_deployments,
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
 
