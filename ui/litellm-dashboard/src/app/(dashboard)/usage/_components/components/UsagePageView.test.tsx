@@ -1162,4 +1162,127 @@ describe("UsagePage", () => {
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
     });
   });
+
+  // Regression test for https://github.com/BerriAI/litellm/issues/33381
+  // When a day's breakdown contains entries where the inner `metrics`
+  // object is undefined (a data-quality issue at the backend), the
+  // top-keys/top-models/top-model-groups/provider aggregations must
+  // skip those entries instead of throwing
+  // `Cannot read properties of undefined (reading 'spend')`.
+  it("should not crash when breakdown entries are missing inner metrics", async () => {
+    const partialSpendData = {
+      ...mockSpendData,
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: mockSpendData.results[0].metrics,
+          breakdown: {
+            models: {
+              "model-x": {
+                metrics: {
+                  spend: 12.5,
+                  api_requests: 100,
+                  successful_requests: 95,
+                  failed_requests: 5,
+                  total_tokens: 1000,
+                  prompt_tokens: 600,
+                  completion_tokens: 400,
+                  cache_read_input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                },
+                metadata: {},
+                api_key_breakdown: {},
+              },
+              "model-broken": {
+                // Inner `metrics` deliberately missing — this used to crash
+                // the page with `Cannot read properties of undefined`.
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+            model_groups: {
+              "group-x": {
+                metrics: {
+                  spend: 12.5,
+                  api_requests: 100,
+                  successful_requests: 95,
+                  failed_requests: 5,
+                  total_tokens: 1000,
+                  prompt_tokens: 600,
+                  completion_tokens: 400,
+                  cache_read_input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                },
+                metadata: {},
+                api_key_breakdown: {},
+              },
+              "group-broken": {
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+            providers: {
+              openai: mockSpendData.results[0].breakdown.providers.openai,
+              broken: { metadata: {} },
+            },
+            api_keys: {
+              "sk-test123": {
+                // Missing inner `metrics`
+                metadata: { key_alias: "Test Key", tags: ["production"] },
+              },
+            },
+            mcp_servers: {},
+            entities: {},
+          },
+        },
+      ],
+      metadata: { ...mockSpendData.metadata, total_pages: 1, page: 1, has_more: false },
+    };
+
+    mockUserDailyActivityAggregatedCall.mockResolvedValueOnce(partialSpendData);
+
+    // Should not throw — the page should render with partial data.
+    expect(() => renderWithProviders(<UsagePage {...defaultProps} />)).not.toThrow();
+
+    // Wait for the request to be made — proves the consumer ran
+    // (without crashing) past the data fetch.
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+  });
+
+  // Regression test for https://github.com/BerriAI/litellm/issues/33381
+  // When an api_keys breakdown entry has no `metadata` field at all, the
+  // topKeys aggregation must skip it gracefully instead of throwing
+  // `Cannot read properties of undefined (reading 'key_alias')`.
+  it("should not crash when api_keys entries are missing metadata", async () => {
+    const partialSpendData = {
+      ...mockSpendData,
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: mockSpendData.results[0].metrics,
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            api_keys: {
+              "sk-valid": mockSpendData.results[0].breakdown.api_keys["sk-test123"],
+              "sk-no-meta": {
+                metrics: mockSpendData.results[0].breakdown.api_keys["sk-test123"].metrics,
+                // metadata intentionally missing
+              },
+            },
+          },
+        },
+      ],
+      metadata: { ...mockSpendData.metadata, total_pages: 1, page: 1, has_more: false },
+    };
+
+    mockUserDailyActivityAggregatedCall.mockResolvedValueOnce(partialSpendData);
+
+    expect(() => renderWithProviders(<UsagePage {...defaultProps} />)).not.toThrow();
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+  });
 });

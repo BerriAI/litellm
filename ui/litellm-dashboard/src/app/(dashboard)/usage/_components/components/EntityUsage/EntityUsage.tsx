@@ -170,15 +170,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
             tokens: 0,
           };
         }
-        try {
-          modelSpend[model].spend += metrics.metrics.spend;
-        } catch (e) {
-          console.error(`Error adding spend for ${model}: ${e}, got metrics: ${JSON.stringify(metrics)}`);
-        }
-        modelSpend[model].requests += metrics.metrics.api_requests;
-        modelSpend[model].successful_requests += metrics.metrics.successful_requests;
-        modelSpend[model].failed_requests += metrics.metrics.failed_requests;
-        modelSpend[model].tokens += metrics.metrics.total_tokens;
+        modelSpend[model].spend += metrics.metrics?.spend ?? 0;
+        modelSpend[model].requests += metrics.metrics?.api_requests ?? 0;
+        modelSpend[model].successful_requests += metrics.metrics?.successful_requests ?? 0;
+        modelSpend[model].failed_requests += metrics.metrics?.failed_requests ?? 0;
+        modelSpend[model].tokens += metrics.metrics?.total_tokens ?? 0;
       });
     });
 
@@ -254,21 +250,21 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
               cache_creation_input_tokens: 0,
             },
             metadata: {
-              key_alias: metrics.metadata.key_alias,
-              team_id: metrics.metadata.team_id || null,
+              key_alias: metrics.metadata?.key_alias ?? null,
+              team_id: metrics.metadata?.team_id ?? null,
               tags: tagDictionary[key] || [],
             },
           };
         }
-        keySpend[key].metrics.spend += metrics.metrics.spend;
-        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
-        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
-        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
-        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
-        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        keySpend[key].metrics.spend += metrics.metrics?.spend ?? 0;
+        keySpend[key].metrics.prompt_tokens += metrics.metrics?.prompt_tokens ?? 0;
+        keySpend[key].metrics.completion_tokens += metrics.metrics?.completion_tokens ?? 0;
+        keySpend[key].metrics.total_tokens += metrics.metrics?.total_tokens ?? 0;
+        keySpend[key].metrics.api_requests += metrics.metrics?.api_requests ?? 0;
+        keySpend[key].metrics.successful_requests += metrics.metrics?.successful_requests ?? 0;
+        keySpend[key].metrics.failed_requests += metrics.metrics?.failed_requests ?? 0;
+        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics?.cache_read_input_tokens ?? 0;
+        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics?.cache_creation_input_tokens ?? 0;
       });
     });
 
@@ -297,15 +293,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
             tokens: 0,
           };
         }
-        try {
-          providerSpend[provider].spend += metrics.metrics.spend;
-          providerSpend[provider].requests += metrics.metrics.api_requests;
-          providerSpend[provider].successful_requests += metrics.metrics.successful_requests;
-          providerSpend[provider].failed_requests += metrics.metrics.failed_requests;
-          providerSpend[provider].tokens += metrics.metrics.total_tokens;
-        } catch (e) {
-          console.error(`Error processing provider ${provider}: ${e}`);
-        }
+        providerSpend[provider].spend += metrics.metrics?.spend ?? 0;
+        providerSpend[provider].requests += metrics.metrics?.api_requests ?? 0;
+        providerSpend[provider].successful_requests += metrics.metrics?.successful_requests ?? 0;
+        providerSpend[provider].failed_requests += metrics.metrics?.failed_requests ?? 0;
+        providerSpend[provider].tokens += metrics.metrics?.total_tokens ?? 0;
       });
     });
 
@@ -370,11 +362,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
             },
           };
         }
-        entitySpend[entity].metrics.spend += data.metrics.spend;
-        entitySpend[entity].metrics.api_requests += data.metrics.api_requests;
-        entitySpend[entity].metrics.successful_requests += data.metrics.successful_requests;
-        entitySpend[entity].metrics.failed_requests += data.metrics.failed_requests;
-        entitySpend[entity].metrics.total_tokens += data.metrics.total_tokens;
+        entitySpend[entity].metrics.spend += data.metrics?.spend ?? 0;
+        entitySpend[entity].metrics.api_requests += data.metrics?.api_requests ?? 0;
+        entitySpend[entity].metrics.successful_requests += data.metrics?.successful_requests ?? 0;
+        entitySpend[entity].metrics.failed_requests += data.metrics?.failed_requests ?? 0;
+        entitySpend[entity].metrics.total_tokens += data.metrics?.total_tokens ?? 0;
       });
     });
 
