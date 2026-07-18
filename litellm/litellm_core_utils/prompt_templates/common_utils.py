@@ -1679,16 +1679,19 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
     This helper uses ``json.JSONDecoder.raw_decode()`` to walk the string
     and extract each JSON object individually.
 
+    The walk degrades gracefully: if the string is malformed or truncated
+    (e.g. a stream that ended mid-tool-call), whatever complete objects were
+    parsed before the bad tail are returned and the remainder is discarded
+    with a warning, rather than raising.  The sole caller
+    (``_convert_to_bedrock_tool_call_invoke``) treats an empty result as
+    ``input={}`` so the conversation can continue instead of hard-failing.
+
     Returns
     -------
     list[dict]
         A list of parsed dicts – one per JSON object found.  If *raw* is
-        empty or whitespace-only, an empty list is returned.
-
-    Raises
-    ------
-    json.JSONDecodeError
-        If the string contains text that cannot be parsed as JSON at all.
+        empty, whitespace-only, or wholly unparseable, an empty list is
+        returned.
     """
     import json
 
@@ -1708,7 +1711,17 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
         if idx >= length:
             break
 
-        obj, end_idx = decoder.raw_decode(raw, idx)
+        try:
+            obj, end_idx = decoder.raw_decode(raw, idx)
+        except json.JSONDecodeError as e:
+            verbose_logger.warning(
+                "split_concatenated_json_objects: discarding unparseable tool-call "
+                "arguments tail after %d complete object(s); error=%s at char %d",
+                len(results),
+                e,
+                idx,
+            )
+            break
         if isinstance(obj, dict):
             results.append(obj)
         else:
