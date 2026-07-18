@@ -809,8 +809,9 @@ async def proxy_shutdown_event():
 async def _initialize_shared_aiohttp_session():
     """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
-        from aiohttp import ClientSession, TCPConnector
+        from aiohttp import ClientSession
 
+        from litellm.llms.custom_httpx.aiohttp_connector import HardenedTCPConnector
         from litellm.llms.custom_httpx.http_handler import (
             _build_aiohttp_keepalive_socket_factory,
         )
@@ -829,7 +830,7 @@ async def _initialize_shared_aiohttp_session():
         if socket_factory is not None:
             connector_kwargs["socket_factory"] = socket_factory
 
-        connector = TCPConnector(**connector_kwargs)
+        connector = HardenedTCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
 
         verbose_proxy_logger.info(

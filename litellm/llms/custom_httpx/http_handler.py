@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.aiohttp_connector import HardenedTCPConnector
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -1043,7 +1044,7 @@ class AsyncHTTPHandler:
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**transport_connector_kwargs),
+                connector=HardenedTCPConnector(**transport_connector_kwargs),
                 trust_env=trust_env,
             ),
             ssl_verify=ssl_for_transport,
