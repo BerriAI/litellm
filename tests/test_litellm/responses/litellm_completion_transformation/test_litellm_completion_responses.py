@@ -2432,3 +2432,26 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
         id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
     )
     assert convert(openai)["id"] == "call_tokyo"
+
+
+def test_no_tools_omitted_from_chat_completion_request():
+    """A responses request without tools must not produce tools=[] in the chat
+    request; strict backends (vLLM) reject empty tool arrays outright"""
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    request = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="openai/some-model",
+        input=[
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ],
+        responses_api_request={},
+        custom_llm_provider="openai",
+        stream=False,
+    )
+    assert "tools" not in request
