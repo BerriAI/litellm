@@ -202,14 +202,15 @@ def drive_to_block(
     attempts: int,
     pause_seconds: float,
     fail_message: str,
-) -> None:
+) -> StreamingResponse:
     """Spend through ``call`` until the cap blocks; every pre-block response must be
     a success (never a provider error), and ``fail_message`` fails the test loudly
-    if enforcement never trips within ``attempts``."""
+    if enforcement never trips within ``attempts``. Returns the blocking response
+    so callers can assert on its shape."""
     for _ in range(attempts):
         result = call()
         if is_budget_block(result):
-            return
+            return result
         require_successful_call(result)
         time.sleep(pause_seconds)
     pytest.fail(fail_message)

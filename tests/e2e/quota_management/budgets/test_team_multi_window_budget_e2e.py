@@ -22,6 +22,7 @@ import time
 import pytest
 
 from budget_client import BudgetClient, drive_to_block, is_budget_block, window_reset_at
+from e2e_http import StreamingResponse
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import BudgetWindow
@@ -40,8 +41,8 @@ def _call(client: BudgetClient, key: str):
     return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
 
 
-def _drive_to_block(client: BudgetClient, key: str) -> None:
-    drive_to_block(
+def _drive_to_block(client: BudgetClient, key: str) -> StreamingResponse:
+    return drive_to_block(
         lambda: _call(client, key),
         attempts=30,
         pause_seconds=1,
@@ -95,7 +96,8 @@ def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient,
     key = client.generate_key(team_id=team_id, models=["claude-haiku-4-5"])
     resources.defer(lambda: client.delete_key(key))
 
-    _drive_to_block(client, key)
+    blocked = _drive_to_block(client, key)
+    assert blocked.status_code == 429, f"budget block was not a 429: {blocked.status_code} {blocked.body[:200]}"
 
     blocked_reset_at = window_reset_at(client.team_budget_windows(team_id), SHORT_WINDOW)
     assert blocked_reset_at is not None, "short window missing from /team/info budget_limits"
