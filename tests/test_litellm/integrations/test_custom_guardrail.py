@@ -653,6 +653,48 @@ class TestGuardrailLoggingAggregation:
         assert len(info) == 2
         assert info[1]["guardrail_name"] == "test_guardrail"
 
+    def test_records_into_litellm_metadata_when_client_metadata_present(self):
+        """When the client sends a top-level ``metadata`` field (e.g. Claude Code /
+        the Anthropic SDK always send ``metadata.user_id``) alongside the internal
+        ``litellm_metadata``, the guardrail entry must still land in
+        ``litellm_metadata``.  The ``anthropic_messages`` streaming spend log is
+        built from ``litellm_metadata``, so recording only into the client
+        ``metadata`` dict drops guardrail_information and hides the Guardrails
+        section in the UI.
+        """
+        request_data = {
+            "metadata": {"user_id": "client-supplied"},
+            "litellm_metadata": {},
+        }
+
+        self._invoke_add_log(request_data)
+
+        litellm_info = request_data["litellm_metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert isinstance(litellm_info, list)
+        assert len(litellm_info) == 1
+        assert litellm_info[0]["guardrail_name"] == "test_guardrail"
+
+        client_info = request_data["metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert isinstance(client_info, list)
+        assert len(client_info) == 1
+
+    def test_no_duplicate_entry_when_metadata_aliases_litellm_metadata(self):
+        """If ``metadata`` and ``litellm_metadata`` reference the same dict, the
+        entry must be recorded once, not twice.
+        """
+        shared: dict = {}
+        request_data = {"metadata": shared, "litellm_metadata": shared}
+
+        self._invoke_add_log(request_data)
+
+        info = shared["standard_logging_guardrail_information"]
+        assert isinstance(info, list)
+        assert len(info) == 1
+
 
 class TestGuardrailOtelSpanEmission:
     """Recording a guardrail emits its otel span inline, so every guardrail

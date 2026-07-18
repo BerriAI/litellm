@@ -94,6 +94,34 @@ def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[s
     return None
 
 
+def _guardrail_log_containers(request_data: dict) -> tuple:
+    """Return the metadata dicts that guardrail logging info must be written to.
+
+    The spend log for ``/v1/chat/completions`` reads guardrail_information from
+    ``metadata`` while streaming ``anthropic_messages`` reads it from
+    ``litellm_metadata``.  When a client sends a top-level ``metadata`` field
+    (Claude Code / the Anthropic SDK always send ``metadata.user_id``), both
+    containers are present, so the info is recorded into every present container
+    (deduplicated by identity) rather than only the client one.
+    """
+
+    def _ensure_dict(key: str) -> Optional[dict]:
+        if key not in request_data:
+            return None
+        if request_data[key] is None:
+            request_data[key] = {}
+        value = request_data[key]
+        return value if isinstance(value, dict) else None
+
+    containers = tuple(m for m in (_ensure_dict("litellm_metadata"), _ensure_dict("metadata")) if m is not None)
+    if not containers:
+        request_data["metadata"] = {}
+        return (request_data["metadata"],)
+    if len(containers) == 2 and containers[0] is containers[1]:
+        return (containers[0],)
+    return containers
+
+
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
@@ -844,17 +872,8 @@ class CustomGuardrail(CustomLogger):
                 # should not happen
                 container[key] = [existing, slg]
 
-        if "metadata" in request_data:
-            if request_data["metadata"] is None:
-                request_data["metadata"] = {}
-            _append_guardrail_info(request_data["metadata"])
-        elif "litellm_metadata" in request_data:
-            _append_guardrail_info(request_data["litellm_metadata"])
-        else:
-            # Ensure guardrail info is always logged (e.g. proxy may not have set
-            # metadata yet). Attach to "metadata" so spend log / standard logging see it.
-            request_data["metadata"] = {}
-            _append_guardrail_info(request_data["metadata"])
+        for container in _guardrail_log_containers(request_data):
+            _append_guardrail_info(container)
 
         # Emit the otel guardrail span here, where every guardrail execution lands,
         # rather than relying on a post-call hook that does not fire on every path
