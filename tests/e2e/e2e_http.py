@@ -249,6 +249,7 @@ def delete[R: BaseModel](
     headers: BaseModel,
     json: BaseModel,
     response_type: type[R],
+    params: BaseModel | None = None,
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
@@ -256,6 +257,7 @@ def delete[R: BaseModel](
             str(url),
             headers=_headers(headers),
             json=json.model_dump(by_alias=True, exclude_none=True),
+            params=_params(params),
             timeout=timeout,
         )
     except requests.RequestException as exc:
