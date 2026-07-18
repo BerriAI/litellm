@@ -22,11 +22,21 @@ pub async fn run(
         CoreError::Routing(format!("no deployment available for model '{model}'"))
     })?;
     let provider_model = deployment.litellm_params.model.as_str();
+    let upstream_model = provider_model
+        .split_once('/')
+        .map_or(provider_model, |(_, model)| model);
     let custom_llm_provider = if provider_model.contains('/') {
         None
     } else {
         Some(ANTHROPIC_MESSAGES_PROVIDER)
     };
+    let mut body = body;
+    body.as_object_mut()
+        .ok_or_else(|| CoreError::InvalidRequest("messages body must be an object".to_string()))?
+        .insert(
+            "model".to_string(),
+            Value::String(upstream_model.to_string()),
+        );
 
     messages(MessagesRequest {
         model: provider_model,
