@@ -23,6 +23,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth impo
     NoOpAuth,
     StaticHeaderAuth,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.idp_subject_source import (
+    IdpSubjectTokenSource,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
     OAuthTokenStore,
@@ -74,6 +77,14 @@ class _NullTokenExchanger:
         return None
 
 
+class _NullIdpSubjectTokenSource:
+    """Fail-closed default: with no source wired, a delegated OBO request has no subject token, so
+    the token_exchange arm challenges rather than falling back to the agent's admission credential."""
+
+    async def subject_token(self, user_id: str, config: TokenExchangeConfig) -> str | None:
+        return None
+
+
 class UpstreamCredentialProvider:
     """Produces the one `httpx.Auth` for a `(subject, upstream)` pair, per declared mode.
 
@@ -87,9 +98,11 @@ class UpstreamCredentialProvider:
         self,
         oauth_token_store: OAuthTokenStore | None = None,
         token_exchanger: TokenExchanger | None = None,
+        idp_subject_source: IdpSubjectTokenSource | None = None,
     ) -> None:
         self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
         self._token_exchanger: TokenExchanger = token_exchanger or _NullTokenExchanger()
+        self._idp_subject_source: IdpSubjectTokenSource = idp_subject_source or _NullIdpSubjectTokenSource()
 
     async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
         match server.config:
@@ -150,39 +163,76 @@ class UpstreamCredentialProvider:
     async def _token_exchange(
         self, subject: Subject, server: ServerSpec, config: TokenExchangeConfig
     ) -> Result[StaticHeaderAuth, CredError]:
-        """RFC 8693 OBO: exchange the caller's inbound token for an upstream-bound bearer.
+        """RFC 8693 OBO: exchange the subject's token for an upstream-bound bearer.
 
-        No inbound token means there is nothing to exchange, so the arm fails closed with a 401 rather
+        The subject token is the caller's own inbound token for a direct request, or the delegated
+        user's IdP token (Path B) for an agent-delegated one; it is never the agent's admission
+        credential (see ``_obo_subject_token``). A missing subject token fails closed with a 401 rather
         than falling through to a weaker source (§1.5); the exchanger handles the IdP round-trip and
         caching and returns the upstream token or a typed error.
         """
-        inbound = subject.inbound_token
-        if inbound is None:
-            return Error(
-                CredError.of_unauthorized(
-                    "Token exchange requires a caller token to exchange (OBO).",
-                    www_authenticate='Bearer error="invalid_request"',
-                )
-            )
-        match await self._token_exchanger.exchange(
-            inbound.get_secret_value(), server, config, tenant_id=subject.tenant_id
-        ):
+        subject_token = await self._obo_subject_token(subject, config)
+        if isinstance(subject_token, Error):
+            return Error(subject_token.error)
+        match await self._token_exchanger.exchange(subject_token.ok, server, config, tenant_id=subject.tenant_id):
             case Ok(token):
                 return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
             case Error(err):
                 return Error(err)
+
+    async def _obo_subject_token(self, subject: Subject, config: TokenExchangeConfig) -> Result[str, CredError]:
+        """The subject_token to exchange (OBO): the caller's own token, or the delegated user's IdP
+        token, never the agent's admission credential.
+
+        For a direct (non-delegated) request the subject presents its own token inline, so the inbound
+        token IS the subject's proof and is exchanged as before; a missing one is the arm's 401. For an
+        agent-delegated request (``delegated_user_id`` set) the inbound token is the agent's admission
+        credential and must not be exchanged (exchanging it would mint agent-scoped access, the exact
+        escalation this design prevents); the delegated user's IdP grant is sourced instead (Path B),
+        and its absence fails closed with a 401 telling the client to authenticate the user with the
+        IdP. The agent's token is never a fallback.
+        """
+        if subject.delegated_user_id is None:
+            inbound = subject.inbound_token
+            if inbound is None:
+                return Error(
+                    CredError.of_unauthorized(
+                        "Token exchange requires a caller token to exchange (OBO).",
+                        www_authenticate='Bearer error="invalid_request"',
+                    )
+                )
+            return Ok(inbound.get_secret_value())
+        subject_token = await self._idp_subject_source.subject_token(subject.delegated_user_id, config)
+        if subject_token is None:
+            return Error(
+                CredError.of_unauthorized(
+                    "Delegated user has not authorized the IdP for on-behalf-of access; complete consent and retry.",
+                    www_authenticate='Bearer error="invalid_token"',
+                )
+            )
+        return Ok(subject_token)
 
     async def invalidate_credentials(self, subject: Subject, server: ServerSpec) -> None:
         """Drop any cached credential the resolver owns for this `(subject, server)`.
 
         Used after an upstream rejects the injected credential, so the next resolve re-mints rather
         than serving the same rejected token until TTL. Only `token_exchange` holds a re-mintable
-        cached credential here; other modes are a no-op.
+        cached credential here; other modes are a no-op. The exchange cache is keyed on the
+        subject_token that minted it, so invalidation recomputes the key from the same source
+        `_token_exchange` uses (the delegated user's IdP token, or the caller's own inbound token),
+        never the agent's admission credential. This is best-effort: if the delegated user's IdP token
+        has since rotated the recomputed key no longer matches the rejected entry, which then lapses on
+        its own TTL rather than being dropped early.
         """
-        if isinstance(server.config, TokenExchangeConfig) and subject.inbound_token is not None:
-            await self._token_exchanger.invalidate(
-                subject.inbound_token.get_secret_value(), server, server.config, tenant_id=subject.tenant_id
-            )
+        if not isinstance(server.config, TokenExchangeConfig):
+            return
+        match await self._obo_subject_token(subject, server.config):
+            case Error(_):
+                return
+            case Ok(subject_token):
+                await self._token_exchanger.invalidate(
+                    subject_token, server, server.config, tenant_id=subject.tenant_id
+                )
 
     async def _authz_token(self, subject: Subject, server: ServerSpec) -> OAuthToken | None:
         """The user's authorization_code token, or None when absent or the store is unreachable.

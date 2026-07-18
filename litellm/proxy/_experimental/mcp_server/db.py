@@ -1169,6 +1169,83 @@ async def list_user_oauth_credentials(
     return results
 
 
+# The user's IdP (e.g. Okta) grant for delegated on-behalf-of exchange is a THIRD credential kind in
+# this table, distinct from a BYOK secret and a per-upstream-server oauth2 token. It is tagged with its
+# own payload ``type`` so the oauth2-only readers (``get_user_oauth_credential`` /
+# ``list_user_oauth_credentials``, which gate on ``type == "oauth2"``) never surface it as a connected
+# server, and it is keyed by the IdP (in ``server_id``) rather than an upstream server, so one grant
+# serves every token_exchange upstream that IdP fronts.
+_IDP_GRANT_TYPE = "idp_grant"
+
+
+def _decode_idp_grant_payload(stored: str) -> dict[str, Any] | None:
+    """Return the decoded payload iff ``stored`` holds an IdP grant (``type == "idp_grant"``)."""
+    decoded = _decode_user_credential(stored)
+    if decoded is None:
+        return None
+    try:
+        parsed = json.loads(decoded)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict) and parsed.get("type") == _IDP_GRANT_TYPE:
+        return parsed
+    return None
+
+
+async def store_user_idp_grant(
+    prisma_client: PrismaClient,
+    user_id: str,
+    idp_key: str,
+    access_token: str,
+    refresh_token: str | None = None,
+    expires_in: int | None = None,
+    scopes: list[str] | None = None,
+) -> None:
+    """Persist a user's IdP grant (for delegated OBO exchange), keyed by IdP in ``server_id``.
+
+    Stored as a ``type: "idp_grant"`` payload so the oauth2-only readers never mistake it for a
+    connected upstream server. The refresh path overwrites the same row with the rotated token.
+    """
+    expires_at: str | None = None
+    if expires_in is not None:
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+
+    payload: dict[str, Any] = {
+        "type": _IDP_GRANT_TYPE,
+        "access_token": access_token,
+        "connected_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if refresh_token:
+        payload["refresh_token"] = refresh_token
+    if expires_at:
+        payload["expires_at"] = expires_at
+    if scopes:
+        payload["scopes"] = scopes
+
+    encoded = encrypt_value_helper(json.dumps(payload))
+    await MCPUserCredentialsRepository(prisma_client).table.upsert(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": idp_key}},
+        data={
+            "create": {"user_id": user_id, "server_id": idp_key, "credential_b64": encoded},
+            "update": {"credential_b64": encoded},
+        },
+    )
+
+
+async def get_user_idp_grant(
+    prisma_client: PrismaClient,
+    user_id: str,
+    idp_key: str,
+) -> dict[str, Any] | None:
+    """Return the decoded IdP-grant payload for a user+IdP pair, or None."""
+    row = await MCPUserCredentialsRepository(prisma_client).table.find_unique(
+        where={"user_id_server_id": {"user_id": user_id, "server_id": idp_key}}
+    )
+    if row is None:
+        return None
+    return _decode_idp_grant_payload(row.credential_b64)
+
+
 def _decrypted_credential_field(creds: Dict[str, object], field: str) -> object:
     """Return one credential field decrypted with the global salt key; non-string and legacy
     plaintext values come back unchanged (decrypt_value_helper returns the original on failure)."""
