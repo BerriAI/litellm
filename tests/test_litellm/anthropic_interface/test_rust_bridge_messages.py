@@ -307,7 +307,7 @@ async def test_gate_invokes_rust_for_native_anthropic_provider():
 async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
     bridge = RecordingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
-    monkeypatch.setenv("RUST", "1")
+    monkeypatch.setenv("LITELLM_RUST", "1")
 
     response = await _gate(
         custom_llm_provider="anthropic",
@@ -322,7 +322,7 @@ async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
 async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
     bridge = ExplodingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
-    monkeypatch.setenv("RUST", "0")
+    monkeypatch.setenv("LITELLM_RUST", "0")
 
     response = await _gate(
         custom_llm_provider="anthropic",

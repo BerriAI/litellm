@@ -2250,7 +2250,7 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _rust_env_enabled() -> bool:
-        return os.getenv("RUST", "").strip().lower() in {"1", "true", "yes", "on"}
+        return os.getenv("LITELLM_RUST", "").strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
     async def _maybe_rust_anthropic_messages(

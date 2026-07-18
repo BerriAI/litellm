@@ -28,7 +28,7 @@ EXCLUDED_GUARD_ONLY_VARS = {
 # environment settings docs until the feature is ready for broad use.
 EXCLUDED_ROLLOUT_FLAGS = {
     "LITELLM_USE_RUST_OCR",
-    "RUST",
+    "LITELLM_RUST",
 }
 
 EXCLUDED_TERMINAL_VARS = {
