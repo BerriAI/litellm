@@ -37,9 +37,30 @@ class ResponsesFunctionTool(BaseModel):
     parameters: FunctionParameters
 
 
+class ResponsesInputTextPart(BaseModel):
+    type: Literal["input_text"] = "input_text"
+    text: str
+
+
+class ResponsesInputImagePart(BaseModel):
+    type: Literal["input_image"] = "input_image"
+    image_url: str
+
+
+ResponsesInputContentPart = ResponsesInputTextPart | ResponsesInputImagePart
+
+
+class ResponsesInputMessage(BaseModel):
+    role: Literal["user", "assistant", "system"] = "user"
+    content: list[ResponsesInputContentPart]
+
+
+ResponsesInput = str | list[ResponsesInputMessage]
+
+
 class ResponsesRequest(BaseModel):
     model: str
-    input: str
+    input: ResponsesInput
     instructions: str | None = None
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
@@ -234,6 +255,26 @@ class EndpointsClient:
                 stream=stream,
             ),
             stream=stream,
+        )
+
+    def responses_vision(
+        self, key: str, model: str, text: str, image_url: str
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/responses",
+            key,
+            ResponsesRequest(
+                model=model,
+                input=[
+                    ResponsesInputMessage(
+                        content=[
+                            ResponsesInputTextPart(text=text),
+                            ResponsesInputImagePart(image_url=image_url),
+                        ]
+                    )
+                ],
+                instructions="You are a helpful assistant",
+            ),
         )
 
     def responses_with_tools(
