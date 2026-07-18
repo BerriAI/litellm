@@ -316,6 +316,24 @@ async def test_restore_transactions_to_redis_noop_when_empty(
     mock_redis_cache.async_rpush_pipeline.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_restore_transactions_to_redis_swallows_redis_error(
+    redis_update_buffer, mock_redis_cache
+):
+    """A Redis failure during restore must not propagate to the caller's finally block."""
+    from redis.exceptions import RedisError
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(
+        side_effect=RedisError("redis down")
+    )
+
+    await redis_update_buffer.restore_transactions_to_redis(
+        db_spend_update_transactions={"key_list_transactions": {"key1": 1.0}},
+    )
+
+    mock_redis_cache.async_rpush_pipeline.assert_called_once()
+
+
 def test_validate_redis_transaction_buffer_raises_without_redis():
     """
     When use_redis_transaction_buffer=true but no Redis cache is configured,

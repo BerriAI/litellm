@@ -797,11 +797,7 @@ class DBSpendUpdateWriter:
         ):
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
-            # Track everything popped from Redis. Each category is removed once it
-            # has been committed to the DB, so whatever is left after a failure can
-            # be re-queued for the next tick instead of being lost. Committed
-            # categories are never re-queued, so their spend is not double-counted.
-            uncommitted: dict[str, Any] = {}  # mutable-ok: drives which popped categories still need re-queuing
+            uncommitted: dict[str, Any] = {}  # mutable-ok: tracks popped categories still needing commit
 
             try:
                 (
@@ -1048,11 +1044,12 @@ class DBSpendUpdateWriter:
             cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
         ):
             verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
-            daily_tag_spend_update_transactions = (
-                await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
-            )
+            daily_tag_spend_update_transactions: dict[str, DailyTagSpendTransaction] | None = None
             committed = False
             try:
+                daily_tag_spend_update_transactions = (
+                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+                )
                 if daily_tag_spend_update_transactions:
                     await DBSpendUpdateWriter.update_daily_tag_spend(
                         n_retry_times=n_retry_times,
