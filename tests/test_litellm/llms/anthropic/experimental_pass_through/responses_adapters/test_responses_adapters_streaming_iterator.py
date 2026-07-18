@@ -6,6 +6,8 @@ Tests for AnthropicResponsesStreamWrapper
 import os
 import sys
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
 )
@@ -77,3 +79,22 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestMessageStartEmittedExactlyOnce:
+    """__anext__ pre-emits message_start before consuming the stream; a later
+    response.created event must not append a second one (strict Anthropic SSE
+    clients such as Claude Code reject duplicate message_start)"""
+
+    @pytest.mark.asyncio
+    async def test_response_created_after_fallback_does_not_duplicate_message_start(self):
+        async def stream():
+            yield {"type": "response.created"}
+            yield {"type": "response.output_item.added", "item": {"type": "message", "id": "item_1"}}
+            yield {"type": "response.output_text.delta", "item_id": "item_1", "delta": "hi"}
+            yield {"type": "response.completed"}
+
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=stream(), model="m")
+        events = [chunk async for chunk in wrapper]
+        starts = [c for c in events if c.get("type") == "message_start"]
+        assert len(starts) == 1
