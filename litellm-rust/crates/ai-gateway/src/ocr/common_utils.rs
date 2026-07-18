@@ -21,12 +21,11 @@ use litellm_core::providers::vertex_ai::ocr::transformation::{
     VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
 };
 
-use super::client::http_client;
-
-const ERROR_BODY_MAX_CHARS: usize = 256;
-const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
-const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
-const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
+use super::client::{http_client, safe_fetch_client};
+use crate::constants::{
+    AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS, DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
+    DEFAULT_OCR_REQUEST_TIMEOUT_SECS, MAX_SAFE_FETCH_REDIRECTS, OCR_ERROR_BODY_MAX_CHARS,
+};
 
 pub(super) fn classify_reqwest_error(err: reqwest::Error) -> CoreError {
     if err.is_timeout() {
@@ -37,10 +36,10 @@ pub(super) fn classify_reqwest_error(err: reqwest::Error) -> CoreError {
 }
 
 pub(super) fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= ERROR_BODY_MAX_CHARS {
+    if body.chars().count() <= OCR_ERROR_BODY_MAX_CHARS {
         return body.to_string();
     }
-    let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
+    let truncated: String = body.chars().take(OCR_ERROR_BODY_MAX_CHARS).collect();
     format!("{truncated}... (truncated)")
 }
 
@@ -221,21 +220,31 @@ fn redirect_location(response: &reqwest::Response, url: &Url) -> CoreResult<Url>
         .map_err(|err| CoreError::InvalidResponse(format!("invalid OCR document redirect: {err}")))
 }
 
-async fn safe_get_document_url(url: &str) -> CoreResult<(Url, reqwest::Response)> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+async fn safe_fetch_request(url: Url, timeout: Duration) -> CoreResult<reqwest::Response> {
+    safe_fetch_client()
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(classify_reqwest_error)
+}
+
+async fn safe_get_document_url(
+    url: &str,
+    timeout: Option<Duration>,
+) -> CoreResult<(Url, reqwest::Response)> {
     let mut current_url = Url::parse(url)
         .map_err(|err| CoreError::InvalidRequest(format!("invalid OCR document URL: {err}")))?;
+    let timeout = timeout.unwrap_or(Duration::from_secs(DEFAULT_OCR_REQUEST_TIMEOUT_SECS));
+    let deadline = Instant::now() + timeout;
 
     for _ in 0..MAX_SAFE_FETCH_REDIRECTS {
         validate_safe_fetch_url(&current_url).await?;
-        let response = client
-            .get(current_url.clone())
-            .send()
-            .await
-            .map_err(classify_reqwest_error)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(CoreError::Timeout);
+        }
+        let response = safe_fetch_request(current_url.clone(), remaining).await?;
         if !response.status().is_redirection() {
             return Ok((current_url, response));
         }
@@ -266,8 +275,8 @@ fn enforce_download_size(content_length: u64, max_bytes: u64, url: &Url) -> Core
 async fn read_response_with_limit(
     mut response: reqwest::Response,
     url: &Url,
+    max_bytes: u64,
 ) -> CoreResult<Vec<u8>> {
-    let max_bytes = max_document_download_bytes();
     if let Some(content_length) = response.content_length() {
         enforce_download_size(content_length, max_bytes, url)?;
     } else {
@@ -284,7 +293,10 @@ async fn read_response_with_limit(
     Ok(bytes)
 }
 
-pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreResult<Value> {
+pub(super) async fn convert_document_url_to_data_uri(
+    document: Value,
+    timeout: Option<Duration>,
+) -> CoreResult<Value> {
     let Some((field, url)) = document_url_field(&document)? else {
         return Ok(document);
     };
@@ -292,10 +304,12 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         return Ok(document);
     }
 
-    let (final_url, response) = safe_get_document_url(url).await?;
+    let (final_url, response) = safe_get_document_url(url, timeout).await?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let body = read_response_with_limit(response, &final_url, max_document_download_bytes())
+            .await
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())?;
         return Err(CoreError::Http {
             status: status.as_u16(),
             body: truncate_error_body(&body),
@@ -310,7 +324,8 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> CoreRes
         .filter(|value| !value.is_empty())
         .unwrap_or("application/octet-stream")
         .to_string();
-    let bytes = read_response_with_limit(response, &final_url).await?;
+    let bytes =
+        read_response_with_limit(response, &final_url, max_document_download_bytes()).await?;
     let data_uri = format!(
         "data:{content_type};base64,{}",
         BASE64_STANDARD.encode(bytes)
@@ -510,12 +525,13 @@ pub(super) async fn poll_document_intelligence(
         ));
     }
 
-    let start = Instant::now();
     let timeout = timeout.unwrap_or(Duration::from_secs(
         AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS,
     ));
+    let deadline = Instant::now() + timeout;
     loop {
-        if start.elapsed() > timeout {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             return Err(CoreError::Timeout);
         }
 
@@ -525,6 +541,7 @@ pub(super) async fn poll_document_intelligence(
                 request_builder = request_builder.header(key, value);
             }
         }
+        request_builder = request_builder.timeout(remaining);
         let response = request_builder
             .send()
             .await
@@ -544,7 +561,11 @@ pub(super) async fn poll_document_intelligence(
         if operation_status(&response_json)? == "succeeded" {
             return Ok(response_json);
         }
-        tokio::time::sleep(Duration::from_secs(retry_after)).await;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(CoreError::Timeout);
+        }
+        tokio::time::sleep(Duration::from_secs(retry_after).min(remaining)).await;
     }
 }
 
@@ -552,6 +573,8 @@ pub(super) async fn poll_document_intelligence(
 mod tests {
     use super::*;
     use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn blocks_private_and_metadata_ips() {
@@ -576,10 +599,13 @@ mod tests {
 
     #[tokio::test]
     async fn convert_document_url_rejects_loopback_fetch() {
-        let error = convert_document_url_to_data_uri(json!({
-            "type": "image_url",
-            "image_url": "http://127.0.0.1/image.png"
-        }))
+        let error = convert_document_url_to_data_uri(
+            json!({
+                "type": "image_url",
+                "image_url": "http://127.0.0.1/image.png"
+            }),
+            None,
+        )
         .await
         .unwrap_err();
 
@@ -597,10 +623,89 @@ mod tests {
             "image_url": "data:image/png;base64,abcd"
         });
 
-        let transformed = convert_document_url_to_data_uri(document.clone())
+        let transformed = convert_document_url_to_data_uri(document.clone(), None)
             .await
             .unwrap();
 
         assert_eq!(transformed, document);
+    }
+
+    #[tokio::test]
+    async fn safe_fetch_request_honors_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+
+        let error = safe_fetch_request(
+            Url::parse(&format!("http://{address}/document")).unwrap(),
+            Duration::from_millis(20),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, CoreError::Timeout);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn response_body_limit_applies_to_error_responses() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 400 Bad Request\r\ncontent-length: 6\r\nconnection: close\r\n\r\nabcdef",
+                )
+                .await
+                .unwrap();
+        });
+        let url = Url::parse(&format!("http://{address}/document")).unwrap();
+        let response = safe_fetch_client().get(url.clone()).send().await.unwrap();
+
+        let error = read_response_with_limit(response, &url, 5)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::InvalidRequest(_)));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn document_intelligence_poll_respects_remaining_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            let body = r#"{"status":"running"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nretry-after: 60\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let operation_url = format!("http://{address}/operations/1");
+        let original_url = format!("http://{address}/document");
+        let started = Instant::now();
+
+        let error = poll_document_intelligence(
+            &operation_url,
+            &original_url,
+            &[],
+            Some(Duration::from_millis(50)),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, CoreError::Timeout);
+        assert!(started.elapsed() < Duration::from_millis(500));
+        server.await.unwrap();
     }
 }

@@ -118,7 +118,7 @@ impl OcrLifecycleHooks {
         let document = match config.document_preparation() {
             OcrDocumentPreparation::None => request.document,
             OcrDocumentPreparation::DataUri => {
-                convert_document_url_to_data_uri(request.document).await?
+                convert_document_url_to_data_uri(request.document, request.timeout).await?
             }
             OcrDocumentPreparation::ReductoUpload => {
                 upload_reducto_document(request.document, &url, &upstream_headers, request.timeout)
