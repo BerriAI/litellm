@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import moment from "moment";
-import { ScrollText } from "lucide-react";
+import { AlertCircle, ScrollText } from "lucide-react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { uiSpendLogDetailsCall, uiSpendLogsCall } from "../networking";
 import { Button } from "@/components/ui/button";
@@ -135,6 +135,18 @@ function LogsEmpty() {
   );
 }
 
+function LogsError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed py-12 text-center text-sm text-muted-foreground">
+      <AlertCircle className="h-6 w-6 text-destructive/70" />
+      Failed to load your logs
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 function LogsTable({ rows, onRowClick }: { rows: LogRow[]; onRowClick: (row: LogRow) => void }) {
   return (
     <div className="overflow-hidden rounded-lg border">
@@ -255,22 +267,24 @@ const LogsPanel: React.FC<Props> = ({ accessToken, userId }) => {
     enabled: !!accessToken && !!userId,
     placeholderData: keepPreviousData,
   };
-  const { data, isLoading } = useQuery(logsQueryOptions);
+  const { data, isLoading, isError, refetch } = useQuery(logsQueryOptions);
 
   const logs = data as PaginatedLogs | undefined;
   const rows = logs?.data ?? [];
   const totalPages = logs?.total_pages ?? 0;
   const total = logs?.total ?? 0;
 
+  const detailStartDate = selectedLog ? moment(selectedLog.startTime).utc().format("YYYY-MM-DD HH:mm:ss") : "";
   const { data: detailData, isLoading: isDetailLoading } = useQuery({
-    queryKey: [LOGS_QUERY_KEY, "detail", accessToken, selectedLog?.request_id, startDate],
-    queryFn: () => uiSpendLogDetailsCall(accessToken, selectedLog!.request_id, startDate),
+    queryKey: [LOGS_QUERY_KEY, "detail", accessToken, selectedLog?.request_id, selectedLog?.startTime],
+    queryFn: () => uiSpendLogDetailsCall(accessToken, selectedLog!.request_id, detailStartDate),
     enabled: !!accessToken && !!selectedLog,
   });
   const details = detailData as LogDetails | undefined;
 
   const renderBody = () => {
     if (isLoading) return <LogsSkeleton />;
+    if (isError) return <LogsError onRetry={() => refetch()} />;
     if (rows.length === 0) return <LogsEmpty />;
     return (
       <>

@@ -81,6 +81,14 @@ describe("LogsPanel", () => {
     );
   });
 
+  it("shows an error state (not the empty state) when the logs query fails", async () => {
+    mockedLogsCall.mockRejectedValue(new Error("boom"));
+    renderWithProviders(<LogsPanel accessToken="tok-err" userId="user-1" />);
+
+    expect(await screen.findByText("Failed to load your logs")).toBeInTheDocument();
+    expect(screen.queryByText("No logs for this period")).not.toBeInTheDocument();
+  });
+
   it("falls back to proxy_server_request when messages is empty for the request payload", async () => {
     mockedDetailsCall.mockResolvedValue({
       messages: {},
