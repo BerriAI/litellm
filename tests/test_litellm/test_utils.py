@@ -4317,7 +4317,7 @@ _FIREWORKS_MODELS = [
         "accounts/fireworks/models/glm-5p2",
         1.4e-06,
         4.4e-06,
-        2.6e-07,
+        1.4e-07,
         1048576,
         131072,
         False,

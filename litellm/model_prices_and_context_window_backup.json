@@ -16272,7 +16272,7 @@
         "supports_vision": false
     },
     "fireworks_ai/accounts/fireworks/models/glm-5p2": {
-        "cache_read_input_token_cost": 2.6e-07,
+        "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
@@ -16686,7 +16686,7 @@
         "supports_vision": false
     },
     "fireworks_ai/glm-5p2": {
-        "cache_read_input_token_cost": 2.6e-07,
+        "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
