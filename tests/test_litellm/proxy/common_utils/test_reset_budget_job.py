@@ -195,6 +195,13 @@ class MockPrismaClient:
         ):
             return [item for item in data if hasattr(item, "budget_reset_at")]
 
+        # Handle team/user queries with reset_at - support limit/offset pagination
+        if query_type == "find_all" and "reset_at" in kwargs:
+            filtered = [item for item in data if hasattr(item, "budget_reset_at")]
+            offset_val = kwargs.get("offset") or 0
+            limit_val = kwargs.get("limit")
+            return filtered[offset_val : offset_val + limit_val] if limit_val else filtered[offset_val:]
+
         return data
 
     async def update_data(self, query_type, data_list, table_name):
@@ -326,6 +333,39 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     assert write["data"]["spend"] == 0
     assert write["data"]["budget_reset_at"] > now
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
+
+
+def test_reset_budget_for_team_fetches_in_batches(reset_budget_job, mock_prisma_client):
+    """Verify that reset_budget_for_litellm_teams pages through teams in batches."""
+    from litellm.constants import BUDGET_RESET_BATCH_SIZE
+
+    now = datetime.now(timezone.utc)
+
+    def make_team(i):
+        return type(
+            "LiteLLM_TeamTable",
+            (),
+            {
+                "spend": float(i),
+                "budget_duration": "1mo",
+                "budget_reset_at": now,
+                "id": f"team-{i}",
+                "team_id": f"tid-{i}",
+            },
+        )
+
+    # Create BUDGET_RESET_BATCH_SIZE + 1 teams so at least two pages are fetched
+    num_teams = BUDGET_RESET_BATCH_SIZE + 1
+    mock_prisma_client.data["team"] = [make_team(i) for i in range(num_teams)]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
+
+    team_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "team"]
+    # All teams should have been reset
+    assert len(team_writes) == num_teams
+    for write in team_writes:
+        assert write["data"]["spend"] == 0
+        assert write["data"]["budget_reset_at"] > now
 
 
 def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
