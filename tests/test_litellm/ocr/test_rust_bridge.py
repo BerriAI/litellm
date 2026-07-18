@@ -301,6 +301,25 @@ def test_load_rust_aocr_returns_injected_impl():
     assert rust_bridge.load_rust_aocr() is bridge
 
 
+def test_use_litellm_rust_controls_injected_bridges(monkeypatch):
+    bridge = RecordingBridge()
+    async_bridge = RecordingAsyncBridge()
+
+    rust_bridge.use_litellm_rust(ocr=bridge, aocr=async_bridge)
+    assert rust_bridge.rust_ocr_enabled() is True
+    assert rust_bridge.load_rust_ocr() is bridge
+    assert rust_bridge.load_rust_aocr() is async_bridge
+
+    monkeypatch.setattr(
+        importlib.import_module("litellm.rust_bridge"),
+        "get_native_bridge",
+        lambda: None,
+    )
+    rust_bridge.use_litellm_rust(False)
+    assert rust_bridge.load_rust_ocr() is None
+    assert rust_bridge.load_rust_aocr() is None
+
+
 def test_bridge_injection_preserves_unspecified_impl():
     bridge = RecordingBridge()
     async_bridge = RecordingAsyncBridge()
@@ -623,6 +642,16 @@ def test_ocr_requires_rust_bridge_when_unavailable(monkeypatch):
 
     with pytest.raises(Exception) as exc_info:
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert "Rust OCR bridge is required" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_aocr_requires_rust_bridge_when_unavailable(monkeypatch):
+    monkeypatch.setattr(ocr_main, "load_rust_aocr", lambda: None)
+
+    with pytest.raises(Exception) as exc_info:
+        await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
     assert "Rust OCR bridge is required" in str(exc_info.value)
 
