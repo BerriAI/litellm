@@ -184,6 +184,6 @@ other.<area>.<case>.<assertion>
 
 - when it comes to typing an input schema for an api endpoint, have it type X = A | B | C ... where X = exhaustive union of all supported input schemas and A, B, C typically are composed by a base type. types are only pretty for a api request / response body. make sure to compose types instead of repeating the same base attributes over and over again.
  
-- use the docker-compose to your advantage and spin up a local proxy, make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
+- spin up a local proxy by running the litellm proxy locally (`litellm --config <your-e2e-config>.yml --port 4000`; see CONTRIBUTING.md), make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
 
 - do not use xfail markers, tests should be written in a form that the end user expects it to pass
