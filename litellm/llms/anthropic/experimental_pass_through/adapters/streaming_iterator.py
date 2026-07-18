@@ -28,7 +28,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper
+from litellm.types.utils import AdapterCompletionStreamWrapper, StreamingChoices
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
@@ -393,25 +393,27 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if compaction_event is not None:
                     return compaction_event
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                if should_start_new_block and self.sent_content_block_start is True:
                     self._increment_content_block_index()
+
+                if self.sent_content_block_start is False:
+                    if not self._chunk_has_substantial_content(chunk):
+                        continue
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    return self.chunk_queue.popleft()
 
                 # applied_edits only needs to flow to the final message_delta
                 # (when finish_reason is set); skip threading it through every
@@ -616,16 +618,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return compaction_event
 
             if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
+                pass
 
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
@@ -633,8 +626,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                if should_start_new_block and self.sent_content_block_start is True:
                     self._increment_content_block_index()
+
+                if self.sent_content_block_start is False:
+                    if not self._chunk_has_substantial_content(chunk):
+                        continue
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    return self.chunk_queue.popleft()
 
                 # applied_edits only needs to flow to the final message_delta
                 # (when finish_reason is set); skip threading it through every
@@ -914,6 +921,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 tool_block["name"] = original_name
 
         if block_type != self.current_content_block_type:
+            if (
+                block_type == "text"
+                and self.current_content_block_type == "thinking"
+                and not self._chunk_has_substantial_content(chunk)
+            ):
+                return False
             self.current_content_block_type = block_type
             self.current_content_block_start = content_block_start
             return True
@@ -931,4 +944,24 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 self.current_content_block_start = content_block_start
                 return True
 
+        return False
+
+    @staticmethod
+    def _chunk_has_substantial_content(chunk: "ModelResponseStream") -> bool:
+        """Return True when the chunk carries content that should determine
+        the initial content block type (non-empty text, tool_calls,
+        thinking_blocks, or reasoning_content).  Role-only chunks and empty
+        deltas return False."""
+        for choice in chunk.choices:
+            if not hasattr(choice, "delta"):
+                continue
+            if choice.delta.tool_calls is not None and len(choice.delta.tool_calls) > 0:
+                return True
+            if getattr(choice.delta, "content", None) and len(choice.delta.content) > 0:
+                return True
+            if isinstance(choice, StreamingChoices):
+                if hasattr(choice.delta, "thinking_blocks") and choice.delta.thinking_blocks:
+                    return True
+                if getattr(choice.delta, "reasoning_content", None):
+                    return True
         return False
