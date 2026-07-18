@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import litellm
 from litellm import get_llm_provider
 from litellm.llms.byteplus.image_generation.transformation import (
     DEFAULT_API_BASE,
@@ -220,6 +221,28 @@ class TestBytePlusImageGenerationTransformation:
                 litellm_params={},
                 encoding=None,
             )
+
+    def test_image_generation_dispatches_to_byteplus_handler(self):
+        fake_response = MagicMock()
+
+        with patch.object(
+            litellm.images.main.llm_http_handler,
+            "image_generation_handler",
+            return_value=fake_response,
+        ) as mock_handler:
+            result = litellm.image_generation(
+                model="byteplus/seedream-5-0-260128",
+                prompt="a cat surfing a wave",
+                api_key="sk-test",
+            )
+
+        assert result is fake_response
+        mock_handler.assert_called_once()
+        kwargs = mock_handler.call_args.kwargs
+        assert kwargs["custom_llm_provider"] == "byteplus"
+        assert kwargs["model"] == "seedream-5-0-260128"
+        assert kwargs["prompt"] == "a cat surfing a wave"
+        assert isinstance(kwargs["image_generation_provider_config"], BytePlusImageGenerationConfig)
 
     def test_transform_response_json_parse_error_raises(self):
         mock_response = MagicMock()
