@@ -268,7 +268,7 @@ class SpendLogsParams(BaseModel):
             raise ValueError(
                 "unfiltered /spend/logs returns the entire spend table and OOMs the "
                 "runner on long-lived environments; filter by request_id or api_key, "
-                "or use Gateway.spend_logs_window for a bounded /spend/logs/v2 read"
+                "or use ProxyClient.spend_logs_window for a bounded /spend/logs/v2 read"
             )
         return self
 
@@ -448,6 +448,7 @@ class LiteLLMParamsBody(BaseModel):
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
+    mock_response: str | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
