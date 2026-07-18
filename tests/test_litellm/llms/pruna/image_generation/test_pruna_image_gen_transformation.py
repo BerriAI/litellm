@@ -67,9 +67,10 @@ class TestPrunaImageGenerationTransformation:
         )
         assert result == {"aspect_ratio": "16:9", "seed": 7}
 
-    def test_map_openai_params_ignores_invalid_size(self):
+    @pytest.mark.parametrize("size", ["auto", "wide", "bigxsmall", "1024x"])
+    def test_map_openai_params_ignores_invalid_size(self, size):
         result = self.config.map_openai_params(
-            non_default_params={"size": "auto"},
+            non_default_params={"size": size},
             optional_params={},
             model=self.model,
             drop_params=False,
