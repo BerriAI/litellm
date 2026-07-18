@@ -520,9 +520,20 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def _get_loop_type():
-        """Helper function to determine the event loop type based on platform"""
+        """Return the uvicorn event-loop type for the current platform.
+
+        Returns ``None`` on Windows (uvicorn default), ``"asyncio"`` when
+        ``LITELLM_DISABLE_UVLOOP`` is set to ``1``, ``true``, or ``yes``, and
+        ``"uvloop"`` otherwise.
+        """
         if sys.platform in ("win32", "cygwin", "cli"):
-            return None  # Let uvicorn choose the default loop on Windows
+            return None
+        if os.environ.get("LITELLM_DISABLE_UVLOOP", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            return "asyncio"
         return "uvloop"
 
     @staticmethod
