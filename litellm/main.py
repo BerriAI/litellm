@@ -8198,6 +8198,34 @@ def speech(
             api_key=api_key,
             **kwargs,
         )
+    elif custom_llm_provider == "dashscope":
+        from litellm.llms.dashscope.text_to_speech.transformation import (
+            DashScopeTextToSpeechConfig,
+        )
+
+        dashscope_config = text_to_speech_provider_config or DashScopeTextToSpeechConfig()
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        voice_str = voice if isinstance(voice, str) else None
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice_str,
+            text_to_speech_provider_config=dashscope_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
 
     if response is None:
         raise Exception(
