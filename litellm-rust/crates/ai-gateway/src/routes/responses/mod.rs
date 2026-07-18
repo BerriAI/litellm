@@ -18,7 +18,6 @@ use serde::Deserialize;
 use crate::auth::RequireMasterKey;
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::RequestMetadata;
-use crate::responses::streaming::{ResponseSessionStatus, ResponsesWsStreaming};
 use crate::state::AppState;
 
 static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -198,16 +197,11 @@ async fn bridge(
         return;
     }
 
+    let call_id = new_call_id();
     let metadata = RequestMetadata {
         user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
         ..RequestMetadata::default()
     };
-    let mut collector = ResponsesWsStreaming::new(
-        loggers.as_ref().clone(),
-        new_call_id(),
-        model.clone(),
-        metadata,
-    );
     let client_in = Box::pin(stream.filter_map(|message| async move {
         match message {
             Ok(Message::Text(text)) => serde_json::from_str::<ResponsesWsEvent>(&text).ok(),
@@ -220,7 +214,9 @@ async fn bridge(
         &model,
         first_frame,
         None,
-        |event| collector.observe(event),
+        loggers,
+        call_id,
+        metadata,
         client_in,
         &mut client_out,
     )
@@ -230,13 +226,6 @@ async fn bridge(
             .close_with_code(1011, "Internal server error")
             .await;
     }
-    collector
-        .log_messages(if result.is_ok() {
-            ResponseSessionStatus::Success
-        } else {
-            ResponseSessionStatus::Failure
-        })
-        .await;
 }
 
 #[cfg(test)]

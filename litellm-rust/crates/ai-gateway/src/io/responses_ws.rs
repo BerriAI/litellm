@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
@@ -7,8 +9,9 @@ use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
 use litellm_core::{CoreError, CoreResult};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+use tokio_tungstenite::tungstenite::http::header::{HeaderName, AUTHORIZATION};
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -24,6 +27,89 @@ const MISSING_KEY_MESSAGE: &str =
 pub type ResponsesUpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type UpstreamTx = SplitSink<ResponsesUpstreamWs, Message>;
 type UpstreamRx = SplitStream<ResponsesUpstreamWs>;
+
+#[derive(Clone)]
+pub struct ResponsesWebSocketConnection {
+    socket: Arc<Mutex<Option<ResponsesUpstreamWs>>>,
+}
+
+impl ResponsesWebSocketConnection {
+    pub async fn connect_url(
+        url: &str,
+        headers: &HashMap<String, String>,
+        timeout: Option<Duration>,
+    ) -> CoreResult<Self> {
+        let mut request = url
+            .into_client_request()
+            .map_err(|error| CoreError::Network(error.to_string()))?;
+        for (name, value) in headers {
+            let header_name = name
+                .parse::<HeaderName>()
+                .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
+            let header_value = HeaderValue::from_str(value)
+                .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
+            request.headers_mut().insert(header_name, header_value);
+        }
+        let connect = connect_async(request);
+        let result = match timeout {
+            Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
+                CoreError::Network("Responses WebSocket connection timed out".to_string())
+            })?,
+            None => connect.await,
+        };
+        let (socket, _) = result.map_err(|error| match error {
+            tokio_tungstenite::tungstenite::Error::Http(response) => CoreError::Http {
+                status: response.status().as_u16(),
+                body: String::new(),
+            },
+            other => CoreError::Network(other.to_string()),
+        })?;
+        Ok(Self {
+            socket: Arc::new(Mutex::new(Some(socket))),
+        })
+    }
+
+    pub async fn send_text(&self, text: String) -> CoreResult<()> {
+        let mut socket = self.socket.lock().await;
+        let Some(socket) = socket.as_mut() else {
+            return Err(CoreError::Network(
+                "Responses WebSocket is closed".to_string(),
+            ));
+        };
+        socket
+            .send(Message::Text(text))
+            .await
+            .map_err(|error| CoreError::Network(error.to_string()))
+    }
+
+    pub async fn recv_text(&self) -> CoreResult<Option<String>> {
+        let mut socket = self.socket.lock().await;
+        let Some(socket) = socket.as_mut() else {
+            return Ok(None);
+        };
+        match socket.next().await {
+            Some(Ok(Message::Text(text))) => Ok(Some(text)),
+            Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
+                .map(Some)
+                .map_err(|error| CoreError::InvalidResponse(error.to_string())),
+            Some(Ok(Message::Close(_))) | None => Ok(None),
+            Some(Ok(_)) => Ok(None),
+            Some(Err(error)) => Err(CoreError::Network(error.to_string())),
+        }
+    }
+
+    pub async fn close(&self) -> CoreResult<()> {
+        let mut socket = self.socket.lock().await;
+        if let Some(socket) = socket.as_mut() {
+            socket
+                .close(None)
+                .await
+                .map_err(|error| CoreError::Network(error.to_string()))?;
+        }
+        *socket = None;
+        Ok(())
+    }
+}
 
 pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
     api_key
@@ -68,6 +154,36 @@ async fn dial_upstream(
             },
             other => CoreError::Network(other.to_string()),
         })
+}
+
+pub struct ResponsesWebSocketStreaming;
+
+impl ResponsesWebSocketStreaming {
+    pub async fn bidirectional_forward<In, Out>(
+        model: &str,
+        upstream_tx: UpstreamTx,
+        upstream_rx: UpstreamRx,
+        idle_timeout: Option<Duration>,
+        observe: impl FnMut(&ResponsesWsEvent) + Send,
+        client_in: In,
+        client_out: Out,
+    ) -> CoreResult<()>
+    where
+        In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
+        Out: Sink<ResponsesWsEvent> + Unpin + Send,
+        Out::Error: std::fmt::Display,
+    {
+        splice(
+            model,
+            upstream_tx,
+            upstream_rx,
+            idle_timeout,
+            observe,
+            client_in,
+            client_out,
+        )
+        .await
+    }
 }
 
 pub(crate) async fn splice<In, Out>(
@@ -128,7 +244,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn responses_ws<In, Out>(
+pub async fn async_responses_websocket<In, Out>(
     model: &str,
     api_key: Option<&str>,
     api_base: Option<&str>,
@@ -159,12 +275,41 @@ where
                 .map_err(|error| CoreError::Network(error.to_string()))?;
         }
     }
-    splice(
+    ResponsesWebSocketStreaming::bidirectional_forward(
         model,
         upstream_tx,
         upstream_rx,
         idle_timeout,
         &mut observe,
+        client_in,
+        client_out,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn responses_ws<In, Out>(
+    model: &str,
+    api_key: Option<&str>,
+    api_base: Option<&str>,
+    first_frame: Option<ResponsesWsEvent>,
+    idle_timeout: Option<Duration>,
+    observe: impl FnMut(&ResponsesWsEvent) + Send,
+    client_in: In,
+    client_out: Out,
+) -> CoreResult<()>
+where
+    In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
+    Out: Sink<ResponsesWsEvent> + Unpin + Send,
+    Out::Error: std::fmt::Display,
+{
+    async_responses_websocket(
+        model,
+        api_key,
+        api_base,
+        first_frame,
+        idle_timeout,
+        observe,
         client_in,
         client_out,
     )
