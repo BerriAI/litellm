@@ -1540,6 +1540,13 @@ async def _user_api_key_auth_builder(
             if _end_user_object is not None:
                 valid_token.end_user_object_permission = _end_user_object.object_permission
 
+            await _maybe_enforce_master_key_end_user_model_max_budget(
+                valid_token=valid_token,
+                request_data=request_data,
+                route=route,
+                request=request,
+            )
+
             return valid_token
 
         if valid_token is not None and isinstance(valid_token, UserAPIKeyAuth) and valid_token.team_id is not None:
@@ -1597,6 +1604,18 @@ async def _user_api_key_auth_builder(
                 route=route,
                 start_time=start_time,
             )
+
+            _user_api_key_obj = update_valid_token_with_end_user_params(
+                valid_token=_user_api_key_obj, end_user_params=end_user_params
+            )
+
+            await _maybe_enforce_master_key_end_user_model_max_budget(
+                valid_token=_user_api_key_obj,
+                request_data=request_data,
+                route=route,
+                request=request,
+            )
+
             asyncio.create_task(
                 _cache_key_object(
                     hashed_token=hash_token(master_key),
@@ -1604,10 +1623,6 @@ async def _user_api_key_auth_builder(
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
-            )
-
-            _user_api_key_obj = update_valid_token_with_end_user_params(
-                valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
 
             return _user_api_key_obj
@@ -1669,10 +1684,9 @@ async def _user_api_key_auth_builder(
                 raise e
             # update end-user params on valid token
             # These can change per request - it's important to update them here
-            valid_token.end_user_id = end_user_params.get("end_user_id")
-            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
-            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
-            valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
+            valid_token = update_valid_token_with_end_user_params(
+                valid_token=valid_token, end_user_params=end_user_params
+            )
             # update key budget with temp budget increase
             valid_token = _update_key_budget_with_temp_budget_increase(
                 valid_token
@@ -1890,20 +1904,12 @@ async def _user_api_key_auth_builder(
                         current_models = _get_model_names_for_budget_checks(model=current_model)
 
                     # Check 5b. End-user model max budget
-                    end_user_mmb = valid_token.end_user_model_max_budget
-                    if (
-                        end_user_mmb is not None
-                        and isinstance(end_user_mmb, dict)
-                        and len(end_user_mmb) > 0
-                        and current_models
-                        and valid_token.end_user_id is not None
-                    ):
-                        for model_name in current_models:
-                            await model_max_budget_limiter.is_end_user_within_model_budget(
-                                end_user_id=valid_token.end_user_id,
-                                end_user_model_max_budget=end_user_mmb,
-                                model=model_name,
-                            )
+                    await _enforce_end_user_model_max_budget_checks(
+                        valid_token=valid_token,
+                        request_data=request_data,
+                        route=route,
+                        request=request,
+                    )
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
@@ -2855,6 +2861,66 @@ def iter_router_fallback_model_names(fallbacks: Any) -> Iterator[str]:
                         yield m["model"]
 
 
+def _is_master_key_auth_token(valid_token: UserAPIKeyAuth) -> bool:
+    return valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS or valid_token.token == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+async def _maybe_enforce_master_key_end_user_model_max_budget(
+    valid_token: UserAPIKeyAuth,
+    request_data: dict,
+    route: str,
+    request: Request,
+) -> None:
+    if not litellm.enforce_end_user_model_max_budget_on_master_key:
+        return
+    if not RouteChecks.is_llm_api_route(route=route):
+        return
+    if not _is_master_key_auth_token(valid_token):
+        return
+
+    await _enforce_end_user_model_max_budget_checks(
+        valid_token=valid_token,
+        request_data=request_data,
+        route=route,
+        request=request,
+    )
+
+
+async def _enforce_end_user_model_max_budget_checks(
+    valid_token: UserAPIKeyAuth,
+    request_data: dict,
+    route: str,
+    request: Request,
+) -> None:
+    from litellm.proxy.proxy_server import llm_router, model_max_budget_limiter
+
+    end_user_mmb = valid_token.end_user_model_max_budget
+    if (
+        end_user_mmb is None
+        or not isinstance(end_user_mmb, dict)
+        or len(end_user_mmb) == 0
+        or valid_token.end_user_id is None
+    ):
+        return
+
+    current_model = _get_model_from_request_context(
+        request_data=request_data,
+        route=route,
+        request=request,
+        llm_router=llm_router,
+    )
+    current_models = _get_model_names_for_budget_checks(model=current_model)
+    if not current_models:
+        return
+
+    for model_name in current_models:
+        await model_max_budget_limiter.is_end_user_within_model_budget(
+            end_user_id=valid_token.end_user_id,
+            end_user_model_max_budget=end_user_mmb,
+            model=model_name,
+        )
+
+
 async def _run_post_custom_auth_checks(
     valid_token: UserAPIKeyAuth,
     request: Request,
@@ -2956,20 +3022,12 @@ async def _run_post_custom_auth_checks(
         current_models = _get_model_names_for_budget_checks(model=current_model)
 
     # 4. Check end-user model_max_budget
-    end_user_mmb = valid_token.end_user_model_max_budget
-    if (
-        end_user_mmb is not None
-        and isinstance(end_user_mmb, dict)
-        and len(end_user_mmb) > 0
-        and current_models
-        and valid_token.end_user_id is not None
-    ):
-        for model_name in current_models:
-            await model_max_budget_limiter.is_end_user_within_model_budget(
-                end_user_id=valid_token.end_user_id,
-                end_user_model_max_budget=end_user_mmb,
-                model=model_name,
-            )
+    await _enforce_end_user_model_max_budget_checks(
+        valid_token=valid_token,
+        request_data=request_data,
+        route=route,
+        request=request,
+    )
 
     # team / user / end_user / project context objects are fetched by
     # the centralized common_checks gate in user_api_key_auth after

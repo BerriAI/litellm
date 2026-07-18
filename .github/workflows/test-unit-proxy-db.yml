@@ -191,6 +191,7 @@ jobs:
           - test-group: budgets
             test-path: >-
               tests/proxy_unit_tests/test_default_end_user_budget_simple.py
+              tests/proxy_unit_tests/test_end_user_model_max_budget_enforcement.py
               tests/proxy_unit_tests/test_unit_test_max_model_budget_limiter.py
               tests/proxy_unit_tests/test_zero_cost_model_budget_bypass.py
             workers: 4

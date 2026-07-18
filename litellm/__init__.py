@@ -438,6 +438,11 @@ max_end_user_budget_id: Optional[str] = None
 # backwards compatibility — arbitrary client-supplied identifiers still
 # pass through unchanged.
 validate_end_user_id_in_db: bool = False
+# When True, master-key authenticated LLM API requests enforce
+# end_user_model_max_budget from the customer budget table. Defaults to False
+# for backwards compatibility — master-key callers that act on behalf of
+# end-users were previously not subject to this check.
+enforce_end_user_model_max_budget_on_master_key: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
