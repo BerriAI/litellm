@@ -105,7 +105,7 @@ repo's source** (the config reader is newer than any PyPI release), so the build
 
 ```bash
 # from the repo root
-docker build -f litellm-rust/crates/ai-gateway/Dockerfile -t litellm-ai-gateway .
+docker build -f src/litellm-rust/crates/ai-gateway/Dockerfile -t litellm-ai-gateway .
 
 docker run --rm -p 4001:4001 \
   -e HOST=0.0.0.0 -e PORT=4001 \
@@ -149,7 +149,7 @@ WebSockets, so the public endpoint is `wss://<service>.onrender.com/v1/realtime`
 
 `crates/ai-gateway/render.yaml` describes the service (Docker runtime,
 `healthCheckPath: /health/readiness`, repo-root `dockerContext: .`,
-`dockerfilePath: ./litellm-rust/crates/ai-gateway/Dockerfile`,
+`dockerfilePath: ./src/litellm-rust/crates/ai-gateway/Dockerfile`,
 `LITELLM_CONFIG_PATH: /app/config.yaml`). `LITELLM_MASTER_KEY` and
 `OPENAI_API_KEY` are `sync: false` — set them in the dashboard after the first
 deploy. To use a non-default model_list, mount a **Render Secret File** at
@@ -168,7 +168,7 @@ curl -X POST https://api.render.com/v1/services \
     "serviceDetails": {
       "env": "docker",
       "envSpecificDetails": {
-        "dockerfilePath": "./litellm-rust/crates/ai-gateway/Dockerfile",
+        "dockerfilePath": "./src/litellm-rust/crates/ai-gateway/Dockerfile",
         "dockerContext": "."
       },
       "healthCheckPath": "/health/readiness"

@@ -8,13 +8,15 @@
 #
 # Strategy: ignore everything, then re-include only what the build needs:
 #   - litellm/            (pip install . needs the full package + proxy reader)
-#   - litellm-rust/       (the rust workspace; Cargo.lock + crate sources)
+#   - src/litellm-rust/   (the rust workspace; Cargo.lock + crate sources)
 #   - pyproject.toml / README.md / LICENSE  (packaging metadata for pip install)
 *
 
 # --- re-include the build inputs ---
 !litellm/
-!litellm-rust/
+!src/
+src/*
+!src/litellm-rust/
 !pyproject.toml
 !README.md
 !LICENSE

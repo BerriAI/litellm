@@ -244,7 +244,7 @@ requires = ["maturin==1.9.4"]
 build-backend = "maturin"
 
 [tool.maturin]
-manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
+manifest-path = "src/litellm-rust/crates/python-bridge/Cargo.toml"
 module-name = "litellm.rust_bridge._native"
 python-source = "."
 bindings = "pyo3"
