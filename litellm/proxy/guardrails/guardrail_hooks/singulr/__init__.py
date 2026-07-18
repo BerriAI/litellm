@@ -1,9 +1,3 @@
-"""
-Author: Madan Singhal
-Date: 23/06/26
-
-"""
-
 from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
