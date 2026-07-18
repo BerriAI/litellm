@@ -63,6 +63,14 @@ class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
 
 
+class OrgInfoParams(BaseModel):
+    organization_id: str
+
+
+class OrgInfoResponse(BaseModel):
+    budget_id: str | None = None
+
+
 class TeamMember(BaseModel):
     role: str
     user_id: str
@@ -291,6 +299,22 @@ class BudgetClient:
                 response_type=OrgNewResponse,
             )
         ).organization_id
+
+    def org_budget_id(self, org_id: str) -> str | None:
+        """The id of the budget row backing an org; its budget_reset_at is read via
+        budget_info (LIT-4570: /organization/new stores budget_duration without
+        scheduling budget_reset_at, so the reset job's first tick schedules it)."""
+        result = self.gateway.transport.get(
+            "/organization/info",
+            headers=self.gateway.transport.master,
+            params=OrgInfoParams(organization_id=org_id),
+            response_type=OrgInfoResponse,
+        )
+        match result:
+            case Success(data=data):
+                return data.budget_id
+            case _:
+                return None
 
     def delete_org(self, org_id: str) -> None:
         _ = self.gateway.transport.delete(

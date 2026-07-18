@@ -78,6 +78,14 @@ class TestBudgetResetDiagonal:
         key = client.generate_key(team_id=team_id)
         resources.defer(lambda: client.delete_key(key))
 
+        budget_id = client.org_budget_id(org_id)
+        assert budget_id, "org created without a budget row"
+        deadline = time.monotonic() + 30
+        while not any(row.budget_reset_at for row in client.budget_info(budget_id)):
+            if time.monotonic() > deadline:
+                pytest.fail("org budget window never scheduled by the reset job")
+            time.sleep(2)
+
         _drive_to_block(client, key)
         _poll_until_serves_again(client, key)
 
