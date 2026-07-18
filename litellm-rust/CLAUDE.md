@@ -20,6 +20,11 @@ Route-level Rust structure mirrors LiteLLM's Python responsibilities:
 - Network execution lives in the host crate `ai-gateway` (`ai-gateway/src/io/`),
   never inside `core`.
 
+Call-hook and lifecycle instrumentation, including phase timing, usage
+accumulation, and callback payload construction, always lives in `core`.
+Hosts feed observed events into core and dispatch the completed payloads through
+their I/O logger; hosts must not own callback orchestration.
+
 Allowed in `core`:
 - Pure request transforms
 - Pure response transforms

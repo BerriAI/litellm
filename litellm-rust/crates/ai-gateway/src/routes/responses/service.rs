@@ -1,98 +1,19 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{Sink, Stream};
-use litellm_core::call_lifecycle::{
-    CallLifecycle, CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming,
+use litellm_core::call_lifecycle::{CallLifecycle, CallLifecycleContext};
+use litellm_core::responses::instrumentation::{
+    ResponsesWsCallbackPayload, ResponsesWsInstrumentation, ResponsesWsLogOutcome,
+    ResponsesWsMetadata,
 };
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::{CoreError, CoreResult};
 
-use crate::integrations::custom_logger::{CallbackTiming, CustomLogger, CustomLoggerRunner};
+use crate::integrations::custom_logger::{
+    CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError, ModelCallDetails,
+};
 use crate::integrations::types::RequestMetadata;
-use crate::responses::streaming::ResponsesWsStreaming;
-
-type BoxLifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
-
-struct ResponsesWebSocketLifecycleHooks {
-    collector: Arc<Mutex<ResponsesWsStreaming>>,
-    loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
-}
-
-impl CallLifecycleHooks<(), (), ()> for ResponsesWebSocketLifecycleHooks {
-    type PreCallFuture<'a> = BoxLifecycleFuture<'a, ()>;
-    type DuringCallFuture<'a> = BoxLifecycleFuture<'a, ()>;
-    type SuccessFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-    type FailureFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: (),
-    ) -> Self::PreCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
-    }
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: (),
-    ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
-    }
-
-    fn async_log_success_event<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        _response: &'a (),
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::SuccessFuture<'a> {
-        Box::pin(async move {
-            let details = {
-                let Ok(mut collector) = self.collector.lock() else {
-                    return;
-                };
-                collector.success_details()
-            };
-            let (details, response) = details;
-            let runner = CustomLoggerRunner::new(self.loggers.as_ref().clone());
-            let _ = runner
-                .async_log_success_event(
-                    &details,
-                    &response,
-                    CallbackTiming::new(timing.start_time, timing.end_time),
-                )
-                .await;
-        })
-    }
-
-    fn async_log_failure_event<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        _error: &'a CoreError,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::FailureFuture<'a> {
-        Box::pin(async move {
-            let details = {
-                let Ok(mut collector) = self.collector.lock() else {
-                    return;
-                };
-                collector.failure_details()
-            };
-            let (details, response) = details;
-            let runner = CustomLoggerRunner::new(self.loggers.as_ref().clone());
-            let _ = runner
-                .async_log_failure_event(
-                    &details,
-                    Some(&response),
-                    CallbackTiming::new(timing.start_time, timing.end_time),
-                )
-                .await;
-        })
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run<In, Out>(
@@ -124,16 +45,19 @@ where
             "Responses WebSocket route supports OpenAI deployments only".to_string(),
         ));
     }
-    let collector = Arc::new(Mutex::new(ResponsesWsStreaming::new(
+    let instrumentation = Arc::new(ResponsesWsInstrumentation::new(
         call_id.clone(),
-        model.to_string(),
-        metadata,
-    )));
-    let observer_collector = Arc::clone(&collector);
-    let lifecycle_hooks = ResponsesWebSocketLifecycleHooks { collector, loggers };
+        model,
+        ResponsesWsMetadata {
+            user_api_key_hash: metadata.user_api_key_hash,
+            user_api_key_user_id: metadata.user_api_key_user_id,
+            user_api_key_team_id: metadata.user_api_key_team_id,
+        },
+    ));
+    let observer_instrumentation = Arc::clone(&instrumentation);
     let context = CallLifecycleContext::new("responses_websocket", model, "openai", call_id);
-    CallLifecycle::default()
-        .run(context, (), &lifecycle_hooks, |_| async move {
+    let result = CallLifecycle::default()
+        .run(context, (), instrumentation.as_ref(), |_| async move {
             crate::io::responses_ws::async_responses_websocket(
                 provider_model,
                 params.api_key.as_deref(),
@@ -141,14 +65,93 @@ where
                 first_frame,
                 idle_timeout,
                 move |event| {
-                    if let Ok(mut collector) = observer_collector.lock() {
-                        collector.observe(event);
-                    }
+                    observer_instrumentation.observe(event);
                 },
                 client_in,
                 client_out,
             )
             .await
         })
-        .await
+        .await;
+    if let Some(outcome) = instrumentation.take_outcome() {
+        dispatch_outcome(loggers, outcome).await;
+    }
+    result
+}
+
+async fn dispatch_outcome(
+    loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
+    outcome: ResponsesWsLogOutcome,
+) {
+    let runner = CustomLoggerRunner::new(loggers.as_ref().clone());
+    match outcome {
+        ResponsesWsLogOutcome::Success { payload, callback } => {
+            let (details, response, start_time, end_time) = logging_values(payload, callback, None);
+            let _ = runner
+                .async_log_success_event(
+                    &details,
+                    &response,
+                    CallbackTiming::new(start_time, end_time),
+                )
+                .await;
+        }
+        ResponsesWsLogOutcome::Failure {
+            payload,
+            callback,
+            error_message,
+            error_kind,
+        } => {
+            let error = LoggingError {
+                message: error_message,
+                kind: error_kind,
+            };
+            let (details, response, start_time, end_time) =
+                logging_values(payload, callback, Some(error));
+            let _ = runner
+                .async_log_failure_event(
+                    &details,
+                    Some(&response),
+                    CallbackTiming::new(start_time, end_time),
+                )
+                .await;
+        }
+    }
+}
+
+fn logging_values(
+    payload: litellm_core::responses::instrumentation::ResponsesWsLogPayload,
+    callback: ResponsesWsCallbackPayload,
+    error: Option<LoggingError>,
+) -> (ModelCallDetails, CallbackValue, f64, f64) {
+    let start_time = payload.start_time;
+    let end_time = payload.end_time;
+    let callback = CallbackValue::new(callback.object, callback.value);
+    let details = ModelCallDetails::from_standard_logging_payload(
+        crate::integrations::types::StandardLoggingPayload {
+            id: payload.id,
+            litellm_call_id: payload.litellm_call_id,
+            call_type: payload.call_type,
+            model: payload.model,
+            custom_llm_provider: payload.custom_llm_provider,
+            response_cost: payload.response_cost,
+            prompt_tokens: payload.usage.prompt_tokens,
+            completion_tokens: payload.usage.completion_tokens,
+            total_tokens: payload.usage.total_tokens,
+            start_time: payload.start_time,
+            end_time: payload.end_time,
+            stream: payload.stream,
+            metadata: crate::integrations::types::StandardLoggingMetadata {
+                user_api_key_hash: payload.metadata.user_api_key_hash,
+                user_api_key_user_id: payload.metadata.user_api_key_user_id,
+                user_api_key_team_id: payload.metadata.user_api_key_team_id,
+                ..Default::default()
+            },
+            messages: None,
+        },
+    );
+    let details = match error {
+        Some(error) => details.with_failure_error(error),
+        None => details,
+    };
+    (details, callback, start_time, end_time)
 }
