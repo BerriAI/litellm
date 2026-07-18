@@ -636,6 +636,7 @@ inception_models: Set = set()
 hyperbolic_models: Set = set()
 black_forest_labs_models: Set = set()
 recraft_models: Set = set()
+pruna_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
@@ -857,6 +858,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             nebius_embedding_models.add(key)
         elif value.get("litellm_provider") == "aiml":
             aiml_models.add(key)
+        elif value.get("litellm_provider") == "pruna":
+            pruna_models.add(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.add(key)
         elif value.get("litellm_provider") == "jina_ai":
@@ -1038,6 +1041,7 @@ model_list = list(
     | inception_models
     | black_forest_labs_models
     | recraft_models
+    | pruna_models
     | cometapi_models
     | oci_models
     | heroku_models
@@ -1145,6 +1149,7 @@ models_by_provider: dict = {
     "hyperbolic": hyperbolic_models,
     "black_forest_labs": black_forest_labs_models,
     "recraft": recraft_models,
+    "pruna": pruna_models,
     "cometapi": cometapi_models,
     "oci": oci_models,
     "volcengine": volcengine_models,

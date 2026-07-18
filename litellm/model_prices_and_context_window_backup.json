@@ -32088,6 +32088,15 @@
             "/v1/ocr"
         ]
     },
+    "pruna/p-image": {
+        "litellm_provider": "pruna",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://docs.api.pruna.ai/guides/models/p-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "recraft/recraftv2": {
         "litellm_provider": "recraft",
         "mode": "image_generation",
