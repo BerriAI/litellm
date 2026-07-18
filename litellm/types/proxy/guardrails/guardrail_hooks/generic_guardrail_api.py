@@ -164,6 +164,7 @@ class GenericGuardrailAPIResponse:
     texts: Optional[List[str]]
     images: Optional[List[str]]
     tools: Optional[List[GuardrailToolParam]]
+    structured_messages: Optional[List[AllMessageValues]]
     action: str
     blocked_reason: Optional[str]
     stream_holdback_chars: Optional[List[int]]
@@ -175,6 +176,7 @@ class GenericGuardrailAPIResponse:
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
         tools: Optional[List[GuardrailToolParam]] = None,
+        structured_messages: Optional[List[AllMessageValues]] = None,
         stream_holdback_chars: Optional[List[int]] = None,
     ):
         self.action = action
@@ -182,6 +184,7 @@ class GenericGuardrailAPIResponse:
         self.texts = texts
         self.images = images
         self.tools = tools
+        self.structured_messages = structured_messages
         # Number of trailing chars, indexed the same as ``texts``, that the
         # framework must withhold from streaming emission until the next
         # processing round (word-boundary safety for text transformations).
@@ -199,5 +202,6 @@ class GenericGuardrailAPIResponse:
             texts=data.get("texts"),
             images=data.get("images"),
             tools=data.get("tools"),
+            structured_messages=data.get("structured_messages"),
             stream_holdback_chars=stream_holdback_chars,
         )
