@@ -14,6 +14,7 @@ sys.path.insert(
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id, normalize_fireworks_usage
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -62,6 +63,36 @@ def test_validate_environment_sets_session_affinity_from_metadata_session_id():
     )
 
     assert headers["x-session-affinity"] == "metadata-session-123"
+
+
+def test_validate_environment_sets_session_affinity_from_session_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"session_id": "session-id-123"},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "session-id-123"
+
+
+def test_validate_environment_sets_session_affinity_from_trace_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"litellm_trace_id": "trace-id-123"},
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "trace-id-123"
 
 
 def test_validate_environment_does_not_set_session_affinity_without_session_id():
@@ -1110,6 +1141,14 @@ def test_transform_response_normalizes_cached_tokens_for_spend_logs():
     assert metadata["additional_usage_values"]["cache_read_input_tokens"] == 80
 
 
+def test_transform_response_leaves_missing_usage_untouched():
+    body = {**_BASE_CHAT_COMPLETION_RESPONSE, "usage": None}
+
+    result = _run_transform_response(body)
+
+    assert getattr(result, "usage", None) is None
+
+
 @pytest.mark.parametrize(
     "usage",
     [
@@ -1128,6 +1167,38 @@ def test_transform_response_preserves_cache_usage_without_inventing_alias(usage)
         assert result.usage.cache_read_input_tokens == 90
     else:
         assert "cache_read_input_tokens" not in result.usage
+
+
+def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
+    assert get_fireworks_session_id({"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"}) == "session-123"
+
+
+def test_normalize_fireworks_usage_sets_cache_read_input_tokens_when_missing():
+    usage = litellm.Usage(
+        prompt_tokens=100,
+        completion_tokens=5,
+        total_tokens=105,
+        prompt_tokens_details={"cached_tokens": 80},
+    )
+
+    normalized = normalize_fireworks_usage(usage)
+
+    assert normalized.cache_read_input_tokens == 80
+    assert normalized._cache_read_input_tokens == 80
+
+
+def test_normalize_fireworks_usage_preserves_existing_cache_read_input_tokens():
+    usage = litellm.Usage(
+        prompt_tokens=100,
+        completion_tokens=5,
+        total_tokens=105,
+        prompt_tokens_details={"cached_tokens": 80},
+        cache_read_input_tokens=90,
+    )
+
+    normalized = normalize_fireworks_usage(usage)
+
+    assert normalized.cache_read_input_tokens == 90
 
 
 def test_streaming_surfaces_fireworks_response_fields():

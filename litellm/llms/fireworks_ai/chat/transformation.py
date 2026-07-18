@@ -534,8 +534,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         additional_headers = get_response_headers(raw_response_headers)
 
         response = ModelResponse(**completion_response)
-        if response.usage is not None:
-            response.usage = normalize_fireworks_usage(response.usage)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            response.usage = normalize_fireworks_usage(usage)
 
         if response.model is not None:
             response.model = "fireworks_ai/" + response.model
