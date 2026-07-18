@@ -424,7 +424,7 @@ class TestPromptCacheKeyIntegration:
 
 
 class TestPromptCacheParams:
-    """Tests for prompt_cache_key and prompt_cache_retention support."""
+    """Tests for prompt_cache_key, prompt_cache_retention, and prompt_cache_breakpoint support."""
 
     def setup_method(self):
         self.config = OpenAIGPTConfig()
@@ -439,12 +439,18 @@ class TestPromptCacheParams:
         supported_params = self.config.get_supported_openai_params("gpt-4o")
         assert "prompt_cache_retention" in supported_params
 
+    def test_prompt_cache_breakpoint_in_supported_params(self):
+        """Test that prompt_cache_breakpoint is in supported params for OpenAI models."""
+        supported_params = self.config.get_supported_openai_params("gpt-4o")
+        assert "prompt_cache_breakpoint" in supported_params
+
     def test_prompt_cache_params_passed_through(self):
         """Test that prompt_cache_key and prompt_cache_retention are passed through by map_openai_params."""
         optional_params = self.config.map_openai_params(
             non_default_params={
                 "prompt_cache_key": "my-cache-key",
                 "prompt_cache_retention": "24h",
+                "prompt_cache_breakpoint": True,
             },
             optional_params={},
             model="gpt-4o",
@@ -452,6 +458,7 @@ class TestPromptCacheParams:
         )
         assert optional_params.get("prompt_cache_key") == "my-cache-key"
         assert optional_params.get("prompt_cache_retention") == "24h"
+        assert optional_params.get("prompt_cache_breakpoint") is True
 
 
 class TestGPT5ReasoningEffortPreservation:

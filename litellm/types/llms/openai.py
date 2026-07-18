@@ -1168,6 +1168,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     safety_identifier: Optional[str]
     prompt: Optional[PromptObject]
     max_tool_calls: Optional[int]
+    prompt_cache_breakpoint: Optional[bool]
     prompt_cache_key: Optional[str]
     prompt_cache_retention: Optional[str]
     stream_options: Optional[dict]

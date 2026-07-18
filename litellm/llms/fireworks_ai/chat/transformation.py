@@ -152,6 +152,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "echo",
             "echo_last",
             "ignore_eos",
+            "prompt_cache_breakpoint",
             "prompt_cache_key",
             "prompt_cache_isolation_key",
             "raw_output",
