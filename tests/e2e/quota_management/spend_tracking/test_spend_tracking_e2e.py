@@ -18,6 +18,7 @@ fails the test; a pricing or token-count drift does not.
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import pytest
 
@@ -428,6 +429,112 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
         assert (
             claude_row.request_id == claude.id
         ), f"claude row request_id {claude_row.request_id} != response id {claude.id}"
+
+
+@dataclass(frozen=True, slots=True)
+class _SweepModel:
+    """A deployment the negative-spend guard drives. `call` is the model_name sent to
+    the proxy; `row_marker` is the substring the resulting spend row's `model` must
+    contain (rows carry the resolved provider/model, so bedrock's alias shows up as
+    `bedrock/us.anthropic...`). The two claude markers are prefix-qualified so a
+    bedrock-anthropic row can't stand in for anthropic-direct, or vice versa."""
+
+    call: str
+    row_marker: str
+
+
+# Chat providers this guard sweeps when the proxy exposes them, each non-streaming and
+# streaming: gemini, anthropic, openai, and bedrock. gemini/anthropic/bedrock are
+# registered by the suite's driver_models; gpt-5.5 is only wired on the stage/docker
+# gateways. Adding a provider is one line.
+_CHAT_SWEEP: tuple[_SweepModel, ...] = (
+    _SweepModel("gemini-2.5-flash", "gemini-2.5-flash"),
+    _SweepModel("claude-haiku-4-5", "anthropic/claude-haiku-4-5"),
+    _SweepModel("gpt-5.5", "gpt-5.5"),
+    _SweepModel("bedrock-claude-haiku-4-5", "us.anthropic.claude-haiku-4-5"),
+)
+_EMBEDDING_SWEEP = _SweepModel("openai-text-embedding-3-small", "text-embedding-3-small")
+
+
+@pytest.mark.covers("quota_management.spend_tracking.non_negative.never_negative")
+def test_no_provider_logs_negative_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
+    """No provider ever writes a negative spend row. One key sweeps every chat provider
+    the proxy exposes, both non-streaming and streaming, plus an embedding; then every
+    logged row is asserted non-negative. Negative spend is a billing bug in any form: it
+    credits the customer's budget back, so a key can outspend its cap without ever
+    tripping it. The per-provider positive-row check keeps the guard non-vacuous - a
+    pipeline that silently logs 0 (or drops the row) fails instead of sliding past a
+    bare `>= 0`.
+
+    Scope, deliberately stated: this is a broad invariant sweep, NOT a regression test
+    for the bedrock cache-token bug (#25846). That bug needs prompt_tokens to exclude
+    cache tokens so `prompt_tokens - cache_hit` goes below zero; the traffic here is
+    uncached, so `cache_hit == 0` and that subtraction can't go negative. Reverting
+    #25846's clamp leaves this test green, so the cell is fail_before_fix=unproven.
+
+    Nor could that be fixed by adding a cached bedrock leg here: probing real bedrock
+    (commercial us-east-1) on 2026-07-14 showed its raw message_delta already carries
+    the cache breakdown, so usage stays self-consistent and spend stays positive even
+    with the fix reverted. The bug needs a deployment whose message_delta omits it
+    (GovCloud / LIT-2411), which a live commercial call cannot produce. That path is
+    therefore unsupported live and guarded by the mock unit test instead; see
+    SPEND_TRACKING_COVERAGE_MATRIX.md."""
+    present = frozenset(entry.model_name for entry in client.gateway.model_info())
+    chat = tuple(m for m in _CHAT_SWEEP if m.call in present)
+    assert len(chat) >= 2, (
+        f"need >=2 chat providers for a cross-provider guard; "
+        f"proxy exposes {sorted(present)}"
+    )
+    assert _EMBEDDING_SWEEP.call in present, (
+        f"embedding deployment {_EMBEDDING_SWEEP.call!r} not registered; "
+        f"proxy exposes {sorted(present)}"
+    )
+
+    for model in chat:
+        _ = unwrap(
+            client.chat(
+                scoped_key, model.call, f"one word {unique_marker()}", max_tokens=16
+            )
+        )
+        stream = client.chat_stream(
+            scoped_key, model.call, f"count to three {unique_marker()}", max_tokens=32
+        )
+        assert stream.ok, (
+            f"{model.call} stream failed (status {stream.status_code}): {stream.body[:300]}"
+        )
+    _ = unwrap(
+        client.embed(
+            scoped_key, _EMBEDDING_SWEEP.call, f"vectorize {unique_marker()}"
+        )
+    )
+
+    expected = (*chat, _EMBEDDING_SWEEP)
+
+    def every_provider_costed(rows: list[SpendLogRow]) -> bool:
+        return all(
+            any(m.row_marker in (r.model or "") and (r.spend or 0) > 0 for r in rows)
+            for m in expected
+        )
+
+    # min_rows waits for the streaming rows too (non-stream + stream per chat model,
+    # plus the embedding), so the streaming spend is actually observed and checked.
+    rows = client.poll_logs_for_key(
+        scoped_key,
+        min_rows=2 * len(chat) + 1,
+        predicate=every_provider_costed,
+    )
+
+    negative = [r for r in rows if (r.spend or 0) < 0]
+    assert not negative, (
+        f"provider logged negative spend (billing regression): {_summarize(negative)}"
+    )
+
+    for m in expected:
+        assert any(
+            m.row_marker in (r.model or "") and (r.spend or 0) > 0 for r in rows
+        ), f"no positive spend row for {m.row_marker!r}; guard would be vacuous: {_summarize(rows)}"
 
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
