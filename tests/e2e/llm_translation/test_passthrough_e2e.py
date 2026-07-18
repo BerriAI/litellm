@@ -35,7 +35,7 @@ def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) 
     whole point of passthrough spend tracking.
     """
     assert result.call_id, "passthrough response had no x-litellm-call-id header"
-    rows = client.gateway.poll_logs_for_request_id(
+    rows = client.proxy.poll_logs_for_request_id(
         result.call_id,
         predicate=lambda rs: (rs[0].spend or 0) > 0,
     )
