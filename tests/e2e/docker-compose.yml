@@ -1,7 +1,5 @@
 # local setup to run e2e tests
 configs:
-  mcp_upstream_server:
-    file: ../mcp_tests/mcp_e2e_upstream_server.py
   litellm_config:
     content: |
       general_settings:
@@ -132,26 +130,6 @@ services:
       - source: litellm_config
         target: /app/config.yaml
     command: ["--config", "/app/config.yaml", "--port", "4000"]
-
-# deterministic self-hosted upstream MCP server (FastMCP add/multiply over
-# streamable-http), reachable by the litellm container at mcp-upstream:8090/mcp.
-# Not a depends_on of litellm on purpose: only the mcp suite needs it, and it
-# boots long before the proxy is live, so it must not gate the other suites'
-# stack. The suite registers it through /v1/mcp/server at test time.
-  mcp-upstream:
-    image: ghcr.io/berriai/litellm:main-latest
-    entrypoint: ["python3", "/app/mcp_upstream_server.py"]
-    environment:
-      MCP_HOST: 0.0.0.0
-      MCP_PORT: "8090"
-    configs:
-      - source: mcp_upstream_server
-        target: /app/mcp_upstream_server.py
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8090), 2).close()"]
-      interval: 3s
-      timeout: 3s
-      retries: 40
 
 # throwaway db
   db:
