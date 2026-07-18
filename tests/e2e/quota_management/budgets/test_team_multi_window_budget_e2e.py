@@ -86,6 +86,8 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
 
 @pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")
 def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient, resources: ResourceManager) -> None:
+
+    # 0. key with a short budget window and a long budget window
     team_id = client.create_team(
         alias=f"e2e-team-long-window-{unique_marker()}",
         budget_limits=[
@@ -96,17 +98,18 @@ def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient,
     resources.defer(lambda: client.delete_team(team_id))
     key = client.generate_key(team_id=team_id, models=["claude-haiku-4-5"])
     resources.defer(lambda: client.delete_key(key))
-
+    
+    # 1. drive the key to being blocked, assert its blocked by budget budget_exceeded
     blocked = _drive_to_block(client, key)
     assert blocked.status_code == 429, f"budget block was not a 429: {blocked.status_code} {blocked.body[:200]}"
 
+    # 2. check the the teams budget windows 
     blocked_reset_at = window_reset_at(client.team_budget_windows(team_id), SHORT_WINDOW)
     assert blocked_reset_at is not None, "short window missing from /team/info budget_limits"
     blocked_long_reset_at = window_reset_at(client.team_budget_windows(team_id), LONG_WINDOW)
     assert blocked_long_reset_at is not None, "long window missing from /team/info budget_limits"
 
-    # wait for the reset job to roll the short (30s) window: reset_at advancing past
-    # the value recorded at block time proves that window's spend counter was zeroed
+    # 3. keep checking that the short budget window reset, if it doesnt within the deadline then fail
     deadline = time.monotonic() + RESET_DEADLINE_SECONDS
     while time.monotonic() < deadline:
         time.sleep(5)
@@ -119,9 +122,7 @@ def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient,
             f"{blocked_reset_at} within {RESET_DEADLINE_SECONDS}s"
         )
 
-    # the long (1d) window must keep blocking now that the short window is clean:
-    # every response must stay a budget 429, and we pass only once the error names
-    # the 1d window (a 200 here means the long cap failed to hold)
+    # 4. short window just reset in 3, so now make another call, assert that the long window blocks the next call with budget_exceeded 
     deadline = time.monotonic() + RESET_DEADLINE_SECONDS
     last_body = ""
     while time.monotonic() < deadline:
