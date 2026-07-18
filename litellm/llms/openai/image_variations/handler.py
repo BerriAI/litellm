@@ -30,9 +30,7 @@ class OpenAIImageVariationsHandler:
             openai_client = client
         return openai_client
 
-    def get_async_client(
-        self, client: Optional[AsyncOpenAI], init_client_params: dict
-    ) -> AsyncOpenAI:
+    def get_async_client(self, client: Optional[AsyncOpenAI], init_client_params: dict) -> AsyncOpenAI:
         if client is None:
             openai_client = AsyncOpenAI(
                 **init_client_params,
@@ -69,13 +67,9 @@ class OpenAIImageVariationsHandler:
                 "organization": organization,
             }
 
-            client = self.get_async_client(
-                client=client, init_client_params=init_client_params
-            )
+            client = self.get_async_client(client=client, init_client_params=init_client_params)
 
-            raw_response = await client.images.with_raw_response.create_variation(
-                **data
-            )  # type: ignore
+            raw_response = await client.images.with_raw_response.create_variation(**data)  # type: ignore
             response = raw_response.parse()
             response_json = response.model_dump()
 
@@ -95,9 +89,7 @@ class OpenAIImageVariationsHandler:
                 model_response=ImageResponse(**response_json),
                 raw_response=httpx.Response(
                     status_code=200,
-                    request=httpx.Request(
-                        method="GET", url="https://litellm.ai"
-                    ),  # mock request object
+                    request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
                 ),
                 logging_obj=logging_obj,
                 request_data=data,
@@ -114,9 +106,7 @@ class OpenAIImageVariationsHandler:
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
 
     def image_variations(
         self,
@@ -143,9 +133,7 @@ class OpenAIImageVariationsHandler:
             )
 
             if provider_config is None:
-                raise ValueError(
-                    f"image variation provider not found: {custom_llm_provider}."
-                )
+                raise ValueError(f"image variation provider not found: {custom_llm_provider}.")
 
             max_retries = optional_params.pop("max_retries", 2)
 
@@ -157,9 +145,7 @@ class OpenAIImageVariationsHandler:
             )
             json_data = data.get("data")
             if not json_data:
-                raise ValueError(
-                    f"data field is required, for openai image variations. Got={data}"
-                )
+                raise ValueError(f"data field is required, for openai image variations. Got={data}")
             ## LOGGING
             logging_obj.pre_call(
                 input="",
@@ -198,9 +184,7 @@ class OpenAIImageVariationsHandler:
                 "organization": organization,
             }
 
-            client = self.get_sync_client(
-                client=client, init_client_params=init_client_params
-            )
+            client = self.get_sync_client(client=client, init_client_params=init_client_params)
 
             raw_response = client.images.with_raw_response.create_variation(**json_data)  # type: ignore
             response = raw_response.parse()
@@ -222,9 +206,7 @@ class OpenAIImageVariationsHandler:
                 model_response=ImageResponse(**response_json),
                 raw_response=httpx.Response(
                     status_code=200,
-                    request=httpx.Request(
-                        method="GET", url="https://litellm.ai"
-                    ),  # mock request object
+                    request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
                 ),
                 logging_obj=logging_obj,
                 request_data=json_data,
@@ -241,6 +223,4 @@ class OpenAIImageVariationsHandler:
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)

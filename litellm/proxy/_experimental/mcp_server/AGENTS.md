@@ -41,6 +41,7 @@ litellm/proxy/_experimental/mcp_server/
   sampling_handler.py        # MCP sampling to LiteLLM completion flow
   elicitation_handler.py     # MCP elicitation relay flow
   semantic_tool_filter.py    # semantic filtering of available MCP tools
+  tool_search.py             # opt-in virtual tools (mcp_tool_search + mcp_tool_call) for large catalogs
   guardrail_translation/
     handler.py               # MCP guardrail result translation
   sse_transport.py           # SSE transport implementation
@@ -79,6 +80,11 @@ module materially harder to understand.
   encryption need focused tests for both allowed and rejected paths.
 - Avoid adding comments to new code unless they explain non-obvious security or
   protocol behavior. Prefer clear names and small functions.
+- The virtual tool path (`tool_search.py`, gated by `mcp_tool_search_enabled`)
+  must mirror the normal tool flow: IP filtering, server allowlist, per-key tool
+  permissions, no-accessible-server rejection, per-request auth headers, server
+  scope, error to `isError` conversion, and spend logging. Reuse `_list_mcp_tools`
+  and `execute_mcp_tool` rather than reimplementing any of these checks.
 
 ## Tests
 

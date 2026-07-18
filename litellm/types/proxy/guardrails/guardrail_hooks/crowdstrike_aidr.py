@@ -9,9 +9,7 @@ class CrowdStrikeAIDRGuardrailConfigModelOptionalParams(BaseModel):
     pass
 
 
-class CrowdStrikeAIDRGuardrailConfigModel(
-    GuardrailConfigModel[CrowdStrikeAIDRGuardrailConfigModelOptionalParams]
-):
+class CrowdStrikeAIDRGuardrailConfigModel(GuardrailConfigModel[CrowdStrikeAIDRGuardrailConfigModelOptionalParams]):
     api_key: Optional[str] = Field(
         default=None,
         description="The CrowdStrike AIDR API key. Reads from CS_AIDR_TOKEN env var if None.",

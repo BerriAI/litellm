@@ -27,13 +27,13 @@ def styled_prompt():
         verbose_logger.debug(f"Error getting terminal size: {e}")
         click.echo("\n" * 3)
 
-    # Unicode box drawing characters
-    top_left = "┌"
-    top_right = "┐"
-    bottom_left = "└"
-    bottom_right = "┘"
-    horizontal = "─"
-    vertical = "│"
+    # ASCII box drawing characters
+    top_left = "+"
+    top_right = "+"
+    bottom_left = "+"
+    bottom_right = "+"
+    horizontal = "-"
+    vertical = "|"
 
     # Create the box with increased width
     width = 80
@@ -57,9 +57,7 @@ def styled_prompt():
 
     # Now move cursor up to the input line and get input
     click.echo("\033[2A", nl=False)  # Move cursor up 2 lines
-    click.echo(
-        f"\r{left_border} {prompt_text}", nl=False
-    )  # Position at start of input line
+    click.echo(f"\r{left_border} {prompt_text}", nl=False)  # Position at start of input line
 
     try:
         # Get user input

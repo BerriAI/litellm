@@ -13,6 +13,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
 from .base import AzureGuardrailBase
@@ -42,6 +43,13 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
     default_severity_threshold: int = 2
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         guardrail_name: str,
@@ -56,6 +64,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             AzureTextModerationRequestBodyOptionalParams,
         )
 
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
         # async_handler and forwards the rest to CustomGuardrail.
         super().__init__(
@@ -73,21 +82,15 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 "SelfHarm",
                 "Violence",
             ],
-            "blocklistNames": cast(
-                Optional[List[str]], kwargs.get("blocklistNames") or None
-            ),
+            "blocklistNames": cast(Optional[List[str]], kwargs.get("blocklistNames") or None),
             "haltOnBlocklistHit": kwargs.get("haltOnBlocklistHit") or False,
             "outputType": kwargs.get("outputType") or "FourSeverityLevels",
         }
 
-        self.severity_threshold = (
-            int(severity_threshold) if severity_threshold else None
-        )
+        self.severity_threshold = int(severity_threshold) if severity_threshold else None
         self.severity_threshold_by_category = severity_threshold_by_category
 
-        verbose_proxy_logger.info(
-            f"Initialized Azure Text Moderation Guardrail: {guardrail_name}"
-        )
+        verbose_proxy_logger.info(f"Initialized Azure Text Moderation Guardrail: {guardrail_name}")
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
@@ -97,9 +100,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
         return AzureContentSafetyTextModerationConfigModel
 
-    async def async_make_request(
-        self, text: str
-    ) -> "AzureTextModerationGuardrailResponse":
+    async def async_make_request(self, text: str) -> "AzureTextModerationGuardrailResponse":
         """
         Make a request to the Azure Text Moderation API.
 
@@ -123,9 +124,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 text=chunk,
                 **self.optional_params_request_body,  # type: ignore[misc]
             )
-            response_json = await self._post_to_content_safety(
-                "text:analyze", cast(dict, request_body)
-            )
+            response_json = await self._post_to_content_safety("text:analyze", cast(dict, request_body))
 
             chunk_response = cast(AzureTextModerationGuardrailResponse, response_json)
 
@@ -147,9 +146,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         assert last_response is not None
         return last_response
 
-    def check_severity_threshold(
-        self, response: "AzureTextModerationGuardrailResponse"
-    ) -> Literal[True]:
+    def check_severity_threshold(self, response: "AzureTextModerationGuardrailResponse") -> Literal[True]:
         """
         - Check if threshold set by category
         - Check if general severity threshold set
@@ -158,9 +155,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
         if self.severity_threshold_by_category:
             for category in response["categoriesAnalysis"]:
-                severity_category_threshold_item = (
-                    self.severity_threshold_by_category.get(category["category"])
-                )
+                severity_category_threshold_item = self.severity_threshold_by_category.get(category["category"])
                 if (
                     severity_category_threshold_item is not None
                     and category["severity"] >= severity_category_threshold_item
@@ -170,9 +165,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                         detail={
                             "error": "Azure Content Safety Guardrail: {} crossed severity {}, Got severity: {}".format(
                                 category["category"],
-                                self.severity_threshold_by_category.get(
-                                    category["category"]
-                                ),
+                                self.severity_threshold_by_category.get(category["category"]),
                                 category["severity"],
                             )
                         },
@@ -190,10 +183,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                             )
                         },
                     )
-        if (
-            self.severity_threshold is None
-            and self.severity_threshold_by_category is None
-        ):
+        if self.severity_threshold is None and self.severity_threshold_by_category is None:
             for category in response["categoriesAnalysis"]:
                 if category["severity"] >= self.default_severity_threshold:
                     raise HTTPException(
@@ -227,16 +217,12 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         )
         new_messages: Optional[List[AllMessageValues]] = data.get("messages")
         if new_messages is None:
-            verbose_proxy_logger.warning(
-                "Azure Text Moderation: not running guardrail. No messages in data"
-            )
+            verbose_proxy_logger.warning("Azure Text Moderation: not running guardrail. No messages in data")
             return data
         user_prompt = self.get_user_prompt(new_messages)
 
         if user_prompt:
-            verbose_proxy_logger.info(
-                f"Azure Text Moderation: User prompt: {user_prompt}"
-            )
+            verbose_proxy_logger.info(f"Azure Text Moderation: User prompt: {user_prompt}")
             await self.async_make_request(
                 text=user_prompt,
             )
@@ -264,9 +250,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 )
         return response
 
-    async def async_post_call_streaming_hook(
-        self, user_api_key_dict: UserAPIKeyAuth, response: str
-    ) -> Any:
+    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> Any:
         try:
             if response is not None and len(response) > 0:
                 await self.async_make_request(
@@ -285,9 +269,7 @@ def _message_content_to_text(content: Any) -> str:
         return content
     if isinstance(content, list):
         text_parts = [
-            item.get("text")
-            for item in content
-            if isinstance(item, dict) and isinstance(item.get("text"), str)
+            item.get("text") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str)
         ]
         return "\n".join(part for part in text_parts if part)
     return ""

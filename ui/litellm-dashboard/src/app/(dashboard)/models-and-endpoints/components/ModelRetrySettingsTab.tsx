@@ -20,6 +20,7 @@ interface ModelRetrySettingsTabProps {
   modelGroupRetryPolicy: RetryPolicyObject | null;
   setModelGroupRetryPolicy: React.Dispatch<React.SetStateAction<RetryPolicyObject | null>>;
   handleSaveRetrySettings: () => void;
+  isSaving?: boolean;
 }
 
 const retryPolicyMap: Record<string, string> = {
@@ -41,8 +42,26 @@ const ModelRetrySettingsTab = ({
   modelGroupRetryPolicy,
   setModelGroupRetryPolicy,
   handleSaveRetrySettings,
+  isSaving = false,
 }: ModelRetrySettingsTabProps) => {
-  //  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
+  const isGlobalScope = selectedModelGroup === "global";
+
+  const setGlobalValue = (retryPolicyKey: string, value: number | null) => {
+    if (value == null) return;
+    setGlobalRetryPolicy((prev) => ({ ...(prev ?? {}), [retryPolicyKey]: value }));
+  };
+
+  const setModelOverride = (retryPolicyKey: string, value: number | null) => {
+    setModelGroupRetryPolicy((prev) => {
+      const groupPolicy = { ...(prev?.[selectedModelGroup!] ?? {}) };
+      if (value == null) {
+        delete groupPolicy[retryPolicyKey];
+      } else {
+        groupPolicy[retryPolicyKey] = value;
+      }
+      return { ...(prev ?? {}), [selectedModelGroup!]: groupPolicy };
+    });
+  };
 
   return (
     <TabPanel>
@@ -51,13 +70,12 @@ const ModelRetrySettingsTab = ({
           <Text>Retry Policy Scope:</Text>
           <Select
             className="ml-2 w-48"
-            defaultValue="global"
-            value={selectedModelGroup === "global" ? "global" : selectedModelGroup || availableModelGroups[0]}
+            value={isGlobalScope ? "global" : selectedModelGroup || availableModelGroups[0]}
             onValueChange={(value) => setSelectedModelGroup(value)}
           >
             <SelectItem value="global">Global Default</SelectItem>
             {availableModelGroups.map((group, idx) => (
-              <SelectItem key={idx} value={group} onClick={() => setSelectedModelGroup(group)}>
+              <SelectItem key={idx} value={group}>
                 {group}
               </SelectItem>
             ))}
@@ -65,7 +83,7 @@ const ModelRetrySettingsTab = ({
         </div>
       </div>
 
-      {selectedModelGroup === "global" ? (
+      {isGlobalScope ? (
         <>
           <Title>Global Retry Policy</Title>
           <Text className="mb-6">Default retry settings applied to all model groups unless overridden</Text>
@@ -76,75 +94,42 @@ const ModelRetrySettingsTab = ({
           <Text className="mb-6">Model-specific retry settings. Falls back to global defaults if not set.</Text>
         </>
       )}
-      {retryPolicyMap && (
-        <table>
-          <tbody>
-            {Object.entries(retryPolicyMap).map(([exceptionType, retryPolicyKey], idx) => {
-              let retryCount: number;
+      <table>
+        <tbody>
+          {Object.entries(retryPolicyMap).map(([exceptionType, retryPolicyKey], idx) => {
+            const inheritedValue = globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry;
+            const override = isGlobalScope ? undefined : modelGroupRetryPolicy?.[selectedModelGroup!]?.[retryPolicyKey];
+            const hasOverride = override != null;
 
-              if (selectedModelGroup === "global") {
-                // Show global policy values
-                retryCount = globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry;
-              } else {
-                // Show model-group specific values with fallback to global
-                const modelSpecificCount = modelGroupRetryPolicy?.[selectedModelGroup!]?.[retryPolicyKey];
-                if (modelSpecificCount != null) {
-                  retryCount = modelSpecificCount;
-                } else {
-                  // Fall back to global policy, then default
-                  retryCount = globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry;
-                }
-              }
-
-              return (
-                <tr key={idx} className="flex justify-between items-center mt-2">
-                  <td>
-                    <Text>{exceptionType}</Text>
-                    {selectedModelGroup !== "global" && (
-                      <Text className="text-xs text-gray-500 ml-2">
-                        (Global: {globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry})
-                      </Text>
-                    )}
-                  </td>
-                  <td>
-                    <InputNumber
-                      className="ml-5"
-                      value={retryCount}
-                      min={0}
-                      step={1}
-                      onChange={(value) => {
-                        if (selectedModelGroup === "global") {
-                          // Update global policy
-                          setGlobalRetryPolicy((prevGlobalRetryPolicy) => {
-                            if (value == null) return prevGlobalRetryPolicy;
-                            return {
-                              ...(prevGlobalRetryPolicy ?? {}),
-                              [retryPolicyKey]: value,
-                            };
-                          });
-                        } else {
-                          // Update model-group specific policy
-                          setModelGroupRetryPolicy((prevModelGroupRetryPolicy) => {
-                            const prevRetryPolicy = prevModelGroupRetryPolicy?.[selectedModelGroup!] ?? {};
-                            return {
-                              ...(prevModelGroupRetryPolicy ?? {}),
-                              [selectedModelGroup!]: {
-                                ...prevRetryPolicy,
-                                [retryPolicyKey!]: value,
-                              },
-                            } as RetryPolicyObject;
-                          });
-                        }
-                      }}
-                    />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-      <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
+            return (
+              <tr key={idx} className="flex justify-between items-center mt-2">
+                <td>
+                  <Text>{exceptionType}</Text>
+                  {!isGlobalScope && <Text className="text-xs text-gray-500 ml-2">(Global: {inheritedValue})</Text>}
+                </td>
+                <td className="flex items-center gap-2">
+                  <InputNumber
+                    className="ml-5"
+                    value={isGlobalScope ? inheritedValue : hasOverride ? override : null}
+                    placeholder={isGlobalScope ? undefined : String(inheritedValue)}
+                    min={0}
+                    step={1}
+                    onChange={(value) =>
+                      isGlobalScope ? setGlobalValue(retryPolicyKey, value) : setModelOverride(retryPolicyKey, value)
+                    }
+                  />
+                  {!isGlobalScope && hasOverride && (
+                    <Button variant="light" size="xs" onClick={() => setModelOverride(retryPolicyKey, null)}>
+                      Reset
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings} loading={isSaving} disabled={isSaving}>
         Save
       </Button>
     </TabPanel>

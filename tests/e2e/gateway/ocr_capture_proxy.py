@@ -154,19 +154,13 @@ def capture_proxy(tmp_path: Path) -> Iterator[CaptureProxy]:
     proxy_log_path = tmp_path / "capture-proxy.log"
     try:
         capture_port = _free_port()
-        capture_server = HTTPServer(
-            ("127.0.0.1", capture_port), _make_capture_handler(captures)
-        )
-        server_thread = threading.Thread(
-            target=capture_server.serve_forever, daemon=True
-        )
+        capture_server = HTTPServer(("127.0.0.1", capture_port), _make_capture_handler(captures))
+        server_thread = threading.Thread(target=capture_server.serve_forever, daemon=True)
         server_thread.start()
 
         proxy_port = _free_port()
         config_path = tmp_path / "capture-config.yml"
-        config_path.write_text(
-            yaml.safe_dump(_capture_config(capture_port, master_key).model_dump())
-        )
+        config_path.write_text(yaml.safe_dump(_capture_config(capture_port, master_key).model_dump()))
 
         proxy_log = proxy_log_path.open("w")
         proxy = subprocess.Popen(
@@ -187,18 +181,14 @@ def capture_proxy(tmp_path: Path) -> Iterator[CaptureProxy]:
             stderr=subprocess.STDOUT,
         )
         proxy_url = f"http://127.0.0.1:{proxy_port}"
-        if not _wait_for_liveness(
-            proxy_url, time.monotonic() + _LIVENESS_DEADLINE_SECONDS
-        ):
+        if not _wait_for_liveness(proxy_url, time.monotonic() + _LIVENESS_DEADLINE_SECONDS):
             proxy_log.flush()
             tail = _sanitize(proxy_log_path.read_text()[-4000:])
             pytest.fail(
                 f"capture proxy did not become live while the Rust bridge is available; "
                 f"sanitized proxy log at {proxy_log_path}\n{tail}"
             )
-        yield CaptureProxy(
-            proxy_url=proxy_url, master_key=master_key, captures=captures
-        )
+        yield CaptureProxy(proxy_url=proxy_url, master_key=master_key, captures=captures)
     finally:
         if proxy is not None:
             proxy.terminate()

@@ -71,12 +71,8 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     ) -> ContainerHandle:
         key = self.validate_environment(api_key=api_key)
         base = self._api_base(api_base)
-        ready_timeout_seconds = (
-            float(ready_timeout) if ready_timeout is not None else DEFAULT_READY_TIMEOUT
-        )
-        poll_interval_seconds = (
-            float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL
-        )
+        ready_timeout_seconds = float(ready_timeout) if ready_timeout is not None else DEFAULT_READY_TIMEOUT
+        poll_interval_seconds = float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL
         body = self._create_body(
             template=template,
             timeout=timeout,
@@ -150,25 +146,13 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             api_key=api_key,
             api_base=api_base,
             use_server_proxy=use_server_proxy,
-            ready_timeout=(
-                float(ready_timeout)
-                if ready_timeout is not None
-                else DEFAULT_READY_TIMEOUT
-            ),
-            poll_interval=(
-                float(poll_interval)
-                if poll_interval is not None
-                else DEFAULT_POLL_INTERVAL
-            ),
+            ready_timeout=(float(ready_timeout) if ready_timeout is not None else DEFAULT_READY_TIMEOUT),
+            poll_interval=(float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL),
             client=client,
         )
         endpoint = str(handle._hidden_params["execd_endpoint"])
         endpoint_headers = self._as_str_dict(handle._hidden_params.get("execd_headers"))
-        base = str(
-            handle._hidden_params.get("api_base")
-            or handle.domain
-            or self._api_base(api_base)
-        )
+        base = str(handle._hidden_params.get("api_base") or handle.domain or self._api_base(api_base))
         lines = await self._post_code(
             url=f"{self._endpoint_base_url(endpoint, base)}/code",
             headers={
@@ -228,9 +212,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
 
         base = str(handle._hidden_params.get("api_base") or self._api_base(api_base))
         key = self._api_key(api_key=api_key, handle=handle)
-        resolved_use_server_proxy = bool(
-            handle._hidden_params.get("use_server_proxy", use_server_proxy)
-        )
+        resolved_use_server_proxy = bool(handle._hidden_params.get("use_server_proxy", use_server_proxy))
         endpoint, endpoint_headers = await self._wait_for_execd_endpoint(
             sandbox_id=handle.id,
             api_base=base,
@@ -277,10 +259,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             if state in {"Failed", "Stopping", "Terminated"}:
                 raise ValueError(f"OpenSandbox sandbox {sandbox_id} entered {state}")
             if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"OpenSandbox sandbox {sandbox_id} was not Running within "
-                    f"{ready_timeout} seconds"
-                )
+                raise TimeoutError(f"OpenSandbox sandbox {sandbox_id} was not Running within {ready_timeout} seconds")
             await asyncio.sleep(poll_interval)
 
     async def _wait_for_execd_endpoint(
@@ -314,8 +293,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
 
             if time.monotonic() >= deadline:
                 raise TimeoutError(
-                    f"OpenSandbox execd endpoint for {sandbox_id} was not ready within "
-                    f"{ready_timeout} seconds"
+                    f"OpenSandbox execd endpoint for {sandbox_id} was not ready within {ready_timeout} seconds"
                 ) from last_error
             await asyncio.sleep(poll_interval)
 
@@ -339,9 +317,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         data = response.json()
         endpoint = data.get("endpoint")
         if not endpoint:
-            raise ValueError(
-                f"OpenSandbox did not return an execd endpoint for {sandbox_id}"
-            )
+            raise ValueError(f"OpenSandbox did not return an execd endpoint for {sandbox_id}")
         return str(endpoint), self._as_str_dict(data.get("headers"))
 
     async def _post_code(
@@ -390,8 +366,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             "image": {"uri": template or OPEN_SANDBOX_DEFAULT_TEMPLATE},
             "entrypoint": list(entrypoint or OPEN_SANDBOX_DEFAULT_ENTRYPOINT),
             "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
-            "resourceLimits": resource_limits
-            or OpenSandboxSandboxConfig._default_resource_limits(),
+            "resourceLimits": resource_limits or OpenSandboxSandboxConfig._default_resource_limits(),
         }
         if metadata:
             body["metadata"] = metadata
@@ -434,10 +409,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     def _api_base(api_base: str | None) -> str:
         base = api_base or get_secret_str(OPEN_SANDBOX_API_BASE_ENV_VAR)
         if not base:
-            raise ValueError(
-                "OpenSandbox api_base is required. Pass api_base or set "
-                f"{OPEN_SANDBOX_API_BASE_ENV_VAR}."
-            )
+            raise ValueError(f"OpenSandbox api_base is required. Pass api_base or set {OPEN_SANDBOX_API_BASE_ENV_VAR}.")
         return str(base).rstrip("/")
 
     @staticmethod
@@ -456,9 +428,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         return f"{protocol}://{normalized_endpoint}"
 
     @staticmethod
-    def _as_handle(
-        container: Union[ContainerHandle, str], *, api_base: str | None
-    ) -> ContainerHandle:
+    def _as_handle(container: Union[ContainerHandle, str], *, api_base: str | None) -> ContainerHandle:
         if isinstance(container, ContainerHandle):
             return container
         handle = ContainerHandle(
@@ -472,9 +442,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     @staticmethod
     def _parse_lines(lines: list[str]) -> CodeExecutionResult:
         messages = tuple(
-            event
-            for line in lines
-            if (event := OpenSandboxSandboxConfig._parse_sse_line(line)) is not None
+            event for line in lines if (event := OpenSandboxSandboxConfig._parse_sse_line(line)) is not None
         )
 
         def of_type(message_type: str):
@@ -488,8 +456,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             (
                 OpenSandboxSandboxConfig._as_int(m.get("execution_count"))
                 for m in of_type("execution_count")
-                if OpenSandboxSandboxConfig._as_int(m.get("execution_count"))
-                is not None
+                if OpenSandboxSandboxConfig._as_int(m.get("execution_count")) is not None
             ),
             None,
         )
@@ -497,9 +464,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         return CodeExecutionResult(
             stdout="".join(str(m.get("text", "")) for m in of_type("stdout")),
             stderr="".join(str(m.get("text", "")) for m in of_type("stderr")),
-            results=[
-                OpenSandboxSandboxConfig._normalize_result(m) for m in of_type("result")
-            ],
+            results=[OpenSandboxSandboxConfig._normalize_result(m) for m in of_type("result")],
             error=error,
             execution_count=execution_count,
         )
@@ -541,40 +506,24 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         results = message.get("results")
         if isinstance(results, dict):
             return {str(k): v for k, v in results.items()}
-        return {
-            str(k): v
-            for k, v in message.items()
-            if k not in {"type", "timestamp", "execution_count"}
-        }
+        return {str(k): v for k, v in message.items() if k not in {"type", "timestamp", "execution_count"}}
 
     @staticmethod
     def _normalize_error(message: dict[str, object]) -> dict[str, object]:
         raw_error = message.get("error")
         if isinstance(raw_error, dict):
-            name = OpenSandboxSandboxConfig._first_non_none_value(
-                raw_error, "ename", "name", default=""
-            )
-            value = OpenSandboxSandboxConfig._first_non_none_value(
-                raw_error, "evalue", "value", default=""
-            )
-            traceback = OpenSandboxSandboxConfig._first_non_none_value(
-                raw_error, "traceback", default=[]
-            )
+            name = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "ename", "name", default="")
+            value = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "evalue", "value", default="")
+            traceback = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "traceback", default=[])
             return {
                 "name": name,
                 "value": value,
                 "traceback": traceback,
             }
         return {
-            "name": OpenSandboxSandboxConfig._first_non_none_value(
-                message, "name", default=""
-            ),
-            "value": OpenSandboxSandboxConfig._first_non_none_value(
-                message, "value", "text", default=""
-            ),
-            "traceback": OpenSandboxSandboxConfig._first_non_none_value(
-                message, "traceback", default=[]
-            ),
+            "name": OpenSandboxSandboxConfig._first_non_none_value(message, "name", default=""),
+            "value": OpenSandboxSandboxConfig._first_non_none_value(message, "value", "text", default=""),
+            "traceback": OpenSandboxSandboxConfig._first_non_none_value(message, "traceback", default=[]),
         }
 
     @staticmethod
@@ -589,9 +538,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         return None
 
     @staticmethod
-    def _first_non_none_value(
-        values: dict[str, object], *keys: str, default: object
-    ) -> object:
+    def _first_non_none_value(values: dict[str, object], *keys: str, default: object) -> object:
         return next(
             (values[key] for key in keys if key in values and values[key] is not None),
             default,

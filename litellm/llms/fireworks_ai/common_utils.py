@@ -17,9 +17,7 @@ class FireworksAIMixin:
     Common Base Config functions across Fireworks AI Endpoints
     """
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
         return FireworksAIException(
             status_code=status_code,
             message=error_message,

@@ -228,16 +228,12 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "us-south",
         ]
 
-    def _build_request_payload(
-        self, model: str, prompt: str, optional_params: Dict
-    ) -> Dict:
+    def _build_request_payload(self, model: str, prompt: str, optional_params: Dict) -> Dict:
         """Shared logic to build request payload"""
         extra_body_params = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
         watsonx_api_params = _get_api_params(params=optional_params, model=model)
-        watsonx_auth_payload = self._prepare_payload(
-            model=model, api_params=watsonx_api_params
-        )
+        watsonx_auth_payload = self._prepare_payload(model=model, api_params=watsonx_api_params)
 
         return {
             "input": prompt,
@@ -263,9 +259,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         prompt = await aconvert_watsonx_messages_to_prompt(
             model=model, messages=messages, provider=provider, custom_prompt_dict={}
         )
-        return self._build_request_payload(
-            model=model, prompt=prompt, optional_params=optional_params
-        )
+        return self._build_request_payload(model=model, prompt=prompt, optional_params=optional_params)
 
     def transform_request(
         self,
@@ -280,9 +274,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         prompt = convert_watsonx_messages_to_prompt(
             model=model, messages=messages, provider=provider, custom_prompt_dict={}
         )
-        return self._build_request_payload(
-            model=model, prompt=prompt, optional_params=optional_params
-        )
+        return self._build_request_payload(model=model, prompt=prompt, optional_params=optional_params)
 
     def transform_response(
         self,
@@ -318,17 +310,13 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         prompt_tokens = json_resp["results"][0]["input_token_count"]
         completion_tokens = json_resp["results"][0]["generated_token_count"]
         model_response.choices[0].message.content = generated_text  # type: ignore
-        model_response.choices[0].finish_reason = map_finish_reason(
-            json_resp["results"][0]["stop_reason"]
-        )
+        model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
         if json_resp.get("created_at"):
             try:
                 created_datetime = datetime.fromisoformat(json_resp["created_at"])
             except ValueError:
                 # datetime.fromisoformat cannot handle 'Z' in Python 3.10
-                created_datetime = datetime.fromisoformat(
-                    f"{json_resp['created_at'].rstrip('Z')}+00:00"
-                )
+                created_datetime = datetime.fromisoformat(f"{json_resp['created_at'].rstrip('Z')}+00:00")
             model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())
@@ -360,17 +348,11 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             )
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
-            endpoint = (
-                WatsonXAIEndpoint.TEXT_GENERATION_STREAM
-                if stream
-                else WatsonXAIEndpoint.TEXT_GENERATION
-            )
+            endpoint = WatsonXAIEndpoint.TEXT_GENERATION_STREAM if stream else WatsonXAIEndpoint.TEXT_GENERATION
         url = url.rstrip("/") + endpoint
 
         ## add api version
-        url = self._add_api_version_to_url(
-            url=url, api_version=optional_params.pop("api_version", None)
-        )
+        url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))
         return url
 
     def get_model_response_iterator(

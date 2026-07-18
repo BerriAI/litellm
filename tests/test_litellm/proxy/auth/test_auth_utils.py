@@ -7,6 +7,7 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -19,6 +20,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_key_tag_rpm_limit,
     get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
@@ -328,6 +330,70 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
                 request_body=request_body, request_headers=headers
             )
         assert result == "body-user"
+
+
+def _request_dispatched_to(endpoint) -> Request:
+    """Build a minimal Request whose FastAPI-resolved endpoint is ``endpoint``,
+    mirroring what Starlette sets in ``scope`` once routing has matched."""
+    return Request(scope={"type": "http", "headers": [], "endpoint": endpoint})
+
+
+def _pass_through_endpoint():
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    def endpoint():  # stand-in for create_pass_through_route's handler
+        ...
+
+    setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return endpoint
+
+
+def test_get_model_from_request_skips_pass_through_dispatched_request():
+    """When FastAPI dispatched the request to a user-defined pass-through handler,
+    the body `model` names an upstream model and must not be treated as a LiteLLM
+    model for allowlist/budget enforcement."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "upstream-special-model"},
+            route="/my-custom-endpoint",
+            request=_request_dispatched_to(_pass_through_endpoint()),
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_enforces_when_builtin_handler_dispatched():
+    """A custom pass-through path that collides with a built-in route resolves to the
+    built-in handler (no marker), so the body `model` must still be extracted and
+    enforced. Same request path as above, but dispatched to a non-pass-through
+    endpoint: the model must NOT be suppressed."""
+
+    def builtin_chat_completions():
+        ...
+
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            request=_request_dispatched_to(builtin_chat_completions),
+        )
+        == "gpt-4o"
+    )
+
+
+def test_get_model_from_request_no_request_extracts_model():
+    """Callers without a request object (e.g. budget reservation) still extract the
+    model; the pass-through suppression only applies to a dispatched pass-through
+    handler."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+        )
+        == "gpt-4o"
+    )
 
 
 def test_get_model_from_request_supports_google_model_names_with_slashes():
@@ -658,7 +724,16 @@ def test_get_model_from_request_ignores_session_model_on_non_realtime_routes():
 
 
 def test_abbreviate_api_key():
-    assert abbreviate_api_key("sk-test-1234") == "sk-...1234"
+    assert abbreviate_api_key("sk-test-1234-abcdefgh") == "sk-...efgh"
+    assert abbreviate_api_key("sk-abcdefghijklm") == "sk-...jklm"
+
+
+def test_abbreviate_api_key_short_key_is_fully_masked():
+    """Regression test for LIT-4355: for keys shorter than the enforced minimum,
+    showing the last 4 characters can reveal the entire key (sk-1234 -> sk-...1234)."""
+    assert abbreviate_api_key("sk-1234") == "sk-..."
+    assert abbreviate_api_key("sk-test-1234") == "sk-..."
+    assert abbreviate_api_key("") == "sk-..."
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():
@@ -1520,6 +1595,42 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "vertex_credentials" not in out
         assert "vertex_project" not in out
 
+    def test_clears_nvcf_function_id_on_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        admin_params = {
+            "model": "nvidia_riva/parakeet",
+            "api_base": "grpc.nvcf.nvidia.com:443",
+            "api_key": "nvapi-admin",
+            "nvcf_function_id": "admin-pinned-function",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(admin_params),
+            request_kwargs={"api_base": "self-hosted.example.com:50051"},
+        )
+        assert out["api_base"] == "self-hosted.example.com:50051"
+        assert "nvcf_function_id" not in out
+
+    def test_clears_use_ssl_on_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        admin_params = {
+            "model": "nvidia_riva/parakeet",
+            "api_base": "grpc.nvcf.nvidia.com:443",
+            "api_key": "nvapi-admin",
+            "use_ssl": True,
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(admin_params),
+            request_kwargs={"api_base": "self-hosted.example.com:50051"},
+        )
+        assert out["api_base"] == "self-hosted.example.com:50051"
+        assert "use_ssl" not in out
+
     def test_caller_resupplied_value_overrides_admin_value_on_base_override(self):
         # When the caller redirects ``api_base`` and *also* supplies their
         # own value for one of the admin fields (e.g. ``organization``),
@@ -1712,6 +1823,127 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
         )
 
 
+class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
+    """``nvcf_function_id`` is rejected as a request-body param unless the
+    admin opted in proxy-wide or per-deployment."""
+
+    def test_nvcf_function_id_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="nvcf_function_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "nvcf_function_id": "caller-supplied",
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+
+    def test_nvcf_function_id_with_api_key_still_rejected(self):
+        with pytest.raises(ValueError, match="nvcf_function_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "api_key": "sk-anything",
+                    "nvcf_function_id": "caller-supplied",
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_nvcf_function_id(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "nvcf_function_id": "byok-function-id",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_nvcf_function_id(self, monkeypatch):
+        """The error message lists per-deployment ``configurable_clientside_auth_params``
+        as a second opt-in. Cover that path too so it can't silently regress."""
+        from litellm.proxy.auth import auth_utils
+
+        monkeypatch.setattr(
+            auth_utils,
+            "_allow_model_level_clientside_configurable_parameters",
+            lambda model, param, request_body_value, llm_router: param == "nvcf_function_id",
+        )
+
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "nvcf_function_id": "byok-function-id",
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBlocksRivaUseSsl:
+    """``use_ssl`` is rejected as a request-body param unless the admin
+    opted in proxy-wide or per-deployment."""
+
+    def test_use_ssl_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="use_ssl"):
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "use_ssl": False,
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_use_ssl(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "use_ssl": True,
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_use_ssl(self, monkeypatch):
+        from litellm.proxy.auth import auth_utils
+
+        monkeypatch.setattr(
+            auth_utils,
+            "_allow_model_level_clientside_configurable_parameters",
+            lambda model, param, request_body_value, llm_router: param == "use_ssl",
+        )
+
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "use_ssl": True,
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+
 # ── is_request_body_safe nested-config recursion (VERIA-6) ────────────────────
 
 
@@ -1746,6 +1978,22 @@ class TestIsRequestBodySafeNestedConfig:
                 general_settings={},
                 llm_router=None,
                 model="milvus-store",
+            )
+
+    def test_nested_nvcf_function_id_in_metadata_blocked(self):
+        """Smuggling ``nvcf_function_id`` via ``metadata`` / ``extra_body``
+        is the same shape as the VERIA-6 ``api_base`` bypass — must be
+        rejected by the recursive walk so the NVCF override gate cannot
+        be sidestepped with nesting."""
+        with pytest.raises(ValueError, match="nvcf_function_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "litellm_metadata": {"nvcf_function_id": "attacker-via-metadata"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
             )
 
     def test_nested_langfuse_host_in_embedding_config_blocked(self):
@@ -1930,6 +2178,21 @@ class TestObservabilityCallbackBans:
                 model="gpt-4",
             )
         assert field in str(exc.value)
+
+    def test_observability_field_in_litellm_params_metadata_is_rejected(self):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "litellm_params": {
+                        "metadata": {"turn_off_message_logging": False}
+                    },
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert "turn_off_message_logging" in str(exc.value)
 
     @pytest.mark.parametrize(
         "metadata_key",
@@ -2205,3 +2468,17 @@ class TestIsRequestBodySafeBlocksModelList:
             )
             is True
         )
+
+
+class TestGetKeyTagRateLimits:
+    """Tests for get_key_tag_rpm_limit."""
+
+    def test_reads_tag_rpm_limit_from_metadata(self):
+        key = UserAPIKeyAuth(
+            api_key="sk-123", metadata={"tag_rpm_limit": {"cell-1": 5}}
+        )
+        assert get_key_tag_rpm_limit(key) == {"cell-1": 5}
+
+    def test_returns_none_when_unset(self):
+        key = UserAPIKeyAuth(api_key="sk-123")
+        assert get_key_tag_rpm_limit(key) is None

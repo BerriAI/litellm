@@ -71,9 +71,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path}
-            )
+            result = convert_file_document_to_url_document({"type": "file", "file": tmp_path})
 
             assert result["type"] == "document_url"
             assert result["document_url"].startswith("data:application/pdf;base64,")
@@ -93,9 +91,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path}
-            )
+            result = convert_file_document_to_url_document({"type": "file", "file": tmp_path})
 
             assert result["type"] == "image_url"
             assert result["image_url"].startswith("data:image/png;base64,")
@@ -110,9 +106,7 @@ class TestConvertFileDocumentToUrlDocument:
         request handler the value is attacker-controlled, and opening it as
         a path is an arbitrary local file read on the proxy host."""
         with pytest.raises(ValueError, match="does not accept bare str values"):
-            convert_file_document_to_url_document(
-                {"type": "file", "file": "/etc/passwd"}
-            )
+            convert_file_document_to_url_document({"type": "file", "file": "/etc/passwd"})
 
     def test_should_convert_pathlib_path(self):
         """pathlib.Path objects should work the same as string paths."""
@@ -124,9 +118,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path}
-            )
+            result = convert_file_document_to_url_document({"type": "file", "file": tmp_path})
 
             assert result["type"] == "document_url"
             assert result["document_url"].startswith("data:application/pdf;base64,")
@@ -137,9 +129,7 @@ class TestConvertFileDocumentToUrlDocument:
         """Raw bytes should be converted using a fallback MIME type."""
         content = b"raw bytes content"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": content})
 
         assert result["type"] == "document_url"
         assert "base64," in result["document_url"]
@@ -162,9 +152,7 @@ class TestConvertFileDocumentToUrlDocument:
         """Raw bytes with an image MIME type should produce type=image_url."""
         content = b"raw image content"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content, "mime_type": "image/jpeg"}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": content, "mime_type": "image/jpeg"})
 
         assert result["type"] == "image_url"
         assert result["image_url"].startswith("data:image/jpeg;base64,")
@@ -174,9 +162,7 @@ class TestConvertFileDocumentToUrlDocument:
         content = b"file-like content"
         file_obj = BytesIO(content)
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": file_obj}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": file_obj})
 
         assert result["type"] == "document_url"
         assert "base64," in result["document_url"]
@@ -187,9 +173,7 @@ class TestConvertFileDocumentToUrlDocument:
         file_obj = BytesIO(content)
         file_obj.name = "test_image.png"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": file_obj}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": file_obj})
 
         assert result["type"] == "image_url"
         assert result["image_url"].startswith("data:image/png;base64,")
@@ -202,9 +186,7 @@ class TestConvertFileDocumentToUrlDocument:
     def test_should_raise_error_for_nonexistent_pathlib_path(self):
         """Non-existent pathlib.Path should raise a path-free input error."""
         with pytest.raises(ValueError, match="does not exist") as exc_info:
-            convert_file_document_to_url_document(
-                {"type": "file", "file": Path("/nonexistent/path/to/file.pdf")}
-            )
+            convert_file_document_to_url_document({"type": "file", "file": Path("/nonexistent/path/to/file.pdf")})
 
         assert "/nonexistent/path/to/file.pdf" not in str(exc_info.value)
 
@@ -215,9 +197,7 @@ class TestConvertFileDocumentToUrlDocument:
 
         try:
             with pytest.raises(ValueError, match="File is empty"):
-                convert_file_document_to_url_document(
-                    {"type": "file", "file": tmp_path}
-                )
+                convert_file_document_to_url_document({"type": "file", "file": tmp_path})
         finally:
             os.unlink(str(tmp_path))
 
@@ -248,9 +228,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path, "mime_type": "image/png"}
-            )
+            result = convert_file_document_to_url_document({"type": "file", "file": tmp_path, "mime_type": "image/png"})
 
             assert result["type"] == "image_url"
             assert result["image_url"].startswith("data:image/png;base64,")
@@ -477,7 +455,5 @@ class TestProxySecurityGuard:
         result = await self._parse_multipart(mock_request)
 
         assert result["document"]["type"] == "document_url"
-        assert result["document"]["document_url"].startswith(
-            "data:application/pdf;base64,"
-        )
+        assert result["document"]["document_url"].startswith("data:application/pdf;base64,")
         assert result["model"] == "mistral/mistral-ocr-latest"

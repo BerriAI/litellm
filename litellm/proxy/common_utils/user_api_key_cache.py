@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
 T = TypeVar("T", bound=BaseModel)
@@ -66,9 +67,7 @@ class UserApiKeyCache(DualCache):
     ) -> Union[Any, Optional[BaseModel]]:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
-        cached = super().get_cache(
-            key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
-        )
+        cached = super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
         if model_type is None:
             return cached
         if cached is None:
@@ -76,8 +75,7 @@ class UserApiKeyCache(DualCache):
         decoded = CacheCodec.deserialize(cached, model_type=model_type)
         if decoded is None:
             verbose_proxy_logger.error(
-                "UserApiKeyCache.get_cache failed to deserialize cached value for "
-                "key=%r model_type=%s",
+                "UserApiKeyCache.get_cache failed to deserialize cached value for key=%r model_type=%s",
                 key,
                 getattr(model_type, "__name__", str(model_type)),
             )
@@ -124,8 +122,7 @@ class UserApiKeyCache(DualCache):
         decoded = CacheCodec.deserialize(cached, model_type=model_type)
         if decoded is None:
             verbose_proxy_logger.error(
-                "UserApiKeyCache.async_get_cache failed to deserialize cached value for "
-                "key=%r model_type=%s",
+                "UserApiKeyCache.async_get_cache failed to deserialize cached value for key=%r model_type=%s",
                 key,
                 getattr(model_type, "__name__", str(model_type)),
             )
@@ -135,16 +132,12 @@ class UserApiKeyCache(DualCache):
     def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
-        return super().set_cache(
-            key=key, value=payload, local_only=local_only, **kwargs
-        )
+        return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
-        return await super().async_set_cache(
-            key=key, value=payload, local_only=local_only, **kwargs
-        )
+        return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     async def async_set_cache_pipeline(  # type: ignore[override]
         self, cache_list: list, local_only: bool = False, **kwargs
@@ -153,10 +146,19 @@ class UserApiKeyCache(DualCache):
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
         """
-        normalized = [
-            (key, CacheCodec.serialize(value, model_type=None))
-            for key, value in cache_list
-        ]
-        return await super().async_set_cache_pipeline(
-            cache_list=normalized, local_only=local_only, **kwargs
-        )
+        normalized = [(key, CacheCodec.serialize(value, model_type=None)) for key, value in cache_list]
+        return await super().async_set_cache_pipeline(cache_list=normalized, local_only=local_only, **kwargs)
+
+
+def get_management_object_ttl(cache: DualCache) -> float:
+    """
+    In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).
+
+    Honors ``general_settings.user_api_key_cache_ttl``, which ``proxy_server``
+    propagates onto ``default_in_memory_ttl`` at startup, and falls back to
+    ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` when no default is configured.
+    """
+    configured: Optional[float] = getattr(cache, "default_in_memory_ttl", None)
+    if configured is not None:
+        return configured
+    return DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL

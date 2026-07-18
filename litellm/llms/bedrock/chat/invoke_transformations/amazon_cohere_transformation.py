@@ -54,9 +54,7 @@ class AmazonCohereConfig(AmazonInvokeConfig, CohereChatConfig):
         }
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        supported_params = CohereChatConfig.get_supported_openai_params(
-            self, model=model
-        )
+        supported_params = CohereChatConfig.get_supported_openai_params(self, model=model)
         return supported_params
 
     def map_openai_params(

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -32,6 +32,12 @@ def _dest(**overrides) -> FocusMavvrikDestination:
     }
     config.update(overrides)
     return FocusMavvrikDestination(prefix="mavvrik_focus_exports", config=config)
+
+
+def _patch_resp(status: int = 204) -> MagicMock:
+    r = MagicMock()
+    r.status_code = status
+    return r
 
 
 def test_missing_api_key_raises():
@@ -83,11 +89,27 @@ def test_initializes_with_not_registered():
 
 
 @pytest.mark.asyncio
-async def test_deliver_skips_empty_content():
+async def test_deliver_skips_upload_but_advances_marker_for_empty_content():
     dest = _dest()
+
+    register_resp = MagicMock()
+    register_resp.status_code = 200
+    register_resp.json.return_value = {"metricsMarker": 0}
+
+    patch_resp = _patch_resp(204)
+
+    mock_http = MagicMock()
+    mock_http.client = MagicMock()
+    mock_http.client.request = AsyncMock(side_effect=[register_resp, patch_resp])
+    dest._http = mock_http
+
     await dest.deliver(content=b"", time_window=_make_window(), filename="usage.csv")
-    # _registered still False — _ensure_registered was never called
-    assert dest._registered is False
+
+    assert dest._registered is True
+    assert mock_http.client.request.call_count == 2
+    patch_call = mock_http.client.request.call_args_list[1]
+    assert patch_call.kwargs["method"] == "PATCH"
+    assert "metricsMarker" in patch_call.kwargs["json"]
 
 
 @pytest.mark.asyncio
@@ -112,9 +134,7 @@ async def test_large_content_uploads_in_multiple_chunks():
 
     signed_url_resp = MagicMock()
     signed_url_resp.status_code = 200
-    signed_url_resp.json.return_value = {
-        "url": "https://storage.googleapis.com/upload?sig=x"
-    }
+    signed_url_resp.json.return_value = {"url": "https://storage.googleapis.com/upload?sig=x"}
 
     init_resp = MagicMock()
     init_resp.status_code = 200
@@ -127,6 +147,8 @@ async def test_large_content_uploads_in_multiple_chunks():
     chunk2_resp = MagicMock()
     chunk2_resp.status_code = 200
 
+    patch_resp = _patch_resp(204)
+
     mock_http = MagicMock()
     mock_http.client = MagicMock()
     mock_http.client.request = AsyncMock(
@@ -136,6 +158,7 @@ async def test_large_content_uploads_in_multiple_chunks():
             init_resp,
             chunk1_resp,
             chunk2_resp,
+            patch_resp,
         ]
     )
     dest._http = mock_http
@@ -152,14 +175,19 @@ async def test_large_content_uploads_in_multiple_chunks():
         filename="usage.csv",
     )
 
-    # register + get_signed_url + init + 2 chunk PUTs = 5 calls
-    assert mock_http.client.request.call_count == 5
+    # register + get_signed_url + init + 2 chunk PUTs + PATCH = 6 calls
+    assert mock_http.client.request.call_count == 6
 
-    # Check Content-Range headers
-    put_calls = mock_http.client.request.call_args_list[3:]
+    # Check Content-Range headers on the chunk PUTs (calls 3 and 4)
+    put_calls = mock_http.client.request.call_args_list[3:5]
     assert "bytes" in put_calls[0].kwargs["headers"]["Content-Range"]
     assert "/*" in put_calls[0].kwargs["headers"]["Content-Range"]  # intermediate
     assert "/*" not in put_calls[1].kwargs["headers"]["Content-Range"]  # final
+
+    # Verify the PATCH call advanced metricsMarker
+    patch_call = mock_http.client.request.call_args_list[5]
+    assert patch_call.kwargs["method"] == "PATCH"
+    assert "metricsMarker" in patch_call.kwargs["json"]
 
 
 @pytest.mark.asyncio
@@ -180,12 +208,14 @@ async def test_deliver_calls_register_get_url_and_upload():
     upload_resp = MagicMock()
     upload_resp.status_code = 200
 
+    patch_resp = _patch_resp(204)
+
     mock_http = MagicMock()
     mock_http.client = MagicMock()
-    # All 4 calls go through self._http.client.request:
-    # 1. register, 2. get_signed_url, 3. GCS session init POST, 4. GCS PUT
+    # All 5 calls go through self._http.client.request:
+    # 1. register, 2. get_signed_url, 3. GCS session init POST, 4. GCS PUT, 5. PATCH marker
     mock_http.client.request = AsyncMock(
-        side_effect=[register_resp, signed_url_resp, init_resp, upload_resp]
+        side_effect=[register_resp, signed_url_resp, init_resp, upload_resp, patch_resp]
     )
     dest._http = mock_http
 
@@ -196,10 +226,14 @@ async def test_deliver_calls_register_get_url_and_upload():
     )
 
     assert dest._registered is True
-    assert mock_http.client.request.call_count == 4
+    assert mock_http.client.request.call_count == 5
     # Verify Content-Range header was set on the PUT
     put_call = mock_http.client.request.call_args_list[3]
     assert "Content-Range" in put_call.kwargs["headers"]
+    # Verify PATCH was called last with metricsMarker
+    patch_call = mock_http.client.request.call_args_list[4]
+    assert patch_call.kwargs["method"] == "PATCH"
+    assert "metricsMarker" in patch_call.kwargs["json"]
 
 
 @pytest.mark.asyncio
@@ -224,17 +258,19 @@ async def test_register_called_only_once_across_multiple_deliveries():
 
     mock_http = MagicMock()
     mock_http.client = MagicMock()
-    # First delivery:  register, get_signed_url, GCS init, GCS PUT
-    # Second delivery: get_signed_url, GCS init, GCS PUT  (register skipped)
+    # First delivery:  register, get_signed_url, GCS init, GCS PUT, PATCH
+    # Second delivery: get_signed_url, GCS init, GCS PUT, PATCH  (register skipped)
     mock_http.client.request = AsyncMock(
         side_effect=[
             register_resp,
             _signed_url_resp(),
             init_resp,
             upload_resp,
+            _patch_resp(204),
             _signed_url_resp(),
             init_resp,
             upload_resp,
+            _patch_resp(204),
         ]
     )
     dest._http = mock_http
@@ -243,8 +279,8 @@ async def test_register_called_only_once_across_multiple_deliveries():
     await dest.deliver(content=b"header\nrow1\n", time_window=window, filename="1.csv")
     await dest.deliver(content=b"header\nrow2\n", time_window=window, filename="2.csv")
 
-    # 7 total: register(1) + [get_url+init+put](2) × 2 deliveries
-    assert mock_http.client.request.call_count == 7
+    # 9 total: register(1) + [get_url+init+put+patch](4) × 2 deliveries
+    assert mock_http.client.request.call_count == 9
     # First call was register
     first_call = mock_http.client.request.call_args_list[0]
     assert first_call.kwargs["method"] == "POST"
@@ -343,9 +379,7 @@ async def test_deliver_raises_on_non_gcs_session_uri():
     signed_url_resp = MagicMock()
     signed_url_resp.status_code = 200
     # signed URL is valid GCS
-    signed_url_resp.json.return_value = {
-        "url": "https://storage.googleapis.com/upload?sig=abc"
-    }
+    signed_url_resp.json.return_value = {"url": "https://storage.googleapis.com/upload?sig=abc"}
 
     # Location header points to a non-GCS host
     init_resp = MagicMock()
@@ -355,9 +389,7 @@ async def test_deliver_raises_on_non_gcs_session_uri():
     mock_http = MagicMock()
     mock_http.client = MagicMock()
     # register, get_signed_url, GCS session init (returns bad Location)
-    mock_http.client.request = AsyncMock(
-        side_effect=[register_resp, signed_url_resp, init_resp]
-    )
+    mock_http.client.request = AsyncMock(side_effect=[register_resp, signed_url_resp, init_resp])
     dest._http = mock_http
 
     with pytest.raises(ValueError, match="GCS endpoint"):
@@ -447,10 +479,11 @@ async def test_export_window_passes_max_rows_as_limit(monkeypatch):
 
     # Mock the engine internals so _export_window runs through our new code path
     db_mock = MagicMock()
-    db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())  # empty → no upload
+    db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())  # empty deliver
 
     engine_mock = MagicMock()
     engine_mock._database = db_mock
+    engine_mock._destination.deliver = AsyncMock()
     logger._engine = engine_mock
 
     window = FocusTimeWindow(
@@ -545,6 +578,36 @@ async def test_run_scheduled_export_no_catchup_when_marker_is_current():
     await logger._run_scheduled_export()
 
     # Only one call — yesterday's normal run, no catch-up
+    assert db_mock.get_usage_data.call_count == 1
+    assert db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date() == yesterday.date()
+
+
+@pytest.mark.asyncio
+async def test_run_scheduled_export_skips_catchup_when_marker_is_unparseable():
+    import polars as pl
+    from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
+        MavvrikFocusLogger,
+    )
+    from litellm.integrations.focus.destinations.mavvrik_destination import (
+        FocusMavvrikDestination,
+    )
+
+    logger = MavvrikFocusLogger()
+    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday = now - timedelta(days=1)
+
+    dest_mock = MagicMock(spec=FocusMavvrikDestination)
+    dest_mock.get_metrics_marker = AsyncMock(return_value="not-a-date")
+
+    db_mock = MagicMock()
+    db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())
+    engine_mock = MagicMock()
+    engine_mock._database = db_mock
+    engine_mock._destination = dest_mock
+    logger._engine = engine_mock
+
+    await logger._run_scheduled_export()
+
     assert db_mock.get_usage_data.call_count == 1
     assert (
         db_mock.get_usage_data.call_args.kwargs["start_time_utc"].date()
@@ -713,9 +776,7 @@ async def test_gcs_session_cancelled_on_chunk_failure():
 
     signed_url_resp = MagicMock()
     signed_url_resp.status_code = 200
-    signed_url_resp.json.return_value = {
-        "url": "https://storage.googleapis.com/upload?sig=x"
-    }
+    signed_url_resp.json.return_value = {"url": "https://storage.googleapis.com/upload?sig=x"}
 
     init_resp = MagicMock()
     init_resp.status_code = 200
@@ -749,3 +810,42 @@ async def test_gcs_session_cancelled_on_chunk_failure():
     delete_call = calls[4]
     assert delete_call.kwargs["method"] == "DELETE"
     assert "storage.googleapis.com/session" in delete_call.kwargs["url"]
+
+
+@pytest.mark.asyncio
+async def test_update_metrics_marker_raises_on_non_410_error():
+    dest = _dest()
+
+    fail_resp = MagicMock()
+    fail_resp.status_code = 500
+    fail_resp.text = "Internal Server Error"
+
+    mock_http = MagicMock()
+    mock_http.client = MagicMock()
+    mock_http.client.request = AsyncMock(return_value=fail_resp)
+    dest._http = mock_http
+
+    with pytest.raises(RuntimeError, match="failed to update metricsMarker"):
+        await dest._update_metrics_marker(1234567890)
+    assert mock_http.client.request.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_update_metrics_marker_raises_on_410():
+    """_update_metrics_marker must raise RuntimeError and reset _registered on 410."""
+    dest = _dest()
+    dest._registered = True
+
+    resp_410 = MagicMock()
+    resp_410.status_code = 410
+    resp_410.text = "Gone"
+
+    mock_http = MagicMock()
+    mock_http.client = MagicMock()
+    mock_http.client.request = AsyncMock(return_value=resp_410)
+    dest._http = mock_http
+
+    with pytest.raises(RuntimeError, match="disconnected"):
+        await dest._update_metrics_marker(1234567890)
+
+    assert dest._registered is False

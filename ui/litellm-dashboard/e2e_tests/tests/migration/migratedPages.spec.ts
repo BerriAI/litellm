@@ -17,7 +17,11 @@ const ROOT = process.env.SERVER_ROOT_PATH ?? "";
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const pathRe = (segment: string) => new RegExp(`${esc(ROOT)}/ui/${esc(segment)}/?($|\\?)`);
-const virtualKeysLink = (page: Page) => page.getByRole("link", { name: "Virtual Keys", exact: true });
+// Scope nav lookups to the sidebar (a `complementary` landmark). The top bar
+// now renders a breadcrumb whose current-page item is also a "Virtual Keys"
+// link, so an unscoped locator would match two elements.
+const sidebar = (page: Page) => page.getByRole("complementary");
+const virtualKeysLink = (page: Page) => sidebar(page).getByRole("link", { name: "Virtual Keys", exact: true });
 
 /** The dashboard shell is present (sidebar rendered); page didn't 404 / crash. */
 async function expectRendered(page: Page) {
@@ -26,16 +30,21 @@ async function expectRendered(page: Page) {
 
 /**
  * Click a migrated page's sidebar link. Migrated items render as <a href=".../ui/<segment>">;
- * nested ones live under collapsible submenus, so expand submenus until the link is clickable.
+ * nested ones live under collapsible groups whose children only render while the
+ * group is open, so expand collapsed groups until the link is clickable.
  */
 async function clickSidebar(page: Page, segment: string) {
-  const link = page.locator(`a[href$="/ui/${segment}"]`).first();
+  const link = sidebar(page).locator(`a[href$="/ui/${segment}"]`).first();
   for (let i = 0; i < 8 && !(await link.isVisible().catch(() => false)); i++) {
-    const collapsedSubmenu = page
-      .locator(".ant-menu-submenu:not(.ant-menu-submenu-open) > .ant-menu-submenu-title")
+    // A collapsed group is a menu item with a group-toggle button but no
+    // rendered submenu yet; clicking the toggle expands it.
+    const collapsedGroup = sidebar(page)
+      .locator(
+        '[data-slot="sidebar-menu-item"]:has(> [data-slot="sidebar-menu-button"]):not(:has(> [data-slot="sidebar-menu-sub"])) > [data-slot="sidebar-menu-button"]',
+      )
       .first();
-    if (!(await collapsedSubmenu.isVisible().catch(() => false))) break;
-    await collapsedSubmenu.click();
+    if (!(await collapsedGroup.isVisible().catch(() => false))) break;
+    await collapsedGroup.click();
     await page.waitForTimeout(250);
   }
   await link.click();

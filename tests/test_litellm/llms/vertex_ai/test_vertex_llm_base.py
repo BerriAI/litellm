@@ -15,6 +15,7 @@ sys.path.insert(
 import litellm
 from litellm.llms.vertex_ai.vertex_ai_aws_wif import VertexAIAwsWifAuth
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
 
 def run_sync(coro):
@@ -774,7 +775,7 @@ class TestVertexBase:
                 "https://aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent",
                 "gemini-pro",
                 "Bearer token123",
-                "https://custom-vertex-api.com:generateContent",
+                "https://custom-vertex-api.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent",
             ),
             # Test case 4: No API base provided (should return original values)
             (
@@ -929,6 +930,173 @@ class TestVertexBase:
         assert (
             result_url_no_streaming == expected_no_streaming_url
         ), f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+
+    def test_check_custom_proxy_vertex_bare_host_api_base_grafts_default_path(self):
+        vertex_base = VertexBase()
+
+        result_auth_header, result_url = vertex_base._check_custom_proxy(
+            api_base="https://aiplatform.googleapis.com",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="embedContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent",
+            model="gemini-embedding-2",
+        )
+
+        assert result_auth_header == "Bearer token123"
+        assert (
+            result_url
+            == "https://aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent"
+        )
+
+    def test_check_custom_proxy_vertex_bare_host_api_base_with_trailing_slash(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="embedContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent",
+            model="gemini-embedding-2",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_path_keeps_endpoint_append(self):
+        vertex_base = VertexBase()
+        gateway_api_base = "https://gateway.ai.cloudflare.com/v1/account-id/my-gateway/google-vertex-ai/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2"
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base=gateway_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="embedContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent",
+            model="gemini-embedding-2",
+        )
+
+        assert result_url == f"{gateway_api_base}:embedContent"
+
+    def test_check_custom_proxy_vertex_bare_host_streaming_keeps_single_alt_sse(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="streamGenerateContent",
+            stream=True,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+            model="gemini-2.5-pro",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+        )
+
+    def test_check_custom_proxy_psc_endpoint_format_unaffected_by_bare_host(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://10.96.32.8",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="predict",
+            stream=None,
+            auth_header="Bearer token123",
+            url="",
+            model="1234567890",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            vertex_api_version="v1",
+            use_psc_endpoint_format=True,
+        )
+
+        assert result_url == "https://10.96.32.8/v1/projects/test-project/locations/us-central1/endpoints/1234567890:predict"
+
+    @pytest.mark.parametrize(
+        "custom_api_base, stream, expected_url",
+        [
+            (
+                "https://aiplatform-myendpoint.p.googleapis.com",
+                False,
+                "https://aiplatform-myendpoint.p.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+            (
+                "https://aiplatform-myendpoint.p.googleapis.com",
+                True,
+                "https://aiplatform-myendpoint.p.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+            (
+                "https://gateway.example.com/vertex-proxy",
+                False,
+                "https://gateway.example.com/vertex-proxy/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions",
+            ),
+        ],
+        ids=["psc-host", "psc-host-streaming", "api-base-with-path"],
+    )
+    def test_get_complete_vertex_url_openai_path_partner_custom_api_base(
+        self, custom_api_base, stream, expected_url
+    ):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base=custom_api_base,
+            vertex_location="global",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.llama,
+            stream=stream,
+            model="minimaxai/minimax-m2-maas",
+        )
+
+        assert result == expected_url
+        assert result.count("://") == 1
+
+    def test_get_complete_vertex_url_openai_path_partner_default_api_base(self):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base=None,
+            vertex_location="us-central1",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.llama,
+            stream=True,
+            model="meta/llama-3.1-405b-instruct-maas",
+        )
+
+        assert (
+            result
+            == "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/endpoints/openapi/chat/completions"
+        )
+
+    def test_get_complete_vertex_url_rawpredict_partner_custom_api_base_keeps_endpoint_format(self):
+        vertex_base = VertexBase()
+
+        result = vertex_base.get_complete_vertex_url(
+            custom_api_base="https://gateway.example.com/vertex-proxy",
+            vertex_location="us-central1",
+            vertex_project="test-project",
+            project_id="test-project",
+            partner=VertexPartnerProvider.mistralai,
+            stream=False,
+            model="mistral-large-2411",
+        )
+
+        assert result == "https://gateway.example.com/vertex-proxy:rawPredict"
 
     @pytest.mark.parametrize(
         "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",

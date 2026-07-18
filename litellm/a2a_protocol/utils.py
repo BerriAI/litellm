@@ -121,8 +121,13 @@ class A2ARequestUtils:
         Returns:
             Tuple of (prompt_tokens, completion_tokens, total_tokens)
         """
-        # Count input tokens
+        # Count input tokens. Dump the message to a dict first so extraction hits
+        # the dict branch — request-side parts are a2a-sdk Part RootModels whose
+        # kind/text live on part.root, which the object branch cannot read. This
+        # mirrors how the response side already works (it operates on model_dump).
         input_message = A2ARequestUtils.get_input_message_from_request(request)
+        if input_message is not None and hasattr(input_message, "model_dump"):
+            input_message = input_message.model_dump(mode="json")
         input_text = A2ARequestUtils.extract_text_from_message(input_message)
         prompt_tokens = A2ARequestUtils.count_tokens(input_text)
 

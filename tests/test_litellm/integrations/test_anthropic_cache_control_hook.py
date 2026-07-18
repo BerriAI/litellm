@@ -1,7 +1,10 @@
+import copy
 import datetime
 import json
 import os
+import subprocess
 import sys
+import textwrap
 import unittest
 from typing import List, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
@@ -9,9 +12,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -93,13 +94,9 @@ async def test_anthropic_cache_control_hook_system_message():
 
             # Verify that cache control was applied (Bedrock transforms it to a separate item)
             cache_control_count = sum(
-                1
-                for item in request_body["system"]
-                if isinstance(item, dict) and "cachePoint" in item
+                1 for item in request_body["system"] if isinstance(item, dict) and "cachePoint" in item
             )
-            assert (
-                cache_control_count == 1
-            ), f"Expected exactly 1 cache control point, found {cache_control_count}"
+            assert cache_control_count == 1, f"Expected exactly 1 cache control point, found {cache_control_count}"
 
 
 @pytest.mark.asyncio
@@ -171,9 +168,7 @@ async def test_anthropic_cache_control_hook_user_message():
             print("request_body: ", json.dumps(request_body, indent=4))
 
             # Verify the request body
-            assert request_body["messages"][1]["content"][1]["cachePoint"] == {
-                "type": "default"
-            }
+            assert request_body["messages"][1]["content"][1]["cachePoint"] == {"type": "default"}
 
 
 @pytest.mark.asyncio
@@ -262,14 +257,10 @@ async def test_anthropic_cache_control_hook_negative_indices():
 
             # Verify the last message (input index -1 -> request index 2) has cache control
             last_message_content = request_body["messages"][2]["content"]
-            assert isinstance(
-                last_message_content, list
-            ), "Last message content should be a list"
-            assert any(
-                "cachePoint" in item
-                for item in last_message_content
-                if isinstance(item, dict)
-            ), "CachePoint missing in last message"
+            assert isinstance(last_message_content, list), "Last message content should be a list"
+            assert any("cachePoint" in item for item in last_message_content if isinstance(item, dict)), (
+                "CachePoint missing in last message"
+            )
 
             # Note: Based on debug output, the hook correctly applies cache control to both messages,
             # but the Bedrock API transformation appears to only preserve cache control for user messages,
@@ -278,30 +269,20 @@ async def test_anthropic_cache_control_hook_negative_indices():
             # The second-to-last message (assistant) gets cache_control from the hook but loses it
             # during API transformation. This test documents this behavior.
             second_last_message_content = request_body["messages"][1]["content"]
-            assert isinstance(
-                second_last_message_content, list
-            ), "Second-to-last message content should be a list"
+            assert isinstance(second_last_message_content, list), "Second-to-last message content should be a list"
 
             # Check if assistant message cache control is preserved (currently it's not)
             assistant_has_cache_control = any(
-                "cachePoint" in item
-                for item in second_last_message_content
-                if isinstance(item, dict)
+                "cachePoint" in item for item in second_last_message_content if isinstance(item, dict)
             )
-            print(
-                f"Assistant message has cache control in final request: {assistant_has_cache_control}"
-            )
+            print(f"Assistant message has cache control in final request: {assistant_has_cache_control}")
 
             # Verify the first user message (request index 0) was NOT modified
             first_user_message_content = request_body["messages"][0]["content"]
-            assert isinstance(
-                first_user_message_content, list
-            ), "First user message content should be a list"
-            assert not any(
-                "cachePoint" in item
-                for item in first_user_message_content
-                if isinstance(item, dict)
-            ), "CachePoint unexpectedly found in first user message"
+            assert isinstance(first_user_message_content, list), "First user message content should be a list"
+            assert not any("cachePoint" in item for item in first_user_message_content if isinstance(item, dict)), (
+                "CachePoint unexpectedly found in first user message"
+            )
 
 
 @pytest.mark.asyncio
@@ -342,9 +323,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
         client = AsyncHTTPHandler()
 
         # Mock the verbose_logger to capture warning calls
-        with patch(
-            "litellm.integrations.anthropic_cache_control_hook.verbose_logger"
-        ) as mock_logger:
+        with patch("litellm.integrations.anthropic_cache_control_hook.verbose_logger") as mock_logger:
             with patch.object(client, "post", return_value=mock_response) as mock_post:
                 messages = [
                     {"role": "user", "content": "Message 1"},
@@ -354,9 +333,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
                 await litellm.acompletion(
                     model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                     messages=messages,
-                    cache_control_injection_points=[
-                        {"location": "message", "index": 10}
-                    ],  # Out of bounds index
+                    cache_control_injection_points=[{"location": "message", "index": 10}],  # Out of bounds index
                     client=client,
                 )
 
@@ -365,10 +342,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
                 warning_call = mock_logger.warning.call_args[0][0]
 
                 # Check that the warning message contains the expected information
-                assert (
-                    "AnthropicCacheControlHook: Provided index 10 is out of bounds"
-                    in warning_call
-                )
+                assert "AnthropicCacheControlHook: Provided index 10 is out of bounds" in warning_call
                 assert "message list of length 2" in warning_call
                 assert "Targeted index was 10" in warning_call
                 assert "Skipping cache control injection for this point" in warning_call
@@ -411,9 +385,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
         client = AsyncHTTPHandler()
 
         # Mock the verbose_logger to capture warning calls
-        with patch(
-            "litellm.integrations.anthropic_cache_control_hook.verbose_logger"
-        ) as mock_logger:
+        with patch("litellm.integrations.anthropic_cache_control_hook.verbose_logger") as mock_logger:
             with patch.object(client, "post", return_value=mock_response) as mock_post:
                 messages = [
                     {"role": "user", "content": "Single message"},
@@ -436,14 +408,9 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
                 warning_call = mock_logger.warning.call_args[0][0]
 
                 # Check that the warning message contains the original negative index
-                assert (
-                    "AnthropicCacheControlHook: Provided index -5 is out of bounds"
-                    in warning_call
-                )
+                assert "AnthropicCacheControlHook: Provided index -5 is out of bounds" in warning_call
                 assert "message list of length 1" in warning_call
-                assert (
-                    "Targeted index was -4" in warning_call
-                )  # -5 + 1 = -4 (converted index)
+                assert "Targeted index was -4" in warning_call  # -5 + 1 = -4 (converted index)
                 assert "Skipping cache control injection for this point" in warning_call
 
 
@@ -531,15 +498,11 @@ async def test_anthropic_cache_control_hook_multiple_user_messages():
 
             # Count cache control points - should have 2 since both injection points were applied
             cache_control_count = sum(
-                1
-                for item in combined_message_content
-                if isinstance(item, dict) and "cachePoint" in item
+                1 for item in combined_message_content if isinstance(item, dict) and "cachePoint" in item
             )
             assert cache_control_count == 2
 
-            print(
-                f"Found {cache_control_count} cache control points in the combined message"
-            )
+            print(f"Found {cache_control_count} cache control points in the combined message")
 
 
 @pytest.mark.asyncio
@@ -588,9 +551,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
             await litellm.acompletion(
                 model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 messages=messages,
-                cache_control_injection_points=[
-                    {"location": "message", "index": bad_index}
-                ],
+                cache_control_injection_points=[{"location": "message", "index": bad_index}],
                 client=client,
             )
 
@@ -601,19 +562,13 @@ async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
             for msg in request_body["messages"]:
                 content = msg.get("content", [])
                 if isinstance(content, list):
-                    assert not any(
-                        "cachePoint" in item
-                        for item in content
-                        if isinstance(item, dict)
-                    )
+                    assert not any("cachePoint" in item for item in content if isinstance(item, dict))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "message_list",
-    [
-        [{"role": "user", "content": "Single message"}]
-    ],  # Single message only - empty list will fail at API level
+    [[{"role": "user", "content": "Single message"}]],  # Single message only - empty list will fail at API level
 )
 async def test_anthropic_cache_control_hook_single_message(message_list):
     """
@@ -662,9 +617,7 @@ async def test_anthropic_cache_control_hook_single_message(message_list):
             # For the single message, verify cache control was applied
             content = request_body["messages"][0]["content"]
             assert isinstance(content, list)
-            assert any(
-                "cachePoint" in item for item in content if isinstance(item, dict)
-            )
+            assert any("cachePoint" in item for item in content if isinstance(item, dict))
 
 
 @pytest.mark.asyncio
@@ -693,9 +646,7 @@ async def test_anthropic_cache_control_hook_empty_message_list():
                 await litellm.acompletion(
                     model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                     messages=[],
-                    cache_control_injection_points=[
-                        {"location": "message", "index": -1}
-                    ],
+                    cache_control_injection_points=[{"location": "message", "index": -1}],
                     client=client,
                 )
 
@@ -755,11 +706,7 @@ async def test_anthropic_cache_control_hook_no_op():
             for msg in request_body["messages"]:
                 content = msg.get("content", [])
                 if isinstance(content, list):
-                    assert not any(
-                        "cachePoint" in item
-                        for item in content
-                        if isinstance(item, dict)
-                    )
+                    assert not any("cachePoint" in item for item in content if isinstance(item, dict))
 
 
 @pytest.mark.asyncio
@@ -827,14 +774,10 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
             message_content = request_body["messages"][0]["content"]
             assert isinstance(message_content, list)
 
-            cache_control_count = sum(
-                1
-                for item in message_content
-                if isinstance(item, dict) and "cachePoint" in item
+            cache_control_count = sum(1 for item in message_content if isinstance(item, dict) and "cachePoint" in item)
+            assert cache_control_count == 1, (
+                f"Expected exactly 1 cache control point, found {cache_control_count}. This test verifies the fix for issue 15696 where cache_control was incorrectly applied to ALL content items."
             )
-            assert (
-                cache_control_count == 1
-            ), f"Expected exactly 1 cache control point, found {cache_control_count}. This test verifies the fix for issue 15696 where cache_control was incorrectly applied to ALL content items."
 
 
 @pytest.mark.asyncio
@@ -891,30 +834,22 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
                         ],
                     }
                 ],
-                cache_control_injection_points=[
-                    {"location": "message", "role": "user"}
-                ],
+                cache_control_injection_points=[{"location": "message", "role": "user"}],
                 client=client,
             )
 
             mock_post.assert_called_once()
             request_body = json.loads(mock_post.call_args.kwargs["data"])
 
-            print(
-                "Document analysis request_body: ", json.dumps(request_body, indent=4)
-            )
+            print("Document analysis request_body: ", json.dumps(request_body, indent=4))
 
             message_content = request_body["messages"][0]["content"]
             assert isinstance(message_content, list)
 
-            cache_control_count = sum(
-                1
-                for item in message_content
-                if isinstance(item, dict) and "cachePoint" in item
+            cache_control_count = sum(1 for item in message_content if isinstance(item, dict) and "cachePoint" in item)
+            assert cache_control_count == 1, (
+                f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
             )
-            assert (
-                cache_control_count == 1
-            ), f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
 
 
 def test_gemini_cache_control_injection_points_detected():
@@ -1076,13 +1011,8 @@ async def test_anthropic_cache_control_hook_string_negative_index():
             # The last user message should have cache control applied
             last_message = request_body["messages"][-1]
             last_message_content = last_message["content"]
-            assert isinstance(
-                last_message_content, list
-            ), f"Expected list content, got {type(last_message_content)}"
-            has_cache_point = any(
-                isinstance(item, dict) and "cachePoint" in item
-                for item in last_message_content
-            )
+            assert isinstance(last_message_content, list), f"Expected list content, got {type(last_message_content)}"
+            has_cache_point = any(isinstance(item, dict) and "cachePoint" in item for item in last_message_content)
             assert has_cache_point, (
                 f"Expected cachePoint in last message content, got: {last_message_content}. "
                 "String index '-1' was not parsed correctly (str.isdigit() returns False for negative strings)."
@@ -1146,17 +1076,13 @@ def test_cache_control_hook_caps_at_four_blocks_with_client_cache_control():
     _, processed, _ = hook.get_chat_completion_prompt(
         model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
         messages=messages,
-        non_default_params={
-            "cache_control_injection_points": _build_injection_points()
-        },
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
         prompt_id=None,
         prompt_variables=None,
         dynamic_callback_params={},
     )
 
-    assert (
-        _count_cache_control(processed) == 4
-    ), "Hook must cap cache_control at Anthropic's limit of 4 blocks"
+    assert _count_cache_control(processed) == 4, "Hook must cap cache_control at Anthropic's limit of 4 blocks"
 
     # Client TTL on system blocks must be preserved (not overwritten by config).
     for i in range(4):
@@ -1170,11 +1096,7 @@ def test_cache_control_hook_caps_at_four_blocks_with_client_cache_control():
     assert user_message.get("cache_control") is None
     user_content = user_message.get("content")
     if isinstance(user_content, list):
-        assert all(
-            block.get("cache_control") is None
-            for block in user_content
-            if isinstance(block, dict)
-        )
+        assert all(block.get("cache_control") is None for block in user_content if isinstance(block, dict))
 
 
 def test_cache_control_hook_caps_at_four_blocks_without_client_cache_control():
@@ -1184,17 +1106,13 @@ def test_cache_control_hook_caps_at_four_blocks_without_client_cache_control():
     """
     hook = AnthropicCacheControlHook()
 
-    messages: List[AllMessageValues] = [
-        {"role": "system", "content": f"System {i}"} for i in range(4)
-    ]
+    messages: List[AllMessageValues] = [{"role": "system", "content": f"System {i}"} for i in range(4)]
     messages.append({"role": "user", "content": "hello"})
 
     _, processed, _ = hook.get_chat_completion_prompt(
         model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
         messages=messages,
-        non_default_params={
-            "cache_control_injection_points": _build_injection_points()
-        },
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
         prompt_id=None,
         prompt_variables=None,
         dynamic_callback_params={},
@@ -1303,18 +1221,12 @@ async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four():
             request_body = json.loads(mock_post.call_args.kwargs["data"])
 
             cache_points = sum(
-                1
-                for block in request_body.get("system", [])
-                if isinstance(block, dict) and "cachePoint" in block
+                1 for block in request_body.get("system", []) if isinstance(block, dict) and "cachePoint" in block
             )
             for msg in request_body.get("messages", []):
                 content = msg.get("content", [])
                 if isinstance(content, list):
-                    cache_points += sum(
-                        1
-                        for block in content
-                        if isinstance(block, dict) and "cachePoint" in block
-                    )
+                    cache_points += sum(1 for block in content if isinstance(block, dict) and "cachePoint" in block)
 
             assert cache_points <= 4, (
                 f"Bedrock payload exceeded Anthropic's 4 cache_control block limit: "
@@ -1331,9 +1243,7 @@ def test_cache_control_hook_reserves_slot_for_tool_config_point():
     """
     hook = AnthropicCacheControlHook()
 
-    messages: List[AllMessageValues] = [
-        {"role": "system", "content": f"System {i}"} for i in range(4)
-    ]
+    messages: List[AllMessageValues] = [{"role": "system", "content": f"System {i}"} for i in range(4)]
     messages.append({"role": "user", "content": "hello"})
 
     _, processed, non_default_params = hook.get_chat_completion_prompt(
@@ -1356,9 +1266,7 @@ def test_cache_control_hook_reserves_slot_for_tool_config_point():
 
     assert _count_cache_control(processed) == 3
     # The tool_config point is passed through for the provider transform.
-    assert non_default_params["cache_control_injection_points"] == [
-        {"location": "tool_config"}
-    ]
+    assert non_default_params["cache_control_injection_points"] == [{"location": "tool_config"}]
 
 
 @pytest.mark.asyncio
@@ -1384,9 +1292,7 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
 
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=mock_response) as mock_post:
-            messages = [
-                {"role": "system", "content": f"System block {i}"} for i in range(4)
-            ]
+            messages = [{"role": "system", "content": f"System block {i}"} for i in range(4)]
             messages.append({"role": "user", "content": "What is the weather?"})
 
             await litellm.acompletion(
@@ -1421,18 +1327,12 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
             request_body = json.loads(mock_post.call_args.kwargs["data"])
 
             cache_points = sum(
-                1
-                for block in request_body.get("system", [])
-                if isinstance(block, dict) and "cachePoint" in block
+                1 for block in request_body.get("system", []) if isinstance(block, dict) and "cachePoint" in block
             )
             for msg in request_body.get("messages", []):
                 content = msg.get("content", [])
                 if isinstance(content, list):
-                    cache_points += sum(
-                        1
-                        for block in content
-                        if isinstance(block, dict) and "cachePoint" in block
-                    )
+                    cache_points += sum(1 for block in content if isinstance(block, dict) and "cachePoint" in block)
             for tool in request_body.get("toolConfig", {}).get("tools", []):
                 if isinstance(tool, dict) and "cachePoint" in tool:
                     cache_points += 1
@@ -1441,3 +1341,436 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
                 f"Bedrock payload exceeded Anthropic's 4 cache_control block limit "
                 f"when mixing message and tool_config injection: found {cache_points}"
             )
+
+
+class TestApplyToAnthropicMessagesRequest:
+    """Tests for apply_to_anthropic_messages_request (v1/messages cache control)."""
+
+    def test_system_string_injection(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        system = "You are helpful"
+        injection_points = [{"location": "message", "role": "system"}]
+
+        result_msgs, result_sys, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        assert result_sys == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
+        assert result_msgs == messages
+        assert remaining == []
+
+    def test_system_list_injection(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        system = [
+            {"type": "text", "text": "Part 1"},
+            {"type": "text", "text": "Part 2"},
+        ]
+        injection_points = [{"location": "message", "role": "system"}]
+
+        _, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        assert result_sys[0] == {"type": "text", "text": "Part 1"}
+        assert result_sys[1] == {"type": "text", "text": "Part 2", "cache_control": {"type": "ephemeral"}}
+
+    def test_user_message_injection_by_role(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "First"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Response"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Second"}]},
+        ]
+        injection_points = [{"location": "message", "role": "user"}]
+
+        result_msgs, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert result_msgs[0]["content"][-1].get("cache_control") == {"type": "ephemeral"}
+        assert result_msgs[2]["content"][-1].get("cache_control") == {"type": "ephemeral"}
+        assert result_msgs[1]["content"][-1].get("cache_control") is None
+
+    def test_message_injection_by_index(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "First"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Response"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Second"}]},
+        ]
+        injection_points = [{"location": "message", "index": -1}]
+
+        result_msgs, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert result_msgs[2]["content"][-1].get("cache_control") == {"type": "ephemeral"}
+        assert result_msgs[0]["content"][-1].get("cache_control") is None
+        assert result_msgs[1]["content"][-1].get("cache_control") is None
+
+    def test_mixed_system_and_message_injection(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Question"}]},
+        ]
+        system = "System prompt"
+        injection_points = [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ]
+
+        result_msgs, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        assert result_sys[0]["cache_control"] == {"type": "ephemeral"}
+        assert result_msgs[2]["content"][-1].get("cache_control") == {"type": "ephemeral"}
+
+    def test_respects_max_4_blocks(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": f"Msg {i}"}]} for i in range(6)]
+        system = "System"
+        injection_points = [
+            {"location": "message", "role": "system"},
+            {"location": "message", "role": "user"},
+        ]
+
+        result_msgs, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        sys_blocks = sum(1 for b in (result_sys or []) if isinstance(b, dict) and b.get("cache_control") is not None)
+        total_blocks = sys_blocks + sum(AnthropicCacheControlHook._count_cache_control_blocks(m) for m in result_msgs)
+        assert total_blocks <= 4
+
+    def test_tool_config_points_forwarded_as_remaining(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        injection_points = [
+            {"location": "message", "role": "user"},
+            {"location": "tool_config"},
+        ]
+
+        _, _, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert remaining == [{"location": "tool_config"}]
+
+    def test_no_injection_points_returns_unchanged(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        system = "System"
+
+        result_msgs, result_sys, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=[],
+        )
+
+        assert result_msgs == messages
+        assert result_sys == system
+        assert remaining == []
+
+    def test_does_not_mutate_input(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        system = [{"type": "text", "text": "System"}]
+        injection_points = [{"location": "message", "role": "system"}]
+
+        original_system = copy.deepcopy(system)
+        original_messages = copy.deepcopy(messages)
+
+        AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        assert messages == original_messages
+        assert system == original_system
+
+    def test_system_none_with_system_point_skipped(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+        injection_points = [{"location": "message", "role": "system"}]
+
+        result_msgs, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=None,
+            injection_points=injection_points,
+        )
+
+        assert result_sys is None
+
+    def test_existing_cache_control_counted_toward_limit(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "A", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "B", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "C", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "D"}]},
+            {"role": "user", "content": [{"type": "text", "text": "E"}]},
+        ]
+        system = "System"
+        injection_points = [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": 3},
+            {"location": "message", "index": 4},
+        ]
+
+        result_msgs, result_sys, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+
+        sys_blocks = sum(1 for b in (result_sys or []) if isinstance(b, dict) and b.get("cache_control") is not None)
+        total_blocks = sys_blocks + sum(AnthropicCacheControlHook._count_cache_control_blocks(m) for m in result_msgs)
+        assert total_blocks <= 4
+
+
+class TestEnableAnthropicPromptCaching:
+    """Auto-injected default breakpoints via litellm.enable_anthropic_prompt_caching."""
+
+    MESSAGES: List[AllMessageValues] = [
+        {"role": "system", "content": "a long system prompt"},
+        {"role": "user", "content": "first turn"},
+        {"role": "assistant", "content": "a reply"},
+        {"role": "user", "content": "latest turn"},
+    ]
+
+    def _points(self, model="claude-sonnet-4-5", provider="anthropic", messages=None, system=None, tools=None):
+        return AnthropicCacheControlHook.get_default_injection_points(
+            messages=copy.deepcopy(self.MESSAGES) if messages is None else messages,
+            system=system,
+            model=model,
+            custom_llm_provider=provider,
+            tools=tools,
+        )
+
+    def test_disabled_by_default(self):
+        assert litellm.enable_anthropic_prompt_caching is False
+        assert self._points() == []
+
+    def test_injects_system_and_trailing_turn(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert self._points() == [
+            {"location": "message", "role": "system", "index": None, "control": {"type": "ephemeral"}},
+            {"location": "message", "role": None, "index": -1, "control": {"type": "ephemeral"}},
+        ]
+
+    def test_bedrock_claude_is_injected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        points = self._points(model="us.anthropic.claude-sonnet-4-5-20250929-v1:0", provider="bedrock")
+        assert [p["index"] for p in points] == [None, -1]
+
+    @pytest.mark.parametrize("model, provider", [("gpt-4o", "openai"), ("gemini-2.0-flash", "gemini")])
+    def test_non_anthropic_providers_never_injected(self, monkeypatch, model, provider):
+        """These report supports_prompt_caching=True but never consume cache_control markers."""
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
+        assert self._points(model=model, provider=provider) == []
+
+    def test_model_without_caching_support_not_injected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
+
+    def test_stands_down_when_client_sent_cache_control(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": "latest turn"},
+        ]
+        assert self._points(messages=messages) == []
+
+    def test_stands_down_when_system_block_has_cache_control(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        system = [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]
+        assert self._points(messages=[{"role": "user", "content": "hi"}], system=system) == []
+
+    @staticmethod
+    def _tools(count: int, cached: bool) -> List[dict]:
+        tool: dict = {"type": "function", "function": {"name": "t", "description": "d", "parameters": {}}}
+        if cached:
+            tool["cache_control"] = {"type": "ephemeral"}
+        return [{**tool, "function": {**tool["function"], "name": f"t{i}"}} for i in range(count)]
+
+    def test_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Caching just the tool definitions is a normal client pattern, and those
+        breakpoints count toward the provider's four-block limit. Three of them plus
+        our two would be five, which Anthropic rejects outright."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert self._points(tools=self._tools(3, cached=True)) == []
+
+    def test_injects_when_tools_carry_no_cache_control(self, monkeypatch):
+        """Tools alone must not suppress injection; only client-marked ones do."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert [p["index"] for p in self._points(tools=self._tools(3, cached=False))] == [None, -1]
+
+    @pytest.mark.parametrize("tools", [None, []])
+    def test_absent_tools_do_not_suppress_injection(self, monkeypatch, tools):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert [p["index"] for p in self._points(tools=tools)] == [None, -1]
+
+    def test_seed_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Same guard on the /chat/completions seeding path."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=self._tools(3, cached=True),
+        )
+        assert "cache_control_injection_points" not in params
+
+    def test_v1_messages_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
+        """Same guard on the /v1/messages path, where tools reach the hook directly."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages),
+            "sys",
+            {},
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=self._tools(3, cached=True),
+        )
+        assert result_sys == "sys"
+        assert result_msgs == messages
+
+    def test_default_ttl_is_anthropics_five_minute_cache(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert all(p["control"] == {"type": "ephemeral"} for p in self._points())
+
+    @pytest.mark.parametrize("ttl", ["5m", "1h"])
+    def test_ttl_override_applied(self, monkeypatch, ttl):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", ttl)
+        assert all(p["control"] == {"type": "ephemeral", "ttl": ttl} for p in self._points())
+
+    def test_seed_does_not_override_configured_points(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        configured = [{"location": "message", "role": "user", "index": 0}]
+        params = {"cache_control_injection_points": configured}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert params["cache_control_injection_points"] is configured
+
+    def test_seed_adds_defaults_when_enabled(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert [p["index"] for p in params["cache_control_injection_points"]] == [None, -1]
+
+    def test_seed_is_noop_when_disabled(self):
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert params == {}
+
+    def test_v1_messages_applies_defaults_end_to_end(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "first"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+            {"role": "user", "content": [{"type": "text", "text": "latest"}]},
+        ]
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages,
+            "a system prompt",
+            {},
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+
+        assert result_sys == [{"type": "text", "text": "a system prompt", "cache_control": {"type": "ephemeral"}}]
+        assert result_msgs[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in result_msgs[0]["content"][-1]
+
+    def test_v1_messages_is_noop_when_disabled(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages,
+            "sys",
+            {},
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+
+        assert result_sys == "sys"
+        assert result_msgs == messages
+
+
+class TestAnthropicPromptCachingEnvVars:
+    """Both settings are read from the environment at import, so an admin can enable
+    auto-caching without a config file. Each case re-imports litellm in a subprocess
+    so the env is read fresh without contaminating this process's module graph.
+    """
+
+    @staticmethod
+    def _import_litellm_with_env(env_override: dict) -> Tuple[bool, Optional[str]]:
+        env = os.environ.copy()
+        env.pop("LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING", None)
+        env.pop("LITELLM_ANTHROPIC_PROMPT_CACHING_TTL", None)
+        env.update(env_override)
+        script = textwrap.dedent(
+            """
+            import json, litellm
+            print(json.dumps([litellm.enable_anthropic_prompt_caching, litellm.anthropic_prompt_caching_ttl]))
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=300
+        )
+        assert result.returncode == 0, result.stderr
+        enabled, ttl = json.loads(result.stdout.strip().splitlines()[-1])
+        return enabled, ttl
+
+    def test_unset_env_leaves_auto_caching_off(self):
+        assert self._import_litellm_with_env({}) == (False, None)
+
+    @pytest.mark.parametrize("value", ["true", "True", "TRUE"])
+    def test_env_enables_auto_caching_case_insensitively(self, value):
+        enabled, _ = self._import_litellm_with_env({"LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING": value})
+        assert enabled is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "yes", ""])
+    def test_env_only_enables_on_true(self, value):
+        enabled, _ = self._import_litellm_with_env({"LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING": value})
+        assert enabled is False
+
+    @pytest.mark.parametrize("value", ["5m", "1h"])
+    def test_ttl_env_is_applied(self, value):
+        _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
+        assert ttl == value
+
+    @pytest.mark.parametrize("value", ["10m", "1H", "3600", "ephemeral"])
+    def test_unsupported_ttl_env_falls_back_to_provider_default(self, value):
+        """An unparseable TTL must fall back to Anthropic's 5m default, never reach the provider verbatim."""
+        _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
+        assert ttl is None

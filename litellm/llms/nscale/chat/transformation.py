@@ -23,9 +23,7 @@ class NscaleConfig(OpenAIGPTConfig):
 
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
-        return (
-            api_base or get_secret_str("NSCALE_API_BASE") or NscaleConfig.API_BASE_URL
-        )
+        return api_base or get_secret_str("NSCALE_API_BASE") or NscaleConfig.API_BASE_URL
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]

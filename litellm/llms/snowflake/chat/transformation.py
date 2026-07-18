@@ -146,9 +146,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 anthropic_tools.append(tool)
         return anthropic_tools
 
-    def _extract_system_and_messages(
-        self, messages: List[AllMessageValues]
-    ) -> tuple[Optional[str], List[Dict]]:
+    def _extract_system_and_messages(self, messages: List[AllMessageValues]) -> tuple[Optional[str], List[Dict]]:
         """
         Split messages into system prompt and conversation turns for Anthropic format.
 
@@ -171,50 +169,22 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 if isinstance(content, str) and content:
                     system_parts.append(content)
                 elif isinstance(content, list):
-                    system_parts.append(
-                        "\n".join(
-                            b.get("text", "")
-                            for b in content
-                            if b.get("type") == "text"
-                        )
-                    )
+                    system_parts.append("\n".join(b.get("text", "") for b in content if b.get("type") == "text"))
             elif role == "assistant":
-                tool_calls = (
-                    msg.get("tool_calls")
-                    if isinstance(msg, dict)
-                    else getattr(msg, "tool_calls", None)
-                )
+                tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
                 if tool_calls:  # type: ignore[truthy-bool]
                     content_blocks: List[Dict[str, Any]] = []
                     if content:
                         content_blocks.append({"type": "text", "text": content})
                     for tc in tool_calls:  # type: ignore[attr-defined]
-                        func = (
-                            tc.get("function", {})
-                            if isinstance(tc, dict)
-                            else getattr(tc, "function", {})
-                        )
-                        tc_id = (
-                            tc.get("id", "")
-                            if isinstance(tc, dict)
-                            else getattr(tc, "id", "")
-                        )
-                        func_name = (
-                            func.get("name", "")
-                            if isinstance(func, dict)
-                            else getattr(func, "name", "")
-                        )
+                        func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
+                        tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                        func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
                         func_args = (
-                            func.get("arguments", "{}")
-                            if isinstance(func, dict)
-                            else getattr(func, "arguments", "{}")
+                            func.get("arguments", "{}") if isinstance(func, dict) else getattr(func, "arguments", "{}")
                         )
                         try:
-                            input_data = (
-                                json.loads(func_args)
-                                if isinstance(func_args, str)
-                                else func_args
-                            )
+                            input_data = json.loads(func_args) if isinstance(func_args, str) else func_args
                         except (json.JSONDecodeError, TypeError):
                             input_data = {}
                         content_blocks.append(
@@ -225,20 +195,14 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                                 "input": input_data,
                             }
                         )
-                    conversation.append(
-                        {"role": "assistant", "content": content_blocks}
-                    )
+                    conversation.append({"role": "assistant", "content": content_blocks})
                 else:
                     conversation.append({"role": "assistant", "content": content})
             elif role == "tool":
                 tool_call_id = (
-                    msg.get("tool_call_id", "")
-                    if isinstance(msg, dict)
-                    else getattr(msg, "tool_call_id", "")
+                    msg.get("tool_call_id", "") if isinstance(msg, dict) else getattr(msg, "tool_call_id", "")
                 )
-                tool_content = (
-                    content if isinstance(content, str) else json.dumps(content)
-                )
+                tool_content = content if isinstance(content, str) else json.dumps(content)
                 tool_result_block = {
                     "type": "tool_result",
                     "tool_use_id": tool_call_id,
@@ -253,9 +217,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 ):
                     conversation[-1]["content"].append(tool_result_block)
                 else:
-                    conversation.append(
-                        {"role": "user", "content": [tool_result_block]}
-                    )
+                    conversation.append({"role": "user", "content": [tool_result_block]})
             else:
                 conversation.append({"role": role, "content": content})
 
@@ -274,12 +236,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         extra_body = optional_params.pop("extra_body", {})
 
         if _is_claude_model(model):
-            return self._transform_request_anthropic(
-                model, messages, optional_params, stream, extra_body
-            )
-        return self._transform_request_openai(
-            model, messages, optional_params, stream, extra_body
-        )
+            return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
+        return self._transform_request_openai(model, messages, optional_params, stream, extra_body)
 
     def _transform_request_openai(
         self,
@@ -341,14 +299,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         system, conversation = self._extract_system_and_messages(messages)
 
         if "tools" in optional_params:
-            optional_params["tools"] = self._transform_tools_to_anthropic(
-                optional_params["tools"]
-            )
+            optional_params["tools"] = self._transform_tools_to_anthropic(optional_params["tools"])
 
         if "tool_choice" in optional_params:
-            optional_params["tool_choice"] = self._transform_tool_choice_to_anthropic(
-                optional_params["tool_choice"]
-            )
+            optional_params["tool_choice"] = self._transform_tool_choice_to_anthropic(optional_params["tool_choice"])
 
         max_completion_tokens = optional_params.pop("max_completion_tokens", None)
         if max_completion_tokens and "max_tokens" not in optional_params:
@@ -368,9 +322,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             body["system"] = system
 
         if "max_tokens" not in body:
-            body["max_tokens"] = (
-                4096  # reasonable default; Anthropic API max varies by model
-            )
+            body["max_tokens"] = 4096  # reasonable default; Anthropic API max varies by model
 
         return body
 
@@ -392,9 +344,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             return self._transform_response_anthropic(
                 model, raw_response, model_response, logging_obj, request_data, messages
             )
-        return self._transform_response_openai(
-            model, raw_response, model_response, logging_obj, request_data, messages
-        )
+        return self._transform_response_openai(model, raw_response, model_response, logging_obj, request_data, messages)
 
     def _transform_response_openai(
         self,
@@ -466,9 +416,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             "tool_use": "tool_calls",
             "stop_sequence": "stop",
         }
-        finish_reason = _stop_reason_map.get(
-            response_json.get("stop_reason", "end_turn"), "stop"
-        )
+        finish_reason = _stop_reason_map.get(response_json.get("stop_reason", "end_turn"), "stop")
 
         message = Message(content=text_content or None, role="assistant")
         if tool_calls:
@@ -484,8 +432,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         usage = Usage(
             prompt_tokens=usage_data.get("input_tokens", 0),
             completion_tokens=usage_data.get("output_tokens", 0),
-            total_tokens=usage_data.get("input_tokens", 0)
-            + usage_data.get("output_tokens", 0),
+            total_tokens=usage_data.get("input_tokens", 0) + usage_data.get("output_tokens", 0),
         )
 
         model_response.choices = [choice]

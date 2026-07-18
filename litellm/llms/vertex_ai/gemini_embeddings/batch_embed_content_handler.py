@@ -38,10 +38,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         """Flatten nested input lists and detect file references."""
         input_list = [input] if isinstance(input, str) else input
         flat_elements = [
-            e
-            for item in input_list
-            for e in (item if isinstance(item, list) else [item])
-            if isinstance(e, str)
+            e for item in input_list for e in (item if isinstance(item, list) else [item]) if isinstance(e, str)
         ]
         has_file_refs = any(_is_file_reference(e) for e in flat_elements)
         return flat_elements, has_file_refs
@@ -73,9 +70,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 response = sync_handler.get(url=url, headers=headers)
 
                 if response.status_code != 200:
-                    raise Exception(
-                        f"Error fetching file {element}: {response.status_code} {response.text}"
-                    )
+                    raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
                 file_data = response.json()
                 resolved_files[element] = {
@@ -112,9 +107,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 response = await async_handler.get(url=url, headers=headers)
 
                 if response.status_code != 200:
-                    raise Exception(
-                        f"Error fetching file {element}: {response.status_code} {response.text}"
-                    )
+                    raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
                 file_data = response.json()
                 resolved_files[element] = {
@@ -218,9 +211,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         if use_embed_content:
             resolved_files = {}
             if api_key:
-                resolved_files = self._resolve_file_references(
-                    input=input, api_key=api_key, sync_handler=sync_handler
-                )
+                resolved_files = self._resolve_file_references(input=input, api_key=api_key, sync_handler=sync_handler)
             request_data = transform_openai_input_gemini_embed_content(
                 input=input,
                 model=model,
@@ -274,6 +265,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 model=model,
                 response_json=_json_response,
+                resolved_files=resolved_files,
             )
         else:
             _predictions = VertexAIBatchEmbeddingsResponseObject(**_json_response)  # type: ignore
@@ -377,6 +369,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 model=model,
                 response_json=_json_response,
+                resolved_files=resolved_files,
             )
         else:
             _predictions = VertexAIBatchEmbeddingsResponseObject(**_json_response)  # type: ignore

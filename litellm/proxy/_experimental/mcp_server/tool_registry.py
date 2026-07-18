@@ -52,11 +52,7 @@ class MCPToolRegistry:
         List all registered tools
         """
         if tool_prefix:
-            return [
-                tool
-                for tool in self.tools.values()
-                if tool.name.startswith(tool_prefix)
-            ]
+            return [tool for tool in self.tools.values() if tool.name.startswith(tool_prefix)]
         return list(self.tools.values())
 
     def unregister_tools_with_prefix(self, prefix: str) -> int:
@@ -75,13 +71,9 @@ class MCPToolRegistry:
                 verbose_logger.debug("Unregistered MCP tool %s", name)
         return removed
 
-    def convert_tools_to_mcp_sdk_tool_type(
-        self, tools: List[MCPTool]
-    ) -> List["MCPToolSDKTool"]:
+    def convert_tools_to_mcp_sdk_tool_type(self, tools: List[MCPTool]) -> List["MCPToolSDKTool"]:
         if MCPToolSDKTool is None:
-            raise ImportError(
-                "MCP SDK is not installed. Please install it with: pip install 'litellm[proxy]'"
-            )
+            raise ImportError("MCP SDK is not installed. Please install it with: pip install 'litellm[proxy]'")
         return [
             MCPToolSDKTool(
                 name=tool.name,
@@ -108,9 +100,7 @@ class MCPToolRegistry:
                 fires.
         """
         if mcp_tools_config is None:
-            raise ValueError(
-                "mcp_tools_config is required, please set `mcp_tools` in your proxy config"
-            )
+            raise ValueError("mcp_tools_config is required, please set `mcp_tools` in your proxy config")
 
         for tool_config in mcp_tools_config:
             if not isinstance(tool_config, dict):
@@ -131,9 +121,7 @@ class MCPToolRegistry:
             handler = get_instance_fn(handler_name, config_file_path)
 
             if handler is None:
-                verbose_logger.warning(
-                    f"Warning: Could not find handler {handler_name} for tool {name}"
-                )
+                verbose_logger.warning(f"Warning: Could not find handler {handler_name} for tool {name}")
                 continue
 
             # Register the tool
@@ -148,9 +136,7 @@ class MCPToolRegistry:
                 input_schema=input_schema,
                 handler=handler,
             )
-        verbose_logger.debug(
-            "all registered tools: %s", json.dumps(self.tools, indent=4, default=str)
-        )
+        verbose_logger.debug("all registered tools: %s", json.dumps(self.tools, indent=4, default=str))
 
 
 global_mcp_tool_registry = MCPToolRegistry()

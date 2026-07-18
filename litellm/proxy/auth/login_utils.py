@@ -162,9 +162,9 @@ async def authenticate_user(
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(
-        username.encode("utf-8"), ui_username.encode("utf-8")
-    ) and secrets.compare_digest(password.encode("utf-8"), ui_password.encode("utf-8")):
+    if secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
+        password.encode("utf-8"), ui_password.encode("utf-8")
+    ):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = LITELLM_PROXY_ADMIN_NAME
@@ -172,8 +172,7 @@ async def authenticate_user(
         # we want the key created to have PROXY_ADMIN_PERMISSIONS
         key_user_id = LITELLM_PROXY_ADMIN_NAME
         if (
-            os.getenv("PROXY_ADMIN_ID", None) is not None
-            and os.environ["PROXY_ADMIN_ID"] == user_id
+            os.getenv("PROXY_ADMIN_ID", None) is not None and os.environ["PROXY_ADMIN_ID"] == user_id
         ) or user_id == LITELLM_PROXY_ADMIN_NAME:
             # checks if user is admin
             key_user_id = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
@@ -222,9 +221,7 @@ async def authenticate_user(
             user_info: Optional[LiteLLM_UserTable] = None
             if _user_row is not None:
                 user_info = _user_row
-            elif (
-                user_id is not None
-            ):  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
+            elif user_id is not None:  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
                 user_info = LiteLLM_UserTable(
                     user_id=user_id,
                     user_role=user_role,
@@ -234,14 +231,10 @@ async def authenticate_user(
             if user_info is None:
                 raise HTTPException(
                     status_code=401,
-                    detail={
-                        "error": "User Information is required for experimental UI login"
-                    },
+                    detail={"error": "User Information is required for experimental UI login"},
                 )
 
-            key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
-                user_info
-            )
+            key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
 
         return LoginResult(
             user_id=user_id,
@@ -258,9 +251,7 @@ async def authenticate_user(
         -> if the user has no role in the DB assume they are only a viewer
         """
         user_id = getattr(_user_row, "user_id", "unknown")
-        user_role = getattr(
-            _user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-        )
+        user_role = getattr(_user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
         user_email = getattr(_user_row, "user_email", "unknown")
         _password = getattr(_user_row, "password", "unknown")
 
@@ -338,9 +329,7 @@ def create_ui_token_object(
     Returns:
         ReturnedUITokenObject: Token object ready for JWT encoding
     """
-    disabled_non_admin_personal_key_creation = (
-        get_disabled_non_admin_personal_key_creation()
-    )
+    disabled_non_admin_personal_key_creation = get_disabled_non_admin_personal_key_creation()
 
     return ReturnedUITokenObject(
         user_id=login_result.user_id,
@@ -349,9 +338,7 @@ def create_ui_token_object(
         user_role=login_result.user_role,
         login_method=login_result.login_method,
         premium_user=premium_user,
-        auth_header_name=general_settings.get(
-            "litellm_key_header_name", "Authorization"
-        ),
+        auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
     )

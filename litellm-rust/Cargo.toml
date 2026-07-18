@@ -4,23 +4,26 @@ members = [
     "crates/ai-gateway",
     "crates/python-bridge",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
+rust-version = "1.86"
 
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
 axum = "0.7"
-pyo3 = "0.23.5"
-pyo3-async-runtimes = { version = "0.23.0", features = ["tokio-runtime"] }
+pyo3 = "0.29.0"
+pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "http2", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+google-cloud-auth = { version = "=1.9.0", default-features = false }
+rustls = { version = "=0.23.41", default-features = false, features = ["ring"] }
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2.0"
