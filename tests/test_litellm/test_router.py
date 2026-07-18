@@ -3600,6 +3600,33 @@ def test_team_wildcard_credentials_not_usable_after_delete_deployment():
     )
 
 
+def test_pattern_match_router_remove_deployment():
+    """
+    remove_deployment must drop only the deployment with the given model id and
+    delete patterns whose deployment list becomes empty.
+    """
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    pattern_router = PatternMatchRouter()
+    pattern_router.add_pattern(
+        "openai/*",
+        {"litellm_params": {"model": "openai/*", "api_key": "key-a"}, "model_info": {"id": "dep-a"}},
+    )
+    pattern_router.add_pattern(
+        "openai/*",
+        {"litellm_params": {"model": "openai/*", "api_key": "key-b"}, "model_info": {"id": "dep-b"}},
+    )
+
+    pattern_router.remove_deployment(model_id="dep-a")
+    matches = pattern_router.route("openai/gpt-5.2")
+    assert matches is not None
+    assert [m["model_info"]["id"] for m in matches] == ["dep-b"]
+
+    pattern_router.remove_deployment(model_id="dep-b")
+    assert pattern_router.patterns == {}
+    assert pattern_router.route("openai/gpt-5.2") is None
+
+
 def test_team_wildcard_credentials_refreshed_on_upsert_and_set_model_list():
     """
     Regression: replacing a team wildcard deployment (upsert or model list
