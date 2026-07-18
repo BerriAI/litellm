@@ -72,6 +72,14 @@ POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
 
+# After /model/new the writer pod loads the model immediately; other gateway
+# pods only pick it up on the ~30s add_deployment DB poll. A single /v1/models
+# success can be the hot pod while a later /chat|/ocr hits a cold one (400
+# Invalid model name). create_model waits until the model is listed continuously
+# for this many seconds so peer reload can finish. Set 0 for single-process
+# local proxies (compose) to return on first list success.
+MODEL_PEER_RELOAD_SECONDS = float(os.environ.get("E2E_MODEL_PEER_RELOAD_SECONDS", "35"))
+
 LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "750"))
 LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
 LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))

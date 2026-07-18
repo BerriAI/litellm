@@ -63,6 +63,7 @@ from models import (
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
     MASTER_KEY,
+    MODEL_PEER_RELOAD_SECONDS,
     POLL_INTERVAL,
     POLL_TIMEOUT,
     PROXY_BASE_URL,
@@ -73,11 +74,36 @@ from transport import HttpTransport, SplitTransport, Transport
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
 
+def peer_reload_ready(
+    *,
+    listed: bool,
+    first_seen_at: float | None,
+    now: float,
+    peer_reload_seconds: float,
+) -> tuple[bool, float | None]:
+    """Whether create_model may return, and the updated first-seen timestamp.
+
+    Multi-pod gateways only load DB models on the writer pod immediately; peers
+    reload on a ~30s poll. A single /v1/models hit can land on the hot pod while
+    a later LLM call hits a cold one. We require the model to stay listed for
+    ``peer_reload_seconds`` after first sight (any miss resets the timer). When
+    ``peer_reload_seconds`` is 0, the first successful list is enough (local
+    single-process proxies).
+    """
+    if not listed:
+        return False, None
+    seen_at = now if first_seen_at is None else first_seen_at
+    if peer_reload_seconds <= 0 or now - seen_at >= peer_reload_seconds:
+        return True, seen_at
+    return False, seen_at
+
+
 @dataclass(frozen=True, slots=True)
 class ProxyClient:
     transport: Transport
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
+    peer_reload_seconds: float = MODEL_PEER_RELOAD_SECONDS
 
     # ---- keys / customers (satisfies lifecycle.ResourceClient) ----------
 
@@ -158,13 +184,11 @@ class ProxyClient:
         """Register a deployment under `model_name` and return its proxy-assigned
         model_id, once the model is actually servable on the data plane.
 
-        /model/new is a control-plane route; in a split control/data-plane
-        deployment the gateway (data plane, which serves /chat, /ocr, ...) only
-        picks the new model up on its next DB reload, so a call issued the instant
-        this returns can race the reload and 400 with "Invalid model name passed".
-        We therefore poll the data-plane /v1/models until the model appears before
-        handing back, so callers can invoke it immediately. In the monolithic case
-        it is already present on the first poll, so this adds one request."""
+        /model/new is a control-plane route; the gateway (data plane) only loads
+        the model on the pod that handled the write immediately. Peer pods pick
+        it up on the next ~30s DB reload. We poll /v1/models until the model is
+        listed continuously for ``peer_reload_seconds`` (see peer_reload_ready)
+        so a later /chat|/ocr is not routed to a still-cold peer."""
         model_id = unwrap(
             self.transport.post(
                 "/model/new",
@@ -180,22 +204,39 @@ class ProxyClient:
         self._await_model_servable(model_name)
         return model_id
 
+    def _model_listed(self, model_name: str) -> tuple[bool, Result[ModelsListResponse]]:
+        result = self.transport.get(
+            "/v1/models",
+            headers=self.transport.master,
+            params=NoBody(),
+            response_type=ModelsListResponse,
+        )
+        listed = isinstance(result, Success) and any(
+            entry.id == model_name for entry in result.data.data
+        )
+        return listed, result
+
     def _await_model_servable(self, model_name: str) -> None:
-        """Block until the data plane lists `model_name`, or fail loudly if it does
-        not within poll_timeout (a real propagation/config problem, surfaced here
-        instead of as a downstream "Invalid model name passed")."""
-        deadline = time.monotonic() + self.poll_timeout
+        """Block until the data plane lists `model_name` long enough for peer
+        pods to reload, or fail if that does not happen in time.
+
+        Budget is ``poll_timeout`` for first appearance plus ``peer_reload_seconds``
+        of continuous listing, so a model first seen late still gets a full peer
+        grace window.
+        """
+        grace = max(0.0, self.peer_reload_seconds)
+        deadline = time.monotonic() + self.poll_timeout + grace
+        first_seen_at: float | None = None
         last_result: Result[ModelsListResponse] | None = None
         while time.monotonic() < deadline:
-            last_result = self.transport.get(
-                "/v1/models",
-                headers=self.transport.master,
-                params=NoBody(),
-                response_type=ModelsListResponse,
+            listed, last_result = self._model_listed(model_name)
+            ready, first_seen_at = peer_reload_ready(
+                listed=listed,
+                first_seen_at=first_seen_at,
+                now=time.monotonic(),
+                peer_reload_seconds=self.peer_reload_seconds,
             )
-            if isinstance(last_result, Success) and any(
-                entry.id == model_name for entry in last_result.data.data
-            ):
+            if ready:
                 return
             time.sleep(self.poll_interval)
         last_error = (
@@ -203,10 +244,12 @@ class ProxyClient:
             if last_result is not None and not isinstance(last_result, Success)
             else ""
         )
+        grace_note = f", peer-reload grace {grace}s" if grace > 0 else ""
         raise AssertionError(
             f"model {model_name!r} was created but never became servable on the data "
-            f"plane within {self.poll_timeout}s of /model/new (control/data-plane "
-            f"propagation or STORE_MODEL_IN_DB reload issue){last_error}"
+            f"plane within {self.poll_timeout + grace}s of /model/new (control/data-plane "
+            f"propagation, multi-pod peer reload, or STORE_MODEL_IN_DB issue"
+            f"{grace_note}){last_error}"
         )
 
     def delete_model(self, model_id: str) -> None:
@@ -382,4 +425,5 @@ def build_proxy_client(
         ),
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,
+        peer_reload_seconds=MODEL_PEER_RELOAD_SECONDS,
     )
