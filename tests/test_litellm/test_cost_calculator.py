@@ -3544,7 +3544,7 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens():
     "model_name",
     ["moonshot/kimi-k3", "openrouter/moonshotai/kimi-k3"],
 )
-def test_kimi_k3_pricing(model_name):
+def test_kimi_k3_pricing(monkeypatch, model_name):
     """
     Kimi K3 (Moonshot's 1M-context flagship, launched 2026-07-16) had no pricing
     entry for either the native moonshot/ prefix or the openrouter/ prefix, so
@@ -3553,8 +3553,8 @@ def test_kimi_k3_pricing(model_name):
     cache miss, $0.30/M cache hit, $15.00/M output, 1,048,576 context) and the
     OpenRouter models API, which quote identical numbers.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     model_info = litellm.model_cost.get(model_name)
     assert model_info is not None, f"Missing model pricing entry: {model_name}"
