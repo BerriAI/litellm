@@ -8535,7 +8535,8 @@ class Router:
         Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
         deployment's model_info for model_name, via O(1) index lookup.
 
-        Returns (None, None) for wildcard-expanded or unknown names. Unlike
+        Returns (None, None) for wildcard-expanded or unknown names, and treats a
+        malformed configured value as absent rather than failing the listing. Unlike
         get_model_group_info, this never triggers pattern matching or deep copies, so it
         is safe to call per listed model on the /v1/models hot path.
         """
@@ -8543,12 +8544,18 @@ class Router:
         if deployment is None:
             return (None, None)
 
+        def _as_int(value: object) -> "int | None":
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
         model_info = deployment.model_info
-        max_input = model_info.get("max_input_tokens")
-        max_output = model_info.get("max_output_tokens")
         return (
-            int(max_input) if max_input is not None else None,
-            int(max_output) if max_output is not None else None,
+            _as_int(model_info.get("max_input_tokens")),
+            _as_int(model_info.get("max_output_tokens")),
         )
 
     def get_deployment_credentials_with_provider(

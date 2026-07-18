@@ -556,6 +556,31 @@ def test_create_model_info_response_deployment_limits_override_cost_map():
     assert response["max_output_tokens"] == 16384
 
 
+def test_create_model_info_response_survives_malformed_configured_limits():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-limit-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": "128,000"},
+            }
+        ]
+    )
+
+    response = create_model_info_response(
+        model_id="bad-limit-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["id"] == "bad-limit-model"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
 def test_create_model_info_response_emits_integer_token_counts():
     response = create_model_info_response(
         model_id="some-model",
