@@ -9923,29 +9923,30 @@ class Router:
         self,
         messages: list[dict[str, str]] | None,
         input: str | list | None,
+        instructions: str | None = None,
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
 
-        Chat Completions send `messages`; the Responses API sends `input` (a string
-        or a list of Responses input items). Responses `input` is normalized to chat
-        messages via the shared LiteLLMCompletionResponsesConfig transform so the
-        same token_counter path covers both API surfaces.
+        Chat Completions send `messages`; the Responses API sends `input` (a string or
+        a list of Responses input items) plus an optional `instructions` system prompt.
+        The Responses payload is normalized to chat messages via the shared
+        LiteLLMCompletionResponsesConfig transform so the same token_counter path covers
+        both API surfaces and `instructions` tokens are included in the count.
         """
         if messages is not None:
             return litellm.token_counter(messages=messages)
-        if isinstance(input, str):
-            return litellm.token_counter(text=input)
-        if isinstance(input, list):
+        if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
 
+            typed_input = cast(str | ResponseInputParam, input)  # cast-ok: str | list matches transform input
             input_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=cast(ResponseInputParam, input),  # cast-ok: Responses input list matches ResponseInputParam
-                responses_api_request={},
+                input=typed_input,
+                responses_api_request={"instructions": instructions} if instructions is not None else {},
             )
             return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
         raise ValueError("Either messages or input must be provided to count tokens")
@@ -9985,6 +9986,10 @@ class Router:
         _rate_limit_error = False
         parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
+        raw_instructions = request_kwargs.get("instructions") if request_kwargs else None
+        instructions = raw_instructions if isinstance(raw_instructions, str) else None
+        has_countable_input = messages is not None or input is not None
+
         ## get model group RPM ##
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
@@ -10007,10 +10012,12 @@ class Router:
                 _deployment_model = base_model or _litellm_params.get("model", None)
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if isinstance(max_input_tokens, int):
+                if isinstance(max_input_tokens, int) and has_countable_input:
                     if input_tokens is None:
                         try:
-                            input_tokens = self._count_pre_call_check_tokens(messages=messages, input=input)
+                            input_tokens = self._count_pre_call_check_tokens(
+                                messages=messages, input=input, instructions=instructions
+                            )
                         except Exception as e:
                             verbose_router_logger.error(
                                 "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(

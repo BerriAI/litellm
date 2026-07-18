@@ -2867,7 +2867,8 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
 def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
     """
     Responses API calls pass `input` (str) instead of `messages`. Context-window
-    checks must count tokens from `input` and filter deployments over the limit.
+    checks must count tokens from `input` and filter deployments over the limit. Uses
+    the real token_counter so the transform + counting path is a true regression guard.
     """
     router = litellm.Router(
         model_list=[
@@ -2876,14 +2877,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
         enable_pre_call_checks=True,
     )
     monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
-    )
-
-    captured = {}
-    monkeypatch.setattr(
-        litellm,
-        "token_counter",
-        lambda *a, **k: captured.update(k) or 1000,
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
     )
 
     deployments = [
@@ -2895,9 +2889,6 @@ def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
             healthy_deployments=deployments,
             input="a very long prompt that exceeds the tiny context window",
         )
-
-    assert captured.get("text") == "a very long prompt that exceeds the tiny context window"
-    assert captured.get("messages") is None
 
 
 def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
@@ -2926,6 +2917,45 @@ def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
             input=[
                 {"role": "user", "content": "count these tokens against the one token limit please"},
             ],
+        )
+
+
+def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
+    """
+    Responses API `instructions` become a system message the model receives, so their
+    tokens must be counted too. A request whose `input` alone fits under the limit but
+    whose `input` + `instructions` exceeds it must be filtered (regression for the
+    context-window check under-filtering when instructions were ignored).
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+
+    short_input = "hi"
+    long_instructions = "you are a helpful assistant. " * 20
+
+    input_only_tokens = router._count_pre_call_check_tokens(messages=None, input=short_input)
+    with_instructions_tokens = router._count_pre_call_check_tokens(
+        messages=None, input=short_input, instructions=long_instructions
+    )
+    assert with_instructions_tokens > input_only_tokens
+
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
+    )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input=short_input,
+            request_kwargs={"instructions": long_instructions},
         )
 
 
@@ -2971,11 +3001,20 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
         router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
     )
 
+    counted: list[dict] = []
+    original = router._count_pre_call_check_tokens
+    monkeypatch.setattr(
+        router,
+        "_count_pre_call_check_tokens",
+        lambda **kwargs: counted.append(kwargs) or original(**kwargs),
+    )
+
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
     ]
     result = router._pre_call_checks(model="m", healthy_deployments=deployments)
     assert len(result) == 1
+    assert counted == []  # token counting skipped entirely, so no misleading error is logged
 
 
 def test_get_deployment_model_info_base_model_flow():
