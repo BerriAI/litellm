@@ -1585,10 +1585,10 @@ class TestGuardrailInterventionClassification:
         )
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
 
-    @pytest.mark.parametrize("status_code", [400, 403, 422, 429])
+    @pytest.mark.parametrize("status_code", [400, 403, 422])
     def test_4xx_http_exception_is_intervention(self, status_code):
-        """A custom guardrail blocking a request with any 4xx HTTPException (not
-        just 400) is a deliberate rejection, not an infra failure."""
+        """A custom guardrail blocking a request with 400, 403, or 422 (not just
+        400) is a deliberate rejection, not an infra failure."""
         from fastapi import HTTPException
 
         exc = HTTPException(status_code=status_code, detail="blocked")
@@ -1601,6 +1601,27 @@ class TestGuardrailInterventionClassification:
         from fastapi import HTTPException
 
         exc = HTTPException(status_code=status_code, detail="upstream error")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is False
+
+    @pytest.mark.parametrize(
+        "status_code",
+        [
+            401,  # e.g. mcp_jwt_signer: incoming token verification failed
+            408,  # e.g. prompt_security: file sanitization timeout
+            429,  # e.g. openai moderations: forwards upstream rate-limit as-is
+        ],
+    )
+    def test_operational_4xx_http_exception_is_not_intervention(self, status_code):
+        """401/408/429 describe a problem reaching, authenticating to, or being
+        rate-limited by the guardrail's own backend, not a verdict about the
+        request's content. Built-in integrations forward these verbatim from an
+        upstream failure, so treating them as a deliberate block would let a
+        guardrail outage or rate limit masquerade as an intentional pass/fail
+        decision, bypassing a stricter on_error policy configured for real
+        failures (see PipelineExecutor.run_step's on_fail/on_error split)."""
+        from fastapi import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="operational failure")
         assert CustomGuardrail._is_guardrail_intervention(exc) is False
 
     def test_bare_exception_is_not_intervention(self):

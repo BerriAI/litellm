@@ -665,6 +665,60 @@ async def test_on_fail_next_on_content_on_error_block_stops_api_fallback():
         litellm.callbacks = original_callbacks
 
 
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [401, 408, 429])
+async def test_operational_status_code_cannot_bypass_on_error_block(status_code):
+    """
+    Regression: a guardrail raising 401/408/429 (auth failure, timeout, rate
+    limit forwarded from its own upstream, e.g. OpenAI Moderation forwarding a
+    429 or an auth failure to reach its backend) must be classified as "error",
+    not "fail". A permissive on_fail (next) configured for genuine content
+    decisions must not apply here; the stricter on_error (block) must run,
+    otherwise an attacker who can force the guardrail's own backend to rate-limit
+    or time out gets routed through the permissive on_fail path instead.
+    """
+    primary = HttpStatusGuardrail("primary-mod", status_code=status_code)
+    fallback = AlwaysPassGuardrail("fallback-filter")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="primary-mod",
+                on_fail="next",
+                on_error="block",
+                on_pass="allow",
+            ),
+            PipelineStep(
+                guardrail="fallback-filter",
+                on_fail="block",
+                on_pass="allow",
+            ),
+        ],
+    )
+
+    original_callbacks = litellm.callbacks.copy()
+    litellm.callbacks = [primary, fallback]
+
+    try:
+        result = await PipelineExecutor.execute_steps(
+            steps=pipeline.steps,
+            mode=pipeline.mode,
+            data={"messages": [{"role": "user", "content": "any"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="operational-status-test",
+        )
+
+        assert result.step_results[0].outcome == "error"
+        assert result.terminal_action == "block"
+        assert primary.calls == 1
+        assert fallback.calls == 0
+    finally:
+        litellm.callbacks = original_callbacks
+
+
 @pytest.mark.asyncio
 async def test_guardrail_not_found_with_next_continues():
     """

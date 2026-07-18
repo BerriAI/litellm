@@ -98,6 +98,15 @@ class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
 
+    # HTTPException status codes that conventionally mean "the guardrail evaluated
+    # the request and rejected it," as opposed to codes like 401/408/429 that
+    # integrations use to forward an operational failure of the guardrail's own
+    # backend (auth, timeout, rate limit). Deliberately an allowlist, not a "4xx
+    # minus known-operational-codes" denylist: an unrecognized code defaults to
+    # guardrail_failed_to_respond, which is at least as strict as guardrail_intervened
+    # wherever the two are handled differently (see PipelineExecutor's on_fail/on_error).
+    _DELIBERATE_REJECTION_STATUS_CODES: ClassVar[frozenset[int]] = frozenset({400, 403, 422})
+
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
@@ -946,9 +955,13 @@ class CustomGuardrail(CustomLogger):
         - GuardrailRaisedException (generic guardrail API, tool permission)
         - BlockedPiiEntityError (Presidio PII detection)
         - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
-        - HTTPException with a 4xx status code (deliberate rejection: content policy
-          violation, forbidden, unprocessable, etc.). A 5xx HTTPException still counts
-          as an infra failure, not a deliberate block.
+        - HTTPException with status code 400, 403, or 422 (content policy violation,
+          forbidden, unprocessable entity). Other 4xx codes, e.g. 401, 408, or 429,
+          are excluded: integrations use them to forward an operational failure of
+          the guardrail's own backend (bad auth, timeout, rate limit), not a verdict
+          about the request's content, e.g. OpenAI Moderation forwarding an upstream
+          429 or Prompt Security's sanitization-timeout 408. A 5xx HTTPException is
+          always an infra failure, never a deliberate block.
         - ModifyResponseException (passthrough mode violation)
         """
         if isinstance(e, ModifyResponseException):
@@ -962,7 +975,11 @@ class CustomGuardrail(CustomLogger):
             ),
         ):
             return True
-        if HTTPException is not None and isinstance(e, HTTPException) and 400 <= e.status_code < 500:
+        if (
+            HTTPException is not None
+            and isinstance(e, HTTPException)
+            and e.status_code in CustomGuardrail._DELIBERATE_REJECTION_STATUS_CODES
+        ):
             return True
         return False
 
