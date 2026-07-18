@@ -4,8 +4,9 @@ import time
 
 import pytest
 
-from budget_client import BudgetClient, drive_to_block, is_budget_block
+from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
+from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
@@ -22,12 +23,13 @@ def _call(client: BudgetClient, key: str):
 def _drive_to_block(client: BudgetClient, key: str) -> None:
     """Spend until the cap blocks a call, staying under one window so the block
     is observed before the reset job can fire; fail hard if enforcement never trips."""
-    drive_to_block(
-        lambda: _call(client, key),
-        attempts=12,
-        pause_seconds=2,
-        fail_message="budget never enforced before the window could reset",
-    )
+    for _ in range(12):
+        result = _call(client, key)
+        if is_budget_block(result):
+            return
+        require_successful_call(result)
+        time.sleep(2)
+    pytest.fail("budget never enforced before the window could reset")
 
 
 def _poll_until_serves_again(client: BudgetClient, key: str) -> None:

@@ -21,8 +21,8 @@ import time
 
 import pytest
 
-from budget_client import BudgetClient, drive_to_block, is_budget_block, window_reset_at
-from e2e_http import StreamingResponse
+from budget_client import BudgetClient, is_budget_block, window_reset_at
+from e2e_http import StreamingResponse, require_successful_call
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import BudgetWindow
@@ -42,12 +42,13 @@ def _call(client: BudgetClient, key: str):
 
 
 def _drive_to_block(client: BudgetClient, key: str) -> StreamingResponse:
-    return drive_to_block(
-        lambda: _call(client, key),
-        attempts=30,
-        pause_seconds=1,
-        fail_message="team budget never enforced before block",
-    )
+    for _ in range(30):
+        result = _call(client, key)
+        if is_budget_block(result):
+            return result
+        require_successful_call(result)
+        time.sleep(1)
+    pytest.fail("team budget never enforced before block")
 
 
 @pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")

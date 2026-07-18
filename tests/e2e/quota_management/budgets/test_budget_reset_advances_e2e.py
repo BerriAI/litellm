@@ -14,10 +14,11 @@ that the happy-path "calls flow again" check alone does not pin down.
 """
 
 import time
+from datetime import datetime
 
 import pytest
 
-from budget_client import BudgetClient, as_datetime, drive_to_block, is_budget_block
+from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
@@ -34,20 +35,27 @@ def _call(client: BudgetClient, key: str):
     return client.chat(key, "claude-haiku-4-5", f"advance {unique_marker()}", max_tokens=16)
 
 
+def _as_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _drive_to_block(client: BudgetClient, key: str) -> None:
     """Spend until the cap blocks; fails loudly if enforcement never trips."""
-    drive_to_block(
-        lambda: _call(client, key),
-        attempts=20,
-        pause_seconds=2,
-        fail_message="budget never enforced before block",
-    )
+    for _ in range(20):
+        result = _call(client, key)
+        if is_budget_block(result):
+            return
+        require_successful_call(result)
+        time.sleep(2)
+    pytest.fail("budget never enforced before block")
 
 
 # ---- Rung 1: scheduling exists at creation -----------------------------------
 
 
-def test_key_with_budget_duration_schedules_reset_at_creation(client: BudgetClient, resources: ResourceManager) -> None:
+def test_key_with_budget_duration_schedules_reset_at_creation(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     """Baseline: a key created with a budget_duration has budget_reset_at populated
     immediately. The reset job can only advance a timestamp that was scheduled in
     the first place; everything below depends on this."""
@@ -56,7 +64,7 @@ def test_key_with_budget_duration_schedules_reset_at_creation(client: BudgetClie
 
     info = client.proxy.key_info(key)
     assert info.budget_reset_at is not None, "budget_duration set no budget_reset_at"
-    assert as_datetime(info.budget_reset_at) > as_datetime("1970-01-01T00:00:00Z")
+    assert _as_datetime(info.budget_reset_at) > _as_datetime("1970-01-01T00:00:00Z")
 
 
 # ---- Rung 2: enforcement trips at the cap ------------------------------------
@@ -80,7 +88,9 @@ def test_key_spend_blocks_at_cap(client: BudgetClient, resources: ResourceManage
 
 
 @pytest.mark.covers("quota_management.budget.key.resets_after_window")
-def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resources: ResourceManager) -> None:
+def test_key_budget_reset_at_advances_after_window(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     """The core #25109 guard: after the window elapses the reset job must move
     budget_reset_at strictly forward AND zero key.spend. The broken nullable-JSON
     filter left eligible rows untouched, so the timestamp stayed pinned and spend
@@ -91,7 +101,7 @@ def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resourc
 
     before_raw = client.proxy.key_info(key).budget_reset_at
     assert before_raw is not None, "no budget_reset_at scheduled at creation"
-    before = as_datetime(before_raw)
+    before = _as_datetime(before_raw)
 
     _drive_to_block(client, key)
 
@@ -104,7 +114,9 @@ def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resourc
             continue
         info = client.proxy.key_info(key)
         assert info.budget_reset_at is not None, "budget_reset_at cleared by reset"
-        assert as_datetime(info.budget_reset_at) > before, "budget_reset_at did not advance past the pre-reset value"
+        assert _as_datetime(info.budget_reset_at) > before, (
+            "budget_reset_at did not advance past the pre-reset value"
+        )
         assert (info.spend or 0.0) < TINY_CAP, f"spend not cleared after reset: {info.spend}"
         return
     pytest.fail(f"key budget never reset within {RESET_DEADLINE_SECONDS}s")
@@ -114,7 +126,9 @@ def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resourc
 
 
 @pytest.mark.covers("quota_management.budget.key_multi_window.resets_windows_independently")
-def test_multi_window_key_resets_each_window_independently(client: BudgetClient, resources: ResourceManager) -> None:
+def test_multi_window_key_resets_each_window_independently(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     """The JSON-backed path #25109 specifically touched. A tight 30s window and a
     roomy 1m window: the tight window must reset on its own boundary while the roomy
     window keeps its accumulated spend (independent per-window reset). The
@@ -154,7 +168,9 @@ def test_multi_window_key_resets_each_window_independently(client: BudgetClient,
 
 
 @pytest.mark.covers("quota_management.budget.team_member.resets_after_window")
-def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: ResourceManager) -> None:
+def test_team_member_budget_reset_at_advances(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     """Per-team member windows are also JSON-backed. member_budget_reset_at must
     advance after the window; the explicit before<after assertion is the #25109
     regression guard (the existing reset test only checks "it eventually moved",
@@ -165,11 +181,13 @@ def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: R
     resources.defer(lambda: client.delete_user(user_id))
 
     client.add_team_member(team_id, user_id, max_budget_in_team=1.0)
-    client.update_team_member(team_id, user_id, max_budget_in_team=1.0, budget_duration=f"{WINDOW_SECONDS}s")
+    client.update_team_member(
+        team_id, user_id, max_budget_in_team=1.0, budget_duration=f"{WINDOW_SECONDS}s"
+    )
 
     before_raw = client.member_budget_reset_at(team_id, user_id)
     assert before_raw, "updating the member with a budget_duration set no budget_reset_at"
-    before = as_datetime(before_raw)
+    before = _as_datetime(before_raw)
 
     key = client.generate_key(team_id=team_id, user_id=user_id)
     resources.defer(lambda: client.delete_key(key))
@@ -179,7 +197,7 @@ def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: R
     while time.monotonic() < deadline:
         time.sleep(5)
         current = client.member_budget_reset_at(team_id, user_id)
-        if current and as_datetime(current) > before:
+        if current and _as_datetime(current) > before:
             return
     pytest.fail(f"member budget_reset_at never advanced past {before.isoformat()} in {RESET_DEADLINE_SECONDS}s")
 
@@ -187,7 +205,9 @@ def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: R
 # ---- Rung 6: error-path edge - resets surface as blocks, never 5xx -----------
 
 
-def test_reset_wait_never_yields_non_budget_error(client: BudgetClient, resources: ResourceManager) -> None:
+def test_reset_wait_never_yields_non_budget_error(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
     """The other #25109 failure mode: a reset job that ERRORS on the nullable-JSON
     column surfaces to the caller as a non-budget 5xx. Across the whole reset wait
     every non-ok response must be a budget block (is_budget_block) and never a

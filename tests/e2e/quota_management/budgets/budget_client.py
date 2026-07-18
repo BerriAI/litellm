@@ -11,15 +11,12 @@ and response models are co-located here because only this suite uses them.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-import pytest
-
 from pydantic import AliasPath, BaseModel, Field, RootModel
 
-from e2e_http import NoBody, Result, StreamingResponse, Success, require_successful_call, unwrap
+from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from proxy_client import ProxyClient
 from models import (
     AnthropicMessagesBody,
@@ -187,33 +184,9 @@ def window_reset_at(windows: list[BudgetWindowState], budget_duration: str) -> d
     return next((w.reset_at for w in windows if w.budget_duration == budget_duration), None)
 
 
-def as_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 def is_budget_block(result: StreamingResponse) -> bool:
     """True if the call was rejected for being over budget (vs a provider error)."""
     return not result.ok and "budget_exceeded" in result.body
-
-
-def drive_to_block(
-    call: Callable[[], StreamingResponse],
-    *,
-    attempts: int,
-    pause_seconds: float,
-    fail_message: str,
-) -> StreamingResponse:
-    """Spend through ``call`` until the cap blocks; every pre-block response must be
-    a success (never a provider error), and ``fail_message`` fails the test loudly
-    if enforcement never trips within ``attempts``. Returns the blocking response
-    so callers can assert on its shape."""
-    for _ in range(attempts):
-        result = call()
-        if is_budget_block(result):
-            return result
-        require_successful_call(result)
-        time.sleep(pause_seconds)
-    pytest.fail(fail_message)
 
 
 def model_budget(model: str, limit: float, period: str = "30d") -> dict[str, ModelBudgetEntry]:
