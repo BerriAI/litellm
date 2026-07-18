@@ -39,6 +39,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "covers(cell_id, *, exercised_on=()): coverage-registry cell(s) this test covers",
     )
+    config.addinivalue_line(
+        "markers",
+        "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
+    )
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -47,9 +51,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     as `<property>` entries, on every outcome including skips and setup errors.
     Downstream (Loki/Grafana) reads outcome and duration from the standard report
     and these properties for package rollups and coverage drill-down. See
-    junit_properties.py."""
+    junit_properties.py.
+
+    Also sort `load`-marked items last so a whole-tree run drives heavy throughput
+    traffic only after the latency-sensitive suites have finished."""
     for item in items:
         attach_result_properties(item)
+    items.sort(key=lambda item: item.get_closest_marker("load") is not None)
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
