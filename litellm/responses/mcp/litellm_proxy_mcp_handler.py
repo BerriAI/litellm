@@ -260,7 +260,7 @@ class LiteLLM_Proxy_MCP_Handler:
         # names), so use None and let the auth object's mcp_servers do the filtering.
         effective_server_filter = None if resolved_toolset_ids else (resolved_mcp_servers or None)
 
-        tools = await _get_tools_from_mcp_servers(
+        listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=effective_server_filter,
@@ -270,6 +270,7 @@ class LiteLLM_Proxy_MCP_Handler:
             litellm_trace_id=litellm_trace_id,
             request_tags=request_tags,
         )
+        tools = listing.tools
 
         allowed_mcp_server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]

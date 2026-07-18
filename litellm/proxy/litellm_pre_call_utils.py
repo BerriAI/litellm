@@ -45,6 +45,7 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+_ANTHROPIC_SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
 def _sanitize_for_log(value: Any) -> str:
@@ -424,6 +425,30 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
     )
+
+
+def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+
+    user_id = metadata.get("user_id")
+    if isinstance(user_id, dict):
+        session_id = user_id.get("session_id")
+        if isinstance(session_id, str) and _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+            return session_id
+        return None
+    if not isinstance(user_id, str):
+        return None
+
+    session_marker = "_session_"
+    session_marker_index = user_id.rfind(session_marker)
+    if session_marker_index == -1:
+        return None
+
+    session_id = user_id[session_marker_index + len(session_marker) :]
+    if not session_id or not _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+        return None
+    return session_id
 
 
 def is_claude_code_user_agent(user_agent: str) -> bool:
@@ -935,6 +960,15 @@ class LiteLLMProxyRequestSetup:
             data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug(f"Extracted chain_id from header (trace-id/session-id): {chain_id}")
+        else:
+            body_metadata = data.get("metadata")
+            session_id = _get_anthropic_session_id_from_metadata(body_metadata)
+            if session_id:
+                metadata_from_headers["session_id"] = session_id
+                data["litellm_session_id"] = session_id
+                if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
+                    body_metadata["user_id"] = session_id
+                verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)

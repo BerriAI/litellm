@@ -14,6 +14,9 @@ from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HE
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+)
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
 
@@ -1482,13 +1485,50 @@ def _format_model_candidates(
     return candidates
 
 
+def _request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
+    """Whether FastAPI resolved this request to a user-defined pass-through handler.
+
+    Reads the marker set by ``create_pass_through_route`` off the dispatched endpoint
+    (``request.scope["endpoint"]``). Because routing has already run by the time auth
+    dependencies execute, this reflects the handler that actually serves the request:
+    a custom path colliding with a built-in route resolves to the built-in handler,
+    which carries no marker, so model-access checks are never wrongly skipped.
+    """
+    if request is None:
+        return False
+    scope = getattr(request, "scope", None)
+    if not isinstance(scope, dict):
+        return False
+    endpoint = scope.get("endpoint")
+    # Identity check against True (not truthiness): the marker is set to the literal
+    # True, and this keeps a spec'd Mock request (whose attribute access yields truthy
+    # child mocks) from being misread as a pass-through dispatch.
+    return getattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+
+
 def get_model_from_request(
     request_data: dict,
     route: str,
     request_headers: Optional[Mapping[str, Any]] = None,
     request_query_params: Optional[Mapping[str, Any]] = None,
     llm_router: Optional[Router] = None,
+    request: Request | None = None,
 ) -> Optional[Union[str, List[str]]]:
+    """Resolve the model(s) a request targets, for model-access and budget checks.
+
+    Returns ``None`` when the request was dispatched to a user-defined pass-through
+    endpoint: its body is forwarded verbatim to the configured upstream, so a
+    ``model`` field there names an upstream model, not a LiteLLM-managed one, and
+    enforcing key/team model allowlists against it would reject valid requests. The
+    check reads the FastAPI-resolved endpoint (``request.scope["endpoint"]``), not the
+    request path, so a custom path that collides with a built-in route never
+    suppresses model-access checks: on a collision the built-in handler is dispatched
+    and does not carry the marker. Built-in provider passthrough routes
+    (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
+    """
+    if _request_dispatched_to_pass_through_endpoint(request):
+        return None
+
     candidates = _extract_model_candidates_from_request(
         request_data=request_data,
         route=route,
