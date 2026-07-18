@@ -9,6 +9,7 @@ from typing import (
     Iterator,
     AsyncIterator,
 )
+import re
 from functools import cached_property
 import litellm
 import httpx
@@ -54,6 +55,20 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: frozenset[str] = frozenset(
         "model_version",
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# SAP capability registry
+# ---------------------------------------------------------------------------
+# Models that accept reasoning_effort / thinking parameters on SAP GenAI Hub.
+# Pattern covers: Anthropic Claude 3.7 / 4.x, OpenAI o-series and GPT-5,
+# and Cohere Command-R-series with "reasoning" in the config name.
+_REASONING_MODELS: re.Pattern[str] = re.compile(
+    r"^(?:anthropic--claude-(?:4|3-7)|o\d|gpt-5(?:[.\-]|$)|cohere--\S*reasoning\S*)"
+)
+
+# Models that support Anthropic-style cache_control on message content parts.
+_CACHE_CONTROL_MODELS: re.Pattern[str] = re.compile(r"^anthropic--")
 
 
 def validate_dict(data: dict, model) -> dict:
@@ -413,6 +428,16 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return response
 
     @staticmethod
+    def _sap_supports_reasoning(model: str) -> bool:
+        """Return True if *model* accepts reasoning_effort / thinking on SAP GenAI Hub."""
+        return bool(_REASONING_MODELS.match(model))
+
+    @staticmethod
+    def _sap_supports_cache_control(model: str) -> bool:
+        """Return True if *model* supports Anthropic-style cache_control content parts."""
+        return bool(_CACHE_CONTROL_MODELS.match(model))
+
+    @staticmethod
     def _normalize_gemini_reasoning(final_result: dict) -> None:
         """Coerce Gemini's list-shaped reasoning_content to a plain string in-place.
 
@@ -437,8 +462,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         markdown code blocks (```json ... ```) depending on prompt phrasing.
         This method strips that wrapper to ensure consistent JSON output.
         """
-        import re
-
         for choice in response.choices or []:
             if choice.message and choice.message.content:
                 content = choice.message.content.strip()
