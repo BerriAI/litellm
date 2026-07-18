@@ -19,6 +19,8 @@ import pytest
 from litellm.proxy._experimental.mcp_server.db import (
     _decode_user_credential,
     _prepare_mcp_server_data,
+    decrypt_credentials,
+    encrypt_credentials,
     get_user_credential,
     get_user_oauth_credential,
     is_oauth_credential_expired,
@@ -330,6 +332,29 @@ def _stored_value(prisma) -> str:
     update_value = data["update"]["credential_b64"]
     assert create_value == update_value, "create/update must agree"
     return create_value
+
+
+# ── MCP server credentials at rest ──────────────────────────────────────────────
+
+
+def test_client_private_key_encrypted_at_rest():
+    """An ID-JAG client_private_key is a secret and must be encrypted in the stored
+    credentials blob, never persisted in plaintext, and must round-trip back. The
+    pre-fix code left client_private_key out of encrypt_credentials, so it was stored
+    verbatim."""
+    private_key = (
+        "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
+    )
+    credentials = {"client_secret": "shh", "client_private_key": private_key}
+
+    encrypted = encrypt_credentials(dict(credentials), encryption_key=None)
+    assert encrypted["client_private_key"] != private_key
+    assert private_key not in encrypted["client_private_key"]
+    assert encrypted["client_secret"] != "shh"
+
+    decrypted = decrypt_credentials(dict(encrypted))
+    assert decrypted["client_private_key"] == private_key
+    assert decrypted["client_secret"] == "shh"
 
 
 # ── BYOK round-trip ───────────────────────────────────────────────────────────
