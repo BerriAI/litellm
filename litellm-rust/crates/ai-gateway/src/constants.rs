@@ -40,3 +40,8 @@ pub(crate) const MESSAGES_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Max characters of an upstream error body echoed across the host boundary
 /// before truncation, so provider bodies are bounded and data-minimized.
 pub(crate) const MESSAGES_ERROR_BODY_MAX_CHARS: usize = 256;
+
+#[cfg(feature = "server")]
+pub(crate) const MESSAGES_STREAM_ACCEPT_HEADER: &str = "accept";
+#[cfg(feature = "server")]
+pub(crate) const MESSAGES_STREAM_ACCEPT_VALUE: &str = "text/event-stream";

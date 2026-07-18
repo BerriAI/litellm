@@ -142,6 +142,17 @@ fn build_router() -> Router {
 /// A real deployment loads `model_list` from config; this is the minimal stand-in
 /// so the gateway has one OpenAI deployment to route to.
 fn build_router_from_env() -> Router {
+    if let Ok(model_name) = std::env::var("LITELLM_MODEL_NAME") {
+        let model = std::env::var("LITELLM_MODEL").unwrap_or_else(|_| model_name.clone());
+        return Router::new(vec![Deployment {
+            model_name,
+            litellm_params: LiteLLMParams {
+                model,
+                api_key: std::env::var("LITELLM_API_KEY").ok(),
+                api_base: std::env::var("LITELLM_API_BASE").ok(),
+            },
+        }]);
+    }
     let model =
         std::env::var("OPENAI_REALTIME_MODEL").unwrap_or_else(|_| "gpt-realtime".to_string());
     let api_key = std::env::var("OPENAI_API_KEY").ok();

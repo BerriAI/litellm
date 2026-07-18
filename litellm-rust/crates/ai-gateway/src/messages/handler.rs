@@ -45,3 +45,34 @@ pub(super) async fn execute_messages_provider_call(
         CoreError::InvalidResponse(format!("failed to serialize messages response: {err}"))
     })
 }
+
+#[cfg(feature = "server")]
+pub(super) async fn execute_messages_provider_stream(
+    request: ProviderMessagesRequest,
+) -> CoreResult<reqwest::Response> {
+    let mut request_builder = http_client().post(&request.url).json(&request.body);
+    for (key, value) in &request.upstream_headers {
+        request_builder = request_builder.header(key, value);
+    }
+    if let Some(duration) = request.timeout {
+        request_builder = request_builder.timeout(duration);
+    }
+
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+    if response.status().is_success() {
+        return Ok(response);
+    }
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|err| CoreError::Network(err.to_string()))?;
+    Err(CoreError::Http {
+        status: status.as_u16(),
+        body: truncate_error_body(&body),
+    })
+}

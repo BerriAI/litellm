@@ -6,7 +6,7 @@ use litellm_core::CoreResult;
 use super::common_utils::{has_header, messages_provider_config, string_headers};
 use super::types::{MessagesRequest, ProviderMessagesRequest};
 
-pub(super) fn prepare_messages_call(
+pub(crate) fn prepare_messages_call(
     request: MessagesRequest<'_>,
 ) -> CoreResult<ProviderMessagesRequest> {
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
