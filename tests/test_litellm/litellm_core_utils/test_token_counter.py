@@ -1114,3 +1114,33 @@ def test_count_content_list_rejects_unknown_type():
     message = str(exc_info.value)
     assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
+
+
+def test_token_counter_anthropic_image_block():
+    """Anthropic-format image blocks ({"type": "image", "source": ...}) must
+    count (flat default) instead of raising; a raise here breaks router
+    pre-call checks and cost tracking for anthropic messages traffic"""
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+    from litellm.utils import token_counter
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgo=",
+                    },
+                },
+            ],
+        }
+    ]
+    text_only = token_counter(
+        model="gpt-4o", messages=[{"role": "user", "content": "What is in this image?"}]
+    )
+    with_image = token_counter(model="gpt-4o", messages=messages)
+    assert with_image >= text_only + DEFAULT_IMAGE_TOKEN_COUNT

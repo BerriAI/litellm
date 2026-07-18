@@ -708,6 +708,10 @@ def _count_content_list(
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
+            elif c["type"] == "image":
+                # Anthropic-format image block ({"type": "image", "source": ...});
+                # base64 payload has no URL/detail to inspect, use the flat default
+                num_tokens += DEFAULT_IMAGE_TOKEN_COUNT
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -736,7 +740,7 @@ def _count_content_list(
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
+                    f"Expected str or dict with 'type' field (text, image, image_url, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:
