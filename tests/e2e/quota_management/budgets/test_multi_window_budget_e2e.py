@@ -7,18 +7,12 @@ PROXY_BUDGET_RESCHEDULER_* in docker-compose) - the window resets and calls flow
 again. Closes the multi-window gap (enforcement + per-window reset) in
 BUDGET_TEST_COVERAGE_MATRIX.md, which the unit suite covered but no live test did.
 
-The long-window direction (E2E-12 steps 4-5) is the second test: a 1d window whose
-cap the first burn already crossed (LONG_CAP sits ~20-100x below one real call's
-cost) must keep blocking after the 30s window provably reset. The short window's reset_at is recorded AFTER the block and the test waits
-for it to advance strictly past that value - the reset job advances reset_at in the
-same pass that zeroes the window's spend counter, so once it moved (and no further
-spend landed) the short window cannot be the blocker; the 1d window's persisted
-spend is. Recording reset_at at mint time instead would race a boundary that rolls
-before the burn's spend lands, letting the short window block again and pass the
-test for the wrong reason. Enforcement reads a cached auth object, so its view of
-the rolled window lags the DB reset_at write; the final phase therefore polls until
-the refusal is attributed to the 1d window ("over 1d budget"), failing immediately
-if any call succeeds (the 1d cap failed to hold) or a non-budget error leaks.
+The second test is the long-window direction: one burn crosses
+both caps; after the 30s window's reset_at strictly advances (read post-block since
+a mint-time read races the boundary; the reset job zeroes the counter in the same
+pass), the key must still be refused with "over 1d budget". That check polls because
+enforcement's cached auth view lags the DB write; any 200 or non-budget error fails
+immediately.
 """
 
 import time

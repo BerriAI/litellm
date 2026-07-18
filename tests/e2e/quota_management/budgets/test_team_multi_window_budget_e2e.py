@@ -12,12 +12,9 @@ the Json? column. A raw list there made Prisma reject the create with a 500 (the
 path and /team/update already json.dumps first); a regression would fail team creation
 here.
 
-The long-window direction (E2E-13 step 4) is the second test, mirroring the key-side
-test in test_multi_window_budget_e2e.py (see its docstring for why reset_at is
-recorded after the block, not at mint, and why the final phase polls for the
-"over 1d budget" attribution): a 1d team window whose cap the first burn already
-crossed (LONG_CAP sits far below one real call's cost) must keep blocking the team
-key after the 30s window's reset_at provably advanced in /team/info.
+The second test is the long-window direction, mirroring the
+key-side test (see its docstring): after the team's 30s window provably resets, the
+1d window the same burn crossed must still block the team key with "over 1d budget".
 """
 
 import time
