@@ -9,6 +9,7 @@ creates (keys via the Gateway, MCP servers via the deferred cleanups).
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -26,10 +27,16 @@ class _DdLogsReaderBuilder(Protocol):
 
 
 def _build_dd_logs_reader() -> DdLogsReader:
+    # Load logging/datadog_reader.py by path so basedpyright does not require a
+    # package layout. Register the module in sys.modules before exec so
+    # dataclasses inside it can resolve cls.__module__ (otherwise Python 3.12
+    # raises AttributeError: 'NoneType' object has no attribute '__dict__').
     path = Path(__file__).resolve().parent.parent / "logging" / "datadog_reader.py"
-    spec = importlib.util.spec_from_file_location("e2e_logging_datadog_reader", path)
+    name = "e2e_logging_datadog_reader"
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     builder = cast(_DdLogsReaderBuilder, getattr(module, "build_dd_logs_reader"))
     return builder()

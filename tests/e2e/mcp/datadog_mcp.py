@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
-from e2e_config import DD_API_KEY, DD_APP_KEY, datadog_mcp_url, unique_marker
+import os
+
+from e2e_config import datadog_mcp_url, unique_marker
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 
 SEARCH_LOGS_TOOL = "search_datadog_logs"
 
 
+def _dd_api_key() -> str:
+    return os.environ.get("DD_API_KEY", "").strip()
+
+
+def _dd_app_key() -> str:
+    return os.environ.get("DD_APP_KEY", "").strip()
+
+
 def assert_dd_mcp_creds() -> None:
-    if not DD_API_KEY or not DD_APP_KEY:
+    if not _dd_api_key() or not _dd_app_key():
         import pytest
 
         pytest.fail(
@@ -29,8 +39,8 @@ def register_datadog_mcp(client: McpClient, resources: ResourceManager) -> str:
         url=datadog_mcp_url(toolsets="core"),
         transport="http",
         static_headers={
-            "DD-API-KEY": DD_API_KEY,
-            "DD-APPLICATION-KEY": DD_APP_KEY,
+            "DD-API-KEY": _dd_api_key(),
+            "DD-APPLICATION-KEY": _dd_app_key(),
         },
         allowed_tools=[SEARCH_LOGS_TOOL],
     )
