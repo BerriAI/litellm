@@ -16,12 +16,12 @@ cover "OpenAI plus the big three clouds":
                                            carries only the open-weight
                                            gpt-oss MaaS models
 
-The openai and azure_openai columns run unconditionally, like every
-other live column: the environments that run the suite carry
-`OPENAI_API_KEY` and `AZURE_API_BASE` + `AZURE_API_KEY` pointing at a
-resource with gpt-5.6 deployments. The bedrock_mantle column is
-opt-in via `COMPAT_MANTLE_CELLS=1` because the AWS account is still
-waiting on the Bedrock Mantle allowlist for the `openai.gpt-5.6-*`
+The azure_openai column runs unconditionally when Azure gpt-5.6
+deployments exist. The openai column is opt-in via
+`COMPAT_OPENAI_GPT_CELLS=1` because under the full stage suite those
+cells routinely burn minutes on Claude CLI timeouts. The bedrock_mantle
+column is opt-in via `COMPAT_MANTLE_CELLS=1` because the AWS account is
+still waiting on the Bedrock Mantle allowlist for the `openai.gpt-5.6-*`
 models; until the flag is set each Mantle cell skips and its matrix
 cell publishes as `not_tested` instead of a credential-shaped red.
 The `vertex_ai_gpt` column needs no flag either way: its cells report
@@ -35,6 +35,7 @@ import os
 import pytest
 
 MANTLE_CELLS_ENV = "COMPAT_MANTLE_CELLS"
+OPENAI_GPT_CELLS_ENV = "COMPAT_OPENAI_GPT_CELLS"
 
 VERTEX_AI_GPT_NOT_APPLICABLE_REASON = (
     "GCP Vertex AI does not offer OpenAI's closed-weight GPT-5.6 family "
@@ -58,4 +59,20 @@ def skip_unless_mantle_cells_enabled() -> None:
     pytest.skip(
         f"Bedrock Mantle GPT-5.6 cells are opt-in; set {MANTLE_CELLS_ENV}=1 "
         "once the AWS account is allowlisted for the openai.gpt-5.6-* models"
+    )
+
+
+def skip_unless_openai_gpt_cells_enabled() -> None:
+    """Skip OpenAI GPT-5.6 columns unless `COMPAT_OPENAI_GPT_CELLS` opts them in.
+
+    Under the full stage suite these cells routinely hit 120s Claude CLI
+    timeouts and rate-limit-shaped retries across Sol/Terra/Luna, burning
+    ~8+ minutes per cell without a stable green. Opt in when exercising
+    the OpenAI GPT translation path in isolation.
+    """
+    if os.environ.get(OPENAI_GPT_CELLS_ENV, "").strip().lower() in {"1", "true", "yes"}:
+        return
+    pytest.skip(
+        f"OpenAI GPT-5.6 cells are opt-in; set {OPENAI_GPT_CELLS_ENV}=1 "
+        "to run them (stage suite timeouts under concurrent load)"
     )
