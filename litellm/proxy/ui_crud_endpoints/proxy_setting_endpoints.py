@@ -1,6 +1,7 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import asyncio
 import json
+import os
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
 
@@ -33,6 +34,23 @@ _SSO_SENSITIVE_FIELDS: Set[str] = {
     "google_client_secret",
     "microsoft_client_secret",
     "generic_client_secret",
+}
+
+# Maps SSOConfig field names to the process env vars the SSO login flows read
+# (litellm/proxy/management_endpoints/ui_sso.py). Used both to persist config to
+# the environment on write and to fall back to it on read.
+_SSO_FIELD_TO_ENV_VAR: Dict[str, str] = {
+    "google_client_id": "GOOGLE_CLIENT_ID",
+    "google_client_secret": "GOOGLE_CLIENT_SECRET",
+    "microsoft_client_id": "MICROSOFT_CLIENT_ID",
+    "microsoft_client_secret": "MICROSOFT_CLIENT_SECRET",
+    "microsoft_tenant": "MICROSOFT_TENANT",
+    "generic_client_id": "GENERIC_CLIENT_ID",
+    "generic_client_secret": "GENERIC_CLIENT_SECRET",
+    "generic_authorization_endpoint": "GENERIC_AUTHORIZATION_ENDPOINT",
+    "generic_token_endpoint": "GENERIC_TOKEN_ENDPOINT",
+    "generic_userinfo_endpoint": "GENERIC_USERINFO_ENDPOINT",
+    "proxy_base_url": "PROXY_BASE_URL",
 }
 
 
@@ -759,22 +777,25 @@ async def get_sso_settings():
         environment_variables=sso_settings_dict
     )
 
-    # Build SSO config with database values or environment fallback
+    # Build SSO config from database values, falling back to the environment so
+    # env-configured SSO still populates the UI. Stored DB values win on overlap.
+    env_fallback = {field: val for field, env_var in _SSO_FIELD_TO_ENV_VAR.items() if (val := os.environ.get(env_var))}
+    merged_sso_settings = {**env_fallback, **decrypted_sso_settings_dict}
 
     sso_config = SSOConfig(
-        google_client_id=decrypted_sso_settings_dict.get("google_client_id", None),
-        google_client_secret=decrypted_sso_settings_dict.get("google_client_secret", None),
-        microsoft_client_id=decrypted_sso_settings_dict.get("microsoft_client_id", None),
-        microsoft_client_secret=decrypted_sso_settings_dict.get("microsoft_client_secret", None),
-        microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
-        generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
-        generic_client_secret=decrypted_sso_settings_dict.get("generic_client_secret", None),
-        generic_authorization_endpoint=decrypted_sso_settings_dict.get("generic_authorization_endpoint", None),
-        generic_token_endpoint=decrypted_sso_settings_dict.get("generic_token_endpoint", None),
-        generic_userinfo_endpoint=decrypted_sso_settings_dict.get("generic_userinfo_endpoint", None),
-        proxy_base_url=decrypted_sso_settings_dict.get("proxy_base_url", None),
-        user_email=decrypted_sso_settings_dict.get("user_email"),
-        ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
+        google_client_id=merged_sso_settings.get("google_client_id", None),
+        google_client_secret=merged_sso_settings.get("google_client_secret", None),
+        microsoft_client_id=merged_sso_settings.get("microsoft_client_id", None),
+        microsoft_client_secret=merged_sso_settings.get("microsoft_client_secret", None),
+        microsoft_tenant=merged_sso_settings.get("microsoft_tenant", None),
+        generic_client_id=merged_sso_settings.get("generic_client_id", None),
+        generic_client_secret=merged_sso_settings.get("generic_client_secret", None),
+        generic_authorization_endpoint=merged_sso_settings.get("generic_authorization_endpoint", None),
+        generic_token_endpoint=merged_sso_settings.get("generic_token_endpoint", None),
+        generic_userinfo_endpoint=merged_sso_settings.get("generic_userinfo_endpoint", None),
+        proxy_base_url=merged_sso_settings.get("proxy_base_url", None),
+        user_email=merged_sso_settings.get("user_email"),
+        ui_access_mode=merged_sso_settings.get("ui_access_mode"),
         role_mappings=role_mappings,
         team_mappings=team_mappings,
     )
@@ -819,9 +840,6 @@ async def update_sso_settings(
     """
     Update SSO configuration by saving to the dedicated SSO table.
     """
-    import json
-    import os
-
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
         prisma_client,
@@ -840,21 +858,6 @@ async def update_sso_settings(
             status_code=500,
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
-
-    # Update environment variables
-    env_var_mapping = {
-        "google_client_id": "GOOGLE_CLIENT_ID",
-        "google_client_secret": "GOOGLE_CLIENT_SECRET",
-        "microsoft_client_id": "MICROSOFT_CLIENT_ID",
-        "microsoft_client_secret": "MICROSOFT_CLIENT_SECRET",
-        "microsoft_tenant": "MICROSOFT_TENANT",
-        "generic_client_id": "GENERIC_CLIENT_ID",
-        "generic_client_secret": "GENERIC_CLIENT_SECRET",
-        "generic_authorization_endpoint": "GENERIC_AUTHORIZATION_ENDPOINT",
-        "generic_token_endpoint": "GENERIC_TOKEN_ENDPOINT",
-        "generic_userinfo_endpoint": "GENERIC_USERINFO_ENDPOINT",
-        "proxy_base_url": "PROXY_BASE_URL",
-    }
 
     # Read the existing SSO row first so the audit log captures a real
     # before/after diff. Stored values are encrypted; decrypt them so the
@@ -884,8 +887,8 @@ async def update_sso_settings(
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump()
     for field_name, value in sso_data.items():
-        if field_name in env_var_mapping:
-            env_var_name = env_var_mapping[field_name]
+        if field_name in _SSO_FIELD_TO_ENV_VAR:
+            env_var_name = _SSO_FIELD_TO_ENV_VAR[field_name]
             if value:
                 os.environ[env_var_name] = value
             else:
@@ -935,7 +938,7 @@ async def update_sso_settings(
             else:
                 environment_variables = {}
 
-            env_vars_to_remove = set(env_var_mapping.values())
+            env_vars_to_remove = set(_SSO_FIELD_TO_ENV_VAR.values())
             filtered_env_vars = {
                 key: value for key, value in environment_variables.items() if key not in env_vars_to_remove
             }
