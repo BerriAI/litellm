@@ -53,4 +53,18 @@ describe("Cost column", () => {
     await user.hover(formatted);
     expect(await screen.findByText("$0.00012345678")).toBeInTheDocument();
   });
+
+  it("shows the summed session total, not the representative call's spend, for a multi-round session", () => {
+    const overrides: Partial<LogEntry> = {
+      request_id: "req-session",
+      spend: 0.01,
+      session_id: "sess-1",
+      session_total_count: 3,
+      session_total_spend: 0.06,
+    };
+    render(<DataTable data={[logEntry(overrides)]} columns={createColumns()} getRowId={(r) => r.request_id} />);
+    expect(screen.getByText("$0.060000")).toBeInTheDocument();
+    expect(screen.queryByText("$0.010000")).not.toBeInTheDocument();
+    expect(screen.getByText("session total")).toBeInTheDocument();
+  });
 });

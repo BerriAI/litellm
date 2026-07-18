@@ -26,6 +26,7 @@ import CredentialModal from "./CredentialModal";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
+import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
 interface CredentialsPanelProps {
   uploadProps: UploadProps;
 }
@@ -51,9 +52,11 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
       return;
     }
 
-    const filter_credential_values = Object.entries(values)
-      .filter(([key]) => !restrictedFields.includes(key))
-      .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
+    const filter_credential_values = stripMaskedSecrets(
+      Object.entries(values)
+        .filter(([key]) => !restrictedFields.includes(key))
+        .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {}),
+    );
     // Transform form values into credential structure
     const newCredential = {
       credential_name: values.credential_name,

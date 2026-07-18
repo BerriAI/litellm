@@ -3626,6 +3626,7 @@ class BedrockImageProcessor:
 
 def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
+    model: Optional[str] = None,
 ) -> List[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -3701,7 +3702,13 @@ def _convert_to_bedrock_tool_call_invoke(
                             # cache_control applies to the whole original
                             # tool call; attach after the last split block.
                             if tool.get("cache_control", None) is not None:
-                                _parts_list.append(BedrockContentBlock(cachePoint=CachePointBlock(type="default")))
+                                _cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                                    {"cache_control": tool["cache_control"]},
+                                    block_type="content_block",
+                                    model=model,
+                                )
+                                if _cache_point_block is not None:
+                                    _parts_list.append(_cache_point_block)
                             continue
                         # Fallback: no objects extracted — use empty dict.
                         arguments_dict = {}
@@ -3712,8 +3719,13 @@ def _convert_to_bedrock_tool_call_invoke(
 
                 # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
-                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                    _parts_list.append(cache_point_block)
+                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        {"cache_control": tool["cache_control"]},
+                        block_type="content_block",
+                        model=model,
+                    )
+                    if cache_point_block is not None:
+                        _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
         raise Exception(
@@ -4417,22 +4429,27 @@ class BedrockConverseMessagesProcessor:
                 tool_content.append(tool_call_result)
 
                 # Check if we need to add a separate cachePoint block
-                has_cache_control = False
+                tool_msg_cache_control = None
 
                 # Check for message-level cache_control
                 if current_message.get("cache_control", None) is not None:
-                    has_cache_control = True
+                    tool_msg_cache_control = current_message["cache_control"]
                 # Check for content-level cache_control in list content
                 elif isinstance(current_message.get("content"), list):
                     for content_element in current_message["content"]:
                         if isinstance(content_element, dict) and content_element.get("cache_control", None) is not None:
-                            has_cache_control = True
+                            tool_msg_cache_control = content_element["cache_control"]
                             break
 
                 # Add a separate cachePoint block if cache_control is present
-                if has_cache_control:
-                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                    tool_content.append(cache_point_block)
+                if tool_msg_cache_control is not None:
+                    cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                        {"cache_control": tool_msg_cache_control},
+                        block_type="content_block",
+                        model=model,
+                    )
+                    if cache_point_block is not None:
+                        tool_content.append(cache_point_block)
 
                 msg_i += 1
             # Deduplicate toolResult blocks with the same toolUseId
@@ -4529,7 +4546,7 @@ class BedrockConverseMessagesProcessor:
 
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
-                    assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls))
+                    assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
 
                 msg_i += 1
 
@@ -4789,22 +4806,27 @@ def _bedrock_converse_messages_pt(
             tool_content.append(tool_call_result)
 
             # Check if we need to add a separate cachePoint block
-            has_cache_control = False
+            tool_msg_cache_control = None
 
             # Check for message-level cache_control
             if current_message.get("cache_control", None) is not None:
-                has_cache_control = True
+                tool_msg_cache_control = current_message["cache_control"]
             # Check for content-level cache_control in list content
             elif isinstance(current_message.get("content"), list):
                 for content_element in current_message["content"]:
                     if isinstance(content_element, dict) and content_element.get("cache_control", None) is not None:
-                        has_cache_control = True
+                        tool_msg_cache_control = content_element["cache_control"]
                         break
 
             # Add a separate cachePoint block if cache_control is present
-            if has_cache_control:
-                cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
-                tool_content.append(cache_point_block)
+            if tool_msg_cache_control is not None:
+                cache_point_block = litellm.AmazonConverseConfig()._get_cache_point_block(
+                    {"cache_control": tool_msg_cache_control},
+                    block_type="content_block",
+                    model=model,
+                )
+                if cache_point_block is not None:
+                    tool_content.append(cache_point_block)
 
             msg_i += 1
         # Deduplicate toolResult blocks with the same toolUseId
@@ -4902,7 +4924,7 @@ def _bedrock_converse_messages_pt(
                     assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
-                assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls))
+                assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
 
             msg_i += 1
 
@@ -5472,3 +5494,56 @@ def has_tool_with_name(tools: Any, tool_name: str) -> bool:
         elif tool.get("name") == tool_name:
             return True
     return False
+
+
+def resolve_structured_messages(
+    messages: list[dict[str, Any]] | None,
+    request_kwargs: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """
+    Normalize a request's messages to OpenAI-spec chat-completions shape,
+    regardless of which API surface produced them (chat completions,
+    Anthropic /v1/messages, Responses API ``input``, etc).
+
+    Returns ``messages`` unchanged if already present. Otherwise dispatches
+    through the guardrail translation handlers (the same per-surface
+    conversion logic guardrails use) to convert e.g. Responses API ``input``
+    into a message list. Returns ``None`` if no messages could be resolved.
+    """
+    if messages:
+        return messages
+
+    from litellm.litellm_core_utils.api_route_to_call_types import (
+        get_call_types_for_route,
+    )
+    from litellm.llms import load_guardrail_translation_mappings
+    from litellm.types.utils import CallTypes
+
+    mappings = load_guardrail_translation_mappings()
+    call_type: CallTypes | None = None
+
+    # 1. Try route-based inference from proxy metadata
+    route = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
+    if route:
+        call_types_list = get_call_types_for_route(route)
+        if call_types_list:
+            for ct in call_types_list:
+                if ct in mappings:
+                    call_type = ct
+                    break
+
+    # 2. Fallback: try each mapped handler until one produces messages
+    handlers_to_try: list[Any] = []
+    if call_type is not None and call_type in mappings:
+        handlers_to_try.append(mappings[call_type]())
+    else:
+        handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
+
+    for handler in handlers_to_try:
+        structured = handler.get_structured_messages(request_kwargs)
+        if structured:
+            return [
+                msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
+                for msg in structured
+            ]
+    return None

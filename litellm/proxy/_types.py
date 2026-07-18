@@ -26,6 +26,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAuth,
     MCPAuthType,
     MCPCredentials,
     MCPTransport,
@@ -588,6 +589,7 @@ class LiteLLMRoutes(enum.Enum):
             # team
             "/team/new",
             "/team/update",
+            "/team/{team_id}",
             "/team/delete",
             "/team/list",
             "/v2/team/list",
@@ -1009,10 +1011,10 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_tool_search_enabled: Optional[bool] = None
 
 
+from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 from litellm.types.object_permission import (  # noqa: E402
     ObjectPermissionDict as ObjectPermissionDict,
 )
-from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1116,6 +1118,7 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
+    key_type: str | None = None
     expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
@@ -1229,6 +1232,14 @@ from litellm.models.mcp_server import (  # noqa: E402
 
 
 # MCP Proxy Request Types
+def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
+    return ValueError(
+        f"dcr_bridge is only supported for auth_type true_passthrough or oauth_delegate (got {auth_type!r}). "
+        "The DCR bridge serves gateway-hosted OAuth discovery for the client-forwarded token modes; "
+        "interactive oauth2 servers already run the gateway authorization-code flow."
+    )
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
     server_name: Optional[str] = None
@@ -1252,6 +1263,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -1268,6 +1280,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1322,6 +1335,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         """
         return values
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_dcr_bridge_auth_type(cls, values):
+        if not isinstance(values, dict) or not values.get("dcr_bridge"):
+            return values
+        auth_type = values.get("auth_type")
+        if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+            return values
+        raise _dcr_bridge_auth_type_error(auth_type)
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1346,6 +1369,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -1362,6 +1386,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1390,6 +1415,21 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("url") and not values.get("spec_path"):
                     raise ValueError("url or spec_path is required for HTTP/SSE transport")
         return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_dcr_bridge_auth_type(cls, values):
+        """Partial updates omit auth_type; that case is validated against the stored row by the
+        update endpoint, which can read the database. This validator covers payloads that carry
+        both fields."""
+        if not isinstance(values, dict) or not values.get("dcr_bridge"):
+            return values
+        if "auth_type" not in values:
+            return values
+        auth_type = values.get("auth_type")
+        if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+            return values
+        raise _dcr_bridge_auth_type_error(auth_type)
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -2082,6 +2122,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     field_default_value: Any
     premium_field: bool = False
     nested_fields: Optional[List[FieldDetail]] = None  # For nested dictionary or Pydantic fields
+    field_options: Optional[list[str]] = None  # Allowed values, for field_type == "Select"
+    field_tab: Optional[str] = None  # Admin UI sub-tab this field renders under; None groups it with the rest
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2115,6 +2157,41 @@ class PluginConfig(LiteLLMPydanticObjectBase):
     )
 
 
+class CoordinationRedisNode(LiteLLMPydanticObjectBase):
+    """A single startup node of a cluster-mode Redis used for proxy coordination."""
+
+    host: str = Field(description="hostname of the cluster node")
+    port: int = Field(description="port of the cluster node")
+
+
+class CoordinationRedisParams(LiteLLMPydanticObjectBase):
+    """
+    Connection params for the proxy's coordination Redis (cross-pod tpm/rpm rate
+    limits, spend tracking, pod lock manager, shared health checks), configured
+    independently of the response-cache backend in `litellm_settings.cache_params`.
+    """
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    host: Optional[str] = Field(None, description="Redis hostname")
+    port: Optional[int] = Field(None, description="Redis port")
+    password: Optional[str] = Field(None, description="Redis password")
+    username: Optional[str] = Field(None, description="Redis username")
+    url: Optional[str] = Field(None, description="full Redis connection url, e.g. redis://:pass@host:6379")
+    ssl: Optional[bool] = Field(None, description="connect over TLS")
+    startup_nodes: Optional[List[CoordinationRedisNode]] = Field(
+        None, description="cluster-mode startup nodes; when set a cluster client is used"
+    )
+    sentinel_nodes: Optional[List[List[Union[str, int]]]] = Field(
+        None, description="sentinel [host, port] pairs; when set a sentinel-managed client is used"
+    )
+    sentinel_password: Optional[str] = Field(None, description="password for the sentinel nodes")
+    service_name: Optional[str] = Field(None, description="sentinel service name")
+
+    def has_connection_target(self) -> bool:
+        return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2130,6 +2207,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: Optional[bool] = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: Optional[bool] = Field(None, description="load keys from azure key vault")
     master_key: Optional[str] = Field(None, description="require a key for all calls to proxy")
+    coordination_redis: Optional[CoordinationRedisParams] = Field(
+        None,
+        description=(
+            "standalone Redis for cross-pod coordination (tpm/rpm rate limits, "
+            "spend tracking, pod lock manager, shared health checks), configured "
+            "independently of the response-cache backend; takes precedence over "
+            "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
@@ -2285,6 +2371,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_auto_add_proxy_admin_to_teams: bool | None = Field(
+        None,
+        description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
@@ -2338,6 +2428,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #27639). "
             "A proxy-level WARNING is logged on every request while this flag "
             "is active as a reminder that hard enforcement is relaxed."
+        ),
+    )
+    skip_user_budget_on_team_key: bool | None = Field(
+        None,
+        description=(
+            "If True, restores the legacy behavior where a user's personal "
+            "max_budget is NOT enforced when their key belongs to a team; only "
+            "the team (and team-member) budgets apply. Defaults to False, meaning "
+            "the user's personal max_budget is always enforced regardless of "
+            "whether the key belongs to a team (see GitHub issue #12905)."
         ),
     )
     user_url_validation: Optional[bool] = Field(

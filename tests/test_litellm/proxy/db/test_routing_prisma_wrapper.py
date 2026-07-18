@@ -626,7 +626,7 @@ async def test_getattr_does_not_block_inside_running_loop_on_expired_token(monke
     assert refresh_calls["count"] == 1
 
 
-def test_writer_get_rds_iam_token_defaults_port_when_unset(monkeypatch):
+def test_writer_get_rds_iam_token_defaults_port_when_unset(monkeypatch, unset_database_url):
     """When DATABASE_PORT is unset, the writer must default to the Postgres
     standard port instead of passing `None` through. Passing None to
     `generate_iam_auth_token` makes botocore embed the literal string
@@ -639,7 +639,6 @@ def test_writer_get_rds_iam_token_defaults_port_when_unset(monkeypatch):
     monkeypatch.setenv("DATABASE_USER", "litellm")
     monkeypatch.setenv("DATABASE_NAME", "litellm")
     monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
 
     captured: Dict[str, Any] = {}
 
@@ -661,7 +660,7 @@ def test_writer_get_rds_iam_token_defaults_port_when_unset(monkeypatch):
     assert ":5432/litellm" in (new_url or "")
 
 
-def test_writer_get_rds_iam_token_uses_database_host_env_vars(monkeypatch):
+def test_writer_get_rds_iam_token_uses_database_host_env_vars(monkeypatch, unset_database_url):
     """Writer's IAM path (no iam_endpoint configured) reads host/port/user/db
     from the legacy DATABASE_HOST/PORT/USER/NAME env vars and writes the URL
     back to DATABASE_URL — this is the pre-read-replica behavior the patch
@@ -673,7 +672,6 @@ def test_writer_get_rds_iam_token_uses_database_host_env_vars(monkeypatch):
     monkeypatch.setenv("DATABASE_USER", "litellm")
     monkeypatch.setenv("DATABASE_NAME", "litellm")
     monkeypatch.setenv("DATABASE_SCHEMA", "public")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
 
     captured: Dict[str, Any] = {}
 

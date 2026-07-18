@@ -1,9 +1,22 @@
 {{- if .Values.proxyConfigMap.create }}
+{{- $config := deepCopy .Values.proxy_config }}
+{{- if and .Values.redis.enabled (dig "coordination" "enabled" true .Values.redis) }}
+{{- $generalSettings := (get $config "general_settings") | default dict }}
+{{- if not (hasKey $generalSettings "coordination_redis") }}
+{{- $coordinationRedis := dict "host" "os.environ/REDIS_HOST" "port" "os.environ/REDIS_PORT" "password" "os.environ/REDIS_PASSWORD" }}
+{{- if .Values.redis.sentinel.enabled }}
+{{- $sentinelNode := list (include "litellm.redis.serviceName" .) (include "litellm.redis.port" . | int) }}
+{{- $coordinationRedis = dict "sentinel_nodes" (list $sentinelNode) "service_name" (default "mymaster" .Values.redis.sentinel.masterSet) "password" "os.environ/REDIS_PASSWORD" }}
+{{- end }}
+{{- $_ := set $generalSettings "coordination_redis" $coordinationRedis }}
+{{- $_ := set $config "general_settings" $generalSettings }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "litellm.fullname" . }}-config
 data:
   config.yaml: |
-{{ .Values.proxy_config | toYaml | indent 6 }}
+{{ $config | toYaml | indent 6 }}
 {{- end }}
