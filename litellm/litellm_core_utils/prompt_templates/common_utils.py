@@ -1716,10 +1716,10 @@ def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
         except json.JSONDecodeError as e:
             verbose_logger.warning(
                 "split_concatenated_json_objects: discarding unparseable tool-call "
-                "arguments tail after %d complete object(s); error=%s at char %d",
+                "arguments tail after %d complete object(s); decode_start=%d error=%s",
                 len(results),
-                e,
                 idx,
+                e,
             )
             break
         if isinstance(obj, dict):
