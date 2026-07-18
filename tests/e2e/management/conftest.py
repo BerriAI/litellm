@@ -1,6 +1,6 @@
 """Management suite fixtures: the client plus a logged-in dashboard page.
 
-Lifecycle/skip/marker live in the parent conftest. The browser fixtures drive
+Lifecycle/liveness gate/marker live in the parent conftest. The browser fixtures drive
 the dashboard the proxy serves at /ui, so browser tests exercise exactly what an
 end user sees. playwright is an optional dependency loaded behind importorskip
 inside the fixture, so the API tests in this suite collect and run without it:

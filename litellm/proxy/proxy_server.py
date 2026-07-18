@@ -28,6 +28,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TypedDict,
     Union,
     cast,
     get_args,
@@ -39,6 +40,7 @@ import anyio
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json, JsonValue
+from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -363,14 +365,14 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
-    get_persisted_coordination_redis_settings,
-    router as coordination_redis_settings_router,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     _user_has_admin_view,
     admin_can_invite_user,
+)
+from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
+    get_persisted_coordination_redis_settings,
+    router as coordination_redis_settings_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -1393,19 +1395,25 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
     if open_telemetry_logger is None:
         return
     # Under OTel V2 the FastAPI instrumentor owns the server span (parent_otel_span
-    # is that same span), and it records the error + ends it itself. Ending it here
-    # would end it early — losing the http.* attributes the instrumentor stamps on
-    # completion — and double-end it. Leave it to the instrumentor.
+    # is that same span) and ends it itself with the http.* attributes stamped on
+    # completion. The instrumentor only records an error when the exception reaches
+    # it uncaught, but these handlers swallow it into a JSONResponse, so it never
+    # does; stamp the error.* attributes here (without ending or re-statusing the
+    # span, which the instrumentor still owns) so pre-call failures carry the error
+    # like v1 did. Otherwise close and annotate the dangling span ourselves.
     try:
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
-        if is_otel_v2_enabled():
-            return
+        v2_enabled = is_otel_v2_enabled()
     except Exception:
-        pass
+        v2_enabled = False
     try:
         from opentelemetry.trace import Status, StatusCode
 
+        if v2_enabled:
+            if status_code >= 400:
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
+            return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
         if status_code >= 400:
             open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
@@ -1414,7 +1422,8 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
     finally:
-        request.state.parent_otel_span = None
+        if not v2_enabled:
+            request.state.parent_otel_span = None
 
 
 @app.exception_handler(RequestValidationError)
@@ -7401,12 +7410,13 @@ async def async_data_generator(
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
         # BaseException, so they bypass the success/failure logging callbacks
-        # that normally release the pre-call max_parallel_requests +1; release
-        # it here. This is the outermost generator Starlette closes on
+        # that normally release the pre-call max_parallel_requests +1. Flag the
+        # disconnect; the shielded cleanup in `finally` owns the slot release
+        # so it can coordinate with disconnect-time success billing and release
+        # exactly once. This is the outermost generator Starlette closes on
         # disconnect, so it fires reliably regardless of needs_iterator_wrap
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
             client_disconnected = True
         raise
     except Exception as e:
@@ -7452,6 +7462,8 @@ async def async_data_generator(
             response=response,
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
 
@@ -14825,7 +14837,17 @@ async def get_config_general_settings(
             )
 
 
-_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
+GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
+
+
+class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
+    type: Literal["Float", "Boolean", "Select"]
+    description: str
+    options: NotRequired[tuple[str, ...]]
+    tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
+
+
+_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec] = {
     "budget_exceeded_throttle_percentage": {
         "type": "Float",
         "description": (
@@ -14834,18 +14856,60 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
             "over-budget keys."
         ),
     },
+    "enable_anthropic_prompt_caching": {
+        "type": "Boolean",
+        "tab": "prompt_caching",
+        "description": (
+            "Auto-adds cache_control to the system prompt and trailing turn for supported Anthropic "
+            "and Bedrock Claude models. The cache is shared across callers on the same upstream credentials."
+        ),
+    },
+    "anthropic_prompt_caching_ttl": {
+        "type": "Select",
+        "options": ("5m", "1h"),
+        "tab": "prompt_caching",
+        "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
+    },
 }
 
 
-def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> Optional[float]:
+def _general_settings_ui_litellm_default(
+    field_type: Literal["Float", "Boolean", "Select"],
+) -> GeneralSettingsUILiteLLMValue:
+    """The value a field falls back to when it is cleared or reset."""
+    return False if field_type == "Boolean" else None
+
+
+def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
+    spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
+    field_type = spec["type"]
     if value is None or value == "":
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
-        )
-    return float(value)
+        return _general_settings_ui_litellm_default(field_type)
+    match field_type:
+        case "Boolean":
+            if not isinstance(value, bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be true or false"},
+                )
+            return value
+        case "Select":
+            options = spec.get("options", ())
+            if value not in options:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be one of: {', '.join(options)}, or empty"},
+                )
+            return cast(str, value)  # cast-ok: membership in options proves it is one of the option strings
+        case "Float":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
+                )
+            return float(value)
+        case _:
+            assert_never(field_type)
 
 
 async def _persist_general_settings_ui_litellm_field(
@@ -14866,11 +14930,12 @@ async def _persist_general_settings_ui_litellm_field(
 async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
     config = await proxy_config.get_config()
     before_value = config.get("litellm_settings", {}).get(field_name)
-    setattr(litellm, field_name, None)
+    default_value = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]["type"])
+    setattr(litellm, field_name, default_value)
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
     await proxy_config.save_config(new_config=config)
-    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, None, user_api_key_dict))
+    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict))
     return {"message": f"Field {field_name} reset", "status": "success"}
 
 
@@ -15038,11 +15103,12 @@ async def get_config_list(
         else {}
     )
     for litellm_field_name, spec in _GENERAL_SETTINGS_UI_LITELLM_FIELDS.items():
-        current_value: Optional[float] = getattr(litellm, litellm_field_name, None)
+        current_value: GeneralSettingsUILiteLLMValue = getattr(litellm, litellm_field_name, None)
+        default_value = _general_settings_ui_litellm_default(spec["type"])
         stored_in_db_litellm: Optional[bool]
         if litellm_field_name in db_litellm_settings:
             stored_in_db_litellm = True
-        elif current_value is not None:
+        elif current_value != default_value:
             stored_in_db_litellm = False
         else:
             stored_in_db_litellm = None
@@ -15053,7 +15119,9 @@ async def get_config_list(
                 field_description=spec["description"],
                 field_value=current_value,
                 stored_in_db=stored_in_db_litellm,
-                field_default_value=None,
+                field_default_value=default_value,
+                field_options=list(spec.get("options", ())) or None,
+                field_tab=spec.get("tab"),
                 nested_fields=None,
             )
         )

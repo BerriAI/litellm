@@ -15,14 +15,14 @@ shared fixtures build on it.
 
 import functools
 import sys
-from collections.abc import Generator, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 import requests
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
-from e2e_result_reporter import covers_from_item, format_e2e_result_line, result_from_pytest
+from junit_properties import attach_result_properties
 from lifecycle import GatewayProvider, ResourceManager
 
 
@@ -46,6 +46,17 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Attach the two custom signals (suite package and covered cell ids) to every
+    test's user_properties so the standard JUnit report (`--junitxml`) records them
+    as `<property>` entries, on every outcome including skips and setup errors.
+    Downstream (Loki/Grafana) reads outcome and duration from the standard report
+    and these properties for package rollups and coverage drill-down. See
+    junit_properties.py."""
+    for item in items:
+        attach_result_properties(item)
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
@@ -94,30 +105,6 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     item.session.stash[_E2E_TEST_RAN] = True
 
 
-@pytest.hookimpl(wrapper=True, tryfirst=True)
-def pytest_runtest_makereport(
-    item: pytest.Item, call: pytest.CallInfo[object]
-) -> Generator[None, pytest.TestReport, pytest.TestReport]:
-    """Emit one structured E2E_RESULT line per finished test for Loki/Grafana.
-
-    Status-history panels should aggregate by package (and optional covers), not
-    scrape pytest progress basenames. See e2e_result_reporter.py.
-    """
-    report = yield
-    result = result_from_pytest(
-        nodeid=str(report.nodeid),
-        when=str(report.when),
-        failed=bool(report.failed),
-        skipped=bool(report.skipped),
-        passed=bool(report.passed),
-        duration_seconds=float(report.duration),
-        covers=covers_from_item(item),
-    )
-    if result is not None:
-        print(format_e2e_result_line(result), flush=True)
-    return report
-
-
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Once the whole e2e session is done (all suites), truncate the spend logs so
     the DB doesn't accumulate test rows. Sessions where no e2e test body ran leave
@@ -139,13 +126,6 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     finally:
         if spend_dir in sys.path:
             sys.path.remove(spend_dir)
-
-    try:
-        from bob_the_builder import remediate
-
-        remediate(session)
-    except Exception as exc:  # noqa: BLE001 - remediation is best-effort
-        print(f"devin remediation best-effort failed: {exc}")
 
 
 @pytest.fixture

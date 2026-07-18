@@ -1079,7 +1079,7 @@
   },
   "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "no-nested-ternary": {
-      "count": 3
+      "count": 1
     },
     "no-restricted-imports": {
       "count": 2
@@ -1885,16 +1885,8 @@
       "count": 1
     }
   },
-  "src/components/model_add/AddCredentialModal.tsx": {
+  "src/components/model_add/CredentialModal.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/EditCredentialModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
