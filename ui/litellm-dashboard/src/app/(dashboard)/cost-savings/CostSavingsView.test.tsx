@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -14,6 +15,12 @@ function renderView() {
       <CostSavingsView />
     </QueryClientProvider>,
   );
+}
+
+async function clickFilter(name: string) {
+  const radio = screen.getByRole("radio", { name });
+  const label = radio.closest("label");
+  await userEvent.click(label ?? radio);
 }
 
 beforeAll(() => {
@@ -84,6 +91,42 @@ const RECENT_RESPONSE: networking.RecentOptimizedRequestsResponse = {
     },
   ],
   scanned_requests: 42,
+};
+
+const MIXED_RECENT_RESPONSE: networking.RecentOptimizedRequestsResponse = {
+  requests: [
+    {
+      request_id: "req_cache_only",
+      start_time: "2026-07-15T12:00:00+00:00",
+      model: "claude-x",
+      total_tokens: 1000,
+      optimizations: ["caching"],
+      original_cost: 0.04,
+      optimized_cost: 0.03,
+      savings: 0.01,
+    },
+    {
+      request_id: "req_compress_only",
+      start_time: "2026-07-15T12:01:00+00:00",
+      model: "claude-y",
+      total_tokens: 2000,
+      optimizations: ["compression"],
+      original_cost: 0.08,
+      optimized_cost: 0.05,
+      savings: 0.03,
+    },
+    {
+      request_id: "req_both",
+      start_time: "2026-07-15T12:02:00+00:00",
+      model: "claude-z",
+      total_tokens: 3000,
+      optimizations: ["caching", "compression"],
+      original_cost: 0.12,
+      optimized_cost: 0.07,
+      savings: 0.05,
+    },
+  ],
+  scanned_requests: 99,
 };
 
 describe("formatUsd", () => {
@@ -157,5 +200,84 @@ describe("CostSavingsView", () => {
     await waitFor(() => {
       expect(screen.getByText(/No optimized requests in this window/)).toBeInTheDocument();
     });
+  });
+
+  it("filters the recent requests table by optimization type", async () => {
+    vi.mocked(networking.costSavingsRecentRequestsCall).mockResolvedValue(MIXED_RECENT_RESPONSE);
+    renderView();
+    await waitFor(() => {
+      expect(screen.getByText("req_both")).toBeInTheDocument();
+    });
+    expect(screen.getByText("req_cache_only")).toBeInTheDocument();
+    expect(screen.getByText("req_compress_only")).toBeInTheDocument();
+
+    await clickFilter("Compression");
+
+    expect(screen.queryByText("req_cache_only")).not.toBeInTheDocument();
+    expect(screen.getByText("req_compress_only")).toBeInTheDocument();
+    expect(screen.getByText("req_both")).toBeInTheDocument();
+
+    await clickFilter("Caching");
+
+    expect(screen.getByText("req_cache_only")).toBeInTheDocument();
+    expect(screen.queryByText("req_compress_only")).not.toBeInTheDocument();
+    expect(screen.getByText("req_both")).toBeInTheDocument();
+  });
+
+  it("shows a type-specific empty state when the filter excludes every request", async () => {
+    vi.mocked(networking.costSavingsRecentRequestsCall).mockResolvedValue({
+      requests: [
+        {
+          request_id: "req_cache_only",
+          start_time: "2026-07-15T12:00:00+00:00",
+          model: "claude-x",
+          total_tokens: 1000,
+          optimizations: ["caching"],
+          original_cost: 0.04,
+          optimized_cost: 0.03,
+          savings: 0.01,
+        },
+      ],
+      scanned_requests: 7,
+    });
+    renderView();
+    await waitFor(() => {
+      expect(screen.getByText("req_cache_only")).toBeInTheDocument();
+    });
+
+    await clickFilter("Compression");
+
+    expect(screen.queryByText("req_cache_only")).not.toBeInTheDocument();
+    expect(screen.getByText("No compression requests in this window.")).toBeInTheDocument();
+  });
+
+  it("scopes the KPI cards and charts to the selected optimization type", async () => {
+    renderView();
+    await waitFor(() => {
+      expect(screen.getAllByText("$2.00").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("Savings Distribution")).toBeInTheDocument();
+
+    await clickFilter("Compression");
+
+    expect(screen.queryByText("Total Savings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Caching Savings")).not.toBeInTheDocument();
+    expect(screen.getByText("Compression Savings")).toBeInTheDocument();
+    expect(screen.getAllByText("$0.50").length).toBeGreaterThan(0);
+    expect(screen.getByText("Tokens Compressed Away")).toBeInTheDocument();
+    expect(screen.getByText("250")).toBeInTheDocument();
+    expect(screen.queryByText("Savings Distribution")).not.toBeInTheDocument();
+
+    await clickFilter("Caching");
+
+    expect(screen.getByText("Caching Savings")).toBeInTheDocument();
+    expect(screen.queryByText("Compression Savings")).not.toBeInTheDocument();
+    expect(screen.getByText("Cached Tokens Read")).toBeInTheDocument();
+    expect(screen.getByText("1,000")).toBeInTheDocument();
+
+    await clickFilter("All");
+
+    expect(screen.getByText("Total Savings")).toBeInTheDocument();
+    expect(screen.getByText("Savings Distribution")).toBeInTheDocument();
   });
 });
