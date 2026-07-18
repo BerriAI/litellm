@@ -13,6 +13,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
+- `mcp/` - the MCP server surface over api_key auth: an admin registers an upstream MCP server through the management API and grants keys access via `object_permission.mcp_servers`, then the suite asserts tool listing and calling honor that permission (a key without the grant sees none of the server's tools and is refused a `tools/call` with a 403)
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)
@@ -51,7 +52,7 @@ The shape is layered so tests stay declarative
 
 Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `Gateway` and adds suite-specific routes. Cleanup runs through that same `Gateway`, so whatever keys or customers your test creates get torn down by the `resources` fixture
 
-Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The skip-vs-fail split is deliberate: a test marked `e2e` skips when no proxy answers its liveness probe, but once a request reaches the proxy any wrong behavior is a hard failure, never a skip
+Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
 Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
@@ -131,7 +132,7 @@ Quota Management - behavior features (entity- or config-driven caps and their ac
 quota_management.<behavior>.<variant>.<assertion>
   behavior  : ratelimit | budget | spend_tracking
   variant   : <ratelimit>      rpm | tpm | priority_generous | priority_strict
-              <budget>         key | internal_user | end_user | organization | team_member | tag
+              <budget>         key | internal_user | end_user | organization | team | team_member | tag
                                | model_max | soft | key_multi_window | team_multi_window
                                | fallback | spend_counter
               <spend_tracking> chat_completions | stream | embeddings | cache_hit | key_rollup
@@ -139,7 +140,8 @@ quota_management.<behavior>.<variant>.<assertion>
                                | spend_calculate | pagination
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
-              | isolates_per_model | routes_to_fallback | reseed_matches_db | logs_cost | zero_cost
+              | isolates_per_model | isolates_per_member | enforced_across_keys | routes_to_fallback
+              | reseed_matches_db | logs_cost | zero_cost
               | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
               | writes_failure_row | returns_cost | keeps_total
   e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
@@ -171,3 +173,16 @@ other.<area>.<case>.<assertion>
   e.g.  other.auth.jwt.valid_token_allows
         other.lifecycle.readiness.reports_db
 ```
+
+## Hard Rules
+- no monkeypatching or mock tests, and never substitute a unit test for e2e feature coverage: a product feature is proven end to end against a live proxy, not with a unit test. if a contributor asks you to write an end to end test, do NOT stage a unit test of the feature with it; if you find a product gap, call it out in the PR description. tests that cover the harness itself are the exception and are allowed (for example `coverage_registry/test_collector.py`, which unit-tests the coverage collector): they carry no `e2e` marker, exercise harness plumbing rather than a product feature, and run whether or not a proxy is up
+
+- use model management endpoints to create new models for a test. this could be in a conftest / inline for each test. ask the user what they want.
+
+- do not overengineer a test, i need you to write readable, clean code of what would look like a natural user scenario
+
+- when it comes to typing an input schema for an api endpoint, have it type X = A | B | C ... where X = exhaustive union of all supported input schemas and A, B, C typically are composed by a base type. types are only pretty for a api request / response body. make sure to compose types instead of repeating the same base attributes over and over again.
+ 
+- use the docker-compose to your advantage and spin up a local proxy, make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
+
+- do not use xfail markers, tests should be written in a form that the end user expects it to pass

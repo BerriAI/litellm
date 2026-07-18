@@ -39,6 +39,10 @@ class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
 
 
+class ObjectPermission(BaseModel):
+    mcp_servers: list[str] | None = None
+
+
 class KeyGenerateBody(BaseModel):
     models: list[str] = []
     duration: str | None = None
@@ -57,6 +61,7 @@ class KeyGenerateBody(BaseModel):
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -440,6 +445,9 @@ class LiteLLMParamsBody(BaseModel):
     aws_batch_role_arn: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    extra_headers: dict[str, str] | None = None
+    use_in_pass_through: bool | None = None
+    complexity_router_config: dict[str, object] | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
