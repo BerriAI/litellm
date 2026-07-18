@@ -153,6 +153,21 @@ class TestConvertFileDocumentToUrlDocument:
         assert result["type"] == "image_url"
         assert result["image_url"].startswith("data:image/png;base64,")
 
+    @pytest.mark.parametrize(
+        ("content", "mime_type"),
+        (
+            (b"\xff\xd8\xff image", "image/jpeg"),
+            (b"GIF89a image", "image/gif"),
+            (b"RIFF\x00\x00\x00\x00WEBP image", "image/webp"),
+            (b"II*\x00 image", "image/tiff"),
+        ),
+    )
+    def test_should_infer_supported_image_mime_from_raw_bytes(self, content: bytes, mime_type: str) -> None:
+        result = convert_file_document_to_url_document({"type": "file", "file": content})
+
+        assert result["type"] == "image_url"
+        assert result["image_url"].startswith(f"data:{mime_type};base64,")
+
     def test_should_prefer_explicit_mime_over_sniffed_magic_number(self):
         content = b"%PDF-1.4 pretends to be a pdf"
 
