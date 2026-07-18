@@ -19,11 +19,30 @@ from e2e_http import StreamingResponse
 from models import ChatMessage, LiteLLMParamsBody
 
 
+class FunctionParameterProperty(BaseModel):
+    type: str
+    description: str | None = None
+
+
+class FunctionParameters(BaseModel):
+    type: Literal["object"] = "object"
+    properties: dict[str, FunctionParameterProperty]
+    required: list[str] = []
+
+
+class ResponsesFunctionTool(BaseModel):
+    type: Literal["function"] = "function"
+    name: str
+    description: str | None = None
+    parameters: FunctionParameters
+
+
 class ResponsesRequest(BaseModel):
     model: str
     input: str
     instructions: str | None = None
     stream: bool = False
+    tools: list[ResponsesFunctionTool] | None = None
 
 
 class MessagesRequest(BaseModel):
@@ -87,6 +106,9 @@ class ResponsesOutputContent(BaseModel):
 class ResponsesOutputItem(BaseModel):
     type: str | None = None
     content: list[ResponsesOutputContent] = []
+    name: str | None = None
+    arguments: str | None = None
+    call_id: str | None = None
 
 
 class ResponsesResult(BaseModel):
@@ -99,6 +121,16 @@ class ResponsesResult(BaseModel):
     def text(self) -> str:
         return "".join(
             content.text or "" for item in self.output for content in item.content
+        )
+
+    @property
+    def function_calls(self) -> tuple[ResponsesOutputItem, ...]:
+        return tuple(
+            item
+            for item in self.output
+            if item.type == "function_call"
+            and item.name is not None
+            and item.arguments is not None
         )
 
 
@@ -202,6 +234,20 @@ class EndpointsClient:
                 stream=stream,
             ),
             stream=stream,
+        )
+
+    def responses_with_tools(
+        self, key: str, model: str, text: str, tools: list[ResponsesFunctionTool]
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/responses",
+            key,
+            ResponsesRequest(
+                model=model,
+                input=text,
+                instructions="You are a helpful assistant",
+                tools=tools,
+            ),
         )
 
     def messages(
