@@ -3230,6 +3230,8 @@ class TestDisconnectGatherCleanup:
     async def test_base_process_llm_request_preserves_llm_error_after_gather(
         self, monkeypatch
     ):
+        import asyncio
+
         import litellm.proxy.common_request_processing as cpr
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
