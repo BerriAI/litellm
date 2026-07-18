@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
-import { Form } from "antd";
+import { Form, Switch } from "antd";
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -22,6 +22,7 @@ const toRedisType = (value: unknown): RedisType =>
 const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
   const [form] = Form.useForm<CacheFormValues>();
   const [redisType, setRedisType] = useState<RedisType>("node");
+  const [semanticEnabled, setSemanticEnabled] = useState<boolean>(false);
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelOption[]>([]);
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -33,8 +34,15 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
     try {
       const data = (await getCacheSettingsCall(accessToken)) as { current_values?: Record<string, unknown> };
       const currentValues = data.current_values ?? {};
+      const rawRedisType = currentValues.redis_type;
+      if (rawRedisType === "semantic") {
+        setRedisType("node");
+        setSemanticEnabled(true);
+      } else {
+        setRedisType(toRedisType(rawRedisType));
+        setSemanticEnabled(false);
+      }
       form.setFieldsValue(buildInitialValues(currentValues));
-      setRedisType(toRedisType(currentValues.redis_type));
     } catch (error) {
       console.error("Failed to load cache settings:", error);
       NotificationsManager.fromBackend("Failed to load cache settings");
@@ -81,7 +89,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
     try {
       const result = await testCacheConnectionCall(
         accessToken,
-        buildCachePayload(redisType, values, { forTesting: true }),
+        buildCachePayload(redisType, values, semanticEnabled, { forTesting: true }),
       );
       if (result.status === "success") {
         NotificationsManager.success("Cache connection test successful!");
@@ -109,7 +117,10 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
 
     setIsSaving(true);
     try {
-      await updateCacheSettingsCall(accessToken, buildCachePayload(redisType, values, { forTesting: false }));
+      await updateCacheSettingsCall(
+        accessToken,
+        buildCachePayload(redisType, values, semanticEnabled, { forTesting: false }),
+      );
       NotificationsManager.success("Cache settings updated successfully");
       await loadCacheSettings();
     } catch (error) {
@@ -137,6 +148,16 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
           redisTypeDescriptions={REDIS_TYPE_DESCRIPTIONS}
           onTypeChange={(type) => setRedisType(toRedisType(type))}
         />
+
+        <div className="flex items-center justify-between py-3 px-4 border rounded-lg bg-gray-50">
+          <div>
+            <label className="text-sm font-medium text-gray-700">Semantic Caching</label>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Reuse responses for similar prompts using embedding similarity
+            </p>
+          </div>
+          <Switch checked={semanticEnabled} onChange={setSemanticEnabled} />
+        </div>
 
         <div className="pt-4 border-t border-gray-200">
           <CacheFieldSection
@@ -170,13 +191,14 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
           </div>
         )}
 
-        {redisType === "semantic" && (
+        {semanticEnabled && (
           <div className="pt-4 border-t border-gray-200">
             <CacheFieldSection
               title="Semantic Configuration"
               section="semantic"
               redisType={redisType}
               embeddingModels={embeddingModels}
+              semanticEnabled={semanticEnabled}
             />
           </div>
         )}

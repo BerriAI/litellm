@@ -3,12 +3,20 @@ import { buildCachePayload, buildInitialValues, fieldsForSection } from "./cache
 
 describe("fieldsForSection", () => {
   it("should only include a redis-type-specific field when that type is selected", () => {
-    expect(fieldsForSection("cluster", "cluster").map((f) => f.name)).toEqual(["redis_startup_nodes"]);
-    expect(fieldsForSection("cluster", "node")).toEqual([]);
+    expect(fieldsForSection("cluster", "cluster", false).map((f) => f.name)).toEqual(["redis_startup_nodes"]);
+    expect(fieldsForSection("cluster", "node", false)).toEqual([]);
+  });
+
+  it("should include semantic fields only when semanticEnabled is true", () => {
+    expect(fieldsForSection("semantic", "node", false)).toEqual([]);
+    expect(fieldsForSection("semantic", "node", true).map((f) => f.name)).toEqual([
+      "similarity_threshold",
+      "redis_semantic_cache_embedding_model",
+    ]);
   });
 
   it("should include connection fields for every redis type in schema order", () => {
-    expect(fieldsForSection("connection", "node").map((f) => f.name)).toEqual([
+    expect(fieldsForSection("connection", "node", false).map((f) => f.name)).toEqual([
       "url",
       "host",
       "port",
@@ -42,7 +50,9 @@ describe("buildInitialValues", () => {
 
 describe("buildCachePayload", () => {
   it("should tag the payload as redis and drop empty fields and the UI-only redis_type", () => {
-    const payload = buildCachePayload("node", { host: "localhost", port: "6379", username: "" }, { forTesting: false });
+    const payload = buildCachePayload("node", { host: "localhost", port: "6379", username: "" }, false, {
+      forTesting: false,
+    });
     expect(payload).toEqual({
       type: "redis",
       host: "localhost",
@@ -58,29 +68,32 @@ describe("buildCachePayload", () => {
     const payload = buildCachePayload(
       "cluster",
       { redis_startup_nodes: '[{"host":"127.0.0.1","port":"7001"}]' },
+      false,
       { forTesting: false },
     );
     expect(payload.redis_startup_nodes).toEqual([{ host: "127.0.0.1", port: "7001" }]);
   });
 
   it("should omit a list field whose textarea holds invalid JSON", () => {
-    const payload = buildCachePayload("cluster", { redis_startup_nodes: "not json" }, { forTesting: false });
+    const payload = buildCachePayload("cluster", { redis_startup_nodes: "not json" }, false, { forTesting: false });
     expect(payload).not.toHaveProperty("redis_startup_nodes");
   });
 
-  it("should send type redis-semantic when saving a semantic cache", () => {
-    const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: false });
+  it("should send type redis-semantic when saving with semantic caching enabled", () => {
+    const payload = buildCachePayload("node", { similarity_threshold: 0.9 }, true, { forTesting: false });
     expect(payload.type).toBe("redis-semantic");
     expect(payload.similarity_threshold).toBe(0.9);
   });
 
-  it("should keep type redis when testing a semantic cache so the test endpoint accepts it", () => {
-    const payload = buildCachePayload("semantic", { similarity_threshold: 0.9 }, { forTesting: true });
+  it("should keep type redis when testing with semantic caching enabled so the test endpoint accepts it", () => {
+    const payload = buildCachePayload("node", { similarity_threshold: 0.9 }, true, { forTesting: true });
     expect(payload.type).toBe("redis");
   });
 
   it("should exclude fields that do not belong to the selected redis type", () => {
-    const payload = buildCachePayload("node", { sentinel_nodes: '[["localhost",26379]]' }, { forTesting: false });
+    const payload = buildCachePayload("node", { sentinel_nodes: '[["localhost",26379]]' }, false, {
+      forTesting: false,
+    });
     expect(payload).not.toHaveProperty("sentinel_nodes");
   });
 });

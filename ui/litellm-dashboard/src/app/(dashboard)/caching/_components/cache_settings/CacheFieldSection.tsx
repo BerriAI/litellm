@@ -10,6 +10,7 @@ interface CacheFieldSectionProps {
   embeddingModels: EmbeddingModelOption[];
   gridCols?: string;
   headingLevel?: "h4" | "h5";
+  semanticEnabled?: boolean;
 }
 
 const CacheFieldSection: React.FC<CacheFieldSectionProps> = ({
@@ -19,8 +20,9 @@ const CacheFieldSection: React.FC<CacheFieldSectionProps> = ({
   embeddingModels,
   gridCols = "grid-cols-1 gap-6 sm:grid-cols-2",
   headingLevel = "h4",
+  semanticEnabled = false,
 }) => {
-  const fields = fieldsForSection(section, redisType);
+  const fields = fieldsForSection(section, redisType, semanticEnabled);
   if (fields.length === 0) {
     return null;
   }
