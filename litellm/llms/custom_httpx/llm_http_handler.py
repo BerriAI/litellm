@@ -1,6 +1,7 @@
 import asyncio
 import json
 import ssl
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -150,9 +151,9 @@ from litellm.utils import (
 
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
-    kwargs: Dict[str, Any],
+    litellm_params: GenericLiteLLMParams,
 ) -> bool:
-    return custom_llm_provider == "openai" and kwargs.get("rust") is True
+    return custom_llm_provider == "openai" and litellm_params.get("rust") is True
 
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -6222,11 +6223,9 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            from contextlib import asynccontextmanager
-
             @asynccontextmanager
             async def _backend_connection():
-                if _rust_responses_websocket_enabled(custom_llm_provider, kwargs):
+                if _rust_responses_websocket_enabled(custom_llm_provider, litellm_params):
                     from litellm.rust_bridge import responses_websocket as rust_responses_websocket
 
                     rust_backend = await rust_responses_websocket.connect(

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
 import httpx
+from websockets.exceptions import ConnectionClosedOK
 
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -51,7 +52,10 @@ def load_rust_responses_websocket() -> Any:
     native_bridge = get_native_bridge()
     if native_bridge is None:
         return None
-    return getattr(native_bridge, "ResponsesWebSocketConnection", None)
+    try:
+        return native_bridge.ResponsesWebSocketConnection
+    except AttributeError:
+        return None
 
 
 class _ConnectionAdapter:
@@ -61,8 +65,11 @@ class _ConnectionAdapter:
     async def send(self, text: str) -> None:
         await self._connection.send_text(text)
 
-    async def recv(self) -> str | None:
-        return await self._connection.recv_text()
+    async def recv(self) -> str:
+        message = await self._connection.recv_text()
+        if message is None:
+            raise ConnectionClosedOK(None, None)
+        return message
 
     async def close(self) -> None:
         await self._connection.close()

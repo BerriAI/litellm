@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from litellm.rust_bridge import responses_websocket
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
+from litellm.rust_bridge import responses_websocket
+from litellm.types.router import GenericLiteLLMParams
 
 
 class _FakeNativeConnection:
@@ -21,6 +22,11 @@ class _FakeNativeConnection:
         self.closed = True
 
 
+class _ClosedNativeConnection:
+    async def recv_text(self) -> None:
+        return None
+
+
 class _FakeNativeBridge:
     @classmethod
     async def connect(
@@ -34,9 +40,17 @@ class _FakeNativeBridge:
 
 
 def test_rust_websocket_bridge_is_disabled_without_flag() -> None:
-    assert not _rust_responses_websocket_enabled("openai", {})
-    assert not _rust_responses_websocket_enabled("anthropic", {"rust": True})
-    assert _rust_responses_websocket_enabled("openai", {"rust": True})
+    assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams())
+    assert not _rust_responses_websocket_enabled("anthropic", GenericLiteLLMParams(rust=True))
+    assert _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=True))
+
+
+@pytest.mark.asyncio
+async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
+    adapter = responses_websocket._ConnectionAdapter(_ClosedNativeConnection())
+
+    with pytest.raises(responses_websocket.ConnectionClosedOK):
+        await adapter.recv()
 
 
 @pytest.mark.asyncio
