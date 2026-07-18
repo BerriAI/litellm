@@ -22,8 +22,7 @@ import { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
-import AddCredentialsTab from "./AddCredentialModal";
-import EditCredentialsModal from "./EditCredentialModal";
+import CredentialModal from "./CredentialModal";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -201,18 +200,20 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
       </Card>
 
       {isAddModalOpen && (
-        <AddCredentialsTab
-          onAddCredential={handleAddCredential}
+        <CredentialModal
+          mode="add"
+          onSubmit={handleAddCredential}
           open={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
           uploadProps={uploadProps}
         />
       )}
       {isUpdateModalOpen && (
-        <EditCredentialsModal
+        <CredentialModal
+          mode="edit"
           open={isUpdateModalOpen}
           existingCredential={selectedCredential}
-          onUpdateCredential={handleUpdateCredential}
+          onSubmit={handleUpdateCredential}
           uploadProps={uploadProps}
           onCancel={() => setIsUpdateModalOpen(false)}
         />

@@ -23,7 +23,8 @@ import requests
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from junit_properties import attach_result_properties
-from lifecycle import GatewayProvider, ResourceManager
+from lifecycle import ProxyClientProvider, ResourceManager
+from proxy_client import ProxyClient, build_proxy_client
 
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
@@ -38,6 +39,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "covers(cell_id, *, exercised_on=()): coverage-registry cell(s) this test covers",
     )
+    config.addinivalue_line(
+        "markers",
+        "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
+    )
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -46,9 +51,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     as `<property>` entries, on every outcome including skips and setup errors.
     Downstream (Loki/Grafana) reads outcome and duration from the standard report
     and these properties for package rollups and coverage drill-down. See
-    junit_properties.py."""
+    junit_properties.py.
+
+    Also sort `load`-marked items last so a whole-tree run drives heavy throughput
+    traffic only after the latency-sensitive suites have finished."""
     for item in items:
         attach_result_properties(item)
+    items.sort(key=lambda item: item.get_closest_marker("load") is not None)
 
 
 def _liveness_reason(label: str, base_url: str) -> str | None:
@@ -120,11 +129,18 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             sys.path.remove(spend_dir)
 
 
+@pytest.fixture(scope="session")
+def proxy() -> ProxyClient:
+    """The shared ProxyClient every suite's client is built from. Suite `client`
+    fixtures depend on this and inject it, so the proxy wiring lives in one place."""
+    return build_proxy_client()
+
+
 @pytest.fixture
-def resources(client: GatewayProvider) -> Iterator[ResourceManager]:
+def resources(client: ProxyClientProvider) -> Iterator[ResourceManager]:
     """init -> run -> teardown: create a manager, run the test, release resources.
-    Cleanup goes through the shared Gateway, whatever the suite's client adds."""
-    manager = ResourceManager(client=client.gateway)
+    Cleanup goes through the shared ProxyClient, whatever the suite's client adds."""
+    manager = ResourceManager(client=client.proxy)
     manager.init()
     yield manager
     manager.teardown()
