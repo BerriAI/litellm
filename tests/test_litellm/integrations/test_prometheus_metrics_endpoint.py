@@ -26,8 +26,7 @@ _METRICS_CONTENT_TYPE = "text/plain; version=0.0.4"
 
 
 async def _fake_metrics_app(scope, receive, send) -> None:
-    """Minimal ASGI app mimicking prometheus_client.make_asgi_app().
-    Used with app.mount() which calls it as a raw ASGI callable."""
+    """Minimal ASGI app mimicking prometheus_client.make_asgi_app()."""
     if scope["type"] == "http":
         await send(
             {
@@ -40,23 +39,20 @@ async def _fake_metrics_app(scope, receive, send) -> None:
 
 
 async def _fake_metrics_view(request: Request) -> Response:
-    """Same content as _fake_metrics_app but as a Starlette view function.
-    Used with app.add_route() which wraps the callable as a view (passes Request)."""
+    """View function used with app.add_route() for the /metrics (no-slash) route."""
     return Response(content=_METRICS_BODY, media_type=_METRICS_CONTENT_TYPE)
 
 
 def _make_app_with_old_mount() -> fastapi.FastAPI:
-    """Reproduces the bug: mount only at '/metrics' (no trailing slash).
-    Starlette redirects GET /metrics -> /metrics/ with a 307."""
+    """Reproduces the bug: mount only at '/metrics' — Starlette 307-redirects to /metrics/."""
     app = fastapi.FastAPI()
     app.mount("/metrics", _fake_metrics_app)
     return app
 
 
 def _make_app_with_fixed_mount() -> fastapi.FastAPI:
-    """Applies the fix: mount at '/metrics/' AND add a direct route for '/metrics'.
-    app.add_route receives a view function (called with Request), while
-    app.mount receives a raw ASGI callable (called with scope/receive/send)."""
+    """Applies the fix: mount at /metrics/ for the ASGI app and add an explicit
+    view route for /metrics so both paths return 200 directly with no redirect."""
     app = fastapi.FastAPI()
     app.mount("/metrics/", _fake_metrics_app)
     app.add_route("/metrics", _fake_metrics_view)
