@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ sys.path.insert(
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
@@ -1078,6 +1080,54 @@ def test_transform_response_captures_token_ids():
     }
     result = _run_transform_response(body)
     assert result._hidden_params["fireworks_token_ids"] == [[4, 5, 6]]
+
+
+def test_transform_response_normalizes_cached_tokens_for_spend_logs():
+    body = {
+        **_BASE_CHAT_COMPLETION_RESPONSE,
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 5,
+            "total_tokens": 105,
+            "prompt_tokens_details": {"cached_tokens": 80},
+        },
+    }
+
+    result = _run_transform_response(body)
+
+    assert result.usage is not None
+    assert result.usage.cache_read_input_tokens == 80
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 80
+
+    payload = get_logging_payload(
+        kwargs={"model": "fireworks_ai/test-model", "litellm_params": {"metadata": {}}},
+        response_obj=result,
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["additional_usage_values"]["cache_read_input_tokens"] == 80
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens_details": {"cached_tokens": 0}},
+        {"prompt_tokens_details": {}},
+        {"cache_read_input_tokens": 90, "prompt_tokens_details": {"cached_tokens": 80}},
+    ],
+)
+def test_transform_response_preserves_cache_usage_without_inventing_alias(usage):
+    body = {**_BASE_CHAT_COMPLETION_RESPONSE, "usage": usage}
+
+    result = _run_transform_response(body)
+
+    assert result.usage is not None
+    if "cache_read_input_tokens" in usage:
+        assert result.usage.cache_read_input_tokens == 90
+    else:
+        assert "cache_read_input_tokens" not in result.usage
 
 
 def test_streaming_surfaces_fireworks_response_fields():

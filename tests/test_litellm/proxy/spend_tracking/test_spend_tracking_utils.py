@@ -46,69 +46,6 @@ from litellm.types.utils import (
 )
 
 
-def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
-    payload = get_logging_payload(
-        kwargs={
-            "model": "gpt-4o-mini",
-            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
-        },
-        response_obj=litellm.ModelResponse(
-            id="chatcmpl-test",
-            choices=[],
-            usage=usage,
-        ),
-        start_time=datetime.datetime.now(timezone.utc),
-        end_time=datetime.datetime.now(timezone.utc),
-    )
-    metadata = json.loads(payload["metadata"])
-    return metadata["additional_usage_values"]
-
-
-def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_tokens():
-    additional_usage_values = _get_additional_usage_values_for_usage(
-        litellm.Usage(
-            prompt_tokens=10,
-            completion_tokens=2,
-            total_tokens=12,
-            prompt_tokens_details={"cached_tokens": 123},
-        )
-    )
-
-    assert additional_usage_values["cache_read_input_tokens"] == 123
-    assert additional_usage_values["prompt_tokens_details"]["cached_tokens"] == 123
-
-
-def test_get_logging_payload_preserves_anthropic_cache_read_input_tokens():
-    additional_usage_values = _get_additional_usage_values_for_usage(
-        litellm.Usage(
-            prompt_tokens=10,
-            completion_tokens=2,
-            total_tokens=12,
-            prompt_tokens_details={"cached_tokens": 123},
-            cache_read_input_tokens=456,
-        )
-    )
-
-    assert additional_usage_values["cache_read_input_tokens"] == 456
-
-
-@pytest.mark.parametrize(
-    "prompt_tokens_details",
-    [None, {"cached_tokens": 0}],
-)
-def test_get_logging_payload_does_not_map_missing_or_zero_cached_tokens(prompt_tokens_details):
-    additional_usage_values = _get_additional_usage_values_for_usage(
-        litellm.Usage(
-            prompt_tokens=10,
-            completion_tokens=2,
-            total_tokens=12,
-            prompt_tokens_details=prompt_tokens_details,
-        )
-    )
-
-    assert "cache_read_input_tokens" not in additional_usage_values
-
-
 def test_sanitize_request_body_for_spend_logs_payload_basic():
     request_body = {
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
