@@ -53,7 +53,7 @@ def get_cost_for_web_search_request(
         # Perplexity handles search costs internally in its own cost calculator
         # Return 0.0 to indicate costs are already accounted for
         return 0.0
-    elif custom_llm_provider == "xai":
+    elif custom_llm_provider in ["xai", "xai-oauth"]:
         from .xai.cost_calculator import cost_per_web_search_request
 
         return cost_per_web_search_request(usage=usage, model_info=model_info)

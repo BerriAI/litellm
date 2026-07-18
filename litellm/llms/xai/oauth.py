@@ -380,4 +380,6 @@ class XAIOAuthAuthenticator:
 
 
 def should_use_xai_oauth(litellm_params: Optional[Dict[str, Any]]) -> bool:
-    return bool((litellm_params or {}).get("use_xai_oauth"))
+    if not litellm_params:
+        return False
+    return bool(litellm_params.get("use_xai_oauth")) or litellm_params.get("custom_llm_provider") == "xai-oauth"

@@ -3690,7 +3690,7 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
             and custom_llm_provider != "groq"
             and custom_llm_provider != "nvidia_nim"
             and custom_llm_provider != "cerebras"
-            and custom_llm_provider != "xai"
+            and custom_llm_provider not in ["xai", "xai-oauth"]
             and custom_llm_provider != "ai21_chat"
             and custom_llm_provider != "volcengine"
             and custom_llm_provider != "deepseek"
@@ -4143,7 +4143,7 @@ def get_optional_params(
             model=model,
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
-    elif custom_llm_provider == "xai":
+    elif custom_llm_provider in ["xai", "xai-oauth"]:
         optional_params = litellm.XAIChatConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -6000,7 +6000,7 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("BASETEN_API_KEY")
-        elif custom_llm_provider == "xai":
+        elif custom_llm_provider in ["xai", "xai-oauth"]:
             if "XAI_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
@@ -7586,6 +7586,7 @@ class ProviderConfigManager:
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
+            LlmProviders.XAI_OAUTH: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
