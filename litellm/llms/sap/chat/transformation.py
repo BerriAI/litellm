@@ -64,7 +64,7 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: frozenset[str] = frozenset(
 # Pattern covers: Anthropic Claude 3.7 / 4.x, OpenAI o-series and GPT-5,
 # and Cohere Command-R-series with "reasoning" in the config name.
 _REASONING_MODELS: re.Pattern[str] = re.compile(
-    r"^(?:anthropic--claude-(?:4|3-7)|o\d|gpt-5(?:[.\-]|$)|cohere--\S*reasoning\S*)"
+    r"^(?:anthropic--claude-(?:4(?:\.[5-9])?|3-7)|o\d|gpt-5(?:[.\-]|$)|cohere--\S*reasoning\S*)"
 )
 
 # Models that support Anthropic-style cache_control on message content parts.
