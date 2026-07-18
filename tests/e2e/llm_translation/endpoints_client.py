@@ -10,6 +10,7 @@ so the assertion is on real content, not just a 200.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -22,6 +23,7 @@ class ResponsesRequest(BaseModel):
     model: str
     input: str
     instructions: str | None = None
+    stream: bool = False
 
 
 class MessagesRequest(BaseModel):
@@ -100,6 +102,19 @@ class ResponsesResult(BaseModel):
         )
 
 
+class ResponsesStreamEvent(BaseModel):
+    event_id: str | None = None
+
+
+class ResponsesStreamEventType(BaseModel):
+    type: str
+
+
+class ResponsesOutputTextDeltaEvent(ResponsesStreamEvent):
+    type: Literal["response.output_text.delta"]
+    delta: str
+
+
 class AnthropicContentBlock(BaseModel):
     type: str | None = None
     text: str | None = None
@@ -164,18 +179,29 @@ class EndpointsClient:
     def delete_model(self, model_id: str) -> None:
         self.proxy.delete_model(model_id)
 
-    def _send(self, path: str, key: str, body: BaseModel) -> StreamingResponse:
+    def _send(
+        self, path: str, key: str, body: BaseModel, *, stream: bool = False
+    ) -> StreamingResponse:
         return self.proxy.transport.send(
-            path, headers=self.proxy.transport.bearer(key), json=body
+            path,
+            headers=self.proxy.transport.bearer(key),
+            json=body,
+            stream=stream,
         )
 
-    def responses(self, key: str, model: str, text: str) -> StreamingResponse:
+    def responses(
+        self, key: str, model: str, text: str, *, stream: bool = False
+    ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
             key,
             ResponsesRequest(
-                model=model, input=text, instructions="You are a helpful assistant"
+                model=model,
+                input=text,
+                instructions="You are a helpful assistant",
+                stream=stream,
             ),
+            stream=stream,
         )
 
     def messages(
