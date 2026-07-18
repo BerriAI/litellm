@@ -4,8 +4,18 @@ Shared by every e2e suite under tests/e2e/. Values come from the
 environment so the same tests run against localhost or a deployed proxy.
 """
 
+from __future__ import annotations
+
 import os
 import uuid
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
+# Compose injects them into the proxy container, but pytest on the host does not
+# inherit that file unless we load it. override=False so a real shell export wins.
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 PROXY_BASE_URL = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4000").rstrip("/")
 MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-1234")
@@ -41,6 +51,7 @@ OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").
 DD_SITE = os.environ.get("DD_SITE", "datadoghq.com").strip()
 DD_API_KEY = os.environ.get("DD_API_KEY", "").strip()
 DD_APP_KEY = os.environ.get("DD_APP_KEY", "").strip()
+
 # After the first event is searchable, keep watching this long for a late
 # duplicate before the exactly-one assertion: real-DataDog ingestion jitter can
 # make one call's two events searchable tens of seconds apart, and a duplicate
@@ -66,6 +77,23 @@ LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
 LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
 LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "355"))
 LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
+
+
+def datadog_mcp_url(*, toolsets: str = "core") -> str:
+    """Regional Datadog remote MCP endpoint for this process's DD_SITE.
+
+    US1 is mcp.datadoghq.com; every other site is mcp.<site> (e.g. us5 ->
+    mcp.us5.datadoghq.com). A fixed mcp.datadoghq.com URL 403s when the keys
+    belong to a non-US1 org.
+    """
+    site = (
+        os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
+    ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+    if site.startswith("app."):
+        site = site[len("app.") :]
+    host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"
+    base = f"https://{host}/v1/mcp"
+    return f"{base}?toolsets={toolsets}" if toolsets else base
 
 
 def unique_marker() -> str:

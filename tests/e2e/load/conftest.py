@@ -5,12 +5,12 @@ from collections.abc import Iterator
 import pytest
 from requests import RequestException
 
-from proxy_client import ProxyClient
 from e2e_http import NoBody, Success
 from load_client import LoadClient, build_client
 from load_constants import LOAD_MODEL
 from models import KeyGenerateBody, LiteLLMParamsBody, ModelsListResponse
 from lifecycle import ResourceManager
+from proxy_client import ProxyClient
 
 LOAD_MODEL_PARAMS = LiteLLMParamsBody(
     model="openai/load-mock",
@@ -19,14 +19,14 @@ LOAD_MODEL_PARAMS = LiteLLMParamsBody(
 
 
 @pytest.fixture(scope="session")
-def client() -> LoadClient:
-    return build_client()
+def client(proxy: ProxyClient) -> LoadClient:
+    return build_client(proxy)
 
 
-def _model_is_servable(gateway: ProxyClient, model_name: str) -> bool:
-    result = gateway.transport.get(
+def _model_is_servable(proxy: ProxyClient, model_name: str) -> bool:
+    result = proxy.transport.get(
         "/v1/models",
-        headers=gateway.transport.master,
+        headers=proxy.transport.master,
         params=NoBody(),
         response_type=ModelsListResponse,
     )
@@ -37,15 +37,15 @@ def _model_is_servable(gateway: ProxyClient, model_name: str) -> bool:
 def _ensure_load_model(  # pyright: ignore[reportUnusedFunction]  # pytest autouse session fixture, wired by name
     client: LoadClient,
 ) -> Iterator[None]:
-    gateway = client.gateway
-    if _model_is_servable(gateway, LOAD_MODEL):
+    proxy = client.proxy
+    if _model_is_servable(proxy, LOAD_MODEL):
         yield
         return
 
     try:
-        model_id = gateway.create_model(LOAD_MODEL, LOAD_MODEL_PARAMS)
+        model_id = proxy.create_model(LOAD_MODEL, LOAD_MODEL_PARAMS)
     except (AssertionError, RequestException) as exc:
-        if _model_is_servable(gateway, LOAD_MODEL):
+        if _model_is_servable(proxy, LOAD_MODEL):
             yield
             return
         raise AssertionError(
@@ -56,11 +56,11 @@ def _ensure_load_model(  # pyright: ignore[reportUnusedFunction]  # pytest autou
     try:
         yield
     finally:
-        gateway.delete_model(model_id)
+        proxy.delete_model(model_id)
 
 
 @pytest.fixture
 def load_key(resources: ResourceManager, client: LoadClient) -> str:
-    key = client.gateway.generate_key(KeyGenerateBody(models=[LOAD_MODEL], user_id="e2e-load"))
-    resources.defer(lambda: client.gateway.delete_key(key))
+    key = client.proxy.generate_key(KeyGenerateBody(models=[LOAD_MODEL], user_id="e2e-load"))
+    resources.defer(lambda: client.proxy.delete_key(key))
     return key
