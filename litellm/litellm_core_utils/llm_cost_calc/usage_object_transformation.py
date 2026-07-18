@@ -24,7 +24,7 @@ class TranscriptionUsageObjectTransformation:
         if isinstance(usage_object, TranscriptionUsageDurationObject):
             return None
         elif isinstance(usage_object, TranscriptionUsageTokensObject):
-            prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+            prompt_tokens_details: PromptTokensDetailsWrapper | None = None
             if usage_object.input_token_details is not None:
                 prompt_tokens_details = PromptTokensDetailsWrapper(
                     text_tokens=usage_object.input_token_details.text_tokens,
