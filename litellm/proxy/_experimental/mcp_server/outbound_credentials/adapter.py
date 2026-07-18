@@ -43,7 +43,10 @@ def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optio
     an empty subject rather than share one credential slot across callers. A validated delegation
     assertion (UserAPIKeyAuth.delegated_user_id, stamped at MCP admission after the consent check)
     replaces the credential subject so per-user upstream credentials resolve as the delegated
-    user; admission, permissions, and attribution stay on the calling key.
+    user; admission, permissions, and attribution stay on the calling key. The same value is
+    surfaced on ``Subject.delegated_user_id`` as the delegation marker: it tells the token_exchange
+    arm that ``inbound_token`` is the agent's admission credential (not the subject's own token), so
+    the arm sources the delegated user's IdP grant instead of exchanging the agent's bearer.
     """
     inbound = SecretStr(subject_token) if subject_token else None
     if user_api_key_auth is None:
@@ -52,6 +55,7 @@ def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optio
         tenant_id=user_api_key_auth.org_id or user_api_key_auth.team_id or "",
         subject_id=user_api_key_auth.delegated_user_id or user_api_key_auth.user_id or "",
         inbound_token=inbound,
+        delegated_user_id=user_api_key_auth.delegated_user_id,
     )
 
 

@@ -20,6 +20,7 @@ from litellm.proxy._experimental.mcp_server.db import (
     _decode_user_credential,
     _prepare_mcp_server_data,
     get_user_credential,
+    get_user_idp_grant,
     get_user_oauth_credential,
     is_oauth_credential_expired,
     list_user_oauth_credentials,
@@ -27,6 +28,7 @@ from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_user_credentials_master_key,
     rotate_mcp_user_env_vars_master_key,
     store_user_credential,
+    store_user_idp_grant,
     store_user_oauth_credential,
 )
 from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
@@ -535,6 +537,62 @@ async def test_list_oauth_credentials_filters_byok_and_returns_payloads():
     assert server_ids == {"srv-encrypted", "srv-legacy"}
     tokens = {r["access_token"] for r in results}
     assert tokens == {"tok-enc", "tok-legacy"}
+
+
+# ── IdP grant (delegated OBO subject material) ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_idp_grant_round_trips():
+    prisma = _make_prisma_with_existing(row=None)
+    await store_user_idp_grant(
+        prisma, "alice", "idp::https://idp.example.com/token", "idp-at", refresh_token="idp-rt", scopes=["read"]
+    )
+
+    stored = _stored_value(prisma)
+    row = MagicMock()
+    row.credential_b64 = stored
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=row)
+
+    result = await get_user_idp_grant(prisma, "alice", "idp::https://idp.example.com/token")
+    assert result is not None
+    assert result["type"] == "idp_grant"
+    assert result["access_token"] == "idp-at"
+    assert result["refresh_token"] == "idp-rt"
+    assert result["scopes"] == ["read"]
+
+
+@pytest.mark.asyncio
+async def test_idp_grant_does_not_persist_plaintext():
+    prisma = _make_prisma_with_existing(row=None)
+    await store_user_idp_grant(prisma, "alice", "idp::https://idp/token", "idp-secret-at", refresh_token="idp-secret-rt")
+    stored = _stored_value(prisma)
+    try:
+        decoded_bytes = base64.urlsafe_b64decode(stored)
+    except Exception:
+        decoded_bytes = b""
+    assert b"idp-secret-at" not in decoded_bytes
+    assert b"idp-secret-rt" not in decoded_bytes
+
+
+@pytest.mark.asyncio
+async def test_idp_grant_is_not_surfaced_as_an_oauth2_credential():
+    # An IdP grant is a THIRD credential kind sharing this table; the oauth2-only readers gate on
+    # type == "oauth2", so an idp_grant row must be invisible to get_user_oauth_credential and to the
+    # connected-servers listing -- otherwise it would show up as a phantom server the user "connected".
+    prisma = _make_prisma_with_existing(row=None)
+    await store_user_idp_grant(prisma, "alice", "idp::https://idp/token", "idp-at")
+    stored = _stored_value(prisma)
+    idp_row = MagicMock()
+    idp_row.credential_b64 = stored
+    idp_row.server_id = "idp::https://idp/token"
+
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=idp_row)
+    assert await get_user_oauth_credential(prisma, "alice", "idp::https://idp/token") is None
+    assert await get_user_idp_grant(prisma, "alice", "idp::https://idp/token") is not None
+
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[idp_row])
+    assert await list_user_oauth_credentials(prisma, "alice") == []
 
 
 # ── _decode_user_credential helper ────────────────────────────────────────────

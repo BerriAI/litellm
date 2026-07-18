@@ -74,6 +74,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     to_server_spec,
     to_subject,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.idp_subject_provider import (
+    build_idp_subject_source,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InvalidatableOAuthTokenStore,
 )
@@ -1009,6 +1012,7 @@ class MCPServerManager:
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
+            idp_subject_source=build_idp_subject_source(),
         )
         self.registry: dict[str, MCPServer] = {}
         self.config_mcp_servers: dict[str, MCPServer] = {}

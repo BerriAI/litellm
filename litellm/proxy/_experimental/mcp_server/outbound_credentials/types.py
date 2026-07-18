@@ -340,6 +340,13 @@ class Subject(BaseModel):
     subject_id: str
     # Opaque, already-validated inbound identity. Only `token_exchange` / `passthrough` read it.
     inbound_token: SecretStr | None = None
+    # Set only for an agent-delegated (on-behalf-of) request; equals subject_id when present. Its
+    # presence means inbound_token is the AGENT's admission credential, NOT this subject's own token,
+    # so an arm that would otherwise consume inbound_token as the subject's proof (token_exchange)
+    # must instead source the subject's own material. subject_id stays the principal whose upstream
+    # credential is resolved either way, so arms keyed purely on subject_id (authorization_code) are
+    # already correct and read nothing here.
+    delegated_user_id: str | None = None
 
 
 class ServerSpec(BaseModel):

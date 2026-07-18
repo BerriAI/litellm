@@ -272,6 +272,9 @@ def test_to_subject_maps_principal_fields():
     assert subject.tenant_id == "org1"
     assert subject.subject_id == "user1"
     assert subject.inbound_token is None
+    # A non-delegated request carries no delegation marker: the token_exchange arm then treats the
+    # inbound token as the subject's own, unchanged from before delegation existed.
+    assert subject.delegated_user_id is None
 
 
 def test_to_subject_delegated_user_replaces_credential_subject():
@@ -281,6 +284,9 @@ def test_to_subject_delegated_user_replaces_credential_subject():
     subject = to_subject(principal, None)
     assert subject.subject_id == "delegated-user"
     assert subject.tenant_id == "team1"
+    # The delegation marker is surfaced so the token_exchange arm knows the inbound token is the
+    # agent's admission credential and sources the delegated user's IdP grant instead.
+    assert subject.delegated_user_id == "delegated-user"
 
 
 @pytest.mark.parametrize(
