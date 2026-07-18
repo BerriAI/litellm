@@ -31,16 +31,6 @@ Every test under `tests/e2e/mcp/` must exercise the proxy against the real Datad
 - Delete the MCP server (and any keys) through `resources.defer` the same way every other suite tears down
 - If a new MCP behavior cannot be covered with Datadog's tool surface, say so in the PR and get agreement before inventing another upstream; the default is always Datadog
 
-## MCP suite: real Datadog only
-
-Every test under `tests/e2e/mcp/` must exercise the proxy against the real Datadog remote MCP server. Do not add a compose service, FastMCP fixture, mock upstream, or any other fake MCP host for this suite
-
-- Register via `register_datadog_mcp` in `tests/e2e/mcp/datadog_mcp.py` (or extend that helper if you need a different `toolsets=` / `allowed_tools` slice of the same Datadog endpoint). That posts `/v1/mcp/server` with `url=datadog_mcp_url(...)` and static headers `DD-API-KEY` / `DD-APPLICATION-KEY` from the process env
-- Auth is Datadog's documented CI/header path, not a browser OAuth authorize/token dance. Hard-fail when `DD_API_KEY` or `DD_APP_KEY` is missing (`assert_dd_mcp_creds`); never skip for a missing fake upstream
-- Prefer calling real Datadog tools that prove the product path (e.g. `search_datadog_logs` for list/call and permission denials). Seed a unique marker (`e2e-datadog-mcp-*`) in a chat completion when you need a log the tool can find; dual-read with `dd_logs` from conftest when delivery matters
-- Delete the MCP server (and any keys) through `resources.defer` the same way every other suite tears down
-- If a new MCP behavior cannot be covered with Datadog's tool surface, say so in the PR and get agreement before inventing another upstream; the default is always Datadog
-
 ## Lay the pattern down in a class
 
 Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test; each method is one behavior. Think of it as documenting the contract, with the rough intent being
