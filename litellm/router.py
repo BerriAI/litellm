@@ -1936,7 +1936,7 @@ class Router:
             kwargs["original_function"] = self._acompletion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            request_priority = kwargs.get("priority") or self.default_priority
+            request_priority = kwargs.get("priority", self.default_priority)
             start_time = time.time()
             _is_prompt_management_model = self._is_prompt_management_model(model)
 
