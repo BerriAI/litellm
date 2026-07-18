@@ -3960,7 +3960,6 @@ class PrometheusLogger(CustomLogger):
         # add_route avoids the redirect so Prometheus gets a direct 200.
         from starlette.requests import Request
         from starlette.responses import Response
-        from starlette.routing import Route
 
         async def _metrics_no_slash_view(request: Request) -> Response:
             status_code = 200
