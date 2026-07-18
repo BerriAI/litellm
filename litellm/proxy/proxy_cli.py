@@ -873,10 +873,16 @@ def run_server(
     reload: bool,
 ):
     if cli_args:
-        if cli_args == ("xai-oauth", "login"):
+        if len(cli_args) >= 2 and cli_args[0] == "xai-oauth" and cli_args[1] == "login":
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator
+            from litellm.secret_managers.main import get_secret_str
 
-            authenticator = XAIOAuthAuthenticator()
+            account = cli_args[2] if len(cli_args) >= 3 else None
+            if account:
+                _token_dir = get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser("~/.config/litellm/xai_oauth")
+                authenticator = XAIOAuthAuthenticator(auth_file=os.path.join(_token_dir, f"auth-{account}.json"))
+            else:
+                authenticator = XAIOAuthAuthenticator()
             auth_data = authenticator.login()
             click.echo(f"xAI OAuth login successful. Credentials saved to {authenticator.auth_file}.")
             if auth_data.get("expires_at"):

@@ -3209,6 +3209,7 @@ all_litellm_params = (
         "order",
         "enable_json_schema_validation",
         "use_xai_oauth",
+        "xai_oauth_token_file",
         "_litellm_rate_limit_descriptors",
         "_litellm_tpm_reserved_tokens",
         "_litellm_tpm_reserved_model",

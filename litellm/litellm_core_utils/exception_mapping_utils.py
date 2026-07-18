@@ -398,6 +398,17 @@ def _map_openai_exception(
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
             )
+        elif original_exception.status_code == 403 and "spending-limit" in error_str:
+            # xAI SuperGrok returns 403 + "personal-team-blocked:spending-limit"
+            # when an account's quota is exhausted. Map to RateLimitError so the
+            # Router treats it as retryable and fails over to another deployment.
+            raise RateLimitError(
+                message=f"RateLimitError: {exception_provider} - {message}",
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=getattr(original_exception, "response", None),
+                litellm_debug_info=extra_information,
+            )
         elif original_exception.status_code == 401:
             raise AuthenticationError(
                 message=f"AuthenticationError: {exception_provider} - {message}",

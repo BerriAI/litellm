@@ -57,8 +57,9 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         dynamic_api_key = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
+            _token_file = (litellm_params or {}).get("xai_oauth_token_file")
             try:
-                headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator().get_access_token()}"
+                headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator(auth_file=_token_file).get_access_token()}"
             except XAIOAuthError as exc:
                 raise AuthenticationError(
                     model=model,
@@ -92,7 +93,8 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         dynamic_api_key = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
-            api_base = XAIOAuthAuthenticator().get_api_base()
+            _token_file = (litellm_params or {}).get("xai_oauth_token_file")
+            api_base = XAIOAuthAuthenticator(auth_file=_token_file).get_api_base()
 
         return super().get_complete_url(
             api_base=api_base,
@@ -110,7 +112,6 @@ class XAIChatConfig(OpenAIGPTConfig):
             "max_tokens",
             "n",
             "parallel_tool_calls",
-            "presence_penalty",
             "response_format",
             "seed",
             "stream",
@@ -123,6 +124,12 @@ class XAIChatConfig(OpenAIGPTConfig):
             "user",
             "web_search_options",
         ]
+        #########################################################
+        # presence penalty check
+        # grok-4+ does not support presence_penalty (confirmed via API errors)
+        #########################################################
+        if not self._is_grok_4_plus(model):
+            base_openai_params.append("presence_penalty")
         # for some reason, grok-3-mini does not support stop tokens
         #########################################################
         # stop tokens check
@@ -167,6 +174,14 @@ class XAIChatConfig(OpenAIGPTConfig):
         if "grok-code-fast" in model:
             return False
         return True
+
+    def _is_grok_4_plus(self, model: str) -> bool:
+        """Check if model is grok-4 or newer (grok-4.x, grok-4.5, etc.)."""
+        if "grok-4" in model:
+            return True
+        if "grok-build" in model:
+            return True
+        return False
 
     def map_openai_params(
         self,
