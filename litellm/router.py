@@ -4461,6 +4461,7 @@ class Router:
                     model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
+                    input=kwargs.get("input", None),
                     specific_deployment=kwargs.pop("specific_deployment", None),
                 )
             except Exception as e:
@@ -4608,6 +4609,7 @@ class Router:
             deployment = self.get_available_deployment(
                 model=model,
                 messages=kwargs.get("messages", None),
+                input=kwargs.get("input", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
@@ -10002,11 +10004,44 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, parent_otel_span=parent_otel_span)
                 return client
 
+    def _count_pre_call_check_tokens(
+        self,
+        messages: list[dict[str, str]] | None,
+        input: str | list | None,
+        instructions: str | None = None,
+    ) -> int:
+        """
+        Count input tokens for context-window pre-call checks.
+
+        Chat Completions send `messages`; the Responses API sends `input` (a string or
+        a list of Responses input items) plus an optional `instructions` system prompt.
+        The Responses payload is normalized to chat messages via the shared
+        LiteLLMCompletionResponsesConfig transform so the same token_counter path covers
+        both API surfaces and `instructions` tokens are included in the count.
+        """
+        if messages is not None:
+            return litellm.token_counter(messages=messages)
+        if input is not None:
+            from openai.types.responses.response_create_params import ResponseInputParam
+
+            from litellm.responses.litellm_completion_transformation.transformation import (
+                LiteLLMCompletionResponsesConfig,
+            )
+
+            typed_input = cast(str | ResponseInputParam, input)  # cast-ok: str | list matches transform input
+            input_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=typed_input,
+                responses_api_request={"instructions": instructions} if instructions is not None else {},
+            )
+            return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
+        raise ValueError("Either messages or input must be provided to count tokens")
+
     def _pre_call_checks(
         self,
         model: str,
         healthy_deployments: List,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
         request_kwargs: Optional[dict] = None,
     ):
         """
@@ -10036,6 +10071,10 @@ class Router:
         _rate_limit_error = False
         parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
+        raw_instructions = request_kwargs.get("instructions") if request_kwargs else None
+        instructions = raw_instructions if isinstance(raw_instructions, str) else None
+        has_countable_input = messages is not None or input is not None
+
         ## get model group RPM ##
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
@@ -10058,10 +10097,12 @@ class Router:
                 _deployment_model = base_model or _litellm_params.get("model", None)
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if isinstance(max_input_tokens, int):
+                if isinstance(max_input_tokens, int) and has_countable_input:
                     if input_tokens is None:
                         try:
-                            input_tokens = litellm.token_counter(messages=messages)
+                            input_tokens = self._count_pre_call_check_tokens(
+                                messages=messages, input=input, instructions=instructions
+                            )
                         except Exception as e:
                             verbose_router_logger.error(
                                 "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
@@ -10526,11 +10567,12 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
 
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=cast(List[Dict], healthy_deployments),
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
         # check if user wants to do tag based routing
@@ -11041,11 +11083,12 @@ class Router:
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         # filter pre-call checks
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=healthy_deployments,
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
 
@@ -11195,11 +11238,12 @@ class Router:
         pass_through_deployments = self._filter_blocked_deployments(pass_through_deployments)
 
         # 5. Apply pre-call checks (if enabled)
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             pass_through_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=pass_through_deployments,
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
 
