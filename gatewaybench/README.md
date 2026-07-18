@@ -4,11 +4,11 @@ A reproducible benchmark for **AI-gateway overhead**: the latency, throughput ce
 
 CursorBench measures model *quality*. The right question for a gateway is not quality but overhead, and specifically the overhead that a coding agent feels on every turn: how much longer until the first token, how evenly the stream flows, how tool calls behave, and how the whole thing holds up under concurrency. GatewayBench measures that, and it measures it the same way for every gateway so the numbers are comparable.
 
-![GatewayBench throughput vs memory](analyze/throughput_vs_memory.png)
+Gateways compared: **LiteLLM (Rust)**, **LiteLLM (Python v1)**, **Portkey**, and **Bifrost**.
 
-![GatewayBench streaming TTFT overhead vs memory](analyze/ttft_vs_memory.png)
+![GatewayBench overhead comparison](analyze/overhead_comparison.png)
 
-> The charts above use **illustrative placeholder data** to show the design. They are regenerated from real `results/*.jsonl` once the harness has run; see [Generating the charts](#generating-the-charts).
+> The chart above uses **illustrative placeholder data** to show the design. It is regenerated from real `results/*.jsonl` once the harness has run; see [Generating the chart](#generating-the-chart).
 
 ## The core idea: isolate the gateway from the provider
 
@@ -38,7 +38,7 @@ The mock and the load driver must never be the bottleneck. A Python mock or clos
 - the driver is **open-loop** (constant arrival rate), which avoids coordinated omission and keeps the p99/p99.9 tail honest
 - runs are deterministic: fixed seeds, fixed payloads, a discarded warmup window
 
-Only the harness is Rust. The gateways run as their real selves: LiteLLM (Python), Bifrost (Go), Portkey (the OSS JS gateway).
+Only the harness is Rust. The gateways run as their real selves: LiteLLM Rust, LiteLLM Python v1, Bifrost (Go), and Portkey (the OSS JS gateway).
 
 ## Metrics
 
@@ -70,16 +70,13 @@ Load and cost
 
 Since LiteLLM publishes this, transparency is the whole point. Every gateway config, image, and pinned version lives in `gateways/` and is meant to be challenged. Rules
 
+- all four gateways run on the **same single machine** so the numbers are directly comparable; a run split across different hosts would not be
 - each gateway runs in its **recommended production config**, not a strawman, and we run two configs per gateway: *bare passthrough* (no logging, DB, cache, or rate limit) to isolate pure proxy cost, and *realistic prod* (key auth plus a logging or spend callback on) to match what people actually run
 - equal resources for every gateway (same container CPU and memory limits), so a result is never "who got more cores"
 - load driver, gateway, and mock run on separate pinned cores so the driver never steals the gateway's CPU
 - fixed seeds and payloads, a discarded warmup window, multiple runs with median-of-runs and variance reported
 
-Category differences we state honestly rather than hide
-
-- **LiteLLM SDK** is an in-process library with no HTTP hop, so it is a different product category from the network proxies. It is reported but kept off the same latency axis
-- **OpenRouter** is SaaS only and cannot be pointed at the mock. Any number for it includes their infrastructure, the network round trip to their datacenter, and a real upstream, so it is not comparable to the self-hosted numbers. It is either excluded from the isolated-overhead charts or reported separately as an end-to-end measurement, always clearly labeled
-- **Portkey** is benchmarked as the open-source self-hostable gateway, not the SaaS
+Portkey is benchmarked as the open-source self-hostable gateway, not the SaaS.
 
 ## Layout
 
@@ -102,7 +99,7 @@ gatewaybench/                 cargo workspace
     throughput/               RPS ceiling + CPU/RSS cost per 1M requests
     tail-latency/             p99/p99.9 added latency under concurrency
   gateways/                   per-gateway configs (bare + prod), pinned versions
-    litellm-proxy/  bifrost/  portkey/  openrouter/
+    litellm-rust/  litellm-python/  bifrost/  portkey/
   xtask/                      `cargo xtask bench` sweeps the matrix -> results/*.jsonl
   analyze/                    chart generation for RESULTS.md
 ```
@@ -123,9 +120,9 @@ cargo run --release -p ttft
 cargo xtask bench
 ```
 
-## Generating the charts
+## Generating the chart
 
-The hero charts are produced from the benchmark results by `analyze/make_hero_charts.py`. Point `_DATA` at real rows from `results/*.jsonl` and regenerate
+The overhead comparison chart is produced from the benchmark results by `analyze/make_hero_charts.py`. Point `_DATA` at real rows from `results/*.jsonl` and regenerate
 
 ```bash
 python analyze/make_hero_charts.py
