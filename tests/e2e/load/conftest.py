@@ -5,7 +5,7 @@ from collections.abc import Iterator
 import pytest
 from requests import RequestException
 
-from e2e_gateway import Gateway
+from proxy_client import ProxyClient
 from e2e_http import NoBody, Success
 from load_client import LoadClient, build_client
 from load_constants import LOAD_MODEL
@@ -23,7 +23,7 @@ def client() -> LoadClient:
     return build_client()
 
 
-def _model_is_servable(gateway: Gateway, model_name: str) -> bool:
+def _model_is_servable(gateway: ProxyClient, model_name: str) -> bool:
     result = gateway.transport.get(
         "/v1/models",
         headers=gateway.transport.master,
