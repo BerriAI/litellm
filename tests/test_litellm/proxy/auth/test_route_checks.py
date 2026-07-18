@@ -528,6 +528,65 @@ def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
     assert RouteChecks.is_management_route(route=route) is False
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/guardrails/apply_guardrail",
+        "/apply_guardrail",
+    ],
+)
+def test_apply_guardrail_routes_classified_as_llm_api(route):
+    """apply_guardrail routes must be classified as LLM API routes so non-admin
+    virtual keys can call them instead of hitting the admin-only 401 branch in
+    non_proxy_admin_allowed_routes_check.
+
+    Regression test for LIT-4579: the routes lived in llm_api_routes (via
+    apply_guardrail_routes) but is_llm_api_route did not check them, so a normal
+    key got a 403/401 unless the exact path was listed in allowed_routes.
+    """
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/guardrails/apply_guardrail",
+        "/apply_guardrail",
+    ],
+)
+@pytest.mark.parametrize("allowed_routes", [None, ["llm_api_routes"]])
+def test_non_admin_key_allowed_apply_guardrail_without_explicit_allowlist(route, allowed_routes):
+    """Regression test for LIT-4579.
+
+    A non-admin virtual key with default LLM API access (allowed_routes=None) or
+    the llm_api_routes preset must be able to call apply_guardrail without adding
+    the exact path to allowed_routes. Before the fix this raised the admin-only
+    exception because is_llm_api_route ignored apply_guardrail_routes.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        allowed_routes=allowed_routes,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 
