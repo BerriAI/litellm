@@ -23240,6 +23240,11 @@ export interface components {
              */
             total_completion_tokens: number;
             /**
+             * Total Compression Saved Tokens
+             * @default 0
+             */
+            total_compression_saved_tokens: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -30864,6 +30869,11 @@ export interface components {
              * @default 0
              */
             completion_tokens: number;
+            /**
+             * Compression Saved Tokens
+             * @default 0
+             */
+            compression_saved_tokens: number;
             /**
              * Failed Requests
              * @default 0

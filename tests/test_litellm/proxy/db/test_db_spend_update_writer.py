@@ -1902,3 +1902,91 @@ async def test_update_user_db_enqueues_user_spend_without_cache_dependency():
     by_type = {u["entity_type"]: u["entity_id"] for u in queued}
     assert by_type[Litellm_EntityType.USER] == "user-123"
     assert by_type[Litellm_EntityType.END_USER] == "end-user-9"
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_carries_compression_saved_tokens():
+    """
+    The daily transaction built from a SpendLog payload must carry
+    compression_saved_tokens summed from both the native compression_savings
+    metadata key and Headroom guardrail entries, alongside the cache token
+    fields extracted from usage_object.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    metadata = {
+        "usage_object": {"cache_read_input_tokens": 40, "cache_creation_input_tokens": 15},
+        "compression_savings": {
+            "tokens_before": 12000,
+            "tokens_after": 5000,
+            "tokens_saved": 7000,
+            "source": "compression_interception",
+        },
+        "guardrail_information": [
+            {
+                "guardrail_name": "headroom-compressor",
+                "guardrail_provider": "headroom",
+                "guardrail_status": "success",
+                "guardrail_response": {"tokens_before": 1000, "tokens_after": 400, "tokens_saved": 600},
+            }
+        ],
+    }
+    payload = {
+        "request_id": "req-compression-1",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 5000,
+        "completion_tokens": 10,
+        "spend": 0.05,
+        "metadata": json.dumps(metadata),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["compression_saved_tokens"] == 7600
+    assert transaction["cache_read_input_tokens"] == 40
+    assert transaction["cache_creation_input_tokens"] == 15
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
+    """Requests without any compression metadata produce a zero count."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-no-compression",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "spend": 0.01,
+        "metadata": json.dumps({"usage_object": {}}),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["compression_saved_tokens"] == 0

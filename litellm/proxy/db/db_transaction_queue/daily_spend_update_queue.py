@@ -122,6 +122,10 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                         payload.get("cache_creation_input_tokens", 0) or 0
                     ) + daily_transaction.get("cache_creation_input_tokens", 0)
 
+                    daily_transaction["compression_saved_tokens"] = (
+                        payload.get("compression_saved_tokens", 0) or 0
+                    ) + daily_transaction.get("compression_saved_tokens", 0)
+
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
         return aggregated_daily_spend_update_transactions

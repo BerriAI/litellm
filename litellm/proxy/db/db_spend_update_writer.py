@@ -59,6 +59,9 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.compression_savings import (
+    extract_compression_saved_tokens,
+)
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
@@ -1554,6 +1557,10 @@ class DBSpendUpdateWriter:
                                         common_data["cache_creation_input_tokens"] = transaction.get(
                                             "cache_creation_input_tokens", 0
                                         )
+                                    if "compression_saved_tokens" in transaction:
+                                        common_data["compression_saved_tokens"] = transaction.get(
+                                            "compression_saved_tokens", 0
+                                        )
 
                                     if entity_type == "tag" and "request_id" in transaction:
                                         common_data["request_id"] = transaction.get("request_id")
@@ -1576,6 +1583,10 @@ class DBSpendUpdateWriter:
                                     if "cache_creation_input_tokens" in transaction:
                                         update_data["cache_creation_input_tokens"] = {
                                             "increment": transaction.get("cache_creation_input_tokens", 0)
+                                        }
+                                    if "compression_saved_tokens" in transaction:
+                                        update_data["compression_saved_tokens"] = {
+                                            "increment": transaction.get("compression_saved_tokens", 0)
                                         }
 
                                     if entity_type == "tag" and "request_id" in transaction:
@@ -1842,6 +1853,7 @@ class DBSpendUpdateWriter:
                 failed_requests=1 if request_status != "success" else 0,
                 cache_read_input_tokens=_extract_cache_read_tokens(usage_obj),
                 cache_creation_input_tokens=_extract_cache_creation_tokens(usage_obj),
+                compression_saved_tokens=extract_compression_saved_tokens(_metadata),
             )
             return daily_transaction
         except Exception as e:
