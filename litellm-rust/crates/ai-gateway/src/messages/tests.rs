@@ -52,9 +52,9 @@ fn write_response(body: &str) -> String {
 }
 
 #[test]
-fn provider_config_only_resolves_azure_ai() {
+fn provider_config_resolves_anthropic_and_azure_ai() {
+    assert!(messages_provider_config("anthropic").is_some());
     assert!(messages_provider_config("azure_ai").is_some());
-    assert!(messages_provider_config("anthropic").is_none());
     assert!(messages_provider_config("openai").is_none());
 }
 
@@ -248,12 +248,12 @@ async fn messages_rejects_unsupported_provider() {
         body: json!({"model": "claude-3-5-sonnet", "max_tokens": 8, "messages": []}),
         api_key: Some("sk"),
         api_base: Some("http://127.0.0.1:1"),
-        custom_llm_provider: Some("anthropic"),
+        custom_llm_provider: Some("openai"),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
     })
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "anthropic"));
+    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "openai"));
 }
