@@ -304,7 +304,9 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         chunks += 1
         decoded_line = line.decode(errors="replace")
         if decoded_line.startswith("data: "):
-            stream_events.append(decoded_line.removeprefix("data: "))
+            payload = decoded_line.removeprefix("data: ")
+            if payload != "[DONE]":
+                stream_events.append(payload)
         if stream_error is None and (
             line.startswith(b"event: error")
             or b'"type":"error"' in line

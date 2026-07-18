@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from e2e_http import StreamingResponse
 from models import ChatMessage, LiteLLMParamsBody
 
@@ -203,20 +203,20 @@ class ImagesResult(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class EndpointsClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
-        return self.gateway.create_model(model_name, litellm_params)
+        return self.proxy.create_model(model_name, litellm_params)
 
     def delete_model(self, model_id: str) -> None:
-        self.gateway.delete_model(model_id)
+        self.proxy.delete_model(model_id)
 
     def _send(
         self, path: str, key: str, body: BaseModel, *, stream: bool = False
     ) -> StreamingResponse:
-        return self.gateway.transport.send(
+        return self.proxy.transport.send(
             path,
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             json=body,
             stream=stream,
         )
@@ -288,5 +288,5 @@ class EndpointsClient:
         )
 
 
-def build_endpoints_client() -> EndpointsClient:
-    return EndpointsClient(gateway=build_gateway())
+def build_endpoints_client(proxy: ProxyClient) -> EndpointsClient:
+    return EndpointsClient(proxy=proxy)

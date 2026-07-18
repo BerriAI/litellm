@@ -19,9 +19,8 @@ from endpoints_client import (
     EndpointsClient,
     FunctionParameterProperty,
     FunctionParameters,
-    ResponsesCompletedEvent,
-    ResponsesFunctionTool,
     ResponsesOutputTextDeltaEvent,
+    ResponsesFunctionTool,
     ResponsesResult,
 )
 from lifecycle import ResourceManager
@@ -32,6 +31,10 @@ pytestmark = pytest.mark.e2e
 
 class WeatherArguments(BaseModel):
     location: str
+
+
+class ResponsesStreamEventType(BaseModel):
+    type: str
 
 
 class TestResponses:
@@ -66,22 +69,18 @@ class TestResponses:
 
         result = endpoints_client.responses(key, model, "reply with one word", stream=True)
         require_successful_call(result)
-        parsed_events = tuple(
+        delta_events = tuple(
             parsed
             for event in result.stream_events
             if (parsed := _parse_stream_event(event)) is not None
         )
-        delta_events = tuple(
-            event for event in parsed_events if isinstance(event, ResponsesOutputTextDeltaEvent)
-        )
-        completed_events = tuple(
-            event for event in parsed_events if isinstance(event, ResponsesCompletedEvent)
-        )
 
         assert any(event.delta for event in delta_events), "responses stream returned no text deltas"
-        assert completed_events and isinstance(parsed_events[-1], ResponsesCompletedEvent), (
-            "responses stream did not terminate with response.completed"
-        )
+        assert result.stream_events, "responses stream returned no events"
+        assert (
+            ResponsesStreamEventType.model_validate_json(result.stream_events[-1]).type
+            == "response.completed"
+        ), "responses stream did not terminate with response.completed"
 
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.cost_logged")
     def test_responses_logs_cost(
@@ -101,7 +100,7 @@ class TestResponses:
         assert parsed.text.strip(), f"/responses returned no output text: {result.body[:300]}"
         assert result.call_id and parsed.id, f"missing response identifiers: {result.body[:300]}"
 
-        rows = endpoints_client.gateway.poll_logs_for_request_id(
+        rows = endpoints_client.proxy.poll_logs_for_request_id(
             parsed.id,
             predicate=lambda logged_rows: any((row.spend or 0) > 0 for row in logged_rows),
         )
@@ -149,13 +148,8 @@ class TestResponses:
         assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
 
 
-def _parse_stream_event(
-    event: str,
-) -> ResponsesOutputTextDeltaEvent | ResponsesCompletedEvent | None:
+def _parse_stream_event(event: str) -> ResponsesOutputTextDeltaEvent | None:
     try:
         return ResponsesOutputTextDeltaEvent.model_validate_json(event)
     except ValidationError:
-        try:
-            return ResponsesCompletedEvent.model_validate_json(event)
-        except ValidationError:
-            return None
+        return None
