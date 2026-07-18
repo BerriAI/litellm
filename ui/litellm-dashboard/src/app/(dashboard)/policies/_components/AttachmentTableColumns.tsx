@@ -54,7 +54,7 @@ function AttachmentRowActions({ attachment, isAdmin, onDeleteClick }: Attachment
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="attachment-action-copy-id"
-          onClick={() => void copyToClipboard(attachment.attachment_id)}
+          onClick={() => void copyToClipboard(attachment.attachment_id, "Attachment ID copied")}
         >
           <Copy />
           Copy attachment ID
