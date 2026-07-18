@@ -690,16 +690,16 @@ class TestListToolsRestAPI:
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
-        result = await rest_endpoints.list_tool_rest_api(
-            request,
-            server_id="server-1",
-            user_api_key_dict=UserAPIKeyAuth(),
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
 
-        assert result["tools"] == []
-        assert result["error"] == "unexpected_error"
-        assert "access_denied" in result["message"]
-        assert "server server-1" in result["message"]
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+        assert "server-1" in exc_info.value.detail["message"]
 
     async def test_lists_tools_for_allowed_server(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
@@ -911,6 +911,64 @@ class TestListToolsRestAPI:
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers == {"www-authenticate": challenge}
 
+    async def test_single_server_upstream_fault_surfaces_truthful_status(self, monkeypatch):
+        """A single-server listing whose upstream breaks (5xx, timeout, unreachable) must answer
+        with the truthful gateway status instead of masking the failure as an empty-success
+        {"tools": [], "error": null} body a caller cannot distinguish from a toolless server."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPServerListError,
+        )
+        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+            ServerListFault,
+        )
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "flaky"
+            allowed_tools = None
+            mcp_info = {"server_name": "flaky"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPServerListError(ServerListFault(tag="upstream_error", status_code=503), "flaky")
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail["error"] == "upstream_error"
+        assert "server-1" in exc_info.value.detail["message"]
+        assert "flaky" not in exc_info.value.detail["message"]
+
     async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch):
         """The multi-server aggregate listing degrades a server whose upstream
         rejects auth to an empty contribution and still returns the healthy
@@ -1108,15 +1166,15 @@ class TestListToolsRestAPI:
         )
 
         request = _build_request(path="/mcp-rest/tools/list", method="GET")
-        result = await rest_endpoints.list_tool_rest_api(
-            request,
-            server_id="restricted-server",
-            user_api_key_dict=UserAPIKeyAuth(),
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="restricted-server",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
 
-        assert result["tools"] == []
-        assert result["error"] == "unexpected_error"
-        assert "access_denied" in result["message"]
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
 
     async def test_mcp_server_name_query_param_resolves_to_server(self, monkeypatch):
         """mcp_server_name is a name-based alias for server_id: it should
@@ -2654,3 +2712,74 @@ class TestToolResponseMcpInfoEnrichment:
             "server_id": "server-uuid",
             "alias": None,
         }
+
+
+class TestRestListToolsetFiltering:
+    @pytest.mark.asyncio
+    async def test_rest_list_filters_toolset_only_key_to_toolset_tools(self, monkeypatch):
+        """A toolset-only key reaching a toolset server via REST list must see
+        only the toolset's tools; the raw catalog leaked every tool on the
+        server when the filter read object_permission directly instead of the
+        shared toolset-aware primitive"""
+        from unittest.mock import patch
+
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        stub_server = MCPServer(
+            server_id="server-a",
+            name="stubtools",
+            transport=MCPTransport.http,
+        )
+        stub_server.alias = "stubtools"
+        stub_server.server_name = "stubtools"
+        stub_server.allowed_tools = None
+        stub_server.disallowed_tools = None
+        stub_server.mcp_info = {"server_name": "stubtools"}
+
+        upstream_tools = [
+            MCPTool(name="lookup_status", inputSchema={"type": "object"}),
+            MCPTool(name="delete_everything", inputSchema={"type": "object"}),
+        ]
+
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = []
+        key_object_permission.mcp_access_groups = []
+        key_object_permission.mcp_tool_permissions = None
+        key_object_permission.mcp_toolsets = ["toolset-1"]
+
+        user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+        mock_manager = MagicMock()
+        mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(
+            return_value={"server-a": ["lookup_status"]}
+        )
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            AsyncMock(return_value=upstream_tools),
+        )
+
+        with (
+            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
+            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await rest_endpoints._get_tools_for_single_server(
+                server=stub_server,
+                server_auth_header=None,
+                raw_headers=None,
+                user_api_key_auth=user_auth,
+            )
+
+        assert [tool.name for tool in result] == ["lookup_status"]

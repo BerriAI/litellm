@@ -12,6 +12,7 @@
 //!   for the load-time config reader.
 
 pub mod io;
+pub mod messages;
 pub mod ocr;
 
 /// GIL-activity tracking. Pure (atomics only); shared by the `server` routes and
