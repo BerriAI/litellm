@@ -547,6 +547,103 @@ def test_vertex_ai_non_grounded_usage_omits_tool_use_tokens():
     assert not hasattr(usage.prompt_tokens_details, "tool_use_tokens")
 
 
+def test_response_has_search_grounding_detection():
+    """
+    Only groundingMetadata.webSearchQueries signals an actual Google Search. URL context also
+    emits groundingMetadata (groundingChunks but no webSearchQueries) and must not be treated
+    as search grounding.
+    """
+    assert (
+        VertexGeminiConfig._response_has_search_grounding(
+            {"candidates": [{"groundingMetadata": {"webSearchQueries": ["latest nobel physics"]}}]}
+        )
+        is True
+    )
+    assert (
+        VertexGeminiConfig._response_has_search_grounding(
+            {
+                "candidates": [
+                    {
+                        "urlContextMetadata": {"urlMetadata": []},
+                        "groundingMetadata": {
+                            "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                        },
+                    }
+                ]
+            }
+        )
+        is False
+    )
+    assert (
+        VertexGeminiConfig._response_has_search_grounding({"candidates": [{"groundingMetadata": {"webSearchQueries": []}}]})
+        is False
+    )
+    assert VertexGeminiConfig._response_has_search_grounding({"candidates": []}) is False
+    assert VertexGeminiConfig._response_has_search_grounding({}) is False
+
+
+def test_vertex_ai_search_grounding_tool_use_tokens_excluded_from_prompt_tokens():
+    """
+    Grounding with Google Search retrieved tokens are not billed at the input token rate
+    (Google charges a separate per-request / per-query search fee), so toolUsePromptTokenCount
+    must be surfaced on prompt_tokens_details.tool_use_tokens but excluded from prompt_tokens.
+    See https://ai.google.dev/gemini-api/docs/pricing and
+    https://github.com/BerriAI/litellm/discussions/33198
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [{"groundingMetadata": {"webSearchQueries": ["latest nobel physics"]}}],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=19,
+            candidatesTokenCount=304,
+            thoughtsTokenCount=122,
+            toolUsePromptTokenCount=142,
+            totalTokenCount=587,
+        ),
+    }
+
+    usage = v._calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 19
+    assert usage.completion_tokens == 304 + 122
+    assert usage.total_tokens == 587
+    assert usage.prompt_tokens_details.tool_use_tokens == 142
+    assert usage.total_tokens - usage.prompt_tokens - usage.completion_tokens == 142
+
+
+def test_vertex_ai_url_context_tool_use_tokens_billed_as_input_tokens():
+    """
+    URL context / File Search / code execution tool-use tokens are billed as input tokens, so
+    toolUsePromptTokenCount is folded into prompt_tokens when the response is not search grounded.
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "urlContextMetadata": {"urlMetadata": []},
+                "groundingMetadata": {
+                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                },
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=19,
+            candidatesTokenCount=304,
+            thoughtsTokenCount=122,
+            toolUsePromptTokenCount=142,
+            totalTokenCount=587,
+        ),
+    }
+
+    usage = v._calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 19 + 142
+    assert usage.completion_tokens == 304 + 122
+    assert usage.total_tokens == 587
+    assert usage.prompt_tokens_details.tool_use_tokens == 142
+    assert usage.total_tokens - usage.prompt_tokens - usage.completion_tokens == 0
+
+
 def test_streaming_chunk_includes_reasoning_tokens():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
