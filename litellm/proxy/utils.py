@@ -5378,13 +5378,18 @@ async def update_spend_logs_job(
         logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process) :]
 
-    await ProxyUpdateSpend.update_spend_logs(
-        n_retry_times=n_retry_times,
-        prisma_client=prisma_client,
-        proxy_logging_obj=proxy_logging_obj,
-        db_writer_client=db_writer_client,
-        logs_to_process=logs_to_process,
-    )
+    try:
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            db_writer_client=db_writer_client,
+            logs_to_process=logs_to_process,
+        )
+    except Exception:
+        async with prisma_client._spend_log_transactions_lock:
+            prisma_client.spend_log_transactions = logs_to_process + prisma_client.spend_log_transactions
+        raise
 
     # Guardrail/policy usage tracking (same batch, outside spend-logs update)
     try:
