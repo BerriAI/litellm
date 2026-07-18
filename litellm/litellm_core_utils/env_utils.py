@@ -21,6 +21,17 @@ def get_env_int(env_var: str, default: int) -> int:
         return default
 
 
+def get_positive_env_int(env_var: str, default: int) -> int:
+    """Parse an environment variable as a strictly positive integer.
+
+    Falls back to default when the value is missing, unparseable, or not > 0,
+    so a misconfiguration (e.g. an empty string or 0) cannot silently turn a
+    bound into something degenerate like ``LIMIT 0``.
+    """
+    value = get_env_int(env_var, default)
+    return value if value > 0 else default
+
+
 def get_env_int_or_none(env_var: str) -> int | None:
     """Parse an environment variable as an integer, returning None when it is unset or unusable.
 

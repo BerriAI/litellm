@@ -56,10 +56,10 @@ def _build_constant_env_var_map() -> dict[str, str]:
                 env_var_name = child.args[0].value
                 break
 
-            # get_env_int("ENV_NAME", default)
+            # get_env_int("ENV_NAME", default) / get_positive_env_int("ENV_NAME", default)
             if (
                 isinstance(child.func, ast.Name)
-                and child.func.id == "get_env_int"
+                and child.func.id in ("get_env_int", "get_positive_env_int")
                 and len(child.args) >= 1
                 and isinstance(child.args[0], ast.Constant)
                 and isinstance(child.args[0].value, str)
