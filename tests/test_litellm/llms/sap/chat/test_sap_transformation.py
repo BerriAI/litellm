@@ -722,3 +722,76 @@ class TestGeminiReasoningNormalization:
         GenAIHubOrchestrationConfig._normalize_gemini_reasoning(final_result)
         response = ModelResponse.model_validate(final_result)
         assert response.choices[0].message.reasoning_content == "Thinking hard."
+
+
+class TestReasoningCapability:
+    """Unit tests for reasoning_effort / thinking parameter routing.
+
+    Verifies that capable models expose the params and that they land in
+    model.params, while non-capable models have them silently dropped.
+    """
+
+    def _transform(self, model: str, **kwargs) -> dict:
+        """Run transform_request and return the parsed body."""
+        from unittest.mock import MagicMock
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        logging_obj = MagicMock()
+        return cfg.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params=dict(kwargs),
+            litellm_params={},
+            headers={},
+        )
+
+    def _model_params(self, body: dict) -> dict:
+        return body["config"]["modules"]["prompt_templating"]["model"]["params"]
+
+    # --- get_supported_openai_params ---
+
+    def test_reasoning_params_exposed_for_claude_3_7(self):
+        """reasoning_effort and thinking appear for claude-3-7 models."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        params = cfg.get_supported_openai_params("anthropic--claude-3-7-sonnet")
+        assert "reasoning_effort" in params
+        assert "thinking" in params
+
+    def test_reasoning_params_exposed_for_claude_4(self):
+        """reasoning_effort and thinking appear for claude-4 models."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        params = cfg.get_supported_openai_params("anthropic--claude-4-opus")
+        assert "reasoning_effort" in params
+        assert "thinking" in params
+
+    def test_reasoning_params_absent_for_gpt4o(self):
+        """reasoning_effort and thinking are not exposed for gpt-4o."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        params = cfg.get_supported_openai_params("gpt-4o")
+        assert "reasoning_effort" not in params
+        assert "thinking" not in params
+
+    # --- transform_request model.params ---
+
+    def test_reasoning_effort_lands_in_model_params_for_o3(self):
+        """reasoning_effort is forwarded into model.params for o-series models."""
+        body = self._transform("o3", reasoning_effort="high")
+        assert self._model_params(body).get("reasoning_effort") == "high"
+
+    def test_thinking_lands_in_model_params_for_claude_3_7(self):
+        """thinking dict is forwarded into model.params for claude-3-7."""
+        thinking = {"type": "enabled", "budget_tokens": 8000}
+        body = self._transform("anthropic--claude-3-7-sonnet", thinking=thinking)
+        assert self._model_params(body).get("thinking") == thinking
+
+    def test_reasoning_effort_dropped_for_non_capable_model(self):
+        """reasoning_effort is silently dropped for models that don't support it."""
+        body = self._transform("gpt-4o", reasoning_effort="high")
+        assert "reasoning_effort" not in self._model_params(body)

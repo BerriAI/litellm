@@ -243,6 +243,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             params.remove("response_format")
         if model.startswith("gemini") or model.startswith("amazon"):
             params.remove("tool_choice")
+        if self._sap_supports_reasoning(model):
+            params.extend(["reasoning_effort", "thinking"])
         return params
 
     def validate_environment(
@@ -282,6 +284,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Anthropic models accept strict, so preserve it for them
         if model_name.startswith("gpt") and "strict" in params:
             params.pop("strict")
+
+        # Drop reasoning params for models that don't support them; they arrive
+        # here only when passed via fallback_sap_modules or extra_params directly.
+        if not self._sap_supports_reasoning(model_name):
+            params.pop("reasoning_effort", None)
+            params.pop("thinking", None)
 
         model_version = params.pop("model_version", "latest")
 
