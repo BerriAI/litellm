@@ -6,6 +6,7 @@ response validates without mirroring every proxy field. No untyped dicts.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, RootModel, model_validator
@@ -24,7 +25,7 @@ class BudgetWindow(BaseModel):
 
 
 class BudgetWindowState(BudgetWindow):
-    reset_at: str | None = None
+    reset_at: datetime | None = None
 
 
 class KeyLoggingCallbackVars(BaseModel):

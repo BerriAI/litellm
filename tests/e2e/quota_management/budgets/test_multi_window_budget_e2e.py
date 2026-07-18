@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from budget_client import BudgetClient, as_datetime, drive_to_block, is_budget_block
+from budget_client import BudgetClient, drive_to_block, is_budget_block, window_reset_at
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from lifecycle import ResourceManager
 from models import BudgetWindow
@@ -99,16 +99,16 @@ def test_long_window_blocks_after_short_window_resets(client: BudgetClient, reso
 
     _drive_to_block(client, key)
 
-    blocked_reset_at = client.key_window_reset_at(key, SHORT_WINDOW)
+    blocked_reset_at = window_reset_at(client.key_budget_windows(key), SHORT_WINDOW)
     assert blocked_reset_at is not None, "short window missing from /key/info budget_limits"
-    blocked_long_reset_at = client.key_window_reset_at(key, LONG_WINDOW)
+    blocked_long_reset_at = window_reset_at(client.key_budget_windows(key), LONG_WINDOW)
     assert blocked_long_reset_at is not None, "long window missing from /key/info budget_limits"
 
     deadline = time.monotonic() + RESET_DEADLINE_SECONDS
     while time.monotonic() < deadline:
         time.sleep(5)
-        current = client.key_window_reset_at(key, SHORT_WINDOW)
-        if current is not None and as_datetime(current) > as_datetime(blocked_reset_at):
+        current = window_reset_at(client.key_budget_windows(key), SHORT_WINDOW)
+        if current is not None and current > blocked_reset_at:
             break
     else:
         pytest.fail(
@@ -120,7 +120,7 @@ def test_long_window_blocks_after_short_window_resets(client: BudgetClient, reso
     while time.monotonic() < deadline:
         result = _call(client, key)
         if result.ok:
-            rolled = client.key_window_reset_at(key, LONG_WINDOW) != blocked_long_reset_at
+            rolled = window_reset_at(client.key_budget_windows(key), LONG_WINDOW) != blocked_long_reset_at
             pytest.fail(
                 f"{LONG_WINDOW} window failed to block after the {SHORT_WINDOW} window reset"
                 + (f" (the {LONG_WINDOW} window itself rolled mid-test - boundary crossed; rerun)" if rolled else "")

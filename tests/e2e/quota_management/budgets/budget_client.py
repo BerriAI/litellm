@@ -183,7 +183,7 @@ class BudgetInfoResponse(RootModel[list[BudgetRow]]):
     pass
 
 
-def _window_reset_at(windows: list[BudgetWindowState], budget_duration: str) -> str | None:
+def window_reset_at(windows: list[BudgetWindowState], budget_duration: str) -> datetime | None:
     return next((w.reset_at for w in windows if w.budget_duration == budget_duration), None)
 
 
@@ -258,21 +258,19 @@ class BudgetClient:
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
 
-    def key_window_reset_at(self, key: str, budget_duration: str) -> str | None:
-        """The stored reset_at of one budget_limits window on a key, or None if the
-        window (or the whole list) is missing. The reset job advances this in the
-        same pass that zeroes the window's spend counter, so a strictly-later value
-        proves that window's spend was wiped."""
-        windows = self.proxy.key_info(key).budget_limits or []
-        return _window_reset_at(windows, budget_duration)
+    def key_budget_windows(self, key: str) -> list[BudgetWindowState]:
+        """A key's budget_limits windows as /key/info stores them. Each window's
+        reset_at is advanced by the reset job in the same pass that zeroes the
+        window's spend counter, so a strictly-later value proves the wipe ran."""
+        return self.proxy.key_info(key).budget_limits or []
 
-    def team_window_reset_at(self, team_id: str, budget_duration: str) -> str | None:
-        """Team analog of key_window_reset_at, read from /team/info."""
+    def team_budget_windows(self, team_id: str) -> list[BudgetWindowState]:
+        """Team analog of key_budget_windows, read from /team/info."""
         match self._team_info(team_id):
             case Success(data=data) if data.team_info is not None:
-                return _window_reset_at(data.team_info.budget_limits or [], budget_duration)
+                return data.team_info.budget_limits or []
             case _:
-                return None
+                return []
 
     def delete_customers(self, user_ids: list[str]) -> None:
         self.proxy.delete_customers(user_ids)
