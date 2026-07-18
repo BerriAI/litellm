@@ -3128,7 +3128,7 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
 
 
 def test_extract_cache_read_tokens_anthropic_top_level():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.cache_savings import extract_cache_read_tokens
 
     usage_obj = {
         "prompt_tokens": 100,
@@ -3136,34 +3136,34 @@ def test_extract_cache_read_tokens_anthropic_top_level():
         "prompt_tokens_details": {"cached_tokens": 80},
     }
     # Anthropic top-level value should win over prompt_tokens_details fallback.
-    assert _extract_cache_read_tokens(usage_obj) == 80
+    assert extract_cache_read_tokens(usage_obj) == 80
 
 
 def test_extract_cache_read_tokens_openai_compatible_fallback():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.cache_savings import extract_cache_read_tokens
 
     # Anthropic field absent — fall back to prompt_tokens_details.cached_tokens.
     usage_obj = {
         "prompt_tokens": 22583,
         "prompt_tokens_details": {"cached_tokens": 22016},
     }
-    assert _extract_cache_read_tokens(usage_obj) == 22016
+    assert extract_cache_read_tokens(usage_obj) == 22016
 
 
 def test_extract_cache_read_tokens_zero_when_missing():
-    from litellm.proxy.db.db_spend_update_writer import _extract_cache_read_tokens
+    from litellm.proxy.spend_tracking.cache_savings import extract_cache_read_tokens
 
-    assert _extract_cache_read_tokens({}) == 0
-    assert _extract_cache_read_tokens({"cache_read_input_tokens": None}) == 0
+    assert extract_cache_read_tokens({}) == 0
+    assert extract_cache_read_tokens({"cache_read_input_tokens": None}) == 0
     assert (
-        _extract_cache_read_tokens({"prompt_tokens_details": {"cached_tokens": None}})
+        extract_cache_read_tokens({"prompt_tokens_details": {"cached_tokens": None}})
         == 0
     )
 
 
 def test_extract_cache_creation_tokens_anthropic_top_level():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
+    from litellm.proxy.spend_tracking.cache_savings import (
+        extract_cache_creation_tokens,
     )
 
     usage_obj = {
@@ -3172,12 +3172,12 @@ def test_extract_cache_creation_tokens_anthropic_top_level():
         "prompt_tokens_details": {"cache_write_tokens": 50},
     }
     # Anthropic top-level should short-circuit the fallback.
-    assert _extract_cache_creation_tokens(usage_obj) == 50
+    assert extract_cache_creation_tokens(usage_obj) == 50
 
 
 def test_extract_cache_creation_tokens_openai_cache_write_alias():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
+    from litellm.proxy.spend_tracking.cache_savings import (
+        extract_cache_creation_tokens,
     )
 
     # kimi-k2 emits cache_write_tokens.
@@ -3185,12 +3185,12 @@ def test_extract_cache_creation_tokens_openai_cache_write_alias():
         "prompt_tokens": 1000,
         "prompt_tokens_details": {"cache_write_tokens": 200},
     }
-    assert _extract_cache_creation_tokens(usage_obj) == 200
+    assert extract_cache_creation_tokens(usage_obj) == 200
 
 
 def test_extract_cache_creation_tokens_openai_cache_creation_alias():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
+    from litellm.proxy.spend_tracking.cache_savings import (
+        extract_cache_creation_tokens,
     )
 
     # Other OpenAI-compatible providers emit cache_creation_tokens.
@@ -3198,18 +3198,18 @@ def test_extract_cache_creation_tokens_openai_cache_creation_alias():
         "prompt_tokens": 1000,
         "prompt_tokens_details": {"cache_creation_tokens": 300},
     }
-    assert _extract_cache_creation_tokens(usage_obj) == 300
+    assert extract_cache_creation_tokens(usage_obj) == 300
 
 
 def test_extract_cache_creation_tokens_zero_when_missing():
-    from litellm.proxy.db.db_spend_update_writer import (
-        _extract_cache_creation_tokens,
+    from litellm.proxy.spend_tracking.cache_savings import (
+        extract_cache_creation_tokens,
     )
 
-    assert _extract_cache_creation_tokens({}) == 0
-    assert _extract_cache_creation_tokens({"cache_creation_input_tokens": None}) == 0
+    assert extract_cache_creation_tokens({}) == 0
+    assert extract_cache_creation_tokens({"cache_creation_input_tokens": None}) == 0
     assert (
-        _extract_cache_creation_tokens(
+        extract_cache_creation_tokens(
             {"prompt_tokens_details": {"cache_write_tokens": None}}
         )
         == 0

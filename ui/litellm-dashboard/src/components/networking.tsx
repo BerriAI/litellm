@@ -1448,6 +1448,91 @@ export const teamDailyActivityCall = async (
   });
 };
 
+export interface CostSavingsMetrics {
+  cache_savings: number;
+  compression_savings: number;
+  total_savings: number;
+  spend: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  compression_saved_tokens: number;
+}
+
+export interface DailyCostSavings {
+  date: string;
+  metrics: CostSavingsMetrics;
+}
+
+export interface CostSavingsActivityResponse {
+  results: DailyCostSavings[];
+  totals: CostSavingsMetrics;
+  unpriced_models: string[];
+}
+
+export type CostOptimizationType = "caching" | "compression";
+
+export interface OptimizedRequestSummary {
+  request_id: string;
+  start_time: string;
+  model: string;
+  total_tokens: number;
+  optimizations: CostOptimizationType[];
+  original_cost: number;
+  optimized_cost: number;
+  savings: number;
+}
+
+export interface RecentOptimizedRequestsResponse {
+  requests: OptimizedRequestSummary[];
+  scanned_requests: number;
+}
+
+export const costSavingsActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+): Promise<CostSavingsActivityResponse> => {
+  /**
+   * Get daily cost savings from prompt caching and prompt compression
+   */
+  try {
+    return await apiClient.get<CostSavingsActivityResponse>(`/cost_savings/activity`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch cost savings activity:", error);
+    throw error;
+  }
+};
+
+export const costSavingsRecentRequestsCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  limit: number = 20,
+): Promise<RecentOptimizedRequestsResponse> => {
+  /**
+   * Get recent requests that benefited from prompt caching or prompt compression
+   */
+  try {
+    return await apiClient.get<RecentOptimizedRequestsResponse>(`/cost_savings/recent_requests`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        limit,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch recent optimized requests:", error);
+    throw error;
+  }
+};
+
 export const organizationDailyActivityCall = async (
   accessToken: string,
   startTime: Date,

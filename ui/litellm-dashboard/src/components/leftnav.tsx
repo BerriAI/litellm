@@ -44,6 +44,7 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  PiggyBank,
   PlayCircle,
   Route,
   ScrollText,
@@ -130,6 +131,13 @@ const menuGroups: MenuGroup[] = [
         label: "Models + Endpoints",
         icon: <Network {...ICON} />,
         roles: rolesAllowedToViewWriteScopedPages,
+      },
+      {
+        key: "cost-savings",
+        page: "cost-savings",
+        label: "Cost Savings",
+        icon: <PiggyBank {...ICON} />,
+        roles: [...all_admin_roles, ...internalUserRoles],
       },
       {
         key: "agentic",
