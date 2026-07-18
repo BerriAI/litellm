@@ -2,6 +2,25 @@
 
 This file defines the rules for Rust work in LiteLLM.
 
+## Provider Coding Standards
+
+Before writing new logic, look for an existing base to extend. When a change is
+“the same behavior for one more provider/endpoint/integration”, the codebase
+almost always already has a shared abstraction for it (for example, provider
+`BaseConfig` transformation classes in `litellm/llms/base_llm/`, shared
+helpers in `litellm_core_utils/`, typed request/response models, or factory
+functions). Find it first with a search, then add the new variant by inheriting
+from or composing that base, overriding only what genuinely differs (model
+name, parameter mapping, or auth).
+
+Never copy an existing implementation and edit it in place, and never hand-roll
+a parallel version of logic a base already provides. If you catch yourself
+writing a second copy of a pattern that exists twice already, stop and extract a
+base instead: put the shared shape in one place and make both call sites thin
+variants of it. The test for a good abstraction is that adding the next provider
+is a few declarative lines, not a new file of duplicated flow. Only diverge from
+the base when behavior is genuinely different, and say so explicitly in the PR.
+
 ## Crates (exactly three — see AGENTS.md)
 
 `litellm-core` describes work; `litellm-ai-gateway` executes it; `litellm-python-bridge`
