@@ -323,3 +323,14 @@ async def event_logging_batch(
     It exists to prevent 404 errors from Claude Code clients that send telemetry.
     """
     return {"status": "ok"}
+
+
+# /v1/messages/batches — Anthropic Message Batches with per-model backend
+# fan-out (internal fork feature; see messages_batches.py). Mounted here so the
+# lazy "anthropic_passthrough" feature (path prefix /v1/messages) picks the
+# routes up with the rest of the anthropic surface.
+from litellm.proxy.anthropic_endpoints.messages_batches import (  # noqa: E402
+    router as messages_batches_router,
+)
+
+router.include_router(messages_batches_router)

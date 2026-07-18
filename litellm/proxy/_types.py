@@ -451,6 +451,10 @@ class LiteLLMRoutes(enum.Enum):
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/v1/messages/batches",
+        "/v1/messages/batches/{batch_id}",
+        "/v1/messages/batches/{batch_id}/results",
+        "/v1/messages/batches/{batch_id}/cancel",
         "/v1/skills",
         "/v1/skills/{skill_id}",
     ]
