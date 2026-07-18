@@ -41,6 +41,21 @@ OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").
 DD_SITE = os.environ.get("DD_SITE", "datadoghq.com").strip()
 DD_API_KEY = os.environ.get("DD_API_KEY", "").strip()
 DD_APP_KEY = os.environ.get("DD_APP_KEY", "").strip()
+
+
+def datadog_mcp_url(*, toolsets: str = "core") -> str:
+    """Regional Datadog remote MCP endpoint for this process's DD_SITE.
+
+    US1 is mcp.datadoghq.com; every other site is mcp.<site> (e.g. us5 ->
+    mcp.us5.datadoghq.com). A fixed mcp.datadoghq.com URL 403s when the keys
+    belong to a non-US1 org.
+    """
+    site = DD_SITE.removeprefix("https://").removeprefix("http://").rstrip("/")
+    if site.startswith("app."):
+        site = site[len("app.") :]
+    host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"
+    base = f"https://{host}/v1/mcp"
+    return f"{base}?toolsets={toolsets}" if toolsets else base
 # After the first event is searchable, keep watching this long for a late
 # duplicate before the exactly-one assertion: real-DataDog ingestion jitter can
 # make one call's two events searchable tens of seconds apart, and a duplicate

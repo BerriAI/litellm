@@ -8,8 +8,11 @@ creates (keys via the Gateway, MCP servers via the deferred cleanups).
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import socket
+from pathlib import Path
+from typing import Protocol, cast
 from urllib.parse import urlparse
 
 import pytest
@@ -17,6 +20,24 @@ import pytest
 from mcp_client import McpClient, build_client
 
 MCP_UPSTREAM_URL = os.environ.get("E2E_MCP_UPSTREAM_URL", "http://mcp-upstream:8090/mcp")
+
+
+class DdLogsReader(Protocol):
+    def poll_events_for_marker(self, marker: str) -> list[object]: ...
+
+
+class _DdLogsReaderBuilder(Protocol):
+    def __call__(self) -> DdLogsReader: ...
+
+
+def _build_dd_logs_reader() -> DdLogsReader:
+    path = Path(__file__).resolve().parent.parent / "logging" / "datadog_reader.py"
+    spec = importlib.util.spec_from_file_location("e2e_logging_datadog_reader", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    builder = cast(_DdLogsReaderBuilder, getattr(module, "build_dd_logs_reader"))
+    return builder()
 
 
 def _mcp_upstream_reachable(url: str) -> bool:
@@ -32,15 +53,20 @@ def _mcp_upstream_reachable(url: str) -> bool:
         return False
 
 
-@pytest.fixture(scope="session", autouse=True)
-def require_mcp_upstream() -> None:
-    if not _mcp_upstream_reachable(MCP_UPSTREAM_URL):
-        pytest.skip(
-            f"MCP upstream not reachable at {MCP_UPSTREAM_URL}; "
-            "start the mcp-upstream compose service or set E2E_MCP_UPSTREAM_URL"
-        )
-
-
 @pytest.fixture(scope="session")
 def client() -> McpClient:
     return build_client()
+
+
+@pytest.fixture(scope="session")
+def dd_logs() -> DdLogsReader:
+    return _build_dd_logs_reader()
+
+
+@pytest.fixture
+def require_math_upstream() -> None:
+    if not _mcp_upstream_reachable(MCP_UPSTREAM_URL):
+        pytest.skip(
+            f"MCP math upstream not reachable at {MCP_UPSTREAM_URL}; "
+            "start the mcp-upstream compose service or set E2E_MCP_UPSTREAM_URL"
+        )

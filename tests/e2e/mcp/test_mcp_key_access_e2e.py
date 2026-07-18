@@ -52,7 +52,10 @@ def _assert_registered(client: McpClient, server_id: str) -> None:
 class TestMcpKeyWithoutAccessIsDenied:
     @pytest.mark.covers("mcp.list_tools.api_key.denied_without_permission")
     def test_list_tools_denied_without_permission(
-        self, client: McpClient, resources: ResourceManager
+        self,
+        client: McpClient,
+        resources: ResourceManager,
+        require_math_upstream: None,
     ) -> None:
         server_id = _register_math_server(client, resources)
         _assert_registered(client, server_id)
@@ -74,7 +77,10 @@ class TestMcpKeyWithoutAccessIsDenied:
 
     @pytest.mark.covers("mcp.call_tool.api_key.denied_without_permission")
     def test_call_tool_denied_without_permission(
-        self, client: McpClient, resources: ResourceManager
+        self,
+        client: McpClient,
+        resources: ResourceManager,
+        require_math_upstream: None,
     ) -> None:
         server_id = _register_math_server(client, resources)
         _assert_registered(client, server_id)
