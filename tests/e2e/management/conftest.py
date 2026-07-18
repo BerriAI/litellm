@@ -1,6 +1,6 @@
 """Management suite fixtures: the client plus a logged-in dashboard page.
 
-Lifecycle/skip/marker live in the parent conftest. The browser fixtures drive
+Lifecycle/liveness gate/marker live in the parent conftest. The browser fixtures drive
 the dashboard the proxy serves at /ui, so browser tests exercise exactly what an
 end user sees. playwright is an optional dependency loaded behind importorskip
 inside the fixture, so the API tests in this suite collect and run without it:
@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Iterator
 
 import pytest
 
-from e2e_config import PROXY_BASE_URL, UI_PASSWORD, UI_USERNAME
+from e2e_config import UI_BASE_URL, UI_PASSWORD, UI_USERNAME
 from management_client import ManagementClient, build_client
 
 if TYPE_CHECKING:
@@ -47,13 +47,17 @@ def ui_page(browser: "Browser") -> "Iterator[Page]":
     context = browser.new_context()
     try:
         page = context.new_page()
-        page.goto(f"{PROXY_BASE_URL}/ui/")
-        page.fill("#username", UI_USERNAME)
-        page.fill("#password", UI_PASSWORD)
-        page.click('button[type="submit"]')
-        page.wait_for_function(
-            "() => document.cookie.includes('token=') || !document.querySelector('#username')"
-        )
+        # Split deploys serve the Next.js dashboard on the UI service, not the
+        # data-plane gateway (which 404s /ui). Login is a client-rendered form
+        # that appears after LoadingScreen; wait on the placeholder, not #id
+        # (Ant Design Input does not always set id="username").
+        page.goto(f"{UI_BASE_URL}/ui/login")
+        username = page.get_by_placeholder("Enter your username")
+        username.wait_for(state="visible", timeout=30_000)
+        username.fill(UI_USERNAME)
+        page.get_by_placeholder("Enter your password").fill(UI_PASSWORD)
+        page.get_by_role("button", name="Login", exact=True).click()
+        page.wait_for_function("() => document.cookie.includes('token=')")
         yield page
     finally:
         context.close()

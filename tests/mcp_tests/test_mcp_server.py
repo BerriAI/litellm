@@ -941,8 +941,8 @@ async def test_get_tools_from_mcp_servers():
                 mcp_auth_header=mock_auth_header,
                 mcp_servers=["server1"],
             )
-            assert len(result) == 1, "Should only return tools from server1"
-            assert result[0].name == "tool1", "Should return tool from server1"
+            assert len(result.tools) == 1, "Should only return tools from server1"
+            assert result.tools[0].name == "tool1", "Should return tool from server1"
 
             # Test Case 2: Without specific MCP servers
             # Create a different mock manager for the second test case
@@ -984,9 +984,9 @@ async def test_get_tools_from_mcp_servers():
                 mcp_auth_header=mock_auth_header,
                 mcp_servers=None,
             )
-            assert len(result) == 2, "Should return tools from all servers"
+            assert len(result.tools) == 2, "Should return tools from all servers"
             assert (
-                result[0].name == "tool1" and result[1].name == "tool2"
+                result.tools[0].name == "tool1" and result.tools[1].name == "tool2"
             ), "Should return tools from all servers"
 
         #
@@ -1021,8 +1021,8 @@ async def test_get_tools_from_mcp_servers():
                     mcp_auth_header=mock_auth_header,
                     mcp_servers=["group-a"],
                 )
-                assert len(result) == 1, "Should only return tools from server3"
-                assert result[0].name == "tool1", "Should return tool from server1"
+                assert len(result.tools) == 1, "Should only return tools from server3"
+                assert result.tools[0].name == "tool1", "Should return tool from server1"
 
     except AssertionError as e:
         pytest.fail(f"Test failed: {str(e)}")
@@ -2442,11 +2442,12 @@ async def test_filter_tools_by_allowed_tools_integration():
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
-            filtered_tools = await _get_tools_from_mcp_servers(
+            listing = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header="Bearer test_token",
                 mcp_servers=None,  # Get from all servers
             )
+            filtered_tools = listing.tools
 
             # Verify that only allowed tools are returned
             assert (
@@ -2555,11 +2556,12 @@ async def test_filter_tools_by_disallowed_tools_integration():
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
-            filtered_tools = await _get_tools_from_mcp_servers(
+            listing = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header="Bearer test_token",
                 mcp_servers=None,  # Get from all servers
             )
+            filtered_tools = listing.tools
 
             # Verify that only safe tools are returned (dangerous tools filtered out)
             assert (
@@ -2656,11 +2658,12 @@ async def test_filter_tools_no_restrictions_integration():
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
-            filtered_tools = await _get_tools_from_mcp_servers(
+            listing = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header="Bearer test_token",
                 mcp_servers=None,  # Get from all servers
             )
+            filtered_tools = listing.tools
 
             # Should return all tools when no restrictions
             assert (

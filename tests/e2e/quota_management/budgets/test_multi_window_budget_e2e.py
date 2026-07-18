@@ -13,7 +13,7 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import unique_marker
+from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 from models import BudgetWindow
@@ -21,11 +21,18 @@ from models import BudgetWindow
 pytestmark = pytest.mark.e2e
 
 WINDOW_SECONDS = 30  # the tight window; calls succeed again only after it elapses
+# Prefer the OpenAI cheap model for this polling test: under the full stage suite
+# Claude chat latency + ALB target idle timeout (~60s) can surface as awselb 502
+# HTML mid-wait, which is not a budget signal. gpt-5.5 stays well under that
+# ceiling so the wait loop measures window reset, not provider/ALB timeout.
+# max_tokens must be >1: gpt-5.5 refuses completions that hit the output limit
+# mid-message when capped at 1 token.
+MODEL = CHEAP_OPENAI_MODEL
 
 
 def _call(client: BudgetClient, key: str):
     return client.chat(
-        key, "claude-haiku-4-5", f"window {unique_marker()}", max_tokens=16
+        key, MODEL, f"window {unique_marker()}", max_tokens=16
     )
 
 
@@ -34,10 +41,11 @@ def test_short_window_blocks_then_resets(
     client: BudgetClient, resources: ResourceManager
 ) -> None:
     key = client.generate_key(
+        models=[MODEL],
         budget_limits=[
-            BudgetWindow(budget_duration=f"{WINDOW_SECONDS}s", max_budget=3e-6),
+            BudgetWindow(budget_duration=f"{WINDOW_SECONDS}s", max_budget=1e-9),
             BudgetWindow(budget_duration="1m", max_budget=1.0),  # roomy: never blocks
-        ]
+        ],
     )
     resources.defer(lambda: client.delete_key(key))
 
@@ -67,5 +75,8 @@ def test_short_window_blocks_then_resets(
                 f"reset took {elapsed:.0f}s - too long for a {WINDOW_SECONDS}s window"
             )
             return
-        assert is_budget_block(result), f"non-budget error during reset wait: {result.body[:200]}"
+        assert is_budget_block(result), (
+            f"non-budget error during reset wait: status={result.status_code} "
+            f"body={result.body[:200]}"
+        )
     pytest.fail(f"{WINDOW_SECONDS}s window never reset within 150s")

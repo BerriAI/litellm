@@ -520,9 +520,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.tsx": {
@@ -1082,7 +1079,7 @@
   },
   "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "no-nested-ternary": {
-      "count": 3
+      "count": 1
     },
     "no-restricted-imports": {
       "count": 2
@@ -1333,16 +1330,6 @@
       "count": 1
     }
   },
-  "src/components/AIHub/AgentHubTableColumns.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/AIHub/AgentHubTableColumns.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/AIHub/ModelHubTable.test.tsx": {
     "max-params": {
       "count": 1
@@ -1352,11 +1339,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/AIHub/SkillHubDashboard.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1885,11 +1867,6 @@
       "count": 1
     }
   },
-  "src/components/mcp_hub_table_columns.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/mcp_server_management/MCPToolPermissions.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1979,11 +1956,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/model_hub_table_columns.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2119,9 +2091,6 @@
     }
   },
   "src/components/public_model_hub.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 1
     }
@@ -2168,11 +2137,6 @@
     }
   },
   "src/components/shared/usage_date_picker.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/skill_hub_table_columns.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
