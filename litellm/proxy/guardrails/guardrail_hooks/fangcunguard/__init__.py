@@ -1,0 +1,34 @@
+from typing import TYPE_CHECKING
+
+from litellm.types.guardrails import SupportedGuardrailIntegrations
+
+from .fangcunguard import FangcunGuardrail
+
+if TYPE_CHECKING:
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+    import litellm
+
+    _fangcun_callback = FangcunGuardrail(
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+        fail_open=getattr(litellm_params, "fail_open", False) or False,
+        guardrail_name=guardrail.get("guardrail_name", ""),
+        event_hook=litellm_params.mode,
+        default_on=litellm_params.default_on,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_fangcun_callback)
+
+    return _fangcun_callback
+
+
+guardrail_initializer_registry = {
+    SupportedGuardrailIntegrations.FANGCUNGUARD.value: initialize_guardrail,
+}
+
+
+guardrail_class_registry = {
+    SupportedGuardrailIntegrations.FANGCUNGUARD.value: FangcunGuardrail,
+}
