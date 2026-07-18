@@ -8,6 +8,7 @@
 pub mod gil;
 pub mod health;
 pub mod realtime;
+pub mod responses;
 
 use axum::Router;
 
@@ -19,5 +20,6 @@ pub fn app(state: AppState) -> Router {
         .merge(health::router())
         .merge(gil::router())
         .merge(realtime::router())
+        .merge(responses::router())
         .with_state(state)
 }

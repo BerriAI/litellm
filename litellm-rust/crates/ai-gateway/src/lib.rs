@@ -14,6 +14,8 @@
 pub mod io;
 pub mod messages;
 pub mod ocr;
+#[cfg(feature = "server")]
+pub mod responses;
 
 /// GIL-activity tracking. Pure (atomics only); shared by the `server` routes and
 /// the `python-config` reader, so it is available without either feature.

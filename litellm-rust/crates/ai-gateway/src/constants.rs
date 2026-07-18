@@ -40,3 +40,6 @@ pub(crate) const MESSAGES_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Max characters of an upstream error body echoed across the host boundary
 /// before truncation, so provider bodies are bounded and data-minimized.
 pub(crate) const MESSAGES_ERROR_BODY_MAX_CHARS: usize = 256;
+
+pub(crate) const DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub(crate) const DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS: u64 = 300;
