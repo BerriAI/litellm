@@ -3017,6 +3017,32 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
     assert counted == []  # token counting skipped entirely, so no misleading error is logged
 
 
+@pytest.mark.asyncio
+async def test_aresponses_enforces_context_window_pre_call_check():
+    """
+    End-to-end router regression: a Responses API call whose `input` exceeds the
+    deployment's max_input_tokens must be filtered by the pre-call check, raising
+    ContextWindowExceededError instead of being silently routed. This guards the
+    wiring that forwards `input` from the generic-call path into deployment selection
+    (the deployment uses mock_response, so the check must trip before any real call).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 5},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aresponses(
+            model="small-ctx",
+            input="this responses input is definitely much longer than five tokens for sure",
+        )
+
+
 def test_get_deployment_model_info_base_model_flow():
     """Test that get_deployment_model_info correctly handles the base model flow"""
     from unittest.mock import patch
