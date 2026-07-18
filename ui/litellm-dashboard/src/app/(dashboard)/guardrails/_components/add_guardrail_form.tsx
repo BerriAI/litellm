@@ -1210,7 +1210,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           <Form
             form={form}
             layout="vertical"
-            preserve={true}
             initialValues={{
               mode: "pre_call",
               default_on: false,
