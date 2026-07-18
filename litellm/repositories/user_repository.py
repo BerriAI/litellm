@@ -34,9 +34,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
         return LiteLLM_UserTable(**data)
 
-    async def find_by_id(
-        self, user_id: str, id_field: str = "user_id"
-    ) -> Optional[LiteLLM_UserTable]:
+    async def find_by_id(self, user_id: str, id_field: str = "user_id") -> Optional[LiteLLM_UserTable]:
         return await super().find_by_id(user_id, id_field)
 
     async def find_by_email(self, user_email: str) -> Optional[LiteLLM_UserTable]:
@@ -51,9 +49,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         record = await self.table.find_unique(where={"sso_user_id": sso_user_id})
         return self._to_model(record)
 
-    async def find_by_organization_id(
-        self, organization_id: str
-    ) -> List[LiteLLM_UserTable]:
+    async def find_by_organization_id(self, organization_id: str) -> List[LiteLLM_UserTable]:
         """Find all users in an organization."""
         records = await self.table.find_many(where={"organization_id": organization_id})
         return self._to_model_list(records)
@@ -62,6 +58,20 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         """Find all users in a team."""
         records = await self.table.find_many(where={"teams": {"has": team_id}})
         return self._to_model_list(records)
+
+    async def count_billable_users(self) -> int:
+        """Number of users that count toward the license seat limit.
+
+        Every user is billable except those SCIM-deactivated
+        (metadata.scim_active == false). Rows where scim_active is absent,
+        null, or true all count, so seats are counted as total users minus
+        the deactivated ones.
+        """
+        from prisma import Json  # pyright: ignore[reportUnknownVariableType]
+
+        total = await self.count()
+        deactivated = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
+        return max(0, total - deactivated)
 
     async def create_user(
         self,
@@ -193,15 +203,11 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         """Delete a user."""
         return await self.delete(user_id, id_field="user_id")
 
-    async def update_spend(
-        self, user_id: str, spend: float
-    ) -> Optional[LiteLLM_UserTable]:
+    async def update_spend(self, user_id: str, spend: float) -> Optional[LiteLLM_UserTable]:
         """Update user spend."""
         return await self.update(user_id, {"spend": spend}, id_field="user_id")
 
-    async def add_to_team(
-        self, user_id: str, team_id: str
-    ) -> Optional[LiteLLM_UserTable]:
+    async def add_to_team(self, user_id: str, team_id: str) -> Optional[LiteLLM_UserTable]:
         """Add a user to a team using atomic array push operation."""
         if not await self.exists(user_id, id_field="user_id"):
             return None
@@ -212,9 +218,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         )
         return self._to_model(record)
 
-    async def remove_from_team(
-        self, user_id: str, team_id: str
-    ) -> Optional[LiteLLM_UserTable]:
+    async def remove_from_team(self, user_id: str, team_id: str) -> Optional[LiteLLM_UserTable]:
         """Remove a user from a team.
 
         Note: Prisma doesn't support atomic array removal, so we use a

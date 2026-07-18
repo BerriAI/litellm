@@ -34,9 +34,7 @@ from litellm.types.proxy.callback_logs_endpoints import (
 # Routes the Python proxy exposes for the Rust data-plane gateway to call into
 # (logging today; auth/budgets later). Namespaced under /v1/rust_control_plane so
 # they're clearly distinct from the proxy's own control-plane/management routes.
-rust_control_plane_router = APIRouter(
-    prefix="/v1/rust_control_plane", tags=["rust control plane"]
-)
+rust_control_plane_router = APIRouter(prefix="/v1/rust_control_plane", tags=["rust control plane"])
 
 
 class CallbackLogsReplayer:
@@ -71,9 +69,7 @@ class CallbackLogsReplayer:
         model = payload.get("model") or ""
         call_type = payload.get("call_type") or "acompletion"
         start_time = CallbackLogsReplayer._epoch_to_datetime(payload.get("startTime"))
-        call_id = (
-            payload.get("litellm_call_id") or payload.get("id") or str(uuid.uuid4())
-        )
+        call_id = payload.get("litellm_call_id") or payload.get("id") or str(uuid.uuid4())
 
         logging_obj = LiteLLMLogging(
             model=model,
@@ -157,9 +153,7 @@ class CallbackLogsReplayer:
                 end_time=end_time,
             )
 
-    async def replay_batch(
-        self, records: list[CallbackLogRecord]
-    ) -> CallbackLogsResponse:
+    async def replay_batch(self, records: list[CallbackLogRecord]) -> CallbackLogsResponse:
         """Replay a batch; a single bad record never sinks the rest. Each failure
         is reported back with its batch index so the caller can retry/triage it."""
         processed = 0
@@ -180,9 +174,7 @@ class CallbackLogsReplayer:
             processed,
             len(failures),
         )
-        return CallbackLogsResponse(
-            processed=processed, failed=len(failures), failures=failures
-        )
+        return CallbackLogsResponse(processed=processed, failed=len(failures), failures=failures)
 
 
 @rust_control_plane_router.post(

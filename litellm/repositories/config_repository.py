@@ -40,9 +40,7 @@ class ConfigRepository:
     @property
     def prisma_client(self) -> Any:
         if self._prisma_client is None:
-            raise RuntimeError(
-                "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
-            )
+            raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
@@ -61,9 +59,7 @@ class ConfigRepository:
 
     async def set_param(self, param_name: str, param_value: Any) -> ConfigParam:
         """Set a config parameter in the database."""
-        value_json = (
-            json.dumps(param_value) if not isinstance(param_value, str) else param_value
-        )
+        value_json = json.dumps(param_value) if not isinstance(param_value, str) else param_value
         await self.table.upsert(
             where={"param_name": param_name},
             data={
@@ -111,9 +107,7 @@ class ConfigRepository:
                 else:
                     d[k] = v
 
-    def _decrypt_env_variables(
-        self, env_vars: Dict[str, Any], return_original_value: bool = True
-    ) -> Dict[str, str]:
+    def _decrypt_env_variables(self, env_vars: Dict[str, Any], return_original_value: bool = True) -> Dict[str, str]:
         """Decrypt environment variables from database."""
         decrypted: Dict[str, str] = {}
         for key, value in env_vars.items():
@@ -152,25 +146,19 @@ class ConfigRepository:
     ) -> dict:
         """Update config fields with DB values, handling the merge strategy."""
         if param_name == "environment_variables":
-            decrypted_env_vars = self._decrypt_env_variables(
-                db_param_value, return_original_value=True
-            )
+            decrypted_env_vars = self._decrypt_env_variables(db_param_value, return_original_value=True)
             merged_env_vars = self._normalize_env_variable_keys(decrypted_env_vars)
             for env_key, value in merged_env_vars.items():
                 os.environ[env_key] = value
 
-            current_config.setdefault("environment_variables", {}).update(
-                merged_env_vars
-            )
+            current_config.setdefault("environment_variables", {}).update(merged_env_vars)
             return current_config
 
         if param_name not in current_config:
             current_config[param_name] = db_param_value
             return current_config
 
-        if isinstance(current_config[param_name], dict) and isinstance(
-            db_param_value, dict
-        ):
+        if isinstance(current_config[param_name], dict) and isinstance(db_param_value, dict):
             self._deep_merge_dicts(current_config[param_name], db_param_value)
         else:
             current_config[param_name] = db_param_value
@@ -196,9 +184,7 @@ class ConfigRepository:
             The merged configuration with DB overrides applied
         """
         if store_model_in_db is not True:
-            verbose_proxy_logger.info(
-                "'store_model_in_db' is not True, skipping db config reconciliation"
-            )
+            verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db config reconciliation")
             return yaml_config
 
         tasks = [self.get_param(k) for k in self.CONFIG_PARAMS]
@@ -211,9 +197,7 @@ class ConfigRepository:
 
             param_name = response.param_name
             param_value = response.param_value
-            verbose_proxy_logger.debug(
-                f"param_name={param_name}, param_value={param_value}"
-            )
+            verbose_proxy_logger.debug(f"param_name={param_name}, param_value={param_value}")
 
             if param_name is not None and param_value is not None:
                 config = self._update_config_fields(

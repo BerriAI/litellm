@@ -31,9 +31,7 @@ class HeliconeLogger:
         self.is_mock_mode = should_use_helicone_mock()
         if self.is_mock_mode:
             create_mock_helicone_client()
-            verbose_logger.info(
-                "[HELICONE MOCK] Helicone logger initialized in mock mode"
-            )
+            verbose_logger.info("[HELICONE MOCK] Helicone logger initialized in mock mode")
 
         self.provider_url = "https://api.openai.com/v1"
         self.key = os.getenv("HELICONE_API_KEY")
@@ -106,9 +104,7 @@ class HeliconeLogger:
         if metadata is None:
             metadata = {}
 
-        proxy_headers = (
-            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-        )
+        proxy_headers = litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
 
         for header_key in proxy_headers:
             if header_key.startswith("helicone_"):
@@ -121,14 +117,10 @@ class HeliconeLogger:
 
         return metadata
 
-    def log_success(
-        self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs
-    ):
+    def log_success(self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs):
         # Method definition
         try:
-            print_verbose(
-                f"Helicone Logging - Enters logging function for model {model}"
-            )
+            print_verbose(f"Helicone Logging - Enters logging function for model {model}")
             litellm_params = kwargs.get("litellm_params", {})
             custom_llm_provider = litellm_params.get("custom_llm_provider", "")
             kwargs.get("litellm_call_id", None)
@@ -136,29 +128,19 @@ class HeliconeLogger:
             metadata = self.add_metadata_from_header(litellm_params, metadata)
 
             # Check if model is a vertex_ai model
-            is_vertex_ai = custom_llm_provider == "vertex_ai" or model.startswith(
-                "vertex_ai/"
-            )
+            is_vertex_ai = custom_llm_provider == "vertex_ai" or model.startswith("vertex_ai/")
 
             model = (
                 model
-                if any(
-                    accepted_model in model
-                    for accepted_model in self.helicone_model_list
-                )
-                or is_vertex_ai
+                if any(accepted_model in model for accepted_model in self.helicone_model_list) or is_vertex_ai
                 else "gpt-3.5-turbo"
             )
             provider_request = {"model": model, "messages": messages}
-            if isinstance(response_obj, litellm.EmbeddingResponse) or isinstance(
-                response_obj, litellm.ModelResponse
-            ):
+            if isinstance(response_obj, litellm.EmbeddingResponse) or isinstance(response_obj, litellm.ModelResponse):
                 response_obj = response_obj.json()
 
             if "claude" in model and not is_vertex_ai:
-                response_obj = self.claude_mapping(
-                    model=model, messages=messages, response_obj=response_obj
-                )
+                response_obj = self.claude_mapping(model=model, messages=messages, response_obj=response_obj)
 
             providerResponse = {
                 "json": response_obj,
@@ -183,13 +165,9 @@ class HeliconeLogger:
                 "Content-Type": "application/json",
             }
             start_time_seconds = int(start_time.timestamp())
-            start_time_milliseconds = int(
-                (start_time.timestamp() - start_time_seconds) * 1000
-            )
+            start_time_milliseconds = int((start_time.timestamp() - start_time_seconds) * 1000)
             end_time_seconds = int(end_time.timestamp())
-            end_time_milliseconds = int(
-                (end_time.timestamp() - end_time_seconds) * 1000
-            )
+            end_time_milliseconds = int((end_time.timestamp() - end_time_seconds) * 1000)
             meta = {"Helicone-Auth": f"Bearer {self.key}"}
             meta.update(metadata)
             data = {
@@ -213,9 +191,7 @@ class HeliconeLogger:
             response = litellm.module_level_client.post(url, headers=headers, json=data)
             if response.status_code == 200:
                 if self.is_mock_mode:
-                    print_verbose(
-                        "[HELICONE MOCK] Helicone Logging - Successfully mocked!"
-                    )
+                    print_verbose("[HELICONE MOCK] Helicone Logging - Successfully mocked!")
                 else:
                     print_verbose("Helicone Logging - Success!")
             else:

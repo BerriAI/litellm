@@ -107,8 +107,7 @@ def _normalize_messages_for_compression(
     """
     if call_type not in _SUPPORTED_CALL_TYPES:
         raise ValueError(
-            f"Unsupported call_type={call_type!r} for compression. "
-            f"Expected one of: {sorted(_SUPPORTED_CALL_TYPES)}."
+            f"Unsupported call_type={call_type!r} for compression. Expected one of: {sorted(_SUPPORTED_CALL_TYPES)}."
         )
 
     original_messages: List[Dict[str, Any]] = [dict(m) for m in messages]
@@ -334,9 +333,7 @@ def _select_kept_indices_for_budget(
     return kept_indices, truncated_overrides
 
 
-def _get_dropped_tool_span_indices(
-    kept_indices: Set[int], tool_exchange_spans: List[Set[int]]
-) -> Set[int]:
+def _get_dropped_tool_span_indices(kept_indices: Set[int], tool_exchange_spans: List[Set[int]]) -> Set[int]:
     dropped_tool_span_indices: Set[int] = set()
     for span in tool_exchange_spans:
         if not any(idx in kept_indices for idx in span):
@@ -440,9 +437,7 @@ def compress(
 
     tool_exchange_spans: List[Set[int]] = []
     if _is_anthropic_call_type(call_type_str):
-        tool_exchange_spans, tool_sequence_error = (
-            _extract_anthropic_tool_exchange_spans(original_messages)
-        )
+        tool_exchange_spans, tool_sequence_error = _extract_anthropic_tool_exchange_spans(original_messages)
         if tool_sequence_error is not None:
             return CompressedResult(
                 messages=original_messages,
@@ -484,9 +479,7 @@ def compress(
             # Use the truncated version if we made one, otherwise the original
             compressed_messages.append(truncated_overrides.get(i, msg))
         else:
-            key = extract_key(
-                normalized_messages[i], fallback_index=i, used_keys=used_keys
-            )
+            key = extract_key(normalized_messages[i], fallback_index=i, used_keys=used_keys)
             content = _content_to_text(msg.get("content", ""))
             cache[key] = content
             compressed_messages.append(stub_message(msg, key))
@@ -503,11 +496,7 @@ def compress(
         messages=compressed_messages,
         original_tokens=original_tokens,
         compressed_tokens=compressed_tokens,
-        compression_ratio=(
-            round(1 - (compressed_tokens / original_tokens), 4)
-            if original_tokens > 0
-            else 0.0
-        ),
+        compression_ratio=(round(1 - (compressed_tokens / original_tokens), 4) if original_tokens > 0 else 0.0),
         cache=cache,
         tools=tools,
     )

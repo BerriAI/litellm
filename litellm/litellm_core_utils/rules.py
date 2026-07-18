@@ -55,11 +55,7 @@ class Rules:
                         )  # type: ignore
                 elif isinstance(decision, dict):
                     decision_val = decision.get("decision", True)
-                    decision_message = decision.get(
-                        "message", "LLM Response failed post-call-rule check"
-                    )
+                    decision_message = decision.get("message", "LLM Response failed post-call-rule check")
                     if decision_val is False:
-                        raise litellm.APIResponseValidationError(
-                            message=decision_message, llm_provider="", model=model
-                        )  # type: ignore
+                        raise litellm.APIResponseValidationError(message=decision_message, llm_provider="", model=model)  # type: ignore
         return True

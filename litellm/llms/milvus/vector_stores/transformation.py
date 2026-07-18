@@ -47,9 +47,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     def __init__(self):
         super().__init__()
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         api_key: Optional[str] = None
         if litellm_params is not None:
             api_key = litellm_params.api_key or get_secret_str("MILVUS_API_KEY")
@@ -63,9 +61,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
 
         return headers
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         api_key = litellm_params.get("api_key")
         if not api_key:
             raise ValueError(
@@ -90,9 +86,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
             ],
         }
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, drop_params: bool
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict, drop_params: bool) -> dict:
         for param, value in non_default_params.items():
             if param in MILVUS_OPTIONAL_PARAMS:
                 optional_params[param] = value
@@ -218,17 +212,15 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
             results = response_json.get("data", [])
 
             # Try to get text_field from optional_params first, then litellm_params
-            optional_params = litellm_logging_obj.model_call_details.get(
-                "optional_params", {}
-            )
+            optional_params = litellm_logging_obj.model_call_details.get("optional_params", {})
             text_field = optional_params.get("milvus_text_field", "")
 
             # Fallback to litellm_params if not in optional_params
 
             if not text_field:
-                text_field = litellm_logging_obj.model_call_details.get(
-                    "litellm_params", {}
-                ).get("milvus_text_field", "")
+                text_field = litellm_logging_obj.model_call_details.get("litellm_params", {}).get(
+                    "milvus_text_field", ""
+                )
 
             # Transform results to standard format
             search_results: List[VectorStoreSearchResult] = []
@@ -282,7 +274,5 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     ) -> Tuple[str, Dict]:
         raise NotImplementedError
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         raise NotImplementedError

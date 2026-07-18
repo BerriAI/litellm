@@ -28,6 +28,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     parse_semconv_opt_in,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
@@ -153,22 +154,16 @@ def _resolve_metric_attribute_filter(
     include = attributes.include_list or None
     exclude = attributes.exclude_list or None
     if include and exclude:
-        raise ValueError(
-            "otel.attributes: include_list and exclude_list are mutually exclusive"
-        )
+        raise ValueError("otel.attributes: include_list and exclude_list are mutually exclusive")
     requested = include or exclude or []
     if TOKEN_TYPE_ATTRIBUTE in requested:
         raise ValueError(
-            f"otel.attributes: {TOKEN_TYPE_ATTRIBUTE} is a structural token-usage "
-            "discriminator and cannot be filtered"
+            f"otel.attributes: {TOKEN_TYPE_ATTRIBUTE} is a structural token-usage discriminator and cannot be filtered"
         )
-    unknown = sorted(
-        name for name in requested if name not in VALID_METRIC_ATTRIBUTE_NAMES
-    )
+    unknown = sorted(name for name in requested if name not in VALID_METRIC_ATTRIBUTE_NAMES)
     if unknown:
         raise ValueError(
-            f"otel.attributes: unknown attribute name(s) {unknown}. "
-            f"Valid names: {sorted(VALID_METRIC_ATTRIBUTE_NAMES)}"
+            f"otel.attributes: unknown attribute name(s) {unknown}. Valid names: {sorted(VALID_METRIC_ATTRIBUTE_NAMES)}"
         )
     return (
         frozenset(include) if include else None,
@@ -212,8 +207,7 @@ def _freeze_for_dedupe(value: object, _depth: int = 0) -> HashableScope:
         return frozenset(_freeze_for_dedupe(item, _depth + 1) for item in value)
     if isinstance(value, dict):
         return frozenset(
-            (_freeze_for_dedupe(key, _depth + 1), _freeze_for_dedupe(item, _depth + 1))
-            for key, item in value.items()
+            (_freeze_for_dedupe(key, _depth + 1), _freeze_for_dedupe(item, _depth + 1)) for key, item in value.items()
         )
     if isinstance(value, (str, int, float, bytes)) or value is None:
         return value
@@ -250,35 +244,23 @@ class OpenTelemetryConfig:
         # automatically infer "otlp_http" to send traces to the endpoint.
         # This fixes an issue where UI-configured OTEL settings would default
         # to console output instead of sending traces to the configured endpoint.
-        if (
-            self.endpoint
-            and isinstance(self.exporter, str)
-            and self.exporter == "console"
-        ):
+        if self.endpoint and isinstance(self.exporter, str) and self.exporter == "console":
             self.exporter = "otlp_http"
 
         if not self.service_name:
             self.service_name = os.getenv("OTEL_SERVICE_NAME", "litellm")
         if not self.deployment_environment:
-            self.deployment_environment = os.getenv(
-                "OTEL_ENVIRONMENT_NAME", "production"
-            )
+            self.deployment_environment = os.getenv("OTEL_ENVIRONMENT_NAME", "production")
         if not self.model_id:
             self.model_id = os.getenv("OTEL_MODEL_ID", self.service_name)
         if self.ignore_context_propagation is None:
-            self.ignore_context_propagation = str_to_bool(
-                os.getenv("OTEL_IGNORE_CONTEXT_PROPAGATION")
-            )
+            self.ignore_context_propagation = str_to_bool(os.getenv("OTEL_IGNORE_CONTEXT_PROPAGATION"))
         # Resolve the env opt-in once here so self.semconv_stability_opt_in is the
         # single source of truth: the union of programmatic and env categories.
-        self.semconv_stability_opt_in |= parse_semconv_opt_in(
-            os.getenv(OTEL_SEMCONV_STABILITY_OPT_IN_ENV)
-        )
+        self.semconv_stability_opt_in |= parse_semconv_opt_in(os.getenv(OTEL_SEMCONV_STABILITY_OPT_IN_ENV))
         self.baggage_team_metadata_keys = _normalize_team_metadata_keys(
             self.baggage_team_metadata_keys
-        ) or _normalize_team_metadata_keys(
-            os.getenv("LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS")
-        )
+        ) or _normalize_team_metadata_keys(os.getenv("LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"))
 
     @classmethod
     def from_env(cls):
@@ -293,21 +275,13 @@ class OpenTelemetryConfig:
             InMemorySpanExporter,
         )
 
-        exporter = os.getenv(
-            "OTEL_EXPORTER_OTLP_PROTOCOL", os.getenv("OTEL_EXPORTER", "console")
-        )
+        exporter = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", os.getenv("OTEL_EXPORTER", "console"))
         endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", os.getenv("OTEL_ENDPOINT"))
         headers = os.getenv(
             "OTEL_EXPORTER_OTLP_HEADERS", os.getenv("OTEL_HEADERS")
         )  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
-        enable_metrics: bool = (
-            os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", "false").lower()
-            == "true"
-        )
-        enable_events: bool = (
-            os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", "false").lower()
-            == "true"
-        )
+        enable_metrics: bool = os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", "false").lower() == "true"
+        enable_events: bool = os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", "false").lower() == "true"
         service_name = os.getenv("OTEL_SERVICE_NAME", "litellm")
         deployment_environment = os.getenv("OTEL_ENVIRONMENT_NAME", "production")
         model_id = os.getenv("OTEL_MODEL_ID", service_name)
@@ -342,13 +316,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if config is None:
             config = OpenTelemetryConfig.from_env()
         if team_metadata_keys_override is not None:
-            config.baggage_team_metadata_keys = _normalize_team_metadata_keys(
-                team_metadata_keys_override
-            )
+            config.baggage_team_metadata_keys = _normalize_team_metadata_keys(team_metadata_keys_override)
         if metric_attributes_override is not None:
-            config.attributes = _build_metric_attribute_filter(
-                metric_attributes_override
-            )
+            config.attributes = _build_metric_attribute_filter(metric_attributes_override)
 
         self.config = config
         self.callback_name = callback_name
@@ -415,9 +385,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         try:
             from litellm.proxy import proxy_server
         except ImportError:
-            verbose_logger.warning(
-                "Proxy Server is not installed. Skipping OpenTelemetry initialization."
-            )
+            verbose_logger.warning("Proxy Server is not installed. Skipping OpenTelemetry initialization.")
             return
 
         # Add self as a service callback
@@ -514,9 +482,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def _skip_set_global(self) -> bool:
         # langfuse_otel relies on the Langfuse SDK's providers; don't overwrite them.
-        return self.config.skip_set_global or (
-            hasattr(self, "callback_name") and self.callback_name == "langfuse_otel"
-        )
+        return self.config.skip_set_global or (hasattr(self, "callback_name") and self.callback_name == "langfuse_otel")
 
     def _compute_capture_mode_from_init_state(self) -> Optional[str]:
         """Sample explicit settings at init. Returns the resolved mode or
@@ -556,11 +522,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return CAPTURE_MODE_NO_CONTENT
         if self._capture_mode_cached is not None:
             return self._capture_mode_cached
-        return (
-            CAPTURE_MODE_SPAN_AND_EVENT
-            if self.message_logging
-            else CAPTURE_MODE_NO_CONTENT
-        )
+        return CAPTURE_MODE_SPAN_AND_EVENT if self.message_logging else CAPTURE_MODE_NO_CONTENT
 
     def _capture_in_span(self) -> bool:
         return self._resolve_capture_mode() in (
@@ -676,9 +638,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
         def create_logger_provider():
-            provider = OTLoggerProvider(
-                resource=self._get_litellm_resource(self.config)
-            )
+            provider = OTLoggerProvider(resource=self._get_litellm_resource(self.config))
             log_exporter = self._get_log_exporter()
             provider.add_log_record_processor(
                 BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
@@ -875,9 +835,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             # _record_exception_on_span only stamps when error_code is set;
             # bare TypeError etc. has none, and the span is about to be ended.
-            error_code = (
-                error_information.get("error_code") if error_information else None
-            )
+            error_code = error_information.get("error_code") if error_information else None
             if not error_code:
                 self.set_response_status_code_attribute(parent_otel_span, 500)
 
@@ -951,9 +909,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 "metadata": metadata,
             },
         }
-        context = (
-            _trace.set_span_in_context(parent_span) if parent_span is not None else None
-        )
+        context = _trace.set_span_in_context(parent_span) if parent_span is not None else None
         self._create_guardrail_span(kwargs=kwargs, context=context)
 
     async def async_post_call_success_hook(
@@ -966,9 +922,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         litellm_logging_obj = data.get("litellm_logging_obj")
 
-        if litellm_logging_obj is not None and isinstance(
-            litellm_logging_obj, LiteLLMLogging
-        ):
+        if litellm_logging_obj is not None and isinstance(litellm_logging_obj, LiteLLMLogging):
             kwargs = litellm_logging_obj.model_call_details
             parent_span = user_api_key_dict.parent_otel_span
 
@@ -995,48 +949,46 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         Returns:
             Tracer: The tracer to use for this request
         """
+        dynamic_config = self._get_dynamic_otel_config_from_kwargs(kwargs)
+        if dynamic_config is not None:
+            verbose_logger.debug(
+                "[OTEL DEBUG] Using DYNAMIC config tracer with endpoint: %s",
+                dynamic_config.endpoint,
+            )
+            return self._get_tracer_with_dynamic_config(dynamic_config)
+
         dynamic_headers = self._get_dynamic_otel_headers_from_kwargs(kwargs)
 
         if dynamic_headers is not None:
             # Create spans using a temporary tracer with dynamic headers
             tracer_to_use = self._get_tracer_with_dynamic_headers(dynamic_headers)
             verbose_logger.debug(
-                "[OTEL DEBUG] Using DYNAMIC tracer with headers: %s", dynamic_headers
+                "[OTEL DEBUG] Using DYNAMIC tracer with headers: %s", redact_string(str(dynamic_headers))
             )
         else:
             # For langfuse_otel without dynamic headers, create a provider with env var credentials
             if hasattr(self, "callback_name") and self.callback_name == "langfuse_otel":
                 # Use the headers from config (which were set from env vars during init)
-                env_var_headers = (
-                    self._get_headers_dictionary(self.OTEL_HEADERS)
-                    if self.OTEL_HEADERS
-                    else {}
-                )
+                env_var_headers = self._get_headers_dictionary(self.OTEL_HEADERS) if self.OTEL_HEADERS else {}
                 if env_var_headers:
-                    tracer_to_use = self._get_tracer_with_dynamic_headers(
-                        env_var_headers
-                    )
+                    tracer_to_use = self._get_tracer_with_dynamic_headers(env_var_headers)
                     verbose_logger.debug(
                         "[OTEL DEBUG] Using env var credentials for langfuse_otel (master key request)"
                     )
                 else:
                     # No env vars set, use global tracer (will be NoOp)
                     tracer_to_use = self.tracer
-                    verbose_logger.debug(
-                        "[OTEL DEBUG] No credentials available for langfuse_otel"
-                    )
+                    verbose_logger.debug("[OTEL DEBUG] No credentials available for langfuse_otel")
             else:
                 tracer_to_use = self.tracer
-                verbose_logger.debug(
-                    "[OTEL DEBUG] Using GLOBAL tracer (no dynamic headers)"
-                )
+                verbose_logger.debug("[OTEL DEBUG] Using GLOBAL tracer (no dynamic headers)")
 
         return tracer_to_use
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = kwargs.get(
+            "standard_callback_dynamic_params"
         )
 
         if not standard_callback_dynamic_params:
@@ -1048,6 +1000,32 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return dynamic_headers if dynamic_headers else None
 
+    def _get_dynamic_otel_config_from_kwargs(self, kwargs: dict) -> Optional[OpenTelemetryConfig]:
+        """Extract a full dynamic exporter config from kwargs if available."""
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = kwargs.get(
+            "standard_callback_dynamic_params"
+        )
+
+        if not standard_callback_dynamic_params:
+            return None
+
+        return self.construct_dynamic_otel_config(standard_callback_dynamic_params=standard_callback_dynamic_params)
+
+    def _get_tracer_with_dynamic_config(self, dynamic_config: OpenTelemetryConfig):
+        """Create (or reuse) a tracer whose exporter target comes from a per-request config."""
+        from opentelemetry.sdk.trace import TracerProvider
+
+        cache_key = f"dynamic_config:{dynamic_config.exporter}:{dynamic_config.endpoint}:{dynamic_config.headers}"
+        if cache_key in self._tracer_provider_cache:
+            return self._tracer_provider_cache[cache_key].get_tracer(LITELLM_TRACER_NAME)
+
+        temp_provider = TracerProvider(resource=self._get_litellm_resource(self.config))
+        temp_provider.add_span_processor(self._get_span_processor(config_override=dynamic_config))
+
+        self._tracer_provider_cache[cache_key] = temp_provider
+
+        return temp_provider.get_tracer(LITELLM_TRACER_NAME)
+
     def _get_tracer_with_dynamic_headers(self, dynamic_headers: dict):
         """Create a temporary tracer with dynamic headers for this request only."""
         from opentelemetry.sdk.trace import TracerProvider
@@ -1055,15 +1033,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Prevents thread exhaustion by reusing providers for the same credential sets (e.g. per-team keys)
         cache_key = str(sorted(dynamic_headers.items()))
         if cache_key in self._tracer_provider_cache:
-            return self._tracer_provider_cache[cache_key].get_tracer(
-                LITELLM_TRACER_NAME
-            )
+            return self._tracer_provider_cache[cache_key].get_tracer(LITELLM_TRACER_NAME)
 
         # Create a temporary tracer provider with dynamic headers
         temp_provider = TracerProvider(resource=self._get_litellm_resource(self.config))
-        temp_provider.add_span_processor(
-            self._get_span_processor(dynamic_headers=dynamic_headers)
-        )
+        temp_provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
 
         # Store in cache for reuse
         self._tracer_provider_cache[cache_key] = temp_provider
@@ -1080,6 +1054,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         Returns:
             dict: A dictionary of dynamic headers
+        """
+        return None
+
+    def construct_dynamic_otel_config(
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> Optional[OpenTelemetryConfig]:
+        """
+        Construct a full exporter config from standard callback dynamic params.
+
+        Override this when team/key dynamic params must control the export
+        target (exporter kind + endpoint), not just the request headers. When
+        this returns a config, it takes precedence over
+        construct_dynamic_otel_headers for the request.
         """
         return None
 
@@ -1211,19 +1198,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Decide whether to create a primary span
         # Always create if no parent span exists (backward compatibility)
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
-        should_create_primary_span = parent_span is None or get_secret_bool(
-            "USE_OTEL_LITELLM_REQUEST_SPAN"
-        )
+        should_create_primary_span = parent_span is None or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
 
         if should_create_primary_span:
             # Create a new litellm_request span
-            span = self._start_primary_span(
-                kwargs, response_obj, start_time, end_time, ctx
-            )
+            span = self._start_primary_span(kwargs, response_obj, start_time, end_time, ctx)
             # Raw-request sub-span (if enabled) - child of litellm_request span
-            self._maybe_log_raw_request(
-                kwargs, response_obj, start_time, end_time, span
-            )
+            self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
             # Do NOT duplicate attributes onto the parent proxy-request span.
             # The child litellm_request span already carries all attributes;
             # copying them to the parent doubles storage and complicates
@@ -1239,15 +1220,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 parent_span.set_status(Status(StatusCode.OK))
                 self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
-            self._maybe_log_raw_request(
-                kwargs, response_obj, start_time, end_time, parent_span
-            )
+            self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, parent_span)
 
         # 3. Guardrail span — ensure guardrails are always parented to an
         #    existing span so they never become orphaned root spans (Issue #5).
-        guardrail_ctx = self._resolve_guardrail_context(
-            span=span, parent_span=parent_span, fallback_ctx=ctx
-        )
+        guardrail_ctx = self._resolve_guardrail_context(span=span, parent_span=parent_span, fallback_ctx=ctx)
         self._create_guardrail_span(kwargs=kwargs, context=guardrail_ctx)
 
         # 4. Metrics & cost recording
@@ -1306,9 +1283,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         span.end(end_time=self._to_ns(end_time))
         return span
 
-    def _maybe_log_raw_request(
-        self, kwargs, response_obj, start_time, end_time, parent_span
-    ):
+    def _maybe_log_raw_request(self, kwargs, response_obj, start_time, end_time, parent_span):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
@@ -1412,42 +1387,28 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         http_route = metadata.get("user_api_key_request_route")
         if http_route:
-            self.safe_set_attribute(
-                span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route
-            )
+            self.safe_set_attribute(span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route)
 
         # ``user_api_key_team_metadata`` is dropped from the standard logging
         # payload metadata, so read it from the raw request metadata in kwargs.
         # ``metadata`` and ``litellm_metadata`` are alternate names for the same
         # full metadata dict (the name varies by endpoint), so first-truthy wins.
-        raw_metadata = (
-            litellm_params.get("metadata")
-            or litellm_params.get("litellm_metadata")
-            or {}
-        )
+        raw_metadata = litellm_params.get("metadata") or litellm_params.get("litellm_metadata") or {}
         team_metadata = self._team_metadata_json(
             raw_metadata.get("user_api_key_team_metadata"),
             self.config.baggage_team_metadata_keys,
         )
         if team_metadata:
-            self.safe_set_attribute(
-                span=span, key=TEAM_METADATA_ATTRIBUTE, value=team_metadata
-            )
+            self.safe_set_attribute(span=span, key=TEAM_METADATA_ATTRIBUTE, value=team_metadata)
 
         model_group = standard_logging_payload.get("model_group")
         if model_group:
-            self.safe_set_attribute(
-                span=span, key=MODEL_GROUP_ATTRIBUTE, value=model_group
-            )
+            self.safe_set_attribute(span=span, key=MODEL_GROUP_ATTRIBUTE, value=model_group)
 
         hidden_params = standard_logging_payload.get("hidden_params") or {}
-        provider_model = hidden_params.get(
-            "litellm_model_name"
-        ) or standard_logging_payload.get("model")
+        provider_model = hidden_params.get("litellm_model_name") or standard_logging_payload.get("model")
         if provider_model:
-            self.safe_set_attribute(
-                span=span, key=PROVIDER_MODEL_ATTRIBUTE, value=provider_model
-            )
+            self.safe_set_attribute(span=span, key=PROVIDER_MODEL_ATTRIBUTE, value=provider_model)
 
     @staticmethod
     def _team_metadata_json(value: Any, allowed_keys: List[str]) -> Optional[str]:
@@ -1473,11 +1434,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         attributes = self.config.attributes
         if attributes is None and self.callback_name in (None, "otel"):
             otel_settings = (litellm.callback_settings or {}).get("otel") or {}
-            raw = (
-                otel_settings.get("attributes")
-                if isinstance(otel_settings, dict)
-                else None
-            )
+            raw = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
                 attributes = _build_metric_attribute_filter(raw)
         (
@@ -1492,9 +1449,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if self._metric_attr_include is not None:
             return {k: v for k, v in attrs.items() if k in self._metric_attr_include}
         if self._metric_attr_exclude is not None:
-            return {
-                k: v for k, v in attrs.items() if k not in self._metric_attr_exclude
-            }
+            return {k: v for k, v in attrs.items() if k not in self._metric_attr_exclude}
         return attrs
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
@@ -1504,9 +1459,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         common_attrs = {
             "gen_ai.operation.name": (
-                self._gen_ai_operation_name(kwargs)
-                if self._gen_ai_semconv_latest_experimental
-                else "chat"
+                self._gen_ai_operation_name(kwargs) if self._gen_ai_semconv_latest_experimental else "chat"
             ),
             "gen_ai.system": provider,
             "gen_ai.request.model": kwargs.get("model"),
@@ -1525,31 +1478,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 common_attrs[f"metadata.{key}"] = str(value)
 
         # get hidden params
-        hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get(
-            "hidden_params", {}
-        )
+        hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get("hidden_params", {})
         if hidden_params:
             common_attrs["hidden_params"] = safe_dumps(hidden_params)
 
         common_attrs = self._filter_metric_attributes(common_attrs)
 
         if self._operation_duration_histogram:
-            self._operation_duration_histogram.record(
-                duration_s, attributes=common_attrs
-            )
-            if (
-                response_obj
-                and (usage := response_obj.get("usage"))
-                and self._token_usage_histogram
-            ):
+            self._operation_duration_histogram.record(duration_s, attributes=common_attrs)
+            if response_obj and (usage := response_obj.get("usage")) and self._token_usage_histogram:
                 in_attrs = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
                 out_attrs = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
-                self._token_usage_histogram.record(
-                    usage.get("prompt_tokens", 0), attributes=in_attrs
-                )
-                self._token_usage_histogram.record(
-                    usage.get("completion_tokens", 0), attributes=out_attrs
-                )
+                self._token_usage_histogram.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
+                self._token_usage_histogram.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
         cost = kwargs.get("response_cost")
         if self._cost_histogram and cost:
@@ -1557,9 +1498,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         # Record latency metrics (TTFT, TPOT, and Total Generation Time)
         self._record_time_to_first_token_metric(kwargs, common_attrs)
-        self._record_time_per_output_token_metric(
-            kwargs, response_obj, end_time, duration_s, common_attrs
-        )
+        self._record_time_per_output_token_metric(kwargs, response_obj, end_time, duration_s, common_attrs)
         self._record_response_duration_metric(kwargs, end_time, common_attrs)
 
     @staticmethod
@@ -1604,9 +1543,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 return  # Skip recording if conversion failed
 
             time_to_first_token_seconds = completion_start_ts - api_call_start_ts
-            self._time_to_first_token_histogram.record(
-                time_to_first_token_seconds, attributes=common_attrs
-            )
+            self._time_to_first_token_histogram.record(time_to_first_token_seconds, attributes=common_attrs)
 
     def _record_time_per_output_token_metric(
         self,
@@ -1643,12 +1580,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Fallback to duration_s if conversion failed
             generation_time_seconds = duration_s
             if generation_time_seconds > 0:
-                time_per_output_token_seconds = (
-                    generation_time_seconds / completion_tokens
-                )
-                self._time_per_output_token_histogram.record(
-                    time_per_output_token_seconds, attributes=common_attrs
-                )
+                time_per_output_token_seconds = generation_time_seconds / completion_tokens
+                self._time_per_output_token_histogram.record(time_per_output_token_seconds, attributes=common_attrs)
             return
 
         if completion_start_time is not None:
@@ -1674,9 +1607,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         if generation_time_seconds > 0:
             time_per_output_token_seconds = generation_time_seconds / completion_tokens
-            self._time_per_output_token_histogram.record(
-                time_per_output_token_seconds, attributes=common_attrs
-            )
+            self._time_per_output_token_histogram.record(time_per_output_token_seconds, attributes=common_attrs)
 
     def _record_response_duration_metric(
         self,
@@ -1717,9 +1648,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         response_duration_seconds = end_time_ts - api_call_start_ts
 
         if response_duration_seconds > 0:
-            self._response_duration_histogram.record(
-                response_duration_seconds, attributes=common_attrs
-            )
+            self._response_duration_histogram.record(response_duration_seconds, attributes=common_attrs)
 
     @staticmethod
     def _otel_log_types():
@@ -1760,9 +1689,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         otel_logger = self._logger_provider.get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
-        provider = (kwargs.get("litellm_params") or {}).get(
-            "custom_llm_provider", "Unknown"
-        )
+        provider = (kwargs.get("litellm_params") or {}).get("custom_llm_provider", "Unknown")
 
         if self._gen_ai_semconv_latest_experimental:
             self._emit_inference_details_event(
@@ -1856,31 +1783,23 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return _trace.set_span_in_context(parent_span)
         return fallback_ctx
 
-    def _create_guardrail_span(
-        self, kwargs: Optional[dict], context: Optional[Context]
-    ):
+    def _create_guardrail_span(self, kwargs: Optional[dict], context: Optional[Context]):
         """
         Creates a span for Guardrail, if any guardrail information is present in standard_logging_object
         """
         # Create span for guardrail information
         kwargs = kwargs or {}
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object"
-        )
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
         if standard_logging_payload is None:
             return
 
-        guardrail_information_data = standard_logging_payload.get(
-            "guardrail_information"
-        )
+        guardrail_information_data = standard_logging_payload.get("guardrail_information")
 
         if not guardrail_information_data:
             return
 
         guardrail_information_list = [
-            information
-            for information in guardrail_information_data
-            if isinstance(information, dict)
+            information for information in guardrail_information_data if isinstance(information, dict)
         ]
 
         if not guardrail_information_list:
@@ -1938,15 +1857,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             masked_entity_count = guardrail_information.get("masked_entity_count")
             if masked_entity_count is not None:
-                guardrail_span.set_attribute(
-                    "masked_entity_count", safe_dumps(masked_entity_count)
-                )
+                guardrail_span.set_attribute("masked_entity_count", safe_dumps(masked_entity_count))
 
             guardrail_response = guardrail_information.get("guardrail_response")
             if guardrail_response is not None:
-                guardrail_span.set_attribute(
-                    "guardrail_response", safe_dumps(guardrail_response)
-                )
+                guardrail_span.set_attribute("guardrail_response", safe_dumps(guardrail_response))
 
             # Surface guardrail_status (success / guardrail_intervened /
             # guardrail_failed_to_respond / not_run) as a top-level span
@@ -1975,9 +1890,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if violation_categories:
                 # OTel sequence attributes must be homogeneous primitives;
                 # serialise to JSON once so set_attribute never coerces.
-                guardrail_span.set_attribute(
-                    "guardrail_violation_categories", safe_dumps(violation_categories)
-                )
+                guardrail_span.set_attribute("guardrail_violation_categories", safe_dumps(violation_categories))
 
             self._set_team_attributes_from_kwargs(guardrail_span, kwargs)
 
@@ -2015,9 +1928,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Decide whether to create a primary span
         # Always create if no parent span exists (backward compatibility)
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
-        should_create_primary_span = parent_otel_span is None or get_secret_bool(
-            "USE_OTEL_LITELLM_REQUEST_SPAN"
-        )
+        should_create_primary_span = parent_otel_span is None or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
 
         span = None
         if should_create_primary_span:
@@ -2085,9 +1996,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 span.record_exception(exception)
 
             # Get StandardLoggingPayload for structured error information
-            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object"
-            )
+            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
                 return
@@ -2156,9 +2065,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 )
 
         except Exception as e:
-            verbose_logger.exception(
-                "OpenTelemetry: Error recording exception on span: %s", str(e)
-            )
+            verbose_logger.exception("OpenTelemetry: Error recording exception on span: %s", str(e))
 
     def set_tools_attributes(self, span: Span, tools):
         import json
@@ -2191,9 +2098,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     value=json.dumps(function.get("parameters")),
                 )
         except Exception as e:
-            verbose_logger.error(
-                "OpenTelemetry: Error setting tools attributes: %s", str(e)
-            )
+            verbose_logger.error("OpenTelemetry: Error setting tools attributes: %s", str(e))
             pass
 
     def cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
@@ -2229,9 +2134,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             for key in keys:
                 _value = _function.get(key)
                 if _value:
-                    kv_pairs[
-                        f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.function_call.{key}"
-                    ] = _value
+                    kv_pairs[f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.function_call.{key}"] = _value
 
         return kv_pairs
 
@@ -2240,18 +2143,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if self.callback_name == "langtrace":
                 from litellm.integrations.langtrace import LangtraceAttributes
 
-                LangtraceAttributes().set_langtrace_attributes(
-                    span, kwargs, response_obj
-                )
+                LangtraceAttributes().set_langtrace_attributes(span, kwargs, response_obj)
                 return
             elif self.callback_name == "langfuse_otel":
                 from litellm.integrations.langfuse.langfuse_otel import (
                     LangfuseOtelLogger,
                 )
 
-                LangfuseOtelLogger.set_langfuse_otel_attributes(
-                    span, kwargs, response_obj
-                )
+                LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, response_obj)
                 return
             elif self.callback_name == "weave_otel":
                 from litellm.integrations.weave.weave_otel import (
@@ -2264,9 +2163,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             optional_params = kwargs.get("optional_params", {})
             litellm_params = kwargs.get("litellm_params", {}) or {}
-            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object"
-            )
+            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
 
@@ -2277,14 +2174,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             metadata = standard_logging_payload["metadata"]
             for key, value in metadata.items():
-                self.safe_set_attribute(
-                    span=span, key="metadata.{}".format(key), value=value
-                )
+                self.safe_set_attribute(span=span, key="metadata.{}".format(key), value=value)
 
             # get hidden params
-            hidden_params = getattr(
-                standard_logging_payload, "hidden_params", None
-            ) or (standard_logging_payload or {}).get("hidden_params", {})
+            hidden_params = getattr(standard_logging_payload, "hidden_params", None) or (
+                standard_logging_payload or {}
+            ).get("hidden_params", {})
             if hidden_params:
                 self.safe_set_attribute(
                     span=span,
@@ -2298,9 +2193,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 litellm_params=litellm_params,
             )
             # Cost breakdown tracking
-            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get(
-                "cost_breakdown"
-            )
+            cost_breakdown: Optional[CostBreakdown] = standard_logging_payload.get("cost_breakdown")
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
                     if value is not None:
@@ -2393,9 +2286,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # but Embeddings and Image-gen responses do not.  Fall back to
             # the litellm call ID so every call type can be correlated
             # across LiteLLM UI, Phoenix traces, and provider logs (Issue #8).
-            response_id = (
-                response_obj.get("id") if response_obj else None
-            ) or standard_logging_payload.get("id")
+            response_id = (response_obj.get("id") if response_obj else None) or standard_logging_payload.get("id")
             if response_id:
                 self.safe_set_attribute(
                     span=span,
@@ -2453,11 +2344,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.set_tools_attributes(span, tools)
 
             if kwargs.get("messages"):
-                transformed_messages = (
-                    self._transform_messages_to_otel_semantic_conventions(
-                        kwargs.get("messages")
-                    )
-                )
+                transformed_messages = self._transform_messages_to_otel_semantic_conventions(kwargs.get("messages"))
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.GEN_AI_INPUT_MESSAGES.value,
@@ -2474,11 +2361,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             system_instructions = (
                 kwargs.get("system_instructions")
                 if kwargs.get("system_instructions") is not None
-                else (
-                    kwargs.get("instructions")
-                    if kwargs.get("instructions") is not None
-                    else kwargs.get("system")
-                )
+                else (kwargs.get("instructions") if kwargs.get("instructions") is not None else kwargs.get("system"))
             )
             if system_instructions:
                 if isinstance(system_instructions, str):
@@ -2489,10 +2372,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         value=system_instructions,
                     )
                 else:
-                    transformed_system_instructions = (
-                        self._transform_messages_to_otel_semantic_conventions(
-                            system_instructions
-                        )
+                    transformed_system_instructions = self._transform_messages_to_otel_semantic_conventions(
+                        system_instructions
                     )
                     self.safe_set_attribute(
                         span=span,
@@ -2525,10 +2406,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             if response_obj is not None:
                 if response_obj.get("choices"):
-                    transformed_choices = (
-                        self._transform_choices_to_otel_semantic_conventions(
-                            response_obj.get("choices")
-                        )
+                    transformed_choices = self._transform_choices_to_otel_semantic_conventions(
+                        response_obj.get("choices")
                     )
                     self.safe_set_attribute(
                         span=span,
@@ -2567,9 +2446,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     # type="message" contains a "content" list of
                     # OutputText objects (type="output_text").
                     output_items = response_obj.get("output")
-                    output_messages = self._transform_responses_api_output_to_otel(
-                        output_items
-                    )
+                    output_messages = self._transform_responses_api_output_to_otel(output_items)
                     if output_messages:
                         self.safe_set_attribute(
                             span=span,
@@ -2613,12 +2490,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         )
 
         except Exception as e:
-            self.handle_callback_failure(
-                callback_name=self.callback_name or "opentelemetry"
-            )
-            verbose_logger.exception(
-                "OpenTelemetry logging error in set_attributes %s", str(e)
-            )
+            self.handle_callback_failure(callback_name=self.callback_name or "opentelemetry")
+            verbose_logger.exception("OpenTelemetry logging error in set_attributes %s", str(e))
 
     def _cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
         """
@@ -2644,9 +2517,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         primitive_value = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
-    def _transform_messages_to_otel_semantic_conventions(
-        self, messages: Union[List[dict], str]
-    ) -> List[dict]:
+    def _transform_messages_to_otel_semantic_conventions(self, messages: Union[List[dict], str]) -> List[dict]:
         """
         Transforms LiteLLM/OpenAI style messages into OTEL GenAI 1.38 compliant format.
         OTEL expects a 'parts' array instead of a single 'content' string.
@@ -2687,9 +2558,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return transformed
 
-    def _transform_choices_to_otel_semantic_conventions(
-        self, choices: List[dict]
-    ) -> List[dict]:
+    def _transform_choices_to_otel_semantic_conventions(self, choices: List[dict]) -> List[dict]:
         """
         Transforms choices into OTEL GenAI 1.38 compliant format for output.messages.
         """
@@ -2698,9 +2567,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             message = choice.get("message") or {}
             finish_reason = choice.get("finish_reason")
 
-            transformed_msg = self._transform_messages_to_otel_semantic_conventions(
-                [message]
-            )[0]
+            transformed_msg = self._transform_messages_to_otel_semantic_conventions([message])[0]
             if finish_reason:
                 transformed_msg["finish_reason"] = finish_reason
 
@@ -2897,16 +2764,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         # Priority 1: Explicit parent span from metadata
         if parent_otel_span is not None:
-            verbose_logger.debug(
-                "OpenTelemetry: Using explicit parent span from metadata"
-            )
+            verbose_logger.debug("OpenTelemetry: Using explicit parent span from metadata")
             return trace.set_span_in_context(parent_otel_span), None
 
         # Priority 2: HTTP traceparent header
         if traceparent is not None:
-            verbose_logger.debug(
-                "OpenTelemetry: Using traceparent header for context propagation"
-            )
+            verbose_logger.debug("OpenTelemetry: Using traceparent header for context propagation")
             carrier = {"traceparent": traceparent}
             return (
                 TraceContextTextMapPropagator().extract(carrier=carrier),
@@ -2928,17 +2791,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     )
                     return context.get_current(), current_span
         except Exception as e:
-            verbose_logger.debug(
-                "OpenTelemetry: Error getting current span: %s", str(e)
-            )
+            verbose_logger.debug("OpenTelemetry: Error getting current span: %s", str(e))
 
         # Priority 4: No parent context
-        verbose_logger.debug(
-            "OpenTelemetry: No parent context found, creating root span"
-        )
+        verbose_logger.debug("OpenTelemetry: No parent context found, creating root span")
         return None, None
 
-    def _get_span_processor(self, dynamic_headers: Optional[dict] = None):
+    def _get_span_processor(
+        self,
+        dynamic_headers: Optional[dict] = None,
+        config_override: Optional[OpenTelemetryConfig] = None,
+    ):
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,
             ConsoleSpanExporter,
@@ -2946,49 +2809,45 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             SpanExporter,
         )
 
+        otel_exporter = config_override.exporter if config_override else self.OTEL_EXPORTER
+        otel_endpoint = config_override.endpoint if config_override else self.OTEL_ENDPOINT
+        otel_headers = config_override.headers if config_override else self.OTEL_HEADERS
+
         verbose_logger.debug(
-            "OpenTelemetry Logger, initializing span processor \nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
-            self.OTEL_EXPORTER,
-            self.OTEL_ENDPOINT,
-            self.OTEL_HEADERS,
+            "OpenTelemetry Logger, initializing span processor \nexporter: %s\nendpoint: %s\nheaders: %s",
+            otel_exporter,
+            otel_endpoint,
+            redact_string(str(otel_headers)),
         )
-        _split_otel_headers = OpenTelemetry._get_headers_dictionary(
-            headers=dynamic_headers or self.OTEL_HEADERS
-        )
+        _split_otel_headers = OpenTelemetry._get_headers_dictionary(headers=dynamic_headers or otel_headers)
 
         if dynamic_headers:
             verbose_logger.debug(
                 "[OTEL DEBUG] Creating span processor with DYNAMIC headers: %s",
-                {
-                    k: v[:20] + "..." if len(str(v)) > 20 else v
-                    for k, v in _split_otel_headers.items()
-                },
+                redact_string(str(_split_otel_headers)),
+            )
+        elif config_override:
+            verbose_logger.debug(
+                "[OTEL DEBUG] Creating span processor with DYNAMIC config, endpoint: %s",
+                otel_endpoint,
             )
         else:
-            verbose_logger.debug(
-                "[OTEL DEBUG] Creating span processor with GLOBAL headers"
-            )
+            verbose_logger.debug("[OTEL DEBUG] Creating span processor with GLOBAL headers")
 
-        if hasattr(
-            self.OTEL_EXPORTER, "export"
-        ):  # Check if it has the export method that SpanExporter requires
+        if hasattr(otel_exporter, "export"):  # Check if it has the export method that SpanExporter requires
             verbose_logger.debug(
                 "OpenTelemetry: intiializing SpanExporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
-            return SimpleSpanProcessor(cast(SpanExporter, self.OTEL_EXPORTER))
+            return SimpleSpanProcessor(cast(SpanExporter, otel_exporter))
 
-        if self.OTEL_EXPORTER == "console":
+        if otel_exporter == "console":
             verbose_logger.debug(
                 "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
-        elif (
-            self.OTEL_EXPORTER == "otlp_http"
-            or self.OTEL_EXPORTER == "http/protobuf"
-            or self.OTEL_EXPORTER == "http/json"
-        ):
+        elif otel_exporter == "otlp_http" or otel_exporter == "http/protobuf" or otel_exporter == "http/json":
             try:
                 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                     OTLPSpanExporter as OTLPSpanExporterHTTP,
@@ -3001,17 +2860,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             verbose_logger.debug(
                 "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
-            normalized_endpoint = self._normalize_otel_endpoint(
-                self.OTEL_ENDPOINT, "traces"
-            )
+            normalized_endpoint = self._normalize_otel_endpoint(otel_endpoint, "traces")
             return BatchSpanProcessor(
-                OTLPSpanExporterHTTP(
-                    endpoint=normalized_endpoint, headers=_split_otel_headers
-                ),
+                OTLPSpanExporterHTTP(endpoint=normalized_endpoint, headers=_split_otel_headers),
             )
-        elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
+        elif otel_exporter == "otlp_grpc" or otel_exporter == "grpc":
             try:
                 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
                     OTLPSpanExporter as OTLPSpanExporterGRPC,
@@ -3024,20 +2879,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             verbose_logger.debug(
                 "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
-            normalized_endpoint = self._normalize_otel_endpoint(
-                self.OTEL_ENDPOINT, "traces"
-            )
+            normalized_endpoint = self._normalize_otel_endpoint(otel_endpoint, "traces")
             return BatchSpanProcessor(
-                OTLPSpanExporterGRPC(
-                    endpoint=normalized_endpoint, headers=_split_otel_headers
-                ),
+                OTLPSpanExporterGRPC(endpoint=normalized_endpoint, headers=_split_otel_headers),
             )
         else:
             verbose_logger.debug(
                 "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
-                self.OTEL_EXPORTER,
+                otel_exporter,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
 
@@ -3049,7 +2900,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             "OpenTelemetry Logger, initializing log exporter \nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
             self.OTEL_EXPORTER,
             self.OTEL_ENDPOINT,
-            self.OTEL_HEADERS,
+            redact_string(str(self.OTEL_HEADERS)),
         )
 
         _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)
@@ -3094,9 +2945,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.OTEL_EXPORTER,
                 normalized_endpoint,
             )
-            return OTLPLogExporter(
-                endpoint=normalized_endpoint, headers=_split_otel_headers
-            )
+            return OTLPLogExporter(endpoint=normalized_endpoint, headers=_split_otel_headers)
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
             try:
                 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
@@ -3113,9 +2962,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self.OTEL_EXPORTER,
                 normalized_endpoint,
             )
-            return OTLPLogExporter(
-                endpoint=normalized_endpoint, headers=_split_otel_headers
-            )
+            return OTLPLogExporter(endpoint=normalized_endpoint, headers=_split_otel_headers)
         else:
             verbose_logger.warning(
                 "OpenTelemetry: Unknown log exporter '%s', defaulting to console. Supported: console, otlp_http, otlp_grpc",
@@ -3140,13 +2987,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             "OpenTelemetry Logger, initializing metric reader\nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
             self.OTEL_EXPORTER,
             self.OTEL_ENDPOINT,
-            self.OTEL_HEADERS,
+            redact_string(str(self.OTEL_HEADERS)),
         )
 
         _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)
-        normalized_endpoint = self._normalize_otel_endpoint(
-            self.OTEL_ENDPOINT, "metrics"
-        )
+        normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, "metrics")
 
         if self.OTEL_EXPORTER == "console":
             exporter = ConsoleMetricExporter()
@@ -3194,9 +3039,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             exporter = ConsoleMetricExporter()
             return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 
-    def _normalize_otel_endpoint(
-        self, endpoint: Optional[str], signal_type: str
-    ) -> Optional[str]:
+    def _normalize_otel_endpoint(self, endpoint: Optional[str], signal_type: str) -> Optional[str]:
         """
         Normalize the endpoint URL for a specific OpenTelemetry signal type.
 
@@ -3445,13 +3288,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if url_path:
             self.safe_set_attribute(span=span, key=URL_PATH_ATTRIBUTE, value=url_path)
         if http_route:
-            self.safe_set_attribute(
-                span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route
-            )
+            self.safe_set_attribute(span=span, key=HTTP_ROUTE_ATTRIBUTE, value=http_route)
 
-    def set_response_status_code_attribute(
-        self, span: Optional[Span], status_code: Optional[int]
-    ) -> None:
+    def set_response_status_code_attribute(self, span: Optional[Span], status_code: Optional[int]) -> None:
         """
         Set OTel-standard ``http.response.status_code`` (int) on the proxy
         SERVER span. The failure path sets this from the error code in
@@ -3483,20 +3322,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             StandardLoggingPayloadSetup,
         )
 
-        error_information = StandardLoggingPayloadSetup.get_error_information(
-            original_exception=exception
-        )
+        error_information = StandardLoggingPayloadSetup.get_error_information(original_exception=exception)
         error_information["error_code"] = str(status_code)
         self._record_exception_on_span(
             span=span,
-            kwargs={
-                "standard_logging_object": {"error_information": error_information}
-            },
+            kwargs={"standard_logging_object": {"error_information": error_information}},
         )
 
-    def set_preprocessing_duration_attribute(
-        self, span: Optional[Span], container: Any
-    ) -> None:
+    def set_preprocessing_duration_attribute(self, span: Optional[Span], container: Any) -> None:
         """
         Set ``litellm.preprocessing.duration_ms`` (proxy-receive -> first
         provider handoff) on the proxy SERVER span. ``litellm_received_at``

@@ -63,9 +63,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
             "templateID": template or E2B_DEFAULT_TEMPLATE,
             "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
             "secure": True,
-            "allow_internet_access": (
-                True if allow_internet_access is None else allow_internet_access
-            ),
+            "allow_internet_access": (True if allow_internet_access is None else allow_internet_access),
         }
         if metadata:
             body["metadata"] = metadata
@@ -141,11 +139,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         **kwargs,
     ) -> bool:
         handle = self._as_handle(container)
-        key = (
-            api_key
-            or handle._hidden_params.get("api_key")
-            or self.validate_environment()
-        )
+        key = api_key or handle._hidden_params.get("api_key") or self.validate_environment()
         base = api_base or handle._hidden_params.get("api_base") or E2B_API_BASE
         try:
             response = cast(
@@ -165,9 +159,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
     def _as_handle(container: Union[ContainerHandle, str]) -> ContainerHandle:
         if isinstance(container, ContainerHandle):
             return container
-        handle = ContainerHandle(
-            id=str(container), provider="e2b", domain=E2B_DEFAULT_DOMAIN
-        )
+        handle = ContainerHandle(id=str(container), provider="e2b", domain=E2B_DEFAULT_DOMAIN)
         handle._hidden_params = {}
         return handle
 
@@ -180,20 +172,14 @@ class E2BSandboxConfig(BaseSandboxConfig):
                 return None
 
         messages = tuple(
-            parsed
-            for line in lines
-            if (stripped := line.strip())
-            if (parsed := _try_parse(stripped)) is not None
+            parsed for line in lines if (stripped := line.strip()) if (parsed := _try_parse(stripped)) is not None
         )
 
         def of_type(message_type: str):
             return (m for m in messages if m.get("type") == message_type)
 
         error = next(
-            (
-                {key: m.get(key) for key in ("name", "value", "traceback")}
-                for m in of_type("error")
-            ),
+            ({key: m.get(key) for key in ("name", "value", "traceback")} for m in of_type("error")),
             None,
         )
         execution_count = next(
@@ -204,9 +190,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         return CodeExecutionResult(
             stdout="".join(m.get("text", "") for m in of_type("stdout")),
             stderr="".join(m.get("text", "") for m in of_type("stderr")),
-            results=[
-                {k: v for k, v in m.items() if k != "type"} for m in of_type("result")
-            ],
+            results=[{k: v for k, v in m.items() if k != "type"} for m in of_type("result")],
             error=error,
             execution_count=execution_count,
         )

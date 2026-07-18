@@ -21,6 +21,7 @@ from litellm.integrations.opentelemetry import (
     _build_metric_attribute_filter,
     _resolve_metric_attribute_filter,
 )
+from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
 from litellm.integrations.otel.model.semconv import Metric, resolve_operation
 from litellm.integrations.otel.model.utils import to_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -81,9 +82,7 @@ class GenAIMetricRecorder:
     survives.
     """
 
-    def __init__(
-        self, metrics: GenAIMetrics, callback_name: Optional[str] = None
-    ) -> None:
+    def __init__(self, metrics: GenAIMetrics, callback_name: Optional[str] = None) -> None:
         self._metrics = metrics
         self._callback_name = callback_name
         self._include: Optional[FrozenSet[str]] = None
@@ -108,9 +107,7 @@ class GenAIMetricRecorder:
             self._metrics.token_cost.record(cost, attributes=common_attrs)
 
         self._record_time_to_first_token(kwargs, common_attrs)
-        self._record_time_per_output_token(
-            kwargs, response_obj, end_time, duration_s, common_attrs
-        )
+        self._record_time_per_output_token(kwargs, response_obj, end_time, duration_s, common_attrs)
         self._record_response_duration(kwargs, end_time, common_attrs)
 
     # ------------------------------------------------------------------ #
@@ -138,9 +135,7 @@ class GenAIMetricRecorder:
             else:
                 common_attrs[f"metadata.{key}"] = str(value)
 
-        hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get(
-            "hidden_params", {}
-        )
+        hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get("hidden_params", {})
         if hidden_params:
             common_attrs["hidden_params"] = safe_dumps(hidden_params)
 
@@ -152,11 +147,7 @@ class GenAIMetricRecorder:
         attributes = None
         if self._callback_name in (None, "otel"):
             otel_settings = (litellm.callback_settings or {}).get("otel") or {}
-            raw = (
-                otel_settings.get("attributes")
-                if isinstance(otel_settings, dict)
-                else None
-            )
+            raw = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
                 attributes = _build_metric_attribute_filter(raw)
         # A bad filter (include_list + exclude_list both set, an unfilterable name)
@@ -187,25 +178,14 @@ class GenAIMetricRecorder:
             return
         in_attrs = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
         out_attrs = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
-        self._metrics.token_usage.record(
-            usage.get("prompt_tokens", 0), attributes=in_attrs
-        )
-        self._metrics.token_usage.record(
-            usage.get("completion_tokens", 0), attributes=out_attrs
-        )
+        self._metrics.token_usage.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
+        self._metrics.token_usage.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
-    def _record_time_to_first_token(
-        self, kwargs: Mapping[str, Any], common_attrs: dict
-    ) -> None:
-        if not kwargs.get("optional_params", {}).get("stream", False):
+    def _record_time_to_first_token(self, kwargs: Mapping[str, Any], common_attrs: dict) -> None:
+        time_to_first_chunk = time_to_first_chunk_seconds(kwargs)
+        if time_to_first_chunk is None:
             return
-        api_call_start = to_seconds(kwargs.get("api_call_start_time"))
-        completion_start = to_seconds(kwargs.get("completion_start_time"))
-        if api_call_start is None or completion_start is None:
-            return
-        self._metrics.time_to_first_token.record(
-            completion_start - api_call_start, attributes=common_attrs
-        )
+        self._metrics.time_to_first_token.record(time_to_first_chunk, attributes=common_attrs)
 
     def _record_time_per_output_token(
         self,
@@ -229,27 +209,17 @@ class GenAIMetricRecorder:
             api_call_start_time = kwargs.get("api_call_start_time")
             if completion_start_time is not None:
                 completion_start = to_seconds(completion_start_time)
-                generation_time = (
-                    duration_s
-                    if completion_start is None
-                    else end_ts - completion_start
-                )
+                generation_time = duration_s if completion_start is None else end_ts - completion_start
             elif api_call_start_time is not None:
                 api_call_start = to_seconds(api_call_start_time)
-                generation_time = (
-                    duration_s if api_call_start is None else end_ts - api_call_start
-                )
+                generation_time = duration_s if api_call_start is None else end_ts - api_call_start
             else:
                 generation_time = duration_s
 
         if generation_time > 0:
-            self._metrics.time_per_output_token.record(
-                generation_time / completion_tokens, attributes=common_attrs
-            )
+            self._metrics.time_per_output_token.record(generation_time / completion_tokens, attributes=common_attrs)
 
-    def _record_response_duration(
-        self, kwargs: Mapping[str, Any], end_time: datetime, common_attrs: dict
-    ) -> None:
+    def _record_response_duration(self, kwargs: Mapping[str, Any], end_time: datetime, common_attrs: dict) -> None:
         api_call_start_time = kwargs.get("api_call_start_time")
         if api_call_start_time is None:
             return

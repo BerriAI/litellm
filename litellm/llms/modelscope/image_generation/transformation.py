@@ -41,9 +41,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     DEFAULT_BASE_URL: str = "https://api-inference.modelscope.cn/v1"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Return list of OpenAI params supported by ModelScope.
 
@@ -70,9 +68,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         """
         supported_params = self.get_supported_openai_params(model)
         if drop_params:
-            non_default_params = {
-                k: v for k, v in non_default_params.items() if k in supported_params
-            }
+            non_default_params = {k: v for k, v in non_default_params.items() if k in supported_params}
         optional_params.update(non_default_params)
         return optional_params
 
@@ -89,9 +85,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete URL for the ModelScope image generation API request.
         """
-        base_url: str = (
-            api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        base_url: str = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
         base_url = base_url.rstrip("/")
 
         # Return the images endpoint
@@ -115,8 +109,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         if not final_api_key:
             raise ValueError(
-                "MODELSCOPE_API_KEY is not set. "
-                "Please set it via environment variable or pass api_key parameter."
+                "MODELSCOPE_API_KEY is not set. Please set it via environment variable or pass api_key parameter."
             )
 
         default_headers = {
@@ -185,9 +178,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         # Check for errors in response
         if "error" in response_data:
-            error_msg = response_data["error"].get(
-                "message", str(response_data["error"])
-            )
+            error_msg = response_data["error"].get("message", str(response_data["error"]))
             raise self.get_error_class(
                 error_message=f"ModelScope error: {error_msg}",
                 status_code=raw_response.status_code,

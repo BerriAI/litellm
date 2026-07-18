@@ -63,9 +63,7 @@ def require_trusted_proxy_request(
     if general_settings is None:
         general_settings = _get_proxy_general_settings()
 
-    trusted_networks = parse_trusted_proxy_ranges(
-        general_settings.get(setting_name), setting_name=setting_name
-    )
+    trusted_networks = parse_trusted_proxy_ranges(general_settings.get(setting_name), setting_name=setting_name)
     if not trusted_networks:
         raise ValueError(
             f"{feature_name} requires general_settings.{setting_name} before "

@@ -212,7 +212,7 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
-def _resolve_api_key(ctx: click.Context) -> str:
+def resolve_api_key(ctx: click.Context) -> str:
     base_url = ctx.obj["base_url"]
     api_key = ctx.obj.get("api_key")
     if api_key:
@@ -228,26 +228,20 @@ def _resolve_api_key(ctx: click.Context) -> str:
     ctx.invoke(login)
     api_key = get_stored_api_key(expected_base_url=base_url)
     if not api_key:
-        raise click.ClickException(
-            "Login did not produce an API key; cannot start the agent."
-        )
+        raise click.ClickException("Login did not produce an API key; cannot start the agent.")
     return api_key
 
 
 _SKIP_VERIFY_HELP = "Skip the pre-launch key check against the proxy."
 
 
-def _launch(
-    ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool
-) -> None:
+def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
     base_url = ctx.obj["base_url"]
     started_interactive = _is_interactive()
-    api_key = _resolve_api_key(ctx)
+    api_key = resolve_api_key(ctx)
 
     display_name, _ = agent_profile(binary)
-    click.echo(
-        f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}"
-    )
+    click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
 
     try:
         run_agent(
@@ -255,9 +249,7 @@ def _launch(
             api_key,
             [binary, *args],
             skip_verify=skip_verify,
-            reattach_terminal=(
-                _restore_controlling_terminal if started_interactive else None
-            ),
+            reattach_terminal=(_restore_controlling_terminal if started_interactive else None),
         )
     except AgentRunError as e:
         raise click.ClickException(str(e))
@@ -286,10 +278,7 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
 
 def agent_commands() -> List[click.Command]:
     """Build one top-level command per known agent, e.g. `lite claude`."""
-    return [
-        _make_agent_command(binary, name)
-        for binary, (name, _profiles) in _KNOWN_AGENTS.items()
-    ]
+    return [_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items()]
 
 
 __all__ = [
@@ -299,5 +288,6 @@ __all__ = [
     "agent_launch_args",
     "verify_proxy_key",
     "agent_profile",
+    "resolve_api_key",
     "AgentRunError",
 ]

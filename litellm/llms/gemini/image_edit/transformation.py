@@ -78,9 +78,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        base_url = (
-            api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        base_url = api_base or get_secret_str("GEMINI_API_BASE") or self.DEFAULT_BASE_URL
         base_url = base_url.rstrip("/")
         return f"{base_url}/models/{model}:generateContent"
 
@@ -152,14 +150,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
 
         model_response.data = cast(List[OpenAIImage], data_list)
         if "usageMetadata" in response_json:
-            model_response.usage = transform_gemini_image_usage(
-                response_json["usageMetadata"]
-            )
+            model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
         return model_response
 
-    def _prepare_inline_image_parts(
-        self, image: Union[FileTypes, List[FileTypes]]
-    ) -> List[Dict[str, Any]]:
+    def _prepare_inline_image_parts(self, image: Union[FileTypes, List[FileTypes]]) -> List[Dict[str, Any]]:
         images: List[FileTypes]
         if isinstance(image, list):
             images = image

@@ -6,15 +6,17 @@ from pydantic import (
     ConfigDict,
     EmailStr,
     Field,
+    TypeAdapter,
     field_validator,
     model_serializer,
+    model_validator,
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
 
-SCIM_ENTERPRISE_USER_SCHEMA = (
-    "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
-)
+SCIM_ENTERPRISE_USER_SCHEMA = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 SCIM_ENTERPRISE_METADATA_KEY = "scim_enterprise"
+SCIM_ENTITLEMENTS_METADATA_KEY = "scim_entitlements"
+SCIM_ROLES_METADATA_KEY = "scim_roles"
 
 
 class LiteLLM_UserScimMetadata(BaseModel):
@@ -55,6 +57,28 @@ class SCIMUserGroup(BaseModel):
     type: Optional[str] = "direct"  # direct or indirect
 
 
+class SCIMMultiValuedAttribute(BaseModel):
+    value: str
+    display: Optional[str] = None
+    type: Optional[str] = None
+    primary: Optional[bool] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_bare_string(cls, data: object) -> object:
+        if isinstance(data, str):
+            return {"value": data}
+        return data
+
+
+SCIM_MULTI_VALUED_LIST_ADAPTER = TypeAdapter(List[SCIMMultiValuedAttribute])
+
+SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS = {
+    "entitlements": SCIM_ENTITLEMENTS_METADATA_KEY,
+    "roles": SCIM_ROLES_METADATA_KEY,
+}
+
+
 class SCIMUserManager(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -83,6 +107,8 @@ class SCIMUser(SCIMResource):
     active: bool = True
     emails: Optional[List[SCIMUserEmail]] = None
     groups: Optional[List[SCIMUserGroup]] = None
+    entitlements: Optional[List[SCIMMultiValuedAttribute]] = None
+    roles: Optional[List[SCIMMultiValuedAttribute]] = None
     enterprise_user: Optional[SCIMEnterpriseUser] = Field(
         default=None,
         alias=SCIM_ENTERPRISE_USER_SCHEMA,
@@ -90,13 +116,15 @@ class SCIMUser(SCIMResource):
     )
 
     @model_serializer(mode="wrap")
-    def _omit_absent_enterprise(
-        self, handler: SerializerFunctionWrapHandler
-    ) -> Dict[str, Any]:
+    def _omit_absent_optional_blocks(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
         dumped = handler(self)
         if self.enterprise_user is None:
             dumped.pop(SCIM_ENTERPRISE_USER_SCHEMA, None)
             dumped.pop("enterprise_user", None)
+        if self.entitlements is None:
+            dumped.pop("entitlements", None)
+        if self.roles is None:
+            dumped.pop("roles", None)
         return dumped
 
 

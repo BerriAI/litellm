@@ -70,9 +70,7 @@ async def handle_elicitation_request(
             )
         # No downstream session — we're in Tool Bridge mode
         # or the client doesn't support elicitation
-        verbose_logger.info(
-            "MCP elicitation: no downstream session available, declining"
-        )
+        verbose_logger.info("MCP elicitation: no downstream session available, declining")
         return ElicitResult(
             action="decline",
         )
@@ -105,23 +103,17 @@ async def _relay_elicitation_to_downstream(
     if downstream_capabilities is not None:
         elicit_caps = getattr(downstream_capabilities, "elicitation", None)
         if elicit_caps is None:
-            verbose_logger.info(
-                "MCP elicitation: downstream client does not support elicitation"
-            )
+            verbose_logger.info("MCP elicitation: downstream client does not support elicitation")
             return ElicitResult(action="decline")
         if mode == "url":
             url_cap = getattr(elicit_caps, "url", None)
             if url_cap is None:
-                verbose_logger.info(
-                    "MCP elicitation: downstream client does not support URL mode"
-                )
+                verbose_logger.info("MCP elicitation: downstream client does not support URL mode")
                 return ElicitResult(action="decline")
         if mode == "form":
             form_cap = getattr(elicit_caps, "form", None)
             if form_cap is None:
-                verbose_logger.info(
-                    "MCP elicitation: downstream client does not support form mode"
-                )
+                verbose_logger.info("MCP elicitation: downstream client does not support form mode")
                 return ElicitResult(action="decline")
     try:
         if mode == "url" and isinstance(params, ElicitRequestURLParams):
@@ -145,9 +137,7 @@ async def _relay_elicitation_to_downstream(
         else:
             # Fallback for generic ElicitRequestParams — pass an empty schema
             # since elicit() requires requestedSchema as a positional arg.
-            verbose_logger.info(
-                "MCP elicitation: relaying generic elicitation to downstream"
-            )
+            verbose_logger.info("MCP elicitation: relaying generic elicitation to downstream")
             result = await downstream_session.elicit(
                 message=getattr(params, "message", ""),
                 requestedSchema=getattr(params, "requestedSchema", {}),

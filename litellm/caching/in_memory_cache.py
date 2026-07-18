@@ -40,9 +40,7 @@ class InMemoryCache(BaseCache):
             max_size_in_memory if max_size_in_memory is not None else 200
         )  # set an upper bound of 200 items in-memory
         self.default_ttl = default_ttl or 600
-        self.max_size_per_item = (
-            max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
-        )  # 1MB = 1024KB
+        self.max_size_per_item = max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB  # 1MB = 1024KB
 
         # in-memory cache
         self.cache_dict: dict = {}
@@ -58,8 +56,7 @@ class InMemoryCache(BaseCache):
             # Fast path for common primitive types that are typically small
             if (
                 isinstance(value, (bool, int, float, str))
-                and len(str(value))
-                < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+                and len(str(value)) < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
             ):  # Conservative estimate
                 return True
 
@@ -73,9 +70,7 @@ class InMemoryCache(BaseCache):
                 return size <= self.max_size_per_item
 
             # Fallback for complex types
-            if isinstance(value, BaseModel) and hasattr(
-                value, "model_dump"
-            ):  # Pydantic v2
+            if isinstance(value, BaseModel) and hasattr(value, "model_dump"):  # Pydantic v2
                 value = value.model_dump()
             elif hasattr(value, "isoformat"):  # datetime objects
                 return True  # datetime strings are always small
@@ -257,9 +252,7 @@ class InMemoryCache(BaseCache):
     ) -> Optional[List[float]]:
         results = []
         for increment in increment_list:
-            result = await self.async_increment(
-                increment["key"], increment["increment_value"], **kwargs
-            )
+            result = await self.async_increment(increment["key"], increment["increment_value"], **kwargs)
             results.append(result)
         return results
 

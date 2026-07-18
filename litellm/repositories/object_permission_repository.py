@@ -99,12 +99,8 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         if search_tools is not None:
             data["search_tools"] = search_tools
 
-        return await self.update(
-            object_permission_id, data, id_field="object_permission_id"
-        )
+        return await self.update(object_permission_id, data, id_field="object_permission_id")
 
-    async def delete_permission(
-        self, object_permission_id: str
-    ) -> Optional[LiteLLM_ObjectPermissionTable]:
+    async def delete_permission(self, object_permission_id: str) -> Optional[LiteLLM_ObjectPermissionTable]:
         """Delete an object permission record."""
         return await self.delete(object_permission_id, id_field="object_permission_id")

@@ -64,9 +64,7 @@ class TestVertexAIMistralOCR(BaseOCRTest):
         if os.environ.get("LITELLM_RUN_LIVE_VERTEX_MISTRAL_OCR_TESTS") != "1":
             pytest.skip("Live Vertex AI Mistral OCR E2E tests are opt-in")
         if os.environ.get("CASSETTE_REDIS_URL"):
-            pytest.skip(
-                "Live Vertex AI Mistral OCR E2E tests cannot run under VCR replay"
-            )
+            pytest.skip("Live Vertex AI Mistral OCR E2E tests cannot run under VCR replay")
 
     def get_base_ocr_call_args(self) -> dict:
         """

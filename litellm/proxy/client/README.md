@@ -336,11 +336,12 @@ sequenceDiagram
 
 ### Authentication Commands
 
-The CLI provides three authentication commands:
+The CLI provides these authentication commands:
 
 - **`lite login`** - Start SSO authentication flow
 - **`lite logout`** - Clear stored authentication token
 - **`lite whoami`** - Show current authentication status
+- **`lite auth print-token`** - Print the cached token (used as Claude Code's `apiKeyHelper`); fails once the token has expired
 
 ### Authentication Flow Steps
 
@@ -375,6 +376,8 @@ Authentication tokens are stored in `~/.litellm/token.json` with restricted file
   "timestamp": 1234567890
 }
 ```
+
+The stored credential is a short-lived, per-session agent token, not a managed virtual key. It is scoped to the user and team you logged in as and inherits their models and budgets; spend is tracked against the shared team and user budgets rather than a separate per-session cap, so multiple logins or several concurrent agents all draw down the same allowance. It is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); re-run `lite login` to refresh it and pick up your latest team and user settings. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while fresh and fails once it expires -- there is no silent renewal. It is accepted on a default deployment without `EXPERIMENTAL_UI_LOGIN`, does not appear in the Keys UI, and cannot be rotated or revoked mid-session. For a long-lived, rotatable, Keys-UI-visible credential, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY`.
 
 ### Usage
 

@@ -1,6 +1,3 @@
-//! Shared mapper from `reqwest` failures to typed [`CoreError`] contracts,
-//! used by every endpoint in this crate that performs HTTP I/O.
-
 use litellm_core::error::CoreError;
 
 pub(crate) fn map_reqwest_error(err: reqwest::Error) -> CoreError {
@@ -13,7 +10,10 @@ pub(crate) fn map_reqwest_error(err: reqwest::Error) -> CoreError {
             body: String::new(),
         };
     }
-    if err.is_decode() {
+    if err.is_builder() {
+        return CoreError::InvalidRequest("invalid HTTP request".to_string());
+    }
+    if err.is_decode() || err.is_body() {
         return CoreError::InvalidResponse(err.without_url().to_string());
     }
     CoreError::Network(err.without_url().to_string())
@@ -72,21 +72,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn maps_connect_failure_to_network() {
+    async fn maps_closed_connection_to_network_without_url() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test listener binds");
         let addr = listener.local_addr().expect("listener has local addr");
-        drop(listener);
-        let err = reqwest::Client::new()
-            .get(format!("http://{addr}/?{QUERY_CANARY}"))
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accepts one request");
+            drop(socket);
+        });
+        let client = reqwest::Client::builder()
+            .resolve(URL_CANARY, addr)
+            .build()
+            .expect("test client builds");
+        let err = client
+            .get(format!(
+                "http://{URL_CANARY}:{}/?{QUERY_CANARY}",
+                addr.port()
+            ))
             .send()
             .await
-            .expect_err("connect failure surfaces");
-        assert!(err.is_connect());
+            .expect_err("closed connection surfaces");
         let mapped = map_reqwest_error(err);
         assert!(matches!(mapped, CoreError::Network(_)));
         assert_eq!(mapped.public_status_code(), None);
+        assert_no_canaries(&mapped.to_string());
+        assert_no_canaries(&mapped.public_message());
+        server.await.expect("server task completes");
+    }
+
+    #[tokio::test]
+    async fn maps_builder_failure_to_invalid_request() {
+        let err = reqwest::Client::new()
+            .get(format!("http://{URL_CANARY}/?{QUERY_CANARY}"))
+            .header("\n", "invalid")
+            .send()
+            .await
+            .expect_err("builder failure surfaces");
+        assert!(err.is_builder());
+        let mapped = map_reqwest_error(err);
+        assert_eq!(
+            mapped,
+            CoreError::InvalidRequest("invalid HTTP request".to_string())
+        );
+        assert_eq!(mapped.public_status_code(), Some(400));
         assert_no_canaries(&mapped.to_string());
         assert_no_canaries(&mapped.public_message());
     }
@@ -135,19 +164,6 @@ mod tests {
         let mapped = map_reqwest_error(err);
         assert!(matches!(mapped, CoreError::InvalidResponse(_)));
         assert_eq!(mapped.public_status_code(), Some(500));
-        assert_no_canaries(&mapped.to_string());
-        assert_no_canaries(&mapped.public_message());
-    }
-
-    #[tokio::test]
-    async fn maps_unresolvable_host_to_network_without_url() {
-        let err = reqwest::Client::new()
-            .get(format!("http://{URL_CANARY}/?{QUERY_CANARY}"))
-            .send()
-            .await
-            .expect_err("dns failure surfaces");
-        let mapped = map_reqwest_error(err);
-        assert!(matches!(mapped, CoreError::Network(_)));
         assert_no_canaries(&mapped.to_string());
         assert_no_canaries(&mapped.public_message());
     }
