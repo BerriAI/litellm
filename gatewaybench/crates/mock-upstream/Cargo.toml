@@ -1,0 +1,9 @@
+[package]
+name = "mock-upstream"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.8.9"
+serde_json = "1.0.150"
+tokio = { version = "1.53.0", features = ["rt-multi-thread", "macros", "net"] }

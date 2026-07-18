@@ -1,0 +1,6 @@
+[package]
+name = "test-tool-call-latency"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]

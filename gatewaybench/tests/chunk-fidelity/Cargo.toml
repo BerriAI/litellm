@@ -1,0 +1,6 @@
+[package]
+name = "test-chunk-fidelity"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]

@@ -1,0 +1,10 @@
+[package]
+name = "driver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gwbench-core = { version = "0.1.0", path = "../gwbench-core" }
+hdrhistogram = "7.6.0"
+reqwest = "0.13.4"
+tokio = { version = "1.53.0", features = ["rt-multi-thread", "macros"] }
