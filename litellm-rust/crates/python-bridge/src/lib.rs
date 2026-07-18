@@ -254,7 +254,7 @@ fn amessages(
         .await
         .map_err(core_error_to_pyerr)?;
 
-        Python::with_gil(|py| json_to_py(py, value))
+        Python::attach(|py| json_to_py(py, value))
     })
 }
 
