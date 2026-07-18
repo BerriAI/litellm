@@ -27,6 +27,7 @@ EXCLUDED_GUARD_ONLY_VARS = {
 # Temporary/internal rollout flags are intentionally not added to the public
 # environment settings docs until the feature is ready for broad use.
 EXCLUDED_ROLLOUT_FLAGS = {
+    "LITELLM_USE_RUST_MESSAGES",
     "LITELLM_USE_RUST_OCR",
 }
 
