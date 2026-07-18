@@ -475,12 +475,12 @@ def test_spend_logs_endpoint_returns_spend(
         )
     )
 
-    gateway = client.gateway
-    deadline = time.monotonic() + gateway.poll_timeout
+    proxy = client.proxy
+    deadline = time.monotonic() + proxy.poll_timeout
     while True:
-        result = gateway.transport.get(
+        result = proxy.transport.get(
             "/spend/logs",
-            headers=gateway.transport.master,
+            headers=proxy.transport.master,
             params=SpendLogsParams(api_key=scoped_key),
             response_type=SpendLogs,
         )
@@ -493,4 +493,4 @@ def test_spend_logs_endpoint_returns_spend(
                 f"/spend/logs never surfaced the key's spend before the deadline; "
                 f"saw {_summarize(rows)}"
             )
-        time.sleep(gateway.poll_interval)
+        time.sleep(proxy.poll_interval)

@@ -43,7 +43,7 @@ class TestChatCompletionsRegression:
         self, client: PassthroughClient, scoped_key: str, model: str, route: str
     ) -> None:
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 scoped_key,
                 ChatBody(
                     model=model,

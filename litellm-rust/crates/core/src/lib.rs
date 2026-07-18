@@ -2,6 +2,7 @@ pub mod cache;
 pub mod call_lifecycle;
 pub(crate) mod constants;
 pub mod error;
+pub mod messages;
 pub mod ocr;
 pub mod providers;
 pub mod realtime;

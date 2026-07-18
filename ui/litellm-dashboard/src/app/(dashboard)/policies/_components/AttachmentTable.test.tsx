@@ -1,62 +1,16 @@
 import React from "react";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import AttachmentTable from "./attachment_table";
+import AttachmentTable from "./AttachmentTable";
 import { PolicyAttachment } from "@/components/policies/types";
 
 vi.mock("./impact_popover", () => ({
-  default: () => <button aria-label="View blast radius" />,
-}));
-
-vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() {
-    return null;
-  },
-  SwitchVerticalIcon: function SwitchVerticalIcon() {
-    return null;
-  },
-  ChevronUpIcon: function ChevronUpIcon() {
-    return null;
-  },
-  ChevronDownIcon: function ChevronDownIcon() {
-    return null;
+  default: function ImpactPopoverMock() {
+    return <button aria-label="View blast radius" />;
   },
 }));
-
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children),
-    ),
-    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
-    Switch: ({
-      checked,
-      onChange,
-      className,
-    }: {
-      checked?: boolean;
-      onChange?: (v: boolean) => void;
-      className?: string;
-    }) =>
-      React.createElement("input", {
-        type: "checkbox",
-        role: "switch",
-        checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange?.(e.target.checked),
-        className,
-      }),
-    Icon: ({ icon: IconComp, onClick, className }: any) =>
-      React.createElement(
-        "button",
-        { type: "button", onClick, className },
-        IconComp?.displayName ?? IconComp?.name ?? "icon",
-      ),
-  };
-});
 
 const makeAttachment = (overrides: Partial<PolicyAttachment> = {}): PolicyAttachment => ({
   attachment_id: "att-abcdef1",
@@ -82,19 +36,26 @@ describe("AttachmentTable", () => {
     vi.clearAllMocks();
   });
 
-  it("should render", () => {
+  it("should render column headers", () => {
     renderWithProviders(<AttachmentTable {...defaultProps} />);
+    expect(screen.getByText("Attachment ID")).toBeInTheDocument();
     expect(screen.getByText("Policy")).toBeInTheDocument();
+    expect(screen.getByText("Scope")).toBeInTheDocument();
+    expect(screen.getByText("Teams")).toBeInTheDocument();
+    expect(screen.getByText("Keys")).toBeInTheDocument();
+    expect(screen.getByText("Models")).toBeInTheDocument();
+    expect(screen.getByText("Tags")).toBeInTheDocument();
+    expect(screen.getByText("Created At")).toBeInTheDocument();
   });
 
-  it("should show a loading message when isLoading is true", () => {
+  it("should show skeleton rows when isLoading is true", () => {
     renderWithProviders(<AttachmentTable {...defaultProps} isLoading />);
-    expect(screen.getByText(/loading/i)).toBeInTheDocument();
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
   });
 
-  it("should show 'No attachments found' when there are no attachments", () => {
+  it("should show the empty state when there are no attachments", () => {
     renderWithProviders(<AttachmentTable {...defaultProps} />);
-    expect(screen.getByText(/no attachments found/i)).toBeInTheDocument();
+    expect(screen.getByText("No attachments found")).toBeInTheDocument();
   });
 
   it("should render a row for each attachment", () => {
@@ -107,13 +68,24 @@ describe("AttachmentTable", () => {
     expect(screen.getByText("policy-beta")).toBeInTheDocument();
   });
 
+  it("should sort rows by created_at descending by default", () => {
+    const attachments = [
+      makeAttachment({ attachment_id: "att-old0001", policy_name: "older-policy", created_at: "2024-01-01T00:00:00Z" }),
+      makeAttachment({ attachment_id: "att-new0001", policy_name: "newer-policy", created_at: "2025-06-01T00:00:00Z" }),
+    ];
+    renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("newer-policy")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("older-policy")).toBeInTheDocument();
+  });
+
   it("should show 'Global (*)' badge when scope is '*'", () => {
     const attachments = [makeAttachment({ scope: "*" })];
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
     expect(screen.getByText("Global (*)")).toBeInTheDocument();
   });
 
-  it("should show team tags when the attachment has teams", () => {
+  it("should show team chips when the attachment has teams", () => {
     const attachments = [makeAttachment({ teams: ["team-alpha", "team-beta"] })];
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
     expect(screen.getByText("team-alpha")).toBeInTheDocument();
@@ -126,18 +98,37 @@ describe("AttachmentTable", () => {
     expect(screen.getByText("+2")).toBeInTheDocument();
   });
 
-  it("should call onDeleteClick with the attachment_id when the delete icon is clicked", async () => {
+  it("should call onDeleteClick with the attachment_id from the actions menu", async () => {
     const attachment = makeAttachment({ attachment_id: "att-del-me1" });
     const user = userEvent.setup();
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} />);
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    await user.click(screen.getByTestId("attachment-actions-att-del-me1"));
+    await user.click(await screen.findByTestId("attachment-action-delete"));
     expect(defaultProps.onDeleteClick).toHaveBeenCalledWith("att-del-me1");
   });
 
-  it("should not show the delete icon for non-admins", () => {
+  it("should not show the delete item for non-admins", async () => {
+    const attachment = makeAttachment({ attachment_id: "att-nonadmin" });
+    const user = userEvent.setup();
+    renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} isAdmin={false} />);
+    await user.click(screen.getByTestId("attachment-actions-att-nonadmin"));
+    expect(await screen.findByTestId("attachment-action-copy-id")).toBeInTheDocument();
+    expect(screen.queryByTestId("attachment-action-delete")).not.toBeInTheDocument();
+  });
+
+  it("should copy the attachment id from the actions menu", async () => {
+    const attachment = makeAttachment({ attachment_id: "att-copy-me1" });
+    const user = userEvent.setup();
+    renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} />);
+    await user.click(screen.getByTestId("attachment-actions-att-copy-me1"));
+    await user.click(await screen.findByTestId("attachment-action-copy-id"));
+    expect(await window.navigator.clipboard.readText()).toBe("att-copy-me1");
+  });
+
+  it("should show the blast radius action for non-admins", () => {
     const attachment = makeAttachment();
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} isAdmin={false} />);
-    expect(screen.queryByRole("button", { name: /TrashIcon/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View blast radius" })).toBeInTheDocument();
   });
 
   it("should show the attachment ID as truncated plain mono text", () => {
@@ -149,7 +140,7 @@ describe("AttachmentTable", () => {
     expect(idElement.className).not.toContain("bg-blue-50");
   });
 
-  it("should render model tags when the attachment has models", () => {
+  it("should render model chips when the attachment has models", () => {
     const attachments = [makeAttachment({ models: ["gpt-4", "claude-3"] })];
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
     expect(screen.getByText("gpt-4")).toBeInTheDocument();
