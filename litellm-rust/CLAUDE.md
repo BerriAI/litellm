@@ -77,6 +77,26 @@ such as `ai-gateway`, router hosts, or standalone servers:
 - Avoid `expect`/`unwrap` in server startup and request paths unless the panic is
   impossible by construction and documented.
 
+## Rust Style Guide
+
+All Rust in `litellm-rust/` follows the official Rust Style Guide:
+https://doc.rust-lang.org/style-guide/
+
+`rustfmt` implements the guide's formatting rules by default, so the mechanical
+side is enforced for you: run `cargo fmt` before committing and CI gates every
+PR on `cargo fmt --check` (see Checks). Do not hand-format against rustfmt or add
+a `rustfmt.toml` that diverges from the default style; the default style *is* the
+guide.
+
+The guide also covers conventions rustfmt cannot auto-apply; follow these too:
+- Naming: `snake_case` for items, functions, and modules; `UpperCamelCase` for
+  types, traits, and enum variants; `SCREAMING_SNAKE_CASE` for constants and
+  statics; acronyms count as one word (`HttpClient`, not `HTTPClient`).
+- Ordering and grouping the guide prescribes: imports grouped std / external /
+  crate-local, derives before other attributes, and consistent item order.
+- Idioms the guide recommends over the formatter fighting you (e.g. prefer
+  restructuring an over-long expression rather than forcing an awkward wrap).
+
 ## Constants
 
 Magic numbers and fixed strings go in a crate-level `constants.rs`, never
