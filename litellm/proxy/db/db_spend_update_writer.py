@@ -797,6 +797,12 @@ class DBSpendUpdateWriter:
         ):
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
+            # Track everything popped from Redis. Each category is removed once it
+            # has been committed to the DB, so whatever is left after a failure can
+            # be re-queued for the next tick instead of being lost. Committed
+            # categories are never re-queued, so their spend is not double-counted.
+            uncommitted: dict[str, Any] = {}  # mutable-ok: drives which popped categories still need re-queuing
+
             try:
                 (
                     db_spend_update_transactions,
@@ -806,6 +812,15 @@ class DBSpendUpdateWriter:
                     daily_end_user_spend_update_transactions,
                     daily_agent_spend_update_transactions,
                 ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+                uncommitted = {  # mutable-ok: drives which popped categories still need re-queuing
+                    "db_spend_update_transactions": db_spend_update_transactions,
+                    "daily_spend_update_transactions": daily_spend_update_transactions,
+                    "daily_team_spend_update_transactions": daily_team_spend_update_transactions,
+                    "daily_org_spend_update_transactions": daily_org_spend_update_transactions,
+                    "daily_end_user_spend_update_transactions": daily_end_user_spend_update_transactions,
+                    "daily_agent_spend_update_transactions": daily_agent_spend_update_transactions,
+                }
 
                 if db_spend_update_transactions is not None:
                     verbose_proxy_logger.info(
@@ -826,6 +841,7 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         db_spend_update_transactions=db_spend_update_transactions,
                     )
+                uncommitted.pop("db_spend_update_transactions", None)
 
                 if daily_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_user_spend(
@@ -834,6 +850,8 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_spend_update_transactions,
                     )
+                uncommitted.pop("daily_spend_update_transactions", None)
+
                 if daily_team_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_team_spend(
                         n_retry_times=n_retry_times,
@@ -841,6 +859,7 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_team_spend_update_transactions,
                     )
+                uncommitted.pop("daily_team_spend_update_transactions", None)
 
                 if daily_org_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_org_spend(
@@ -849,6 +868,7 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_org_spend_update_transactions,
                     )
+                uncommitted.pop("daily_org_spend_update_transactions", None)
 
                 if daily_end_user_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_end_user_spend(
@@ -857,6 +877,8 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_end_user_spend_update_transactions,
                     )
+                uncommitted.pop("daily_end_user_spend_update_transactions", None)
+
                 if daily_agent_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_agent_spend(
                         n_retry_times=n_retry_times,
@@ -864,14 +886,20 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_agent_spend_update_transactions,
                     )
+                uncommitted.pop("daily_agent_spend_update_transactions", None)
             except Exception as e:
                 spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
-                    "Data already popped from Redis may be lost. Error: %s",
+                    "Re-queuing uncommitted transactions to Redis for retry on next tick. Error: %s",
                     str(e),
                     exc=e,
                 )
             finally:
+                to_restore = {  # mutable-ok: transient kwargs payload consumed immediately below
+                    name: txns for name, txns in uncommitted.items() if txns is not None
+                }
+                if to_restore:
+                    await self.redis_update_buffer.restore_transactions_to_redis(**to_restore)
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
                 )
@@ -1020,11 +1048,11 @@ class DBSpendUpdateWriter:
             cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
         ):
             verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
+            daily_tag_spend_update_transactions = (
+                await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+            )
+            committed = False
             try:
-                daily_tag_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
-                )
-
                 if daily_tag_spend_update_transactions:
                     await DBSpendUpdateWriter.update_daily_tag_spend(
                         n_retry_times=n_retry_times,
@@ -1032,14 +1060,19 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_tag_spend_update_transactions,
                     )
+                committed = True
             except Exception as e:
                 spend_log_error(
                     "Spend tracking - failed to commit daily tag spend updates from Redis to DB. "
-                    "Data already popped from Redis may be lost. Error: %s",
+                    "Re-queuing to Redis for retry on next tick. Error: %s",
                     str(e),
                     exc=e,
                 )
             finally:
+                if not committed and daily_tag_spend_update_transactions:
+                    await self.redis_update_buffer.restore_transactions_to_redis(
+                        daily_tag_spend_update_transactions=daily_tag_spend_update_transactions,
+                    )
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
                 )
