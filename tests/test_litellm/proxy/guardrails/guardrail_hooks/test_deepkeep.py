@@ -530,6 +530,89 @@ class TestDeepKeepGuardrail:
         assert result["structured_messages"] == sample_structured
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_applies_structured_messages_redactions_from_response(self):
+        """should use redacted structured_messages from the response instead of the original input."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-key",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        original_structured = [{"role": "user", "content": "my ssn is 123-45-6789"}]
+        redacted_structured = [{"role": "user", "content": "my ssn is [REDACTED]"}]
+
+        mock_response = Response(
+            status_code=200,
+            json={
+                "action": "GUARDRAIL_INTERVENED",
+                "blocked_reason": None,
+                "texts": None,
+                "images": None,
+                "structured_messages": redacted_structured,
+            },
+            request=Request(
+                "POST",
+                "https://test.deepkeep.ai/v3/openai/beta/litellm_basic_guardrail_api",
+            ),
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"], "structured_messages": original_structured},
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+
+        assert result["structured_messages"] == redacted_structured
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_honours_empty_structured_messages_replacement(self):
+        """should honour an intentional empty structured_messages replacement rather than falling back."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-key",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        mock_response = Response(
+            status_code=200,
+            json={
+                "action": "GUARDRAIL_INTERVENED",
+                "blocked_reason": None,
+                "texts": None,
+                "images": None,
+                "structured_messages": [],
+            },
+            request=Request(
+                "POST",
+                "https://test.deepkeep.ai/v3/openai/beta/litellm_basic_guardrail_api",
+            ),
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["hi"], "structured_messages": [{"role": "user", "content": "hi"}]},
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+
+        assert result["structured_messages"] == []
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_applies_tool_redactions_from_response(self):
         """should use redacted tools/tool_calls from response when GUARDRAIL_INTERVENED returns them."""
         guardrail = DeepKeepGuardrail(

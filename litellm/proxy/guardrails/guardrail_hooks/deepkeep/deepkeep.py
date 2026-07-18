@@ -259,7 +259,9 @@ class DeepKeepGuardrail(CustomGuardrail):
             return_inputs["tool_calls"] = response_json["tool_calls"]
         elif tool_calls is not None:
             return_inputs["tool_calls"] = tool_calls
-        if structured_messages is not None:
+        if response_json.get("structured_messages") is not None:
+            return_inputs["structured_messages"] = response_json["structured_messages"]
+        elif structured_messages is not None:
             return_inputs["structured_messages"] = structured_messages
         return return_inputs
 
