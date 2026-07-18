@@ -107,6 +107,15 @@ class RaisingAsyncMessages:
         raise RuntimeError("upstream request failed with status 400: bad request")
 
 
+class NoneAsyncMessages:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, **kwargs: object) -> dict[str, object] | None:
+        self.calls += 1
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     litellm.use_litellm_rust(False, messages=None, amessages=None)
@@ -252,6 +261,28 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
+async def test_gate_invokes_rust_for_native_anthropic_provider():
+    bridge = RecordingAsyncMessages()
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    response = await _gate(
+        custom_llm_provider="anthropic",
+        api_key="sk-ant-test",
+        api_base="https://api.anthropic.com",
+        headers={"anthropic-version": "2023-06-01"},
+        litellm_params=GenericLiteLLMParams(api_key="sk-ant-test", rust=True),
+    )
+
+    assert response is not None
+    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
+    call = bridge.calls[0]
+    assert call["custom_llm_provider"] == "anthropic"
+    assert call["api_key"] == "sk-ant-test"
+    assert call["api_base"] == "https://api.anthropic.com"
+    assert call["extra_headers"] == {"anthropic-version": "2023-06-01"}
+
+
+@pytest.mark.asyncio
 async def test_gate_falls_back_to_python_when_bridge_raises():
     bridge = RaisingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
@@ -265,7 +296,7 @@ async def test_gate_falls_back_to_python_when_bridge_raises():
 @pytest.mark.asyncio
 async def test_gate_skips_rust_when_flag_absent():
     bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.use_litellm_rust(False, amessages=bridge)
 
     response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
 
@@ -276,7 +307,7 @@ async def test_gate_skips_rust_when_flag_absent():
 @pytest.mark.asyncio
 async def test_gate_skips_rust_when_flag_false():
     bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.use_litellm_rust(False, amessages=bridge)
 
     response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure", rust=False))
 
@@ -285,14 +316,14 @@ async def test_gate_skips_rust_when_flag_false():
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_for_non_azure_provider():
-    bridge = ExplodingAsyncMessages()
+async def test_gate_skips_rust_for_non_listed_provider():
+    bridge = NoneAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
 
-    response = await _gate(custom_llm_provider="anthropic")
+    response = await _gate(custom_llm_provider="openai")
 
     assert response is None
-    assert bridge.calls == 0
+    assert bridge.calls == 1
 
 
 @pytest.mark.asyncio
