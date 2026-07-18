@@ -36,6 +36,7 @@ from litellm.proxy.proxy_server import (
     data_generator,
     select_data_generator,
 )
+from litellm.router_strategy.complexity_router.config import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
 from .conftest import normalize
@@ -270,6 +271,21 @@ def test_restamp_streaming_chunk_model_overrides_model_on_basemodel():
         "same_object": new_chunk is chunk,
     }
     assert snapshot == {"model": "gpt-4", "logged": True, "same_object": True}
+
+
+@pytest.mark.parametrize("return_raw_model_name", [False, True])
+def test_restamp_streaming_chunk_model_respects_raw_model_name_toggle(return_raw_model_name):
+    chunk = _simple_chunk(model="gpt-4o-mini")
+    new_chunk, logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="auto_router/complexity_router",
+        request_data={"metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: return_raw_model_name}},
+        model_mismatch_logged=False,
+    )
+
+    expected_model = "gpt-4o-mini" if return_raw_model_name else "auto_router/complexity_router"
+    assert new_chunk.model == expected_model
+    assert logged is (not return_raw_model_name)
 
 
 def test_restamp_streaming_chunk_model_overrides_model_on_dict():

@@ -30,6 +30,7 @@ TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
 )
 
 DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
+RETURN_RAW_MODEL_NAME_METADATA_KEY: str = "_complexity_router_return_raw_model_name"
 
 
 class KeywordTierRule(BaseModel):
@@ -309,6 +310,14 @@ class ComplexityRouterConfig(BaseModel):
     default_model: str | None = Field(
         default=None,
         description="Default model to use if tier cannot be determined",
+    )
+
+    return_raw_model_name: bool = Field(
+        default=False,
+        description=(
+            "Return the resolved raw model name in the response model field instead of "
+            "the client-requested complexity-router alias"
+        ),
     )
 
     # Classifier strategy

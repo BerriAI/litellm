@@ -27,11 +27,13 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.utils import ProxyLogging
+from litellm.router_strategy.complexity_router.config import RETURN_RAW_MODEL_NAME_METADATA_KEY
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -1675,6 +1677,31 @@ class TestExtractErrorFromSSEChunk:
 class TestOverrideOpenAIResponseModel:
     """Tests for _override_openai_response_model function"""
 
+    @pytest.mark.parametrize("return_raw_model_name", [False, True])
+    def test_raw_model_name_toggle(self, return_raw_model_name):
+        response_obj = {"model": "gpt-4o-mini"}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="auto_router/complexity_router",
+            log_context="test_context",
+            return_raw_model_name=return_raw_model_name,
+        )
+
+        expected_model = "gpt-4o-mini" if return_raw_model_name else "auto_router/complexity_router"
+        assert response_obj["model"] == expected_model
+
+    @pytest.mark.parametrize(
+        "request_data, expected",
+        [
+            ({"metadata": {}}, False),
+            ({"metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}}, True),
+            ({"litellm_metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}}, True),
+        ],
+    )
+    def test_raw_model_name_toggle_metadata(self, request_data, expected):
+        assert _should_return_raw_model_name(request_data) is expected
+
     def test_override_model_preserves_fallback_model_when_fallback_occurred_object(
         self,
     ):
@@ -3203,8 +3230,6 @@ class TestDisconnectGatherCleanup:
     async def test_base_process_llm_request_preserves_llm_error_after_gather(
         self, monkeypatch
     ):
-        import asyncio
-
         import litellm.proxy.common_request_processing as cpr
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 

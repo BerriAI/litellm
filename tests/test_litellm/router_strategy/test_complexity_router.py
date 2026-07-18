@@ -27,6 +27,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     ComplexityRouterConfig,
     ComplexityTier,
 )
@@ -124,6 +125,29 @@ class TestComplexityRouterInit:
             default_model="fallback-model",
         )
         assert router.config.default_model == "fallback-model"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("return_raw_model_name", [False, True])
+    async def test_pre_routing_hook_propagates_raw_model_response_setting(
+        self, mock_router_instance, basic_config, return_raw_model_name
+    ):
+        config = {**basic_config, "return_raw_model_name": return_raw_model_name}
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+        request_kwargs = {}
+
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        assert result is not None
+        metadata = request_kwargs.get("metadata", {})
+        assert metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY, False) is return_raw_model_name
 
 
 class TestTokenScoring:

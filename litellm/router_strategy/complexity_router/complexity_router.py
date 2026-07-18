@@ -32,6 +32,7 @@ from .config import (
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     TIER_SEVERITY_ORDER,
     ComplexityRouterConfig,
     ComplexityTier,
@@ -955,6 +956,12 @@ class ComplexityRouter(CustomLogger):
         budget plugin, once the session's spend crosses its cap).
         """
         from litellm.types.router import PreRoutingHookResponse
+
+        if self.config.return_raw_model_name:
+            metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
+            metadata = request_kwargs.setdefault(metadata_key, {})
+            if isinstance(metadata, dict):
+                metadata[RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
 
         use_session_affinity = self.config.session_affinity and not self.config.plugins
         session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
