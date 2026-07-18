@@ -14,6 +14,7 @@ import pytest
 
 from e2e_config import UI_BASE_URL, UI_PASSWORD, UI_USERNAME
 from management_client import ManagementClient, build_client
+from proxy_client import ProxyClient
 
 if TYPE_CHECKING:
     from playwright.sync_api import Browser, Page
@@ -27,8 +28,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(scope="session")
-def client() -> ManagementClient:
-    return build_client()
+def client(proxy: ProxyClient) -> ManagementClient:
+    return build_client(proxy)
 
 
 @pytest.fixture(scope="session")

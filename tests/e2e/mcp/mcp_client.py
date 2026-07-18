@@ -15,9 +15,9 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from e2e_gateway import Gateway, build_gateway
 from e2e_http import Headers, NoBody, Result, unwrap
 from models import KeyGenerateBody, ObjectPermission
+from proxy_client import ProxyClient
 
 
 class ApiKeyHeaders(Headers):
@@ -92,31 +92,31 @@ class McpCallToolResponse(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class McpClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def register_server(self, *, server_name: str, alias: str, url: str) -> str:
         return unwrap(
-            self.gateway.transport.post(
+            self.proxy.transport.post(
                 "/v1/mcp/server",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 json=McpServerNewBody(server_name=server_name, alias=alias, url=url),
                 response_type=McpServerNewResponse,
             )
         ).server_id
 
     def delete_server(self, server_id: str) -> None:
-        _ = self.gateway.transport.delete(
+        _ = self.proxy.transport.delete(
             f"/v1/mcp/server/{server_id}",
-            headers=self.gateway.transport.master,
+            headers=self.proxy.transport.master,
             json=NoBody(),
             response_type=NoBody,
         )
 
     def registered_servers(self) -> list[McpServerRow]:
         return unwrap(
-            self.gateway.transport.get(
+            self.proxy.transport.get(
                 "/v1/mcp/server",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 params=NoBody(),
                 response_type=McpServersListResponse,
             )
@@ -126,12 +126,12 @@ class McpClient:
         object_permission = (
             ObjectPermission(mcp_servers=mcp_servers) if mcp_servers is not None else None
         )
-        return self.gateway.generate_key(
+        return self.proxy.generate_key(
             KeyGenerateBody(models=[], user_id=user_id, object_permission=object_permission)
         )
 
     def list_tools(self, key: str) -> Result[McpToolsListResponse]:
-        return self.gateway.transport.get(
+        return self.proxy.transport.get(
             "/mcp-rest/tools/list",
             headers=ApiKeyHeaders(x_litellm_api_key=key),
             params=NoBody(),
@@ -141,7 +141,7 @@ class McpClient:
     def call_tool(
         self, key: str, *, server_id: str, name: str, arguments: dict[str, int]
     ) -> Result[McpCallToolResponse]:
-        return self.gateway.transport.post(
+        return self.proxy.transport.post(
             "/mcp-rest/tools/call",
             headers=ApiKeyHeaders(x_litellm_api_key=key),
             json=McpCallToolBody(name=name, arguments=arguments, server_id=server_id),
@@ -149,5 +149,5 @@ class McpClient:
         )
 
 
-def build_client() -> McpClient:
-    return McpClient(gateway=build_gateway())
+def build_client(proxy: ProxyClient) -> McpClient:
+    return McpClient(proxy=proxy)

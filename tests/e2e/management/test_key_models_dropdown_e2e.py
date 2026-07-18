@@ -104,8 +104,8 @@ def _provision_team(client: ManagementClient, resources: ResourceManager, alias:
 def _provision_key(
     client: ManagementClient, resources: ResourceManager, alias: str, team_id: str | None = None
 ) -> str:
-    key = client.gateway.generate_key(KeyGenerateBody(key_alias=alias, models=["gpt-5.5"], team_id=team_id))
-    resources.defer(lambda: client.gateway.delete_key(key))
+    key = client.proxy.generate_key(KeyGenerateBody(key_alias=alias, models=["gpt-5.5"], team_id=team_id))
+    resources.defer(lambda: client.proxy.delete_key(key))
     return key
 
 
@@ -122,9 +122,9 @@ class TestKeyModelsDropdownUI:
         assert "All Team Models" not in options, f"teamless create offered 'All Team Models': {options}"
 
         key = _submit_create_modal(ui_page, sentinel_label="All Proxy Models")
-        resources.defer(lambda: client.gateway.delete_key(key))
+        resources.defer(lambda: client.proxy.delete_key(key))
 
-        info = client.gateway.key_info(key)
+        info = client.proxy.key_info(key)
         assert info.models == ["all-proxy-models"], f"persisted models {info.models}"
         assert info.team_id is None, f"teamless key persisted with team {info.team_id}"
 
@@ -144,9 +144,9 @@ class TestKeyModelsDropdownUI:
         assert "all-proxy-models" not in options, f"team key create offered the raw sentinel: {options}"
 
         key = _submit_create_modal(ui_page, sentinel_label="All Team Models")
-        resources.defer(lambda: client.gateway.delete_key(key))
+        resources.defer(lambda: client.proxy.delete_key(key))
 
-        info = client.gateway.key_info(key)
+        info = client.proxy.key_info(key)
         assert info.models == ["all-team-models"], f"persisted models {info.models}"
         assert info.team_id == team_id, f"persisted team {info.team_id}, expected {team_id}"
 

@@ -1,7 +1,7 @@
-"""Spend-tracking e2e client: a Gateway plus the spend-specific read endpoints.
+"""Spend-tracking e2e client: a ProxyClient plus the spend-specific read endpoints.
 
 Generic proxy operations (keys, customers, chat/embed, route probing, SpendLogs
-polling) come from the shared Gateway, DI'd in (composition, not inheritance).
+polling) come from the shared ProxyClient, DI'd in (composition, not inheritance).
 This client adds only the spend surface: /spend/calculate, /spend/tags,
 key-spend polling, and the route probes the breadth test uses.
 
@@ -27,7 +27,7 @@ from e2e_http import (
     is_ok,
     unwrap,
 )
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from models import (
     ChatBody,
     ChatMessage,
@@ -96,7 +96,7 @@ def _chat_body(
 
 @dataclass(frozen=True, slots=True)
 class SpendClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def chat(
         self,
@@ -108,19 +108,19 @@ class SpendClient:
         tags: list[str] | None = None,
         user: str | None = None,
     ) -> Result[ChatResponse]:
-        return self.gateway.chat(
+        return self.proxy.chat(
             key, _chat_body(model, content, max_tokens=max_tokens, tags=tags, user=user)
         )
 
     def chat_stream(
         self, key: str, model: str, content: str, *, max_tokens: int | None = None
     ) -> StreamingResponse:
-        return self.gateway.chat_stream(
+        return self.proxy.chat_stream(
             key, _chat_body(model, content, max_tokens=max_tokens, stream=True)
         )
 
     def embed(self, key: str, model: str, content: str) -> Result[EmbedResponse]:
-        return self.gateway.embed(key, EmbedBody(model=model, input=content))
+        return self.proxy.embed(key, EmbedBody(model=model, input=content))
 
     def poll_logs_for_key(
         self,
@@ -129,15 +129,15 @@ class SpendClient:
         min_rows: int = 1,
         predicate: Callable[[list[SpendLogRow]], bool] | None = None,
     ) -> list[SpendLogRow]:
-        return self.gateway.poll_logs_for_key(
+        return self.proxy.poll_logs_for_key(
             key, min_rows=min_rows, predicate=predicate
         )
 
     def calculate_spend(self, model: str, content: str) -> float:
         return unwrap(
-            self.gateway.transport.post(
+            self.proxy.transport.post(
                 "/spend/calculate",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 json=SpendCalculateBody(
                     model=model, messages=[ChatMessage(role="user", content=content)]
                 ),
@@ -146,9 +146,9 @@ class SpendClient:
         ).cost
 
     def spend_by_tags(self) -> list[TagSpend]:
-        result = self.gateway.transport.get(
+        result = self.proxy.transport.get(
             "/spend/tags",
-            headers=self.gateway.transport.master,
+            headers=self.proxy.transport.master,
             params=NoBody(),
             response_type=SpendTagsResponse,
         )
@@ -160,7 +160,7 @@ class SpendClient:
 
     def poll_tag_spend(self, tag: str, *, minimum: float = 0.0) -> TagSpend | None:
         """Poll /spend/tags until the tag's aggregate reaches `minimum`; last seen."""
-        deadline = time.monotonic() + self.gateway.poll_timeout
+        deadline = time.monotonic() + self.proxy.poll_timeout
         entry: TagSpend | None = None
         while time.monotonic() < deadline:
             matches = [
@@ -170,17 +170,17 @@ class SpendClient:
                 entry = matches[0]
                 if (entry.total_spend or 0.0) >= minimum:
                     return entry
-            time.sleep(self.gateway.poll_interval)
+            time.sleep(self.proxy.poll_interval)
         return entry
 
     def poll_key_spend(self, key: str, *, minimum: float = 0.0) -> float:
-        deadline = time.monotonic() + self.gateway.poll_timeout
+        deadline = time.monotonic() + self.proxy.poll_timeout
         spend = 0.0
         while time.monotonic() < deadline:
-            spend = self.gateway.key_info(key).spend or 0.0
+            spend = self.proxy.key_info(key).spend or 0.0
             if spend > minimum:
                 return spend
-            time.sleep(self.gateway.poll_interval)
+            time.sleep(self.proxy.poll_interval)
         return spend
 
     def spend_logs_page(
@@ -191,9 +191,9 @@ class SpendClient:
         now = datetime.now(timezone.utc)
         fmt = "%Y-%m-%d %H:%M:%S"
         return unwrap(
-            self.gateway.transport.get(
+            self.proxy.transport.get(
                 "/spend/logs/v2",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 params=SpendLogsPageParams(
                     start_date=(now - timedelta(days=1)).strftime(fmt),
                     end_date=(now + timedelta(days=1)).strftime(fmt),
@@ -206,18 +206,18 @@ class SpendClient:
         )
 
     def probe(self, path: str, *, params: DateRangeParams) -> ProbeResult:
-        return self.gateway.transport.probe(path, params=params)
+        return self.proxy.transport.probe(path, params=params)
 
     def openapi(self) -> OpenAPISchema:
         return unwrap(
-            self.gateway.transport.get(
+            self.proxy.transport.get(
                 "/openapi.json",
-                headers=self.gateway.transport.master,
+                headers=self.proxy.transport.master,
                 params=NoBody(),
                 response_type=OpenAPISchema,
             )
         )
 
 
-def build_client() -> SpendClient:
-    return SpendClient(gateway=build_gateway())
+def build_client(proxy: ProxyClient) -> SpendClient:
+    return SpendClient(proxy=proxy)
