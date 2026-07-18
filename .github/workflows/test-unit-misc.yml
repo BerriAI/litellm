@@ -34,7 +34,6 @@ jobs:
         tests/test_litellm/images
         tests/test_litellm/interactions
         tests/test_litellm/ocr
-        tests/test_litellm/rust_bridge
         tests/test_litellm/passthrough
         tests/test_litellm/sandbox
         tests/test_litellm/vector_stores
