@@ -43,6 +43,7 @@ from models import (
     ModelInfoBody,
     ModelInfoEntry,
     ModelInfoResponse,
+    ModelListResponse,
     ModelMode,
     ModelNewBody,
     ModelNewResponse,
@@ -125,6 +126,21 @@ class Gateway:
                 response_type=ModelInfoResponse,
             )
         ).data
+
+    def list_models(self, key: str) -> list[str]:
+        """The public model names GET /v1/models lists as callable for `key`,
+        the same visibility an OpenAI-compatible client (e.g. OpenWebUI) sees."""
+        return [
+            entry.id
+            for entry in unwrap(
+                self.transport.get(
+                    "/v1/models",
+                    headers=self.transport.bearer(key),
+                    params=NoBody(),
+                    response_type=ModelListResponse,
+                )
+            ).data
+        ]
 
     def list_files(self, key: str) -> Result[FileListResponse]:
         return self.transport.get(

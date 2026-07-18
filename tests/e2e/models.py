@@ -389,6 +389,14 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class ModelListEntry(BaseModel):
+    id: str
+
+
+class ModelListResponse(BaseModel):
+    data: list[ModelListEntry] = []
+
+
 class FileEntry(BaseModel):
     id: str
 
@@ -472,10 +480,6 @@ class ModelNewBody(BaseModel):
 class ModelNewResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
-
-
-class ModelListEntry(BaseModel):
-    id: str
 
 
 class ModelsListResponse(BaseModel):
