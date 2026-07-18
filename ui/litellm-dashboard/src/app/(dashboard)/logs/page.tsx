@@ -2,22 +2,16 @@
 
 import SpendLogsTable from "@/components/view_logs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
-const LogsPage = () => {
-  const { accessToken, token, userRole, userId, premiumUser } = useAuthorized();
-  const { teams } = useTeams();
-
+export default function Logs() {
+  const { accessToken, userRole, userId, token, premiumUser } = useAuthorized();
   return (
     <SpendLogsTable
-      accessToken={accessToken}
-      token={token}
-      userRole={userRole}
       userID={userId}
-      allTeams={teams || []}
+      userRole={userRole}
+      token={token}
+      accessToken={accessToken}
       premiumUser={premiumUser}
     />
   );
-};
-
-export default LogsPage;
+}

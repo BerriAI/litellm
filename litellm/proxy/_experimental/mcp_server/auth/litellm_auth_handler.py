@@ -20,7 +20,7 @@ class MCPAuthenticatedUser(AuthenticatedUser):
 
     def __init__(
         self,
-        user_api_key_auth: UserAPIKeyAuth,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,

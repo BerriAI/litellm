@@ -2,6 +2,7 @@
 Tests for JSON-based provider configuration system.
 """
 
+import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -99,7 +100,8 @@ class TestJSONProviderLoader:
 
     def test_tool_params_excluded_when_function_calling_not_supported(self):
         """Test that tool-related params are excluded for models that don't support
-        function calling. Regression test for https://github.com/BerriAI/litellm/issues/21125"""
+        function calling. Regression test for https://github.com/BerriAI/litellm/issues/21125
+        """
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -111,11 +113,17 @@ class TestJSONProviderLoader:
         with patch("litellm.utils.supports_function_calling", return_value=False):
             supported = config.get_supported_openai_params("some-model-without-fc")
 
-        tool_params = ["tools", "tool_choice", "function_call", "functions", "parallel_tool_calls"]
+        tool_params = [
+            "tools",
+            "tool_choice",
+            "function_call",
+            "functions",
+            "parallel_tool_calls",
+        ]
         for param in tool_params:
-            assert param not in supported, (
-                f"'{param}' should not be in supported params when function calling is not supported"
-            )
+            assert (
+                param not in supported
+            ), f"'{param}' should not be in supported params when function calling is not supported"
 
         # Non-tool params should still be present
         assert "temperature" in supported
@@ -168,6 +176,168 @@ class TestJSONProviderLoader:
         assert config.custom_llm_provider == "publicai"
 
 
+class TestPinstripes:
+    """Tests for Pinstripes JSON-configured provider"""
+
+    def test_pinstripes_json_config_exists(self):
+        """Test that pinstripes is configured in providers.json"""
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        assert JSONProviderRegistry.exists("pinstripes")
+
+        pinstripes = JSONProviderRegistry.get("pinstripes")
+        assert pinstripes is not None
+        assert pinstripes.base_url == "https://pinstripes.io/v1"
+        assert pinstripes.api_key_env == "PINSTRIPES_API_KEY"
+        assert pinstripes.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_pinstripes_provider_resolution(self):
+        """Test that provider resolution finds pinstripes and returns the default base URL"""
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="pinstripes/ps/glm-4.5-air",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "ps/glm-4.5-air"
+        assert provider == "pinstripes"
+        assert api_base == "https://pinstripes.io/v1"
+
+    def test_pinstripes_dynamic_config(self):
+        """Test dynamic config class creation for pinstripes"""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("pinstripes")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://pinstripes.io/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom.pinstripes.io/v1", "test-key"
+        )
+        assert api_base == "https://custom.pinstripes.io/v1"
+        assert api_key == "test-key"
+
+    def test_pinstripes_parameter_mapping(self):
+        """Test that max_completion_tokens is mapped to max_tokens for pinstripes"""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("pinstripes")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        optional_params = {}
+        non_default_params = {"max_completion_tokens": 100, "temperature": 0.7}
+        result = config.map_openai_params(
+            non_default_params, optional_params, "ps/glm-4.5-air", False
+        )
+
+        assert "max_tokens" in result
+        assert result["max_tokens"] == 100
+        assert "max_completion_tokens" not in result
+        assert result["temperature"] == 0.7
+
+
+class TestDarkbloom:
+    def test_darkbloom_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        darkbloom = JSONProviderRegistry.get("darkbloom")
+        assert darkbloom is not None
+        assert darkbloom.base_url == "https://api.darkbloom.dev/v1"
+        assert darkbloom.api_key_env == "DARKBLOOM_API_KEY"
+        assert darkbloom.api_base_env == "DARKBLOOM_API_BASE"
+        assert darkbloom.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_darkbloom_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="darkbloom/gemma-4-26b",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "gemma-4-26b"
+        assert provider == "darkbloom"
+        assert api_key is None
+        assert api_base == "https://api.darkbloom.dev/v1"
+
+    def test_darkbloom_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("darkbloom")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.darkbloom.dev/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom.darkbloom.dev/v1", "test-key"
+        )
+        assert api_base == "https://custom.darkbloom.dev/v1"
+        assert api_key == "test-key"
+
+    def test_darkbloom_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("darkbloom")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        url = config.get_complete_url(
+            api_base="https://api.darkbloom.dev/v1",
+            api_key="test-key",
+            model="darkbloom/gemma-4-26b",
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://api.darkbloom.dev/v1/chat/completions"
+
+    def test_darkbloom_provider_config_manager(self):
+        from litellm import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="gemma-4-26b", provider=LlmProviders.DARKBLOOM
+        )
+
+        assert config is not None
+        assert config.custom_llm_provider == "darkbloom"
+
+    def test_darkbloom_model_cost_map(self):
+        with open(
+            os.path.join(workspace_path, "model_prices_and_context_window.json")
+        ) as f:
+            model_cost = json.load(f)
+
+        expected_models = {
+            "darkbloom/gemma-4-26b": (3e-08, 1.65e-07),
+            "darkbloom/gpt-oss-20b": (1.45e-08, 7e-08),
+        }
+        for model, (input_cost, output_cost) in expected_models.items():
+            assert model in model_cost
+            assert model_cost[model]["litellm_provider"] == "darkbloom"
+            assert model_cost[model]["max_output_tokens"] == 32768
+            assert model_cost[model]["supports_function_calling"] is True
+            assert model_cost[model]["supports_tool_choice"] is True
+            assert model_cost[model]["input_cost_per_token"] == input_cost
+            assert model_cost[model]["output_cost_per_token"] == output_cost
+
+
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
 
@@ -182,7 +352,12 @@ class TestPublicAIIntegration:
         try:
             response = litellm.completion(
                 model="publicai/swiss-ai/apertus-8b-instruct",
-                messages=[{"role": "user", "content": "Say 'test successful' and nothing else"}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Say 'test successful' and nothing else",
+                    }
+                ],
                 max_tokens=10,
             )
 
@@ -198,7 +373,9 @@ class TestPublicAIIntegration:
             content = response.choices[0].message.content.lower()
             assert len(content) > 0
 
-            print(f"✓ PublicAI completion successful: {response.choices[0].message.content}")
+            print(
+                f"✓ PublicAI completion successful: {response.choices[0].message.content}"
+            )
 
         except Exception as e:
             if pytest:
@@ -285,12 +462,7 @@ class TestPublicAIIntegration:
             response = litellm.completion(
                 model="publicai/swiss-ai/apertus-8b-instruct",
                 messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Say hello"}
-                        ]
-                    }
+                    {"role": "user", "content": [{"type": "text", "text": "Say hello"}]}
                 ],
                 max_tokens=10,
             )
@@ -310,50 +482,50 @@ class TestPublicAIIntegration:
 if __name__ == "__main__":
     # Run basic tests
     print("Testing JSON Provider System...")
-    
+
     test_loader = TestJSONProviderLoader()
     print("\n1. Testing JSON provider loading...")
     test_loader.test_load_json_providers()
     print("   ✓ JSON providers loaded")
-    
+
     print("\n2. Testing dynamic config generation...")
     test_loader.test_dynamic_config_generation()
     print("   ✓ Dynamic config works")
-    
+
     print("\n3. Testing parameter mapping...")
     test_loader.test_parameter_mapping()
     print("   ✓ Parameter mapping works")
-    
+
     print("\n4. Testing excluded params...")
     test_loader.test_excluded_params()
     print("   ✓ Excluded params work")
-    
+
     print("\n5. Testing provider resolution...")
     test_loader.test_provider_resolution()
     print("   ✓ Provider resolution works")
-    
+
     print("\n6. Testing provider config manager...")
     test_loader.test_provider_config_manager()
     print("   ✓ Config manager works")
-    
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print("PublicAI Integration Tests...")
-    print("="*50)
-    
+    print("=" * 50)
+
     test_integration = TestPublicAIIntegration()
-    
+
     print("\n7. Testing basic completion...")
     test_integration.test_publicai_completion_basic()
-    
+
     print("\n8. Testing streaming...")
     test_integration.test_publicai_completion_with_streaming()
-    
+
     print("\n9. Testing parameter mapping...")
     test_integration.test_publicai_parameter_mapping()
-    
+
     print("\n10. Testing content list conversion...")
     test_integration.test_publicai_content_list_conversion()
-    
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print("✓ All tests passed!")
-    print("="*50)
+    print("=" * 50)

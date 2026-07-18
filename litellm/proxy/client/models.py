@@ -27,9 +27,7 @@ class ModelsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(
-        self, return_request: bool = False
-    ) -> Union[List[Dict[str, Any]], requests.Request]:
+    def list(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
         """
         Get the list of models supported by the server.
 
@@ -111,9 +109,7 @@ class ModelsManagementClient:
                 raise UnauthorizedError(e)
             raise
 
-    def delete(
-        self, model_id: str, return_request: bool = False
-    ) -> Union[Dict[str, Any], requests.Request]:
+    def delete(self, model_id: str, return_request: bool = False) -> Union[Dict[str, Any], requests.Request]:
         """
         Delete a model from the proxy.
 
@@ -175,9 +171,7 @@ class ModelsManagementClient:
             NotFoundError: If the model is not found
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        if (model_id is None and model_name is None) or (
-            model_id is not None and model_name is not None
-        ):
+        if (model_id is None and model_name is None) or (model_id is not None and model_name is not None):
             raise ValueError("Exactly one of model_id or model_name must be provided")
 
         # If return_request is True, delegate to info
@@ -211,9 +205,7 @@ class ModelsManagementClient:
             )
         )
 
-    def info(
-        self, return_request: bool = False
-    ) -> Union[List[Dict[str, Any]], requests.Request]:
+    def info(self, return_request: bool = False) -> Union[List[Dict[str, Any]], requests.Request]:
         """
         Get detailed information about all models from the server.
 

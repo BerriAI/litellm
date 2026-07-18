@@ -31,7 +31,9 @@ def test_validate_tool_choice_cursor_format():
     """Test Cursor IDE format: {"type": "auto"} -> {"type": "auto"}."""
     assert validate_chat_completion_tool_choice({"type": "auto"}) == {"type": "auto"}
     assert validate_chat_completion_tool_choice({"type": "none"}) == {"type": "none"}
-    assert validate_chat_completion_tool_choice({"type": "required"}) == {"type": "required"}
+    assert validate_chat_completion_tool_choice({"type": "required"}) == {
+        "type": "required"
+    }
 
 
 def test_validate_tool_choice_invalid_dict():
@@ -40,12 +42,12 @@ def test_validate_tool_choice_invalid_dict():
     with pytest.raises(Exception) as exc_info:
         validate_chat_completion_tool_choice({})
     assert "Invalid tool choice" in str(exc_info.value)
-    
+
     # Invalid type value
     with pytest.raises(Exception) as exc_info:
         validate_chat_completion_tool_choice({"type": "invalid"})
     assert "Invalid tool choice" in str(exc_info.value)
-    
+
     # Has type but missing function when type is "function"
     with pytest.raises(Exception) as exc_info:
         validate_chat_completion_tool_choice({"type": "function"})
@@ -57,7 +59,7 @@ def test_validate_tool_choice_invalid_type():
     with pytest.raises(Exception) as exc_info:
         validate_chat_completion_tool_choice(123)
     assert "Got=<class 'int'>" in str(exc_info.value)
-    
+
     with pytest.raises(Exception) as exc_info:
         validate_chat_completion_tool_choice([])
     assert "Got=<class 'list'>" in str(exc_info.value)

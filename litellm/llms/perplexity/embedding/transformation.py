@@ -34,9 +34,7 @@ class PerplexityEmbeddingError(BaseLLMException):
     ):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://api.perplexity.ai/v1/embeddings"
-        )
+        self.request = httpx.Request(method="POST", url="https://api.perplexity.ai/v1/embeddings")
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             status_code=status_code,
@@ -99,9 +97,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
-            api_key = get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str(
-                "PERPLEXITY_API_KEY"
-            )
+            api_key = get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -152,9 +148,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise PerplexityEmbeddingError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise PerplexityEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
         model_response.model = raw_response_json.get("model", model)
         model_response.object = raw_response_json.get("object", "list")
@@ -163,16 +157,13 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         decoded_data: List[Dict[str, Any]] = []
         for item in raw_data:
             decoded_item = dict(item)
-            decoded_item["embedding"] = self._decode_base64_embedding(
-                item.get("embedding")
-            )
+            decoded_item["embedding"] = self._decode_base64_embedding(item.get("embedding"))
             decoded_data.append(decoded_item)
         model_response.data = decoded_data
 
         usage_data = raw_response_json.get("usage", {})
         usage = Usage(
-            prompt_tokens=usage_data.get("prompt_tokens", 0)
-            or usage_data.get("total_tokens", 0),
+            prompt_tokens=usage_data.get("prompt_tokens", 0) or usage_data.get("total_tokens", 0),
             total_tokens=usage_data.get("total_tokens", 0),
         )
         model_response.usage = usage
@@ -184,6 +175,4 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         status_code: int,
         headers: Union[dict, httpx.Headers],
     ) -> BaseLLMException:
-        return PerplexityEmbeddingError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+        return PerplexityEmbeddingError(message=error_message, status_code=status_code, headers=headers)

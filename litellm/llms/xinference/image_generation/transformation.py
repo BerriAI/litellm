@@ -13,9 +13,7 @@ class XInferenceImageGenerationConfig(BaseImageGenerationConfig):
     https://inference.readthedocs.io/en/v1.1.1/reference/generated/xinference.client.handlers.ImageModelHandle.text_to_image.html#xinference.client.handlers.ImageModelHandle.text_to_image
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         return ["n", "response_format", "size", "response_format"]
 
     def map_openai_params(

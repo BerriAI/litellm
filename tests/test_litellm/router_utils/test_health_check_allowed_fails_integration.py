@@ -48,7 +48,8 @@ class TestHealthCheckEndpointExceptionPropagation:
     @pytest.mark.asyncio
     async def test_unhealthy_endpoint_dict_exception_in_map(self):
         """When ahealth_check returns {"error": ..., "exception": e}, the exception
-        must appear in exceptions_by_model_id keyed by model_id — not in the endpoint dict."""
+        must appear in exceptions_by_model_id keyed by model_id — not in the endpoint dict.
+        """
         from unittest.mock import AsyncMock, patch
 
         from litellm.proxy.health_check import _perform_health_check
@@ -66,7 +67,9 @@ class TestHealthCheckEndpointExceptionPropagation:
 
         with patch(
             "litellm.proxy.health_check.litellm.ahealth_check",
-            new=AsyncMock(return_value={"error": "auth failed", "exception": auth_error}),
+            new=AsyncMock(
+                return_value={"error": "auth failed", "exception": auth_error}
+            ),
         ):
             healthy, unhealthy, exc_map = await _perform_health_check(model_list)
 

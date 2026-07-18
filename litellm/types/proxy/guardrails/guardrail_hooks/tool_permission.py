@@ -20,9 +20,7 @@ class ToolPermissionRule(BaseModel):
         default=None,
         description="Regex pattern applied to the tool type (e.g., function)",
     )
-    decision: Literal["allow", "deny"] = Field(
-        description="Whether to allow or deny this tool usage"
-    )
+    decision: Literal["allow", "deny"] = Field(description="Whether to allow or deny this tool usage")
     allowed_param_patterns: Optional[Dict[str, str]] = Field(
         default=None,
         description="Optional regex map enforcing nested parameter values using dot/[] paths",
@@ -51,9 +49,7 @@ class ToolPermissionRule(BaseModel):
     @model_validator(mode="after")
     def _ensure_target_present(self):
         if self.tool_name is None and self.tool_type is None:
-            raise ValueError(
-                "Each rule must specify at least a tool_name or tool_type regex"
-            )
+            raise ValueError("Each rule must specify at least a tool_name or tool_type regex")
         return self
 
 
@@ -63,9 +59,7 @@ class ToolResult(BaseModel):
     """
 
     type: str = Field(default="tool_result", description="Should be 'tool_result'")
-    tool_use_id: str = Field(
-        description="ID of the tool use this result corresponds to"
-    )
+    tool_use_id: str = Field(description="ID of the tool use this result corresponds to")
     content: str = Field(description="Result content")
     is_error: bool = Field(default=True, description="Whether this is an error result")
 

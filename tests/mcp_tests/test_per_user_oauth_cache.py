@@ -183,6 +183,31 @@ class TestValidateTokenResponse:
                 server_id="atlassian",
             )
 
+    def test_boolean_value_matches_lowercase_string_rule(self):
+        """Boolean ``True`` in token response must match the JSON-style rule ``"true"``.
+
+        Admin config is typically written as ``{"verified": "true"}`` (lower-case
+        from JSON / YAML), but the OAuth response returns ``{"verified": true}``
+        (Python ``True``). The normaliser must align them.
+        """
+        _validate_token_response = _import_validate()
+        token_response = {"access_token": "tok", "verified": True}
+        # Should not raise
+        _validate_token_response(
+            token_response=token_response,
+            validation_rules={"verified": "true"},
+            server_id="test",
+        )
+
+    def test_boolean_false_matches_lowercase_string_rule(self):
+        _validate_token_response = _import_validate()
+        token_response = {"access_token": "tok", "is_admin": False}
+        _validate_token_response(
+            token_response=token_response,
+            validation_rules={"is_admin": "false"},
+            server_id="test",
+        )
+
 
 # ── _compute_per_user_token_ttl ──────────────────────────────────────────────
 
@@ -236,10 +261,11 @@ class TestMCPPerUserTokenCache:
 
     @pytest.mark.asyncio
     async def test_get_returns_none_on_miss(self, cache, mock_dual_cache):
-        with patch(
-            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.decrypt_value_helper"
-        ) as mock_decrypt, patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.oauth2_token_cache.decrypt_value_helper"
+            ) as mock_decrypt,
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
         ):
             mock_dual_cache.async_get_cache.return_value = None
             result = await cache.get("alice", "slack-test")
@@ -250,11 +276,12 @@ class TestMCPPerUserTokenCache:
     async def test_get_decrypts_cached_value(self, cache, mock_dual_cache):
         fake_encrypted = "encrypted_blob_abc123"
         fake_plaintext = "xoxb-slack-token"
-        with patch(
-            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.decrypt_value_helper",
-            return_value=fake_plaintext,
-        ) as mock_decrypt, patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.oauth2_token_cache.decrypt_value_helper",
+                return_value=fake_plaintext,
+            ) as mock_decrypt,
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
         ):
             mock_dual_cache.async_get_cache.return_value = fake_encrypted
             result = await cache.get("alice", "slack-test")
@@ -269,11 +296,12 @@ class TestMCPPerUserTokenCache:
     @pytest.mark.asyncio
     async def test_set_encrypts_before_storing(self, cache, mock_dual_cache):
         fake_encrypted = "encrypted_blob_xyz"
-        with patch(
-            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.encrypt_value_helper",
-            return_value=fake_encrypted,
-        ) as mock_encrypt, patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.oauth2_token_cache.encrypt_value_helper",
+                return_value=fake_encrypted,
+            ) as mock_encrypt,
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
         ):
             await cache.set("alice", "slack-test", "xoxb-token", ttl=3540)
 
@@ -285,11 +313,12 @@ class TestMCPPerUserTokenCache:
 
     @pytest.mark.asyncio
     async def test_set_uses_correct_cache_key(self, cache, mock_dual_cache):
-        with patch(
-            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.encrypt_value_helper",
-            return_value="enc",
-        ), patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.oauth2_token_cache.encrypt_value_helper",
+                return_value="enc",
+            ),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
         ):
             await cache.set("bob", "github-server", "ghp_token", ttl=3600)
 
@@ -299,9 +328,7 @@ class TestMCPPerUserTokenCache:
     @pytest.mark.asyncio
     async def test_delete_calls_async_delete_cache(self, cache, mock_dual_cache):
         mock_dual_cache.async_delete_cache = AsyncMock()
-        with patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache
-        ):
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache):
             await cache.delete("alice", "slack-test")
 
         mock_dual_cache.async_delete_cache.assert_called_once_with(
@@ -312,11 +339,12 @@ class TestMCPPerUserTokenCache:
     @pytest.mark.asyncio
     async def test_get_returns_none_on_decrypt_failure(self, cache, mock_dual_cache):
         """Cache misses and decrypt errors should both return None without raising."""
-        with patch(
-            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.decrypt_value_helper",
-            return_value=None,  # decrypt returns None on failure
-        ), patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.oauth2_token_cache.decrypt_value_helper",
+                return_value=None,  # decrypt returns None on failure
+            ),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
         ):
             mock_dual_cache.async_get_cache.return_value = "bad_encrypted_data"
             result = await cache.get("alice", "slack-test")
@@ -327,11 +355,12 @@ class TestMCPPerUserTokenCache:
     async def test_set_is_noop_on_cache_error(self, cache, mock_dual_cache):
         """Errors in the cache layer must not propagate to the caller."""
         mock_dual_cache.async_set_cache.side_effect = RuntimeError("Redis down")
-        with patch(
-            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.encrypt_value_helper",
-            return_value="enc",
-        ), patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.oauth2_token_cache.encrypt_value_helper",
+                return_value="enc",
+            ),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_dual_cache),
         ):
             # Should not raise
             await cache.set("alice", "slack-test", "token", ttl=3600)
@@ -353,9 +382,7 @@ class TestRefreshUserOauthToken:
             "type": "oauth2",
             "access_token": "OLD_TOKEN",
             "refresh_token": "REFRESH_TOKEN_123",
-            "expires_at": (
-                datetime.now(timezone.utc) - timedelta(hours=1)
-            ).isoformat(),
+            "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
         }
 
     @pytest.mark.asyncio
@@ -426,16 +453,20 @@ class TestRefreshUserOauthToken:
         }
         mock_prisma = AsyncMock()
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db.get_async_httpx_client",
-            return_value=mock_client,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
-            new_callable=AsyncMock,
-        ) as mock_store, patch(
-            "litellm.proxy._experimental.mcp_server.db.get_user_oauth_credential",
-            new_callable=AsyncMock,
-            return_value=stored_cred,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
+                new_callable=AsyncMock,
+            ) as mock_store,
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_user_oauth_credential",
+                new_callable=AsyncMock,
+                return_value=stored_cred,
+            ),
         ):
             result = await refresh_user_oauth_token(
                 prisma_client=mock_prisma,
@@ -455,9 +486,7 @@ class TestRefreshUserOauthToken:
         assert call_kwargs.get("skip_byok_guard") is True
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_old_refresh_token_when_not_rotated(
-        self, server, cred
-    ):
+    async def test_falls_back_to_old_refresh_token_when_not_rotated(self, server, cred):
         """When provider doesn't return a new refresh_token, keep the old one."""
         from litellm.proxy._experimental.mcp_server.db import refresh_user_oauth_token
 
@@ -472,16 +501,20 @@ class TestRefreshUserOauthToken:
         mock_client = AsyncMock()
         mock_client.post.return_value = new_token_response
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db.get_async_httpx_client",
-            return_value=mock_client,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
-            new_callable=AsyncMock,
-        ) as mock_store, patch(
-            "litellm.proxy._experimental.mcp_server.db.get_user_oauth_credential",
-            new_callable=AsyncMock,
-            return_value={"type": "oauth2", "access_token": "NEW_TOKEN"},
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.store_user_oauth_credential",
+                new_callable=AsyncMock,
+            ) as mock_store,
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_user_oauth_credential",
+                new_callable=AsyncMock,
+                return_value={"type": "oauth2", "access_token": "NEW_TOKEN"},
+            ),
         ):
             await refresh_user_oauth_token(
                 prisma_client=AsyncMock(),

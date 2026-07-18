@@ -113,7 +113,7 @@ class TestTextFormatConversion:
             captured_request["model"] = model
             captured_request["input"] = input
             captured_request["params"] = response_api_optional_request_params
-            
+
             # Return a mock ResponsesAPIResponse wrapped in a coroutine if async
             async def async_response():
                 return ResponsesAPIResponse(
@@ -132,7 +132,7 @@ class TestTextFormatConversion:
                     error=None,
                     incomplete_details=None,
                 )
-            
+
             if _is_async:
                 return async_response()
             else:
@@ -168,7 +168,9 @@ class TestTextFormatConversion:
             )
 
             # Verify the captured request
-            print("Captured request:", json.dumps(captured_request, indent=4, default=str))
+            print(
+                "Captured request:", json.dumps(captured_request, indent=4, default=str)
+            )
 
             # Validate that text_format was converted to text parameter
             assert (

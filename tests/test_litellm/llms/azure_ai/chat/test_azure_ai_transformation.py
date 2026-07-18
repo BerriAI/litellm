@@ -77,14 +77,17 @@ def test_azure_ai_validate_environment_with_azure_ad_token():
     import litellm
 
     config = AzureAIStudioConfig()
-    with patch(
-        "litellm.llms.azure.common_utils.get_azure_ad_token",
-        return_value="fake-azure-ad-token",
-    ), patch(
-        "litellm.llms.azure.common_utils.get_secret_str",
-        return_value=None,
-    ), patch.object(litellm, "api_key", None), patch.object(
-        litellm, "azure_key", None
+    with (
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token",
+            return_value="fake-azure-ad-token",
+        ),
+        patch(
+            "litellm.llms.azure.common_utils.get_secret_str",
+            return_value=None,
+        ),
+        patch.object(litellm, "api_key", None),
+        patch.object(litellm, "azure_key", None),
     ):
         headers = config.validate_environment(
             headers={},
@@ -105,18 +108,18 @@ def test_azure_ai_grok_stop_parameter_handling():
     Test that Grok models properly handle stop parameter filtering in Azure AI Studio.
     """
     config = AzureAIStudioConfig()
-    
+
     # Test Grok model detection
     assert config._supports_stop_reason("grok-4-fast") == False
     assert config._supports_stop_reason("grok-4") == False
     assert config._supports_stop_reason("grok-3-mini") == False
     assert config._supports_stop_reason("grok-code-fast") == False
     assert config._supports_stop_reason("gpt-4") == True
-    
+
     # Test supported parameters for Grok models
     grok_params = config.get_supported_openai_params("grok-4-fast")
     assert "stop" not in grok_params, "Grok models should not support stop parameter"
-    
+
     # Test supported parameters for non-Grok models
     gpt_params = config.get_supported_openai_params("gpt-4")
     assert "stop" in gpt_params, "GPT models should support stop parameter"
@@ -126,20 +129,20 @@ def test_azure_model_router_response_shows_actual_model():
     """
     Test that Azure Model Router returns the actual model used in the response,
     not the router model.
-    
+
     According to the documentation, when using Azure Model Router, the response
     should show the actual model that handled the request (e.g., gpt-5-nano-2025-08-07)
     rather than the router model (e.g., model-router).
-    
+
     Regression test for: Azure Model Router should show actual model in response
     """
     from httpx import Response
 
     from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
     from litellm.types.utils import ModelResponse
-    
+
     config = AzureModelRouterConfig()
-    
+
     # Mock raw response from Azure that includes the actual model used
     raw_response_json = {
         "id": "chatcmpl-test123",
@@ -162,21 +165,21 @@ def test_azure_model_router_response_shows_actual_model():
             "total_tokens": 15,
         },
     }
-    
+
     # Create mock Response object
     mock_response = MagicMock(spec=Response)
     mock_response.json.return_value = raw_response_json
     mock_response.text = json.dumps(raw_response_json)
     mock_response.headers = {}
-    
+
     # Create ModelResponse object
     model_response = ModelResponse()
-    
+
     # Create mock logging object with required methods
     logging_obj = MagicMock(spec=LiteLLMLoggingObj)
     logging_obj.post_call = MagicMock()
     logging_obj.model_call_details = {}
-    
+
     # Call transform_response with router model
     result = config.transform_response(
         model="model-router",  # This is the router model (without prefix)
@@ -191,9 +194,71 @@ def test_azure_model_router_response_shows_actual_model():
         api_key="test-key",
         json_mode=False,
     )
-    
+
     # Verify that the response contains the actual model used, not the router model
     assert result.model == "azure_ai/gpt-5-nano-2025-08-07", (
         f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
         f"but got '{result.model}'"
     )
+
+
+def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
+    """
+    Regression test: Azure AI returns 400 when tools contain copilot_mcp_server_name.
+    LiteLLM should strip the field and retry automatically.
+    """
+    import httpx
+
+    config = AzureAIStudioConfig()
+
+    error_text = json.dumps(
+        {
+            "error": {
+                "message": "2 request validation errors: Extra inputs are not permitted, field: 'tools[0].copilot_mcp_server_name', value: 'github-mcp-server'; Extra inputs are not permitted, field: 'tools[1].copilot_mcp_server_name', value: 'ide'"
+            }
+        }
+    )
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = error_text
+    mock_response.json.return_value = json.loads(error_text)
+    mock_response.status_code = 400
+    e = httpx.HTTPStatusError(
+        message="400", request=MagicMock(), response=mock_response
+    )
+
+    assert config._error_has_tool_level_extra_fields(error_text) is True
+    assert (
+        config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
+    )
+
+    request_data = {
+        "model": "FW-Kimi-K2.6",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "tools": [
+            {
+                "type": "function",
+                "copilot_mcp_server_name": "github-mcp-server",
+                "function": {
+                    "name": "github_search_code",
+                    "description": "Search code",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "copilot_mcp_server_name": "ide",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+    }
+
+    result = config.transform_request_on_unprocessable_entity_error(e, request_data)
+
+    for tool in result["tools"]:
+        assert "copilot_mcp_server_name" not in tool
+    assert result["tools"][0]["type"] == "function"
+    assert result["tools"][1]["function"]["name"] == "read_file"

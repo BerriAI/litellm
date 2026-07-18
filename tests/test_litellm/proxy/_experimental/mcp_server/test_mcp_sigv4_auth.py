@@ -557,10 +557,7 @@ class TestSigV4CredentialEncryption:
 
         # Secrets should be encrypted
         assert result["aws_access_key_id"] == "enc:AKIAIOSFODNN7EXAMPLE"
-        assert (
-            result["aws_secret_access_key"]
-            == "enc:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        )
+        assert result["aws_secret_access_key"] == "enc:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         assert result["aws_session_token"] == "enc:FwoGZX..."
         # Non-secrets should be unchanged
         assert result["aws_region_name"] == "us-east-1"
@@ -602,12 +599,8 @@ class TestCredentialMergeOnUpdate:
         )
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
-            return_value=existing_record
-        )
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
-            return_value=MagicMock()
-        )
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -615,12 +608,15 @@ class TestCredentialMergeOnUpdate:
             credentials={"aws_region_name": "eu-west-1"},
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: value,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: value,
+            ),
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
 
@@ -643,9 +639,7 @@ class TestCredentialMergeOnUpdate:
         from litellm.proxy._types import UpdateMCPServerRequest
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
-            return_value=MagicMock()
-        )
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -672,12 +666,8 @@ class TestCredentialMergeOnUpdate:
         existing_record.credentials = None
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
-            return_value=existing_record
-        )
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
-            return_value=MagicMock()
-        )
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -685,12 +675,15 @@ class TestCredentialMergeOnUpdate:
             credentials={"aws_region_name": "us-east-1"},
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: value,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: value,
+            ),
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
 
@@ -715,12 +708,8 @@ class TestCredentialMergeOnUpdate:
         )
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
-            return_value=existing_record
-        )
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
-            return_value=MagicMock()
-        )
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -728,12 +717,15 @@ class TestCredentialMergeOnUpdate:
             credentials={"auth_value": "my-key"},
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: f"enc:{value}",
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: f"enc:{value}",
+            ),
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
 
@@ -759,12 +751,8 @@ class TestCredentialMergeOnUpdate:
         )
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
-            return_value=existing_record
-        )
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
-            return_value=MagicMock()
-        )
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -772,12 +760,15 @@ class TestCredentialMergeOnUpdate:
             credentials={"scopes": ["read", "write"]},
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: value,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: value,
+            ),
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
 
@@ -838,14 +829,18 @@ class TestSigV4BuildFromTable:
         table_record.tool_name_to_description = None
         table_record.byok_api_key_help_url = None
         table_record.oauth2_flow = None
+        table_record.token_exchange_endpoint = None
+        table_record.audience = None
+        table_record.subject_token_type = None
+        table_record.token_exchange_profile = None
+        table_record.instructions = None
+        table_record.source_url = None
 
         manager = MCPServerManager()
 
         with patch(
             "litellm.proxy._experimental.mcp_server.mcp_server_manager.decrypt_value_helper",
-            side_effect=lambda value, key, exception_type, return_original_value: value.replace(
-                "enc:", ""
-            ),
+            side_effect=lambda value, key, exception_type, return_original_value: value.replace("enc:", ""),
         ):
             server = await manager.build_mcp_server_from_table(table_record)
 
@@ -895,14 +890,18 @@ class TestSigV4BuildFromTable:
         table_record.tool_name_to_description = None
         table_record.byok_api_key_help_url = None
         table_record.oauth2_flow = None
+        table_record.token_exchange_endpoint = None
+        table_record.audience = None
+        table_record.subject_token_type = None
+        table_record.token_exchange_profile = None
+        table_record.instructions = None
+        table_record.source_url = None
 
         manager = MCPServerManager()
 
         with patch(
             "litellm.proxy._experimental.mcp_server.mcp_server_manager.decrypt_value_helper",
-            side_effect=lambda value, key, exception_type, return_original_value: value.replace(
-                "enc:", ""
-            ),
+            side_effect=lambda value, key, exception_type, return_original_value: value.replace("enc:", ""),
         ):
             server = await manager.build_mcp_server_from_table(table_record)
 
@@ -934,7 +933,9 @@ class TestDecryptCredentials:
 
         with patch(
             "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
-            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc:", ""),
+            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace(
+                "enc:", ""
+            ),
         ):
             result = decrypt_credentials(credentials=creds)
 
@@ -956,7 +957,9 @@ class TestDecryptCredentials:
 
         with patch(
             "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
-            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc:", ""),
+            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace(
+                "enc:", ""
+            ),
         ):
             result = decrypt_credentials(credentials=creds)
 
@@ -981,26 +984,29 @@ class TestRotateCredentials:
             "aws_secret_access_key": "enc_old:SAK",
             "aws_region_name": "us-east-1",
         }
+        server.env_vars = None
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
-            return_value=[server]
-        )
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[server])
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value="old-key",
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
-            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc_old:", ""),
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: f"enc_new:{value}",
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value="old-key",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
+                side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace(
+                    "enc_old:", ""
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: f"enc_new:{value}",
+            ),
         ):
-            await rotate_mcp_server_credentials_master_key(
-                mock_prisma, "admin", "new-key"
-            )
+            await rotate_mcp_server_credentials_master_key(mock_prisma, "admin", "new-key")
 
         update_call = mock_prisma.db.litellm_mcpservertable.update
         assert update_call.called
@@ -1010,6 +1016,54 @@ class TestRotateCredentials:
         assert stored_creds["aws_secret_access_key"] == "enc_new:SAK"
         # Non-secret fields should pass through unchanged
         assert stored_creds["aws_region_name"] == "us-east-1"
+
+    @pytest.mark.asyncio
+    async def test_rotation_reencrypts_global_env_vars(self):
+        """Global env var values are re-encrypted under the new key; user-scope
+        placeholders are left untouched."""
+        from litellm.proxy._experimental.mcp_server.db import (
+            rotate_mcp_server_credentials_master_key,
+        )
+
+        server = MagicMock()
+        server.server_id = "srv-env"
+        server.credentials = None
+        server.env_vars = [
+            {"name": "API_KEY", "value": "enc_old:secret", "scope": "global"},
+            {"name": "USER_TOKEN", "value": "", "scope": "user"},
+        ]
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[server])
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value="old-key",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
+                side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace(
+                    "enc_old:", ""
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: f"enc_new:{value}",
+            ),
+        ):
+            await rotate_mcp_server_credentials_master_key(mock_prisma, "admin", "new-key")
+
+        update_call = mock_prisma.db.litellm_mcpservertable.update
+        assert update_call.called
+        stored_env = json.loads(update_call.call_args[1]["data"]["env_vars"])
+        # Global value decrypted from old, then re-encrypted with new key
+        assert stored_env[0]["value"] == "enc_new:secret"
+        # User-scope placeholder untouched
+        assert stored_env[1]["value"] == ""
+        # Credentials column not written when the server has none
+        assert "credentials" not in update_call.call_args[1]["data"]
 
 
 class TestAuthTypeSwitchClearsCredentials:
@@ -1023,17 +1077,11 @@ class TestAuthTypeSwitchClearsCredentials:
 
         existing_record = MagicMock()
         existing_record.auth_type = "oauth2"
-        existing_record.credentials = json.dumps(
-            {"client_id": "enc:cid", "client_secret": "enc:csec"}
-        )
+        existing_record.credentials = json.dumps({"client_id": "enc:cid", "client_secret": "enc:csec"})
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
-            return_value=existing_record
-        )
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(
-            return_value=MagicMock()
-        )
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -1048,8 +1096,12 @@ class TestAuthTypeSwitchClearsCredentials:
             await update_mcp_server(mock_prisma, data, "test-user")
 
         data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
-        # Credentials should be cleared (set to None)
-        assert data_dict.get("credentials") is None
+        # Credentials should be cleared. The clear reaches prisma as Json(None) (SQL null), which
+        # prisma-python requires for a Json? field; a bare None is also accepted for older callers.
+        from prisma import Json
+
+        cleared = data_dict.get("credentials")
+        assert cleared is None or (isinstance(cleared, Json) and getattr(cleared, "data", "x") is None)
 
 
 class TestInheritCredentials:

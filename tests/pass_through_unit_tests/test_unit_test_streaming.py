@@ -14,7 +14,9 @@ import litellm
 from typing import AsyncGenerator
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
-from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -48,6 +50,7 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     """
     # Mock inputs
     response = AsyncMock(spec=httpx.Response)
+    response.status_code = 200
     raw_chunks = [
         b'{"id": "1", "content": "Hello"}',
         b'{"id": "2", "content": "World"}',
@@ -93,6 +96,123 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     assert b"".join(received_chunks) == b"".join(
         raw_chunks
     ), "Collected chunks do not match raw chunks"
+
+
+@pytest.mark.asyncio
+async def test_route_streaming_logging_runs_async_handler_for_sdk_passthrough():
+    """
+    SDK pass-through streaming (anthropic_messages, google generate_content) must run
+    the async success handler so async-only loggers record the assembled stream.
+
+    Regression for duplicate-trace dedupe: dispatch_success_handlers treated these as
+    sync SDK requests because call_type is not ``pass_through_endpoint`` and
+    litellm_params carries no ``acompletion`` flag, so only the sync success_handler
+    ran and CustomLogger.async_log_success_event never fired.
+    """
+    import time
+
+    from litellm.types.utils import CallTypes
+
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type=CallTypes.anthropic_messages.value,
+        start_time=time.time(),
+        litellm_call_id="test-id",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"anthropic_messages": True}
+
+    with (
+        patch.object(
+            PassThroughStreamingHandler,
+            "_build_passthrough_logging_result",
+            return_value=({"id": "slp"}, {}),
+        ),
+        patch.object(
+            logging_obj, "async_success_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "success_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_callbacks_for_async_calls",
+            return_value=False,
+        ),
+    ):
+        await PassThroughStreamingHandler._route_streaming_logging_to_handler(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/v1/messages",
+            request_body={},
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            raw_bytes=[],
+            end_time=datetime.now(),
+        )
+
+    mock_async.assert_awaited_once()
+    mock_sync.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_logging_runs_async_handler_for_passthrough():
+    """
+    Non-streaming pass-through logging (_handle_logging) must always run the
+    async success handler so async-only loggers (e.g. the proxy spend logger)
+    record the request.
+
+    _handle_logging is only ever reached from pass_through_async_success_handler
+    (an async context), so it forces async dispatch via prefer_async_handlers.
+    This pins that contract independent of the call-type classification: even a
+    call_type that _is_sync_litellm_request would classify as sync (here
+    "completion" with no async marker in litellm_params) must still reach
+    async_success_handler. Without prefer_async_handlers=True the sync-only
+    branch would return early and async_log_success_event would never fire.
+    """
+    import time
+
+    from litellm.types.utils import CallTypes
+
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type=CallTypes.completion.value,
+        start_time=time.time(),
+        litellm_call_id="test-id",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    handler = PassThroughEndpointLogging()
+
+    with (
+        patch.object(
+            logging_obj, "async_success_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "success_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_callbacks_for_async_calls",
+            return_value=False,
+        ),
+    ):
+        await handler._handle_logging(
+            logging_obj=logging_obj,
+            standard_logging_response_object={"id": "slp"},
+            result="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+        )
+
+    mock_async.assert_awaited_once()
+    mock_sync.assert_not_called()
 
 
 def test_convert_raw_bytes_to_str_lines():

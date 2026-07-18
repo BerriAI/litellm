@@ -110,9 +110,7 @@ class S3Cache(BaseCache):
             func = partial(self.set_cache, key, value, **kwargs)
             await loop.run_in_executor(None, func)
         except Exception as e:
-            verbose_logger.error(
-                f"S3 Caching: async_set_cache() - Got exception from S3: {e}"
-            )
+            verbose_logger.error(f"S3 Caching: async_set_cache() - Got exception from S3: {e}")
 
     def get_cache(self, key, **kwargs):
         import botocore
@@ -122,9 +120,7 @@ class S3Cache(BaseCache):
 
             print_verbose(f"Get S3 Cache: key: {key}")
             # Download the data from S3
-            cached_response = self.s3_client.get_object(
-                Bucket=self.bucket_name, Key=key
-            )
+            cached_response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
 
             if cached_response is not None:
                 if "Expires" in cached_response:
@@ -135,13 +131,9 @@ class S3Cache(BaseCache):
                         return None
 
                 # cached_response is in `b{} convert it to ModelResponse
-                cached_response = (
-                    cached_response["Body"].read().decode("utf-8")
-                )  # Convert bytes to string
+                cached_response = cached_response["Body"].read().decode("utf-8")  # Convert bytes to string
                 try:
-                    cached_response = json.loads(
-                        cached_response
-                    )  # Convert string to dictionary
+                    cached_response = json.loads(cached_response)  # Convert string to dictionary
                 except Exception:
                     cached_response = ast.literal_eval(cached_response)
             if not isinstance(cached_response, dict):
@@ -153,15 +145,11 @@ class S3Cache(BaseCache):
             return cached_response
         except botocore.exceptions.ClientError as e:  # type: ignore
             if e.response["Error"]["Code"] == "NoSuchKey":
-                verbose_logger.debug(
-                    f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket."
-                )
+                verbose_logger.debug(f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket.")
                 return None
 
         except Exception as e:
-            verbose_logger.error(
-                f"S3 Caching: get_cache() - Got exception from S3: {e}"
-            )
+            verbose_logger.error(f"S3 Caching: get_cache() - Got exception from S3: {e}")
 
     async def async_get_cache(self, key, **kwargs):
         """
@@ -175,9 +163,7 @@ class S3Cache(BaseCache):
             result = await loop.run_in_executor(None, func)
             return result
         except Exception as e:
-            verbose_logger.error(
-                f"S3 Caching: async_get_cache() - Got exception from S3: {e}"
-            )
+            verbose_logger.error(f"S3 Caching: async_get_cache() - Got exception from S3: {e}")
             return None
 
     def flush_cache(self):

@@ -3,9 +3,9 @@
  * Used for system messages
  */
 
-import { useState } from 'react';
-import { Typography } from 'antd';
-import { DownOutlined, RightOutlined } from '@ant-design/icons';
+import { useState } from "react";
+import { Typography } from "antd";
+import { DownOutlined, RightOutlined } from "@ant-design/icons";
 
 const { Text } = Typography;
 
@@ -15,11 +15,7 @@ interface CollapsibleMessageProps {
   defaultExpanded?: boolean;
 }
 
-export function CollapsibleMessage({ 
-  label, 
-  content, 
-  defaultExpanded = false 
-}: CollapsibleMessageProps) {
+export function CollapsibleMessage({ label, content, defaultExpanded = false }: CollapsibleMessageProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [isHovered, setIsHovered] = useState(false);
   const charCount = content?.length || 0;
@@ -36,23 +32,23 @@ export function CollapsibleMessage({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         style={{
-          display: 'flex',
-          alignItems: 'center',
+          display: "flex",
+          alignItems: "center",
           gap: 6,
-          cursor: 'pointer',
-          padding: '4px 0',
+          cursor: "pointer",
+          padding: "4px 0",
           borderRadius: 4,
-          background: isHovered ? '#f5f5f5' : 'transparent',
-          transition: 'background 0.15s ease',
+          background: isHovered ? "#f5f5f5" : "transparent",
+          transition: "background 0.15s ease",
           marginBottom: isExpanded ? 4 : 0,
         }}
       >
         {isExpanded ? (
-          <DownOutlined style={{ fontSize: 10, color: '#8c8c8c' }} />
+          <DownOutlined style={{ fontSize: 10, color: "#8c8c8c" }} />
         ) : (
-          <RightOutlined style={{ fontSize: 10, color: '#8c8c8c' }} />
+          <RightOutlined style={{ fontSize: 10, color: "#8c8c8c" }} />
         )}
-        <Text type="secondary" style={{ fontSize: 10, letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+        <Text type="secondary" style={{ fontSize: 10, letterSpacing: "0.5px", textTransform: "uppercase" }}>
           {label}
         </Text>
         <Text type="secondary" style={{ fontSize: 10 }}>
@@ -63,9 +59,9 @@ export function CollapsibleMessage({
       {/* Content with smooth animation */}
       <div
         style={{
-          maxHeight: isExpanded ? '2000px' : '0px',
-          overflow: 'hidden',
-          transition: 'max-height 0.2s ease-out, opacity 0.2s ease-out',
+          maxHeight: isExpanded ? "2000px" : "0px",
+          overflow: "hidden",
+          transition: "max-height 0.2s ease-out, opacity 0.2s ease-out",
           opacity: isExpanded ? 1 : 0,
         }}
       >
@@ -74,10 +70,10 @@ export function CollapsibleMessage({
             paddingLeft: 16,
             fontSize: 13,
             lineHeight: 1.7,
-            color: '#262626',
-            borderLeft: '1px solid #f0f0f0',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
+            color: "#262626",
+            borderLeft: "1px solid #f0f0f0",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
           }}
         >
           {content}

@@ -1,3 +1,4 @@
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -28,9 +29,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         BaseVectorStoreConfig.__init__(self)
         BaseAWSLLM.__init__(self)
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         return {}
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
@@ -39,9 +38,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             "write": [],
         }
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> List[VECTOR_STORE_OPENAI_PARAMS]:
         return ["max_num_results"]
 
     def map_openai_params(
@@ -55,9 +52,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 optional_params["maxResults"] = value
         return optional_params
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
         return headers
@@ -66,6 +61,8 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         aws_region_name = litellm_params.get("aws_region_name")
         if not aws_region_name:
             raise ValueError("aws_region_name is required for S3 Vectors")
+        if not re.match(r"^[a-z][a-z0-9-]*$", aws_region_name):
+            raise ValueError("Invalid aws_region_name format")
         return f"https://s3vectors.{aws_region_name}.api.aws"
 
     def transform_search_vector_store_request(
@@ -76,6 +73,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """Sync version - generates embedding synchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
@@ -88,9 +86,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         else:
             # Try to get bucket_name from litellm_params
             bucket_name_from_params = litellm_params.get("vector_bucket_name")
-            if not bucket_name_from_params or not isinstance(
-                bucket_name_from_params, str
-            ):
+            if not bucket_name_from_params or not isinstance(bucket_name_from_params, str):
                 raise ValueError(
                     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
                     "or vector_bucket_name must be provided in litellm_params"
@@ -102,15 +98,11 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             query = " ".join(query)
 
         # Generate embedding for the query
-        embedding_model = litellm_params.get(
-            "embedding_model", "text-embedding-3-small"
-        )
+        embedding_model = litellm_params.get("embedding_model", "text-embedding-3-small")
 
         import litellm as litellm_module
 
-        embedding_response = litellm_module.embedding(
-            model=embedding_model, input=[query]
-        )
+        embedding_response = litellm_module.embedding(model=embedding_model, input=[query])
         query_embedding = embedding_response.data[0]["embedding"]
 
         url = f"{api_base}/QueryVectors"
@@ -119,9 +111,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             "vectorBucketName": bucket_name,
             "indexName": index_name,
             "queryVector": {"float32": query_embedding},
-            "topK": vector_store_search_optional_params.get(
-                "max_num_results", 5
-            ),  # Default to 5
+            "topK": vector_store_search_optional_params.get("max_num_results", 5),  # Default to 5
             "returnDistance": True,
             "returnMetadata": True,
         }
@@ -137,6 +127,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """Async version - generates embedding asynchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
@@ -149,9 +140,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         else:
             # Try to get bucket_name from litellm_params
             bucket_name_from_params = litellm_params.get("vector_bucket_name")
-            if not bucket_name_from_params or not isinstance(
-                bucket_name_from_params, str
-            ):
+            if not bucket_name_from_params or not isinstance(bucket_name_from_params, str):
                 raise ValueError(
                     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
                     "or vector_bucket_name must be provided in litellm_params"
@@ -163,15 +152,11 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             query = " ".join(query)
 
         # Generate embedding for the query asynchronously
-        embedding_model = litellm_params.get(
-            "embedding_model", "text-embedding-3-small"
-        )
+        embedding_model = litellm_params.get("embedding_model", "text-embedding-3-small")
 
         import litellm as litellm_module
 
-        embedding_response = await litellm_module.aembedding(
-            model=embedding_model, input=[query]
-        )
+        embedding_response = await litellm_module.aembedding(model=embedding_model, input=[query])
         query_embedding = embedding_response.data[0]["embedding"]
 
         url = f"{api_base}/QueryVectors"
@@ -180,9 +165,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             "vectorBucketName": bucket_name,
             "indexName": index_name,
             "queryVector": {"float32": query_embedding},
-            "topK": vector_store_search_optional_params.get(
-                "max_num_results", 5
-            ),  # Default to 5
+            "topK": vector_store_search_optional_params.get("max_num_results", 5),  # Default to 5
             "returnDistance": True,
             "returnMetadata": True,
         }
@@ -241,9 +224,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 results.append(
                     VectorStoreSearchResult(
                         score=score,
-                        content=[
-                            VectorStoreResultContent(text=source_text, type="text")
-                        ],
+                        content=[VectorStoreResultContent(text=source_text, type="text")],
                         file_id=file_id,
                         filename=filename,
                         attributes=metadata,

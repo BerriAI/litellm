@@ -9,15 +9,13 @@ import os
 import sys
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import pytest
 
 import litellm
 import litellm.utils
-from litellm import completion
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 
 
@@ -52,82 +50,79 @@ class TestMoonshotConfig:
     def test_get_supported_openai_params(self):
         """Test that get_supported_openai_params returns correct params"""
         config = MoonshotChatConfig()
-        
+
         supported_params = config.get_supported_openai_params("moonshot-v1-8k")
-        
+
         # Should include these params
         assert "tools" in supported_params
         assert "tool_choice" in supported_params
         assert "temperature" in supported_params
         assert "max_tokens" in supported_params
         assert "stream" in supported_params
-        
+
         # Should NOT include functions (not supported by Moonshot AI)
         assert "functions" not in supported_params
 
     def test_map_openai_params_excludes_functions(self):
         """Test that functions parameter is not mapped"""
         config = MoonshotChatConfig()
-        
+
         non_default_params = {
             "functions": [{"name": "test_function", "description": "Test function"}],
             "temperature": 0.7,
-            "max_tokens": 1000
+            "max_tokens": 1000,
         }
-        
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model="moonshot-v1-8k",
-            drop_params=False
+            drop_params=False,
         )
-        
+
         # Functions should not be in result (not in supported params)
         assert "functions" not in result
         # Other supported params should be included
         assert result.get("temperature") == 0.7
         assert result.get("max_tokens") == 1000
 
-
-
-
     def test_map_openai_params_allows_other_tool_choice_values(self):
         """Test that other tool_choice values are allowed"""
         config = MoonshotChatConfig()
-        
-        for tool_choice_value in ["auto", "none", {"type": "function", "function": {"name": "test"}}]:
+
+        for tool_choice_value in [
+            "auto",
+            "none",
+            {"type": "function", "function": {"name": "test"}},
+        ]:
             non_default_params = {
                 "tool_choice": tool_choice_value,
-                "tools": [{"type": "function", "function": {"name": "test"}}]
+                "tools": [{"type": "function", "function": {"name": "test"}}],
             }
-            
+
             result = config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params={},
                 model="moonshot-v1-8k",
-                drop_params=False
+                drop_params=False,
             )
-            
+
             # tool_choice should be included for non-"required" values
             assert result.get("tool_choice") == tool_choice_value
-
 
     def test_map_openai_params_max_completion_tokens_mapping(self):
         """Test that max_completion_tokens is mapped to max_tokens"""
         config = MoonshotChatConfig()
-        
-        non_default_params = {
-            "max_completion_tokens": 1000,
-            "temperature": 0.7
-        }
-        
+
+        non_default_params = {"max_completion_tokens": 1000, "temperature": 0.7}
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model="moonshot-v1-8k",
-            drop_params=False
+            drop_params=False,
         )
-        
+
         # max_completion_tokens should be mapped to max_tokens
         assert result.get("max_tokens") == 1000
         assert "max_completion_tokens" not in result
@@ -136,37 +131,37 @@ class TestMoonshotConfig:
     def test_temperature_handling_clamps_to_max_1(self):
         """Test that temperature > 1 is clamped to 1 (Moonshot limitation)"""
         config = MoonshotChatConfig()
-        
+
         non_default_params = {
             "temperature": 1.5  # OpenAI allows up to 2, but Moonshot only allows up to 1
         }
-        
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model="moonshot-v1-8k",
-            drop_params=False
+            drop_params=False,
         )
-        
+
         # Temperature should be clamped to 1
         assert result.get("temperature") == 1
 
     def test_temperature_handling_low_temp_with_multiple_n(self):
         """Test that temperature < 0.3 with n > 1 is adjusted to 0.3"""
         config = MoonshotChatConfig()
-        
+
         non_default_params = {
             "temperature": 0.1,  # Less than 0.3
-            "n": 3  # Multiple completions
+            "n": 3,  # Multiple completions
         }
-        
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model="moonshot-v1-8k",
-            drop_params=False
+            drop_params=False,
         )
-        
+
         # Temperature should be adjusted to 0.3 to avoid Moonshot API exceptions
         assert result.get("temperature") == 0.3
         assert result.get("n") == 3
@@ -174,19 +169,19 @@ class TestMoonshotConfig:
     def test_temperature_handling_low_temp_single_n(self):
         """Test that temperature < 0.3 with n = 1 is preserved"""
         config = MoonshotChatConfig()
-        
+
         non_default_params = {
             "temperature": 0.1,  # Less than 0.3
-            "n": 1  # Single completion
+            "n": 1,  # Single completion
         }
-        
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model="moonshot-v1-8k",
-            drop_params=False
+            drop_params=False,
         )
-        
+
         # Temperature should be preserved when n = 1
         assert result.get("temperature") == 0.1
         assert result.get("n") == 1
@@ -194,53 +189,84 @@ class TestMoonshotConfig:
     def test_temperature_handling_valid_range(self):
         """Test that temperatures in valid range [0.3, 1] are preserved"""
         config = MoonshotChatConfig()
-        
+
         test_temps = [0.3, 0.5, 0.7, 1.0]
-        
+
         for temp in test_temps:
-            non_default_params = {
-                "temperature": temp,
-                "n": 2
-            }
-            
+            non_default_params = {"temperature": temp, "n": 2}
+
             result = config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params={},
                 model="moonshot-v1-8k",
-                drop_params=False
+                drop_params=False,
             )
-            
+
             # Temperature should be preserved
             assert result.get("temperature") == temp
+
+    def test_temperature_dropped_for_reasoning_models(self):
+        """Reasoning models (kimi-k2.5, kimi-k2.6) reject any temperature except 1,
+        so the param is dropped rather than clamped. A clamp to 0.3/1 would still
+        400 when the caller passes e.g. 0.5."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            for temp in [0.0, 0.5, 1.0, 1.5]:
+                result = config.map_openai_params(
+                    non_default_params={"temperature": temp},
+                    optional_params={},
+                    model="kimi-k2.5",
+                    drop_params=False,
+                )
+                assert "temperature" not in result
+
+    def test_temperature_clamped_for_non_reasoning_models(self):
+        """Non-reasoning models keep the [0.3, 1] clamp behaviour."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=False,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"temperature": 1.5},
+                optional_params={},
+                model="moonshot-v1-8k",
+                drop_params=False,
+            )
+
+        assert result.get("temperature") == 1
 
     def test_tool_choice_required_adds_message(self):
         """Test that tool_choice='required' adds a special message and removes tool_choice"""
         config = MoonshotChatConfig()
-        
-        messages = [
-            {"role": "user", "content": "What's the weather like?"}
-        ]
-        
+
+        messages = [{"role": "user", "content": "What's the weather like?"}]
+
         optional_params = {
             "tool_choice": "required",
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
         }
-        
+
         result = config.transform_request(
             model="moonshot-v1-8k",
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
-            headers={}
+            headers={},
         )
-        
+
         # Check that the special message was added
         assert len(result["messages"]) == 2
         assert result["messages"][0]["role"] == "user"
         assert result["messages"][0]["content"] == "What's the weather like?"
         assert result["messages"][1]["role"] == "user"
         assert result["messages"][1]["content"] == "Please select a tool to handle the current issue."
-        
+
         # Check that tool_choice was removed but tools are preserved
         assert "tool_choice" not in result
         assert "tools" in result
@@ -249,65 +275,93 @@ class TestMoonshotConfig:
     def test_tool_choice_required_preserves_other_params(self):
         """Test that tool_choice='required' handling preserves other parameters"""
         config = MoonshotChatConfig()
-        
-        messages = [
-            {"role": "user", "content": "Calculate 2+2"}
-        ]
-        
+
+        messages = [{"role": "user", "content": "Calculate 2+2"}]
+
         optional_params = {
             "tool_choice": "required",
             "tools": [{"type": "function", "function": {"name": "calculator"}}],
             "temperature": 0.7,
-            "max_tokens": 1000
+            "max_tokens": 1000,
         }
-        
+
         result = config.transform_request(
             model="moonshot-v1-8k",
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
-            headers={}
+            headers={},
         )
-        
+
         # Check that other parameters are preserved
         assert result.get("temperature") == 0.7
         assert result.get("max_tokens") == 1000
         assert "tools" in result
-        
+
         # Check that tool_choice was removed
         assert "tool_choice" not in result
-        
+
         # Check that the message was added
         assert len(result["messages"]) == 2
         assert result["messages"][1]["content"] == "Please select a tool to handle the current issue."
 
-    def test_tool_choice_non_required_preserved(self):
-        """Test that non-'required' tool_choice values are preserved"""
+    def test_tool_choice_required_does_not_mutate_input_messages(self):
+        """tool_choice='required' must not mutate the caller's messages list.
+
+        The handling appends a "select a tool" user message; building it in
+        place corrupts the caller's conversation history and makes
+        transform_request non-idempotent across retries.
+        """
         config = MoonshotChatConfig()
-        
-        messages = [
-            {"role": "user", "content": "What's the weather?"}
-        ]
-        
-        test_values = ["auto", "none", {"type": "function", "function": {"name": "get_weather"}}]
-        
-        for tool_choice_value in test_values:
+
+        messages = [{"role": "user", "content": "What's the weather like?"}]
+
+        for _ in range(2):
             optional_params = {
-                "tool_choice": tool_choice_value,
-                "tools": [{"type": "function", "function": {"name": "get_weather"}}]
+                "tool_choice": "required",
+                "tools": [{"type": "function", "function": {"name": "get_weather"}}],
             }
-            
             result = config.transform_request(
                 model="moonshot-v1-8k",
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params={},
-                headers={}
+                headers={},
             )
-            
+            # The returned request carries the extra message.
+            assert len(result["messages"]) == 2
+            # The caller's list is untouched, so repeated calls stay idempotent.
+            assert messages == [{"role": "user", "content": "What's the weather like?"}]
+
+    def test_tool_choice_non_required_preserved(self):
+        """Test that non-'required' tool_choice values are preserved"""
+        config = MoonshotChatConfig()
+
+        messages = [{"role": "user", "content": "What's the weather?"}]
+
+        test_values = [
+            "auto",
+            "none",
+            {"type": "function", "function": {"name": "get_weather"}},
+        ]
+
+        for tool_choice_value in test_values:
+            optional_params = {
+                "tool_choice": tool_choice_value,
+                "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            }
+
+            result = config.transform_request(
+                model="moonshot-v1-8k",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+
             # Check that tool_choice is preserved for non-"required" values
             assert result.get("tool_choice") == tool_choice_value
-            
+
             # Check that no extra message was added
             assert len(result["messages"]) == 1
             assert result["messages"][0]["content"] == "What's the weather?"
@@ -421,7 +475,11 @@ class TestMoonshotConfig:
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
                 ],
             },
             {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 22°C"},
@@ -458,7 +516,11 @@ class TestMoonshotConfig:
             "role": "assistant",
             "content": None,
             "tool_calls": [
-                {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "fn", "arguments": "{}"},
+                }
             ],
             "reasoning_content": "<actual thinking>",
         }
@@ -479,7 +541,11 @@ class TestMoonshotConfig:
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "fn", "arguments": "{}"},
+                    }
                 ],
                 "provider_specific_fields": {"reasoning_content": "stored thinking"},
             }
@@ -502,7 +568,11 @@ class TestMoonshotConfig:
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "fn", "arguments": "{}"},
+                    }
                 ],
             },
         ]
@@ -531,7 +601,11 @@ class TestMoonshotConfig:
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "fn", "arguments": "{}"},
+                    }
                 ],
             },
         ]
@@ -569,7 +643,11 @@ class TestMoonshotConfig:
             content=None,
             reasoning_content="<thinking>User wants weather</thinking>",
             tool_calls=[
-                {"id": "call_1", "type": "function", "function": {"name": "fn", "arguments": "{}"}}
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "fn", "arguments": "{}"},
+                }
             ],
         )
 
@@ -596,7 +674,11 @@ class TestMoonshotConfig:
             "content": None,
             "reasoning_content": "<thinking>Planning to call weather tool</thinking>",
             "tool_calls": [
-                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{}'}}
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
             ],
         }
 
@@ -619,3 +701,74 @@ class TestMoonshotConfig:
 
         # reasoning_content should be preserved in the assistant message
         assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
+
+
+class TestKimiK26ModelRegistry:
+    """Tests that kimi-k2.6 is correctly registered in the model registry."""
+
+    @pytest.fixture(autouse=True)
+    def model_cost_map(self):
+        """Load directly from the bundled backup so tests don't depend on remote fetch."""
+        return GetModelCostMap.load_local_model_cost_map()
+
+    def test_kimi_k26_in_model_cost_map(self, model_cost_map):
+        """kimi-k2.6 should be present in the model cost map."""
+        assert "moonshot/kimi-k2.6" in model_cost_map, "moonshot/kimi-k2.6 not found in model_cost"
+
+    def test_kimi_k26_pricing(self, model_cost_map):
+        """kimi-k2.6 pricing should match official Kimi API rates."""
+        model_info = model_cost_map["moonshot/kimi-k2.6"]
+        assert model_info["input_cost_per_token"] == pytest.approx(9.5e-07)
+        assert model_info["output_cost_per_token"] == pytest.approx(4e-06)
+        assert model_info["cache_read_input_token_cost"] == pytest.approx(1.6e-07)
+
+    def test_kimi_k26_context_window(self, model_cost_map):
+        """kimi-k2.6 should have a 256K (262144 token) context window."""
+        model_info = model_cost_map["moonshot/kimi-k2.6"]
+        assert model_info["max_input_tokens"] == 262144
+        assert model_info["max_output_tokens"] == 262144
+        assert model_info["max_tokens"] == 262144
+
+    def test_kimi_k26_capabilities(self, model_cost_map):
+        """kimi-k2.6 should support function calling, vision, video input, tool choice, and reasoning."""
+        model_info = model_cost_map["moonshot/kimi-k2.6"]
+        assert model_info.get("supports_function_calling") is True
+        assert model_info.get("supports_tool_choice") is True
+        assert model_info.get("supports_vision") is True
+        assert model_info.get("supports_video_input") is True
+        assert model_info.get("supports_reasoning") is True
+
+    def test_kimi_k26_provider(self, model_cost_map):
+        """kimi-k2.6 should be assigned to the moonshot provider."""
+        model_info = model_cost_map["moonshot/kimi-k2.6"]
+        assert model_info["litellm_provider"] == "moonshot"
+
+
+class TestMoonshotResponseSchemaSupport:
+    """Every model currently live on api.moonshot.ai supports json_schema
+    response_format, which gates discovery via litellm.responses(). The flag
+    must be true so the capability is advertised honestly."""
+
+    LIVE_MODELS = [
+        "moonshot/kimi-k2.5",
+        "moonshot/kimi-k2.6",
+        "moonshot/moonshot-v1-8k",
+        "moonshot/moonshot-v1-32k",
+        "moonshot/moonshot-v1-128k",
+        "moonshot/moonshot-v1-8k-vision-preview",
+        "moonshot/moonshot-v1-32k-vision-preview",
+        "moonshot/moonshot-v1-128k-vision-preview",
+        "moonshot/moonshot-v1-auto",
+    ]
+
+    @pytest.fixture(autouse=True)
+    def model_cost_map(self):
+        return GetModelCostMap.load_local_model_cost_map()
+
+    @pytest.mark.parametrize("model", LIVE_MODELS)
+    def test_live_model_supports_response_schema(self, model, model_cost_map):
+        assert model_cost_map[model].get("supports_response_schema") is True
+
+    def test_supports_response_schema_utility_reports_true(self, model_cost_map, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", model_cost_map)
+        assert litellm.utils.supports_response_schema(model="moonshot/kimi-k2.5") is True

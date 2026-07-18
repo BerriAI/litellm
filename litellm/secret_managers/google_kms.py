@@ -17,13 +17,9 @@ from litellm.proxy._types import KeyManagementSystem
 
 def validate_environment():
     if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-        raise ValueError(
-            "Missing required environment variable - GOOGLE_APPLICATION_CREDENTIALS"
-        )
+        raise ValueError("Missing required environment variable - GOOGLE_APPLICATION_CREDENTIALS")
     if "GOOGLE_KMS_RESOURCE_NAME" not in os.environ:
-        raise ValueError(
-            "Missing required environment variable - GOOGLE_KMS_RESOURCE_NAME"
-        )
+        raise ValueError("Missing required environment variable - GOOGLE_KMS_RESOURCE_NAME")
 
 
 def load_google_kms(use_google_kms: Optional[bool]):

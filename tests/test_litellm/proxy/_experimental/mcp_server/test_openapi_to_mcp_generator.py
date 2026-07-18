@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    _request_auth_header,
+    _request_extra_headers,
     _resolve_param_list,
     _resolve_ref,
     build_input_schema,
@@ -24,9 +26,7 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     resolve_operation_params,
 )
 
-GET_ASYNC_CLIENT_TARGET = (
-    "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
-)
+GET_ASYNC_CLIENT_TARGET = "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
 
 
 def _create_mock_client(method: str, response_text: str) -> AsyncMock:
@@ -511,11 +511,11 @@ class TestGetBaseUrl:
             "openapi": "3.0.0",
             "servers": [
                 {"url": "https://api.example.com/v1"},
-                {"url": "https://api-staging.example.com/v1"}
+                {"url": "https://api-staging.example.com/v1"},
             ],
-            "paths": {}
+            "paths": {},
         }
-        
+
         base_url = get_base_url(spec)
         assert base_url == "https://api.example.com/v1"
 
@@ -526,9 +526,9 @@ class TestGetBaseUrl:
             "host": "api.example.com",
             "basePath": "/v1",
             "schemes": ["https"],
-            "paths": {}
+            "paths": {},
         }
-        
+
         base_url = get_base_url(spec)
         assert base_url == "https://api.example.com/v1"
 
@@ -538,20 +538,16 @@ class TestGetBaseUrl:
             "swagger": "2.0",
             "host": "api.example.com",
             "schemes": ["https"],
-            "paths": {}
+            "paths": {},
         }
-        
+
         base_url = get_base_url(spec)
         assert base_url == "https://api.example.com"
 
     def test_openapi_2x_default_scheme(self):
         """Test that https is used as default scheme when not specified."""
-        spec = {
-            "swagger": "2.0",
-            "host": "api.example.com",
-            "paths": {}
-        }
-        
+        spec = {"swagger": "2.0", "host": "api.example.com", "paths": {}}
+
         base_url = get_base_url(spec)
         assert base_url == "https://api.example.com"
 
@@ -559,11 +555,11 @@ class TestGetBaseUrl:
         """Test fallback: derive base URL from spec_path with /openapi.json suffix."""
         spec = {
             "openapi": "3.0.0",
-            "paths": {}
+            "paths": {},
             # No servers field
         }
         spec_path = "http://localhost:8001/openapi.json"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == "http://localhost:8001"
 
@@ -571,65 +567,50 @@ class TestGetBaseUrl:
         """Test fallback: derive base URL from spec_path with /swagger.json suffix."""
         spec = {
             "swagger": "2.0",
-            "paths": {}
+            "paths": {},
             # No host field
         }
         spec_path = "https://api.example.com/api/swagger.json"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://api.example.com/api"
 
     def test_fallback_with_openapi_yaml_suffix(self):
         """Test fallback: derive base URL from spec_path with .yaml suffix."""
-        spec = {
-            "openapi": "3.0.0",
-            "paths": {}
-        }
+        spec = {"openapi": "3.0.0", "paths": {}}
         spec_path = "http://localhost:3000/docs/openapi.yaml"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == "http://localhost:3000/docs"
 
     def test_fallback_with_generic_json_file(self):
         """Test fallback: remove last segment if it's a JSON file."""
-        spec = {
-            "openapi": "3.0.0",
-            "paths": {}
-        }
+        spec = {"openapi": "3.0.0", "paths": {}}
         spec_path = "https://example.com/v1/api-spec.json"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://example.com/v1"
 
     def test_fallback_with_generic_yaml_file(self):
         """Test fallback: remove last segment if it's a YAML file."""
-        spec = {
-            "openapi": "3.0.0",
-            "paths": {}
-        }
+        spec = {"openapi": "3.0.0", "paths": {}}
         spec_path = "https://example.com/docs/api.yml"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://example.com/docs"
 
     def test_no_fallback_without_spec_path(self):
         """Test that empty string is returned when no server info and no spec_path."""
-        spec = {
-            "openapi": "3.0.0",
-            "paths": {}
-        }
-        
+        spec = {"openapi": "3.0.0", "paths": {}}
+
         base_url = get_base_url(spec)
         assert base_url == ""
 
     def test_no_fallback_with_local_file_path(self):
         """Test that fallback doesn't apply to local file paths."""
-        spec = {
-            "openapi": "3.0.0",
-            "paths": {}
-        }
+        spec = {"openapi": "3.0.0", "paths": {}}
         spec_path = "/Users/test/openapi.json"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == ""
 
@@ -638,30 +619,24 @@ class TestGetBaseUrl:
         spec = {
             "openapi": "3.0.0",
             "servers": [{"url": "https://production.example.com"}],
-            "paths": {}
+            "paths": {},
         }
         spec_path = "http://localhost:8001/openapi.json"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://production.example.com"
 
     def test_fallback_with_port_number(self):
         """Test fallback handles URLs with port numbers correctly."""
-        spec = {
-            "openapi": "3.0.0",
-            "paths": {}
-        }
+        spec = {"openapi": "3.0.0", "paths": {}}
         spec_path = "http://localhost:8001/openapi.json"
-        
+
         base_url = get_base_url(spec, spec_path)
         assert base_url == "http://localhost:8001"
 
     def test_fallback_with_nested_path(self):
         """Test fallback with deeply nested spec path."""
-        spec = {
-            "openapi": "3.0.0",
-            "paths": {}
-        }
+        spec = {"openapi": "3.0.0", "paths": {}}
         spec_path = "https://api.example.com/v2/docs/api/openapi.json"
 
         base_url = get_base_url(spec, spec_path)
@@ -682,10 +657,18 @@ class TestResolveRef:
         """A $ref pointing at components/parameters is resolved correctly."""
         param = {"$ref": "#/components/parameters/per-page"}
         component_params = {
-            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+            "per-page": {
+                "name": "per_page",
+                "in": "query",
+                "schema": {"type": "integer"},
+            }
         }
         result = _resolve_ref(param, component_params)
-        assert result == {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+        assert result == {
+            "name": "per_page",
+            "in": "query",
+            "schema": {"type": "integer"},
+        }
 
     def test_unresolvable_ref_returns_none(self):
         """A $ref whose target is absent from components returns None (not the stub)."""
@@ -722,7 +705,11 @@ class TestResolveParamList:
             {"name": "q", "in": "query"},
         ]
         component_params = {
-            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+            "per-page": {
+                "name": "per_page",
+                "in": "query",
+                "schema": {"type": "integer"},
+            }
         }
         result = _resolve_param_list(raw, component_params)
         assert len(result) == 2
@@ -774,7 +761,11 @@ class TestResolveOperationParams:
         path_item = {"get": operation}
         components = {
             "parameters": {
-                "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}}
+                "per-page": {
+                    "name": "per_page",
+                    "in": "query",
+                    "schema": {"type": "integer"},
+                }
             }
         }
         result = resolve_operation_params(operation, path_item, components)
@@ -788,9 +779,7 @@ class TestResolveOperationParams:
             {"name": "owner", "in": "path", "required": True},
             {"name": "repo", "in": "path", "required": True},
         ]
-        operation = {
-            "parameters": [{"name": "sort", "in": "query"}]
-        }
+        operation = {"parameters": [{"name": "sort", "in": "query"}]}
         path_item = {"parameters": path_level_params, "get": operation}
         result = resolve_operation_params(operation, path_item, {})
         names = [p["name"] for p in result["parameters"]]
@@ -801,11 +790,21 @@ class TestResolveOperationParams:
     def test_operation_level_wins_on_collision(self):
         """When path-level and operation-level define the same name+in, operation wins."""
         path_level_params = [
-            {"name": "per_page", "in": "query", "schema": {"type": "integer"}, "default": 30}
+            {
+                "name": "per_page",
+                "in": "query",
+                "schema": {"type": "integer"},
+                "default": 30,
+            }
         ]
         operation = {
             "parameters": [
-                {"name": "per_page", "in": "query", "schema": {"type": "integer"}, "default": 100}
+                {
+                    "name": "per_page",
+                    "in": "query",
+                    "schema": {"type": "integer"},
+                    "default": 100,
+                }
             ]
         }
         path_item = {"parameters": path_level_params, "get": operation}
@@ -832,9 +831,23 @@ class TestResolveOperationParams:
     def test_github_style_spec_structure(self):
         """Simulate a GitHub-style spec: path-level owner+repo refs, operation-level query params."""
         component_params = {
-            "owner": {"name": "owner", "in": "path", "required": True, "schema": {"type": "string"}},
-            "repo": {"name": "repo", "in": "path", "required": True, "schema": {"type": "string"}},
-            "per-page": {"name": "per_page", "in": "query", "schema": {"type": "integer"}},
+            "owner": {
+                "name": "owner",
+                "in": "path",
+                "required": True,
+                "schema": {"type": "string"},
+            },
+            "repo": {
+                "name": "repo",
+                "in": "path",
+                "required": True,
+                "schema": {"type": "string"},
+            },
+            "per-page": {
+                "name": "per_page",
+                "in": "query",
+                "schema": {"type": "integer"},
+            },
         }
         path_level_params = [
             {"$ref": "#/components/parameters/owner"},
@@ -848,10 +861,349 @@ class TestResolveOperationParams:
             ],
         }
         path_item = {"parameters": path_level_params, "get": operation}
-        result = resolve_operation_params(operation, path_item, {"parameters": component_params})
+        result = resolve_operation_params(
+            operation, path_item, {"parameters": component_params}
+        )
         names = [p["name"] for p in result["parameters"]]
         assert "owner" in names
         assert "repo" in names
         assert "per_page" in names
         assert "sha" in names
         assert len(names) == 4  # no duplicates
+
+
+# ---------------------------------------------------------------------------
+# Tool name sanitization for OpenAPI -> MCP
+# Repro: GitHub's REST OpenAPI uses tag-namespaced operationIds like
+# "actions/download-job-logs-for-workflow-run". Without sanitization the
+# generated MCP tool name contains '/', which Anthropic/OpenAI/Bedrock all
+# reject (^[a-zA-Z0-9_-]+$). This block guards the registration + preview
+# paths against that.
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeOpenAPIToolName:
+    def test_replaces_slashes(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert (
+            sanitize_openapi_tool_name("actions/download-job-logs-for-workflow-run")
+            == "actions_download-job-logs-for-workflow-run"
+        )
+
+    def test_replaces_other_punctuation(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("foo.bar:baz qux") == "foo_bar_baz_qux"
+
+    def test_lowercases(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("Pulls/List-Files") == "pulls_list-files"
+
+    def test_already_valid_passes_through(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("plain-tool_name") == "plain-tool_name"
+
+    def test_empty_string(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("") == ""
+
+    def test_caps_at_128_chars(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        out = sanitize_openapi_tool_name("a/" * 200)
+        assert len(out) <= 128
+
+
+class TestRegisterToolsFromOpenAPI:
+    """Verify register_tools_from_openapi emits provider-safe tool names."""
+
+    def test_github_style_operation_ids_are_sanitized(self, monkeypatch):
+        import re
+
+        from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
+
+        registered: list = []
+
+        def _capture(name, description, input_schema, handler):  # noqa: ANN001
+            registered.append(name)
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator.global_mcp_tool_registry,
+            "register_tool",
+            _capture,
+        )
+
+        spec = {
+            "paths": {
+                "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
+                    "get": {
+                        "operationId": "actions/download-job-logs-for-workflow-run",
+                        "summary": "Download job logs",
+                    }
+                },
+                "/repos/{owner}/{repo}/pulls/{pull_number}/files": {
+                    "get": {
+                        "operationId": "pulls/list-files",
+                        "summary": "List files",
+                    }
+                },
+            }
+        }
+
+        openapi_to_mcp_generator.register_tools_from_openapi(
+            spec, base_url="https://api.example.com"
+        )
+
+        assert registered, "expected at least one registered tool"
+        anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+        for name in registered:
+            assert anthropic_re.match(
+                name
+            ), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+        assert "actions_download-job-logs-for-workflow-run" in registered
+        assert "pulls_list-files" in registered
+
+    def test_missing_operation_id_uses_sanitized_method_path_fallback(
+        self, monkeypatch
+    ):
+        import re
+
+        from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
+
+        registered: list = []
+
+        def _capture(name, description, input_schema, handler):  # noqa: ANN001
+            registered.append(name)
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator.global_mcp_tool_registry,
+            "register_tool",
+            _capture,
+        )
+
+        spec = {
+            "paths": {
+                "/foo/{bar}/baz": {
+                    "get": {"summary": "no operationId here"},
+                }
+            }
+        }
+        openapi_to_mcp_generator.register_tools_from_openapi(
+            spec, base_url="https://api.example.com"
+        )
+
+        assert registered
+        for name in registered:
+            assert re.match(
+                r"^[a-zA-Z0-9_-]+$", name
+            ), f"fallback tool name {name!r} not sanitized"
+
+
+class TestRequestExtraHeaders:
+    """Tests for _request_extra_headers ContextVar forwarding in tool_function."""
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_forwarded_to_upstream(self):
+        """Extra headers set via ContextVar are included in the upstream request."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-TOKEN": "secret-value"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-TOKEN") == "secret-value"
+
+    @pytest.mark.asyncio
+    async def test_no_extra_headers_by_default(self):
+        """Without setting _request_extra_headers, no extra headers are injected."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Static": "static-value"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            result = await func()
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent == {"X-Static": "static-value"}
+            assert "X-TOKEN" not in headers_sent
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_merged_with_static_headers(self):
+        """Forwarded headers are passed through alongside non-conflicting static headers."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="post",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Static": "static-value"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("post", "created")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-TOKEN": "dynamic-value"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "created"
+            call_args = async_client.post.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-Static") == "static-value"
+            assert headers_sent.get("X-TOKEN") == "dynamic-value"
+
+    @pytest.mark.asyncio
+    async def test_static_headers_win_over_forwarded_on_conflict(self):
+        """Static (operator) headers must override forwarded (caller) headers on name conflict."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Tenant": "operator-tenant"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-Tenant": "caller-spoofed"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-Tenant") == "operator-tenant"
+            assert "caller-spoofed" not in headers_sent.values()
+
+    @pytest.mark.asyncio
+    async def test_static_headers_win_case_insensitively(self):
+        """Forwarded header with different casing must not bypass the static-wins rule."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Tenant": "operator-tenant"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"x-tenant": "caller-spoofed"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-Tenant") == "operator-tenant"
+            assert "x-tenant" not in headers_sent
+            assert "caller-spoofed" not in headers_sent.values()
+
+    @pytest.mark.asyncio
+    async def test_auth_header_still_overrides_extra_headers(self):
+        """_request_auth_header takes precedence for Authorization over extra headers."""
+        operation = {}
+        func = create_tool_function(
+            path="/secure",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "secure-data")
+            mock_client.return_value = async_client
+
+            extra_token = _request_extra_headers.set(
+                {"Authorization": "Bearer extra", "X-TOKEN": "token-value"}
+            )
+            auth_token = _request_auth_header.set("Bearer byok-credential")
+            try:
+                result = await func()
+            finally:
+                _request_auth_header.reset(auth_token)
+                _request_extra_headers.reset(extra_token)
+
+            assert result == "secure-data"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("Authorization") == "Bearer byok-credential"
+            assert headers_sent.get("X-TOKEN") == "token-value"
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_not_leaked_between_calls(self):
+        """After resetting the ContextVar, subsequent calls do not see the headers."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-TOKEN": "first-call"})
+            _request_extra_headers.reset(token)
+
+            await func()
+
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert "X-TOKEN" not in headers_sent

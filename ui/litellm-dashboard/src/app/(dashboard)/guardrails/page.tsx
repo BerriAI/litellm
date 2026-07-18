@@ -1,12 +1,9 @@
 "use client";
 
-import GuardrailsPanel from "@/components/guardrails";
+import GuardrailsPanel from "./_components/GuardrailsPanel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-const GuardrailsPage = () => {
-  const { accessToken } = useAuthorized();
-
-  return <GuardrailsPanel accessToken={accessToken} />;
-};
-
-export default GuardrailsPage;
+export default function Guardrails() {
+  const { accessToken, userRole } = useAuthorized();
+  return <GuardrailsPanel accessToken={accessToken} userRole={userRole} />;
+}

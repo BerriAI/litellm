@@ -1,6 +1,7 @@
 """
 Auto-Routing Strategy that works with a Semantic Router Config
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_router_logger
@@ -81,11 +82,34 @@ class AutoRouter(CustomLogger):
             )
         return auto_router_routes
 
+    @staticmethod
+    def _extract_text_from_messages(messages: List[Dict[str, Any]]) -> str:
+        """
+        Extract text content from the last user message for routing.
+
+        Handles tool-call conversations (where the last message may be an
+        assistant or tool message with non-string content) and multimodal
+        messages (where content is a list of content blocks).
+        """
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content")
+                if content is None:
+                    return ""
+                if isinstance(content, list):
+                    return " ".join(
+                        block.get("text", "")
+                        for block in content
+                        if isinstance(block, dict) and block.get("type") == "text"
+                    )
+                return str(content)
+        return ""
+
     async def async_pre_routing_hook(
         self,
         model: str,
         request_kwargs: Dict,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional["PreRoutingHookResponse"]:
@@ -106,11 +130,12 @@ class AutoRouter(CustomLogger):
             # do nothing, return same inputs
             return None
 
-        if self.routelayer is None:
+        routelayer = self.routelayer
+        if routelayer is None:
             #######################
             # Create the route layer
             #######################
-            self.routelayer = SemanticRouter(
+            routelayer = SemanticRouter(
                 routes=self.loaded_routes,
                 encoder=LiteLLMRouterEncoder(
                     litellm_router_instance=self.litellm_router_instance,
@@ -118,12 +143,10 @@ class AutoRouter(CustomLogger):
                 ),
                 auto_sync=self.auto_sync_value,
             )
+            self.routelayer = routelayer
 
-        user_message: Dict[str, str] = messages[-1]
-        message_content: str = user_message.get("content", "")
-        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(
-            text=message_content
-        )
+        message_content = self._extract_text_from_messages(messages)
+        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = routelayer(text=message_content)
         verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model

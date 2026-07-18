@@ -38,9 +38,7 @@ class FakeAnthropicMessagesStreamIterator:
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
-    def _create_content_block_chunks(
-        self, block_dict: Dict[str, Any], index: int
-    ) -> List[bytes]:
+    def _create_content_block_chunks(self, block_dict: Dict[str, Any], index: int) -> List[bytes]:
         """Build SSE chunks for a single content block."""
         chunks = []
         block_type = block_dict.get("type")
@@ -51,18 +49,14 @@ class FakeAnthropicMessagesStreamIterator:
                 "index": index,
                 "content_block": {"type": "text", "text": ""},
             }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
             text = block_dict.get("text", "")
             content_block_delta = {
                 "type": "content_block_delta",
                 "index": index,
                 "delta": {"type": "text_delta", "text": text},
             }
-            chunks.append(
-                f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
 
         elif block_type == "thinking":
             content_block_start = {
@@ -70,9 +64,7 @@ class FakeAnthropicMessagesStreamIterator:
                 "index": index,
                 "content_block": {"type": "thinking", "thinking": "", "signature": ""},
             }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
             thinking_text = block_dict.get("thinking", "")
             if thinking_text:
                 content_block_delta = {
@@ -80,9 +72,7 @@ class FakeAnthropicMessagesStreamIterator:
                     "index": index,
                     "delta": {"type": "thinking_delta", "thinking": thinking_text},
                 }
-                chunks.append(
-                    f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-                )
+                chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
             signature = block_dict.get("signature", "")
             if signature:
                 signature_delta = {
@@ -90,9 +80,7 @@ class FakeAnthropicMessagesStreamIterator:
                     "index": index,
                     "delta": {"type": "signature_delta", "signature": signature},
                 }
-                chunks.append(
-                    f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode()
-                )
+                chunks.append(f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode())
 
         elif block_type == "redacted_thinking":
             content_block_start = {
@@ -100,9 +88,7 @@ class FakeAnthropicMessagesStreamIterator:
                 "index": index,
                 "content_block": {"type": "redacted_thinking"},
             }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
 
         elif block_type == "tool_use":
             content_block_start = {
@@ -115,23 +101,20 @@ class FakeAnthropicMessagesStreamIterator:
                     "input": {},
                 },
             }
-            chunks.append(
-                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
             input_data = block_dict.get("input", {})
             content_block_delta = {
                 "type": "content_block_delta",
                 "index": index,
-                "delta": {"type": "input_json_delta", "partial_json": json.dumps(input_data)},
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(input_data),
+                },
             }
-            chunks.append(
-                f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-            )
+            chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
 
         content_block_stop = {"type": "content_block_stop", "index": index}
-        chunks.append(
-            f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-        )
+        chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
         return chunks
 
     def _create_streaming_chunks(self) -> List[bytes]:
@@ -159,9 +142,7 @@ class FakeAnthropicMessagesStreamIterator:
                 },
             },
         }
-        chunks.append(
-            f"event: message_start\ndata: {json.dumps(message_start)}\n\n".encode()
-        )
+        chunks.append(f"event: message_start\ndata: {json.dumps(message_start)}\n\n".encode())
 
         # 2-4. For each content block, send start/delta/stop events
         content_blocks = response_dict.get("content", [])
@@ -179,13 +160,9 @@ class FakeAnthropicMessagesStreamIterator:
             if usage.get("input_tokens") is not None:
                 delta_usage["input_tokens"] = usage["input_tokens"]
             if usage.get("cache_creation_input_tokens") is not None:
-                delta_usage["cache_creation_input_tokens"] = usage[
-                    "cache_creation_input_tokens"
-                ]
+                delta_usage["cache_creation_input_tokens"] = usage["cache_creation_input_tokens"]
             if usage.get("cache_read_input_tokens") is not None:
-                delta_usage["cache_read_input_tokens"] = usage[
-                    "cache_read_input_tokens"
-                ]
+                delta_usage["cache_read_input_tokens"] = usage["cache_read_input_tokens"]
         message_delta = {
             "type": "message_delta",
             "delta": {
@@ -194,15 +171,11 @@ class FakeAnthropicMessagesStreamIterator:
             },
             "usage": delta_usage,
         }
-        chunks.append(
-            f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode()
-        )
+        chunks.append(f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode())
 
         # 6. message_stop event
         message_stop = {"type": "message_stop", "usage": usage if usage else {}}
-        chunks.append(
-            f"event: message_stop\ndata: {json.dumps(message_stop)}\n\n".encode()
-        )
+        chunks.append(f"event: message_stop\ndata: {json.dumps(message_stop)}\n\n".encode())
 
         return chunks
 

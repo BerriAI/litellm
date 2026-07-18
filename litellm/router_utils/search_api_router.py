@@ -8,7 +8,7 @@ import asyncio
 import random
 import traceback
 from functools import partial
-from typing import Any, Callable
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from litellm._logging import verbose_router_logger
 
@@ -19,6 +19,28 @@ class SearchAPIRouter:
 
     Provides methods for search tool selection, load balancing, and fallback handling.
     """
+
+    @staticmethod
+    def _resolve_search_provider_credentials(
+        *,
+        tool_litellm_params: Dict[str, Any],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Resolve search provider credentials from tool configuration ONLY.
+
+        Credentials are stored only in search_tool.litellm_params, never in team/key metadata.
+        This ensures secrets are not exposed in team/key API responses.
+
+        Args:
+            tool_litellm_params: Search tool litellm_params with credentials
+
+        Returns:
+            Tuple of (api_key, api_base) from tool configuration
+        """
+        resolved_api_key: Optional[str] = tool_litellm_params.get("api_key")
+        resolved_api_base: Optional[str] = tool_litellm_params.get("api_base")
+
+        return resolved_api_key, resolved_api_base
 
     @staticmethod
     async def update_router_search_tools(router_instance: Any, search_tools: list):
@@ -34,9 +56,7 @@ class SearchAPIRouter:
         try:
             from litellm.types.router import SearchToolTypedDict
 
-            verbose_router_logger.debug(
-                f"Adding {len(search_tools)} search tools to router"
-            )
+            verbose_router_logger.debug(f"Adding {len(search_tools)} search tools to router")
 
             # Convert search tools to the format expected by the router
             router_search_tools: list = []
@@ -53,14 +73,10 @@ class SearchAPIRouter:
             # Update the router's search_tools list
             router_instance.search_tools = router_search_tools
 
-            verbose_router_logger.info(
-                f"Successfully updated router with {len(router_search_tools)} search tool(s)"
-            )
+            verbose_router_logger.info(f"Successfully updated router with {len(router_search_tools)} search tool(s)")
 
         except Exception as e:
-            verbose_router_logger.exception(
-                f"Error updating router with search tools: {str(e)}"
-            )
+            verbose_router_logger.exception(f"Error updating router with search tools: {str(e)}")
             raise e
 
     @staticmethod
@@ -82,15 +98,11 @@ class SearchAPIRouter:
             ValueError: If no matching search tools are found
         """
         matching_tools = [
-            tool
-            for tool in router_instance.search_tools
-            if tool.get("search_tool_name") == search_tool_name
+            tool for tool in router_instance.search_tools if tool.get("search_tool_name") == search_tool_name
         ]
 
         if not matching_tools:
-            raise ValueError(
-                f"Search tool '{search_tool_name}' not found in router.search_tools"
-            )
+            raise ValueError(f"Search tool '{search_tool_name}' not found in router.search_tools")
 
         return matching_tools
 
@@ -116,14 +128,10 @@ class SearchAPIRouter:
             search_tool_name = kwargs.get("search_tool_name", kwargs.get("model"))
 
             if not search_tool_name:
-                raise ValueError(
-                    "search_tool_name or model parameter is required for search"
-                )
+                raise ValueError("search_tool_name or model parameter is required for search")
 
             # Set up kwargs for the fallback system
-            kwargs[
-                "model"
-            ] = search_tool_name  # Use model field for compatibility with fallback system
+            kwargs["model"] = search_tool_name  # Use model field for compatibility with fallback system
             kwargs["original_generic_function"] = original_function
             # Bind router_instance to the helper method using partial
             kwargs["original_function"] = partial(
@@ -138,9 +146,7 @@ class SearchAPIRouter:
                 metadata_variable_name="litellm_metadata",
             )
 
-            available_search_tool_names = [
-                tool.get("search_tool_name") for tool in router_instance.search_tools
-            ]
+            available_search_tool_names = [tool.get("search_tool_name") for tool in router_instance.search_tools]
             verbose_router_logger.debug(
                 f"Inside SearchAPIRouter.async_search_with_fallbacks() - search_tool_name: {search_tool_name}, Available Search Tools: {available_search_tool_names}, kwargs: {kwargs}"
             )
@@ -198,17 +204,14 @@ class SearchAPIRouter:
             # Extract search provider and other params from litellm_params
             litellm_params = selected_tool.get("litellm_params", {})
             search_provider = litellm_params.get("search_provider")
-            api_key = litellm_params.get("api_key")
-            api_base = litellm_params.get("api_base")
-
             if not search_provider:
-                raise ValueError(
-                    f"search_provider not found in litellm_params for search tool '{search_tool_name}'"
-                )
+                raise ValueError(f"search_provider not found in litellm_params for search tool '{search_tool_name}'")
 
-            verbose_router_logger.debug(
-                f"Selected search tool with provider: {search_provider}"
+            api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
+                tool_litellm_params=litellm_params,
             )
+
+            verbose_router_logger.debug(f"Selected search tool with provider: {search_provider}")
 
             # Call the original search function with the provider config
             response = await original_generic_function(

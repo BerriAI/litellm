@@ -19,9 +19,7 @@ class TranscriptionUsageObjectTransformation:
 
     @staticmethod
     def transform_transcription_usage_object(
-        usage_object: Union[
-            TranscriptionUsageDurationObject, TranscriptionUsageTokensObject
-        ],
+        usage_object: Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject],
     ) -> Optional[Usage]:
         if isinstance(usage_object, TranscriptionUsageDurationObject):
             return None

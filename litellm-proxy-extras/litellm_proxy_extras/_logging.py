@@ -23,7 +23,8 @@ class JsonFormatter(logging.Formatter):
 def _is_json_enabled():
     try:
         import litellm
-        return getattr(litellm, 'json_logs', False)
+
+        return getattr(litellm, "json_logs", False)
     except (ImportError, AttributeError):
         return os.getenv("JSON_LOGS", "false").lower() == "true"
 
@@ -35,6 +36,8 @@ if not logger.handlers:
     if _is_json_enabled():
         handler.setFormatter(JsonFormatter())
     else:
-        handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)

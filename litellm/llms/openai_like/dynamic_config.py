@@ -20,16 +20,13 @@ def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
     # Choose base class
-    base_class: type = (
-        OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
-    )
+    base_class: type = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
     class JSONProviderConfig(base_class):  # type: ignore[valid-type,misc]
         @overload
         def _transform_messages(
             self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-        ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-            ...
+        ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
         @overload
         def _transform_messages(
@@ -37,8 +34,7 @@ def create_config_class(provider: SimpleProviderConfig):
             messages: List[AllMessageValues],
             model: str,
             is_async: Literal[False] = False,
-        ) -> List[AllMessageValues]:
-            ...
+        ) -> List[AllMessageValues]: ...
 
         def _transform_messages(
             self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -50,13 +46,9 @@ def create_config_class(provider: SimpleProviderConfig):
                 messages = handle_messages_with_content_list_to_str_conversion(messages)
 
             if is_async:
-                return super()._transform_messages(
-                    messages=messages, model=model, is_async=True
-                )
+                return super()._transform_messages(messages=messages, model=model, is_async=True)
             else:
-                return super()._transform_messages(
-                    messages=messages, model=model, is_async=False
-                )
+                return super()._transform_messages(messages=messages, model=model, is_async=False)
 
         def _get_openai_compatible_provider_info(
             self, api_base: Optional[str], api_key: Optional[str]
@@ -99,13 +91,11 @@ def create_config_class(provider: SimpleProviderConfig):
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
-            from litellm.utils import supports_function_calling
+            from litellm.utils import supports_function_calling, supports_reasoning
 
             supported_params = super().get_supported_openai_params(model=model)
 
-            _supports_fc = supports_function_calling(
-                model=model, custom_llm_provider=provider.slug
-            )
+            _supports_fc = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
             if not _supports_fc:
                 tool_params = [
@@ -122,6 +112,10 @@ def create_config_class(provider: SimpleProviderConfig):
                     f"Model {model} on provider {provider.slug} does not support "
                     f"function calling — removed tool-related params from supported params."
                 )
+
+            _supports_reasoning = supports_reasoning(model=model, custom_llm_provider=provider.slug)
+            if _supports_reasoning and "reasoning_effort" not in supported_params:
+                supported_params.append("reasoning_effort")
 
             return supported_params
 
@@ -189,6 +183,7 @@ def create_responses_config_class(provider: SimpleProviderConfig):
     from litellm.llms.openai_like.responses.transformation import (
         OpenAILikeResponsesConfig,
     )
+    from litellm.types.llms.openai import ResponseInputParam
     from litellm.types.router import GenericLiteLLMParams
 
     class JSONProviderResponsesConfig(OpenAILikeResponsesConfig):
@@ -224,6 +219,24 @@ def create_responses_config_class(provider: SimpleProviderConfig):
 
             api_base = api_base.rstrip("/")
             return f"{api_base}/responses"
+
+        def transform_responses_api_request(
+            self,
+            model: str,
+            input: Union[str, ResponseInputParam],
+            response_api_optional_request_params: dict,
+            litellm_params: GenericLiteLLMParams,
+            headers: dict,
+        ) -> dict:
+            if provider.special_handling.get("force_store_false"):
+                response_api_optional_request_params["store"] = False
+            return super().transform_responses_api_request(
+                model=model,
+                input=input,
+                response_api_optional_request_params=response_api_optional_request_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
 
     _responses_config_cache[provider.slug] = JSONProviderResponsesConfig
     return JSONProviderResponsesConfig

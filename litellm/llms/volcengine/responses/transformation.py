@@ -17,6 +17,7 @@ from pydantic import fields as pyd_fields
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
@@ -91,20 +92,14 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> VolcEngineError:
-        typed_headers: httpx.Headers = (
-            headers
-            if isinstance(headers, httpx.Headers)
-            else httpx.Headers(headers or {})
-        )
+        typed_headers: httpx.Headers = headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers or {})
         return VolcEngineError(
             status_code=status_code,
             message=error_message,
             headers=typed_headers,
         )
 
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Build auth headers for Volcengine Responses API.
         """
@@ -121,9 +116,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
 
         if api_key is None:
-            raise ValueError(
-                "Volcengine API key is required. Set ARK_API_KEY / VOLCENGINE_API_KEY or pass api_key."
-            )
+            raise ValueError("Volcengine API key is required. Set ARK_API_KEY / VOLCENGINE_API_KEY or pass api_key.")
 
         return get_volcengine_headers(api_key=api_key, extra_headers=headers)
 
@@ -172,9 +165,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Volcengine docs do not list parallel_tool_calls; drop it to avoid backend errors.
         if "parallel_tool_calls" in params:
-            verbose_logger.debug(
-                "Volcengine Responses API: dropping unsupported 'parallel_tool_calls' param."
-            )
+            verbose_logger.debug("Volcengine Responses API: dropping unsupported 'parallel_tool_calls' param.")
             params.pop("parallel_tool_calls", None)
 
         return params
@@ -194,11 +185,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         allowed = set(self._SUPPORTED_OPTIONAL_PARAMS)
 
-        sanitized_optional = {
-            k: v
-            for k, v in response_api_optional_request_params.items()
-            if k in allowed
-        }
+        sanitized_optional = {k: v for k, v in response_api_optional_request_params.items() if k in allowed}
         # Ensure metadata never reaches provider
         sanitized_optional.pop("metadata", None)
         sanitized_optional.pop("parallel_tool_calls", None)
@@ -206,11 +193,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # If extra_body is provided, filter its keys against the same allowlist to avoid
         # leaking unsupported params to the provider.
         if isinstance(sanitized_optional.get("extra_body"), dict):
-            filtered_body = {
-                k: v
-                for k, v in sanitized_optional["extra_body"].items()
-                if k in allowed
-            }
+            filtered_body = {k: v for k, v in sanitized_optional["extra_body"].items() if k in allowed}
             if filtered_body:
                 sanitized_optional["extra_body"] = filtered_body
             else:
@@ -246,9 +229,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 chunk = patched_chunk
 
         event_type = str(chunk.get("type")) if isinstance(chunk, dict) else None
-        event_pydantic_model = OpenAIResponsesAPIConfig.get_event_model_class(
-            event_type=event_type
-        )
+        event_pydantic_model = OpenAIResponsesAPIConfig.get_event_model_class(event_type=event_type)
 
         patched_chunk = self._fill_missing_fields(chunk, event_pydantic_model)
 
@@ -267,13 +248,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
             raw_response_json = raw_response.json()
             if "created_at" in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(
-                    raw_response_json["created_at"]
-                )
+                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
-            raise VolcEngineError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
@@ -281,9 +258,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         try:
             response = ResponsesAPIResponse(**raw_response_json)
         except Exception:
-            verbose_logger.debug(
-                "Volcengine Responses API: falling back to model_construct for response parsing."
-            )
+            verbose_logger.debug("Volcengine Responses API: falling back to model_construct for response parsing.")
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         response._hidden_params["additional_headers"] = processed_headers
@@ -300,7 +275,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}"
+        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
+        url = f"{api_base}/{encoded_response_id}"
         data: Dict = {}
         return url, data
 
@@ -312,9 +288,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise VolcEngineError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
         try:
             return DeleteResponseResult(**raw_response_json)
         except Exception:
@@ -333,7 +307,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}"
+        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
+        url = f"{api_base}/{encoded_response_id}"
         data: Dict = {}
         return url, data
 
@@ -345,9 +320,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise VolcEngineError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
@@ -372,7 +345,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}/input_items"
+        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
+        url = f"{api_base}/{encoded_response_id}/input_items"
         params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
@@ -394,9 +368,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         try:
             return raw_response.json()
         except Exception:
-            raise VolcEngineError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
@@ -408,7 +380,8 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}/cancel"
+        encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
+        url = f"{api_base}/{encoded_response_id}/cancel"
         data: Dict = {}
         return url, data
 
@@ -420,9 +393,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise VolcEngineError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
@@ -458,29 +429,19 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         for name, field in fields_map.items():
             if name in patched:
-                patched[name] = VolcEngineResponsesAPIConfig._maybe_fill_nested(
-                    patched[name], field.annotation
-                )
+                patched[name] = VolcEngineResponsesAPIConfig._maybe_fill_nested(patched[name], field.annotation)
                 continue
 
             # Explicit default or factory
-            if (
-                field.default is not pyd_fields.PydanticUndefined
-                and field.default is not None
-            ):
+            if field.default is not pyd_fields.PydanticUndefined and field.default is not None:
                 patched[name] = field.default
                 continue
-            if (
-                field.default_factory is not None
-                and field.default_factory is not pyd_fields.PydanticUndefined
-            ):
+            if field.default_factory is not None and field.default_factory is not pyd_fields.PydanticUndefined:
                 patched[name] = field.default_factory()
                 continue
 
             # Heuristic defaults for missing required fields
-            patched[name] = VolcEngineResponsesAPIConfig._default_for_annotation(
-                field.annotation
-            )
+            patched[name] = VolcEngineResponsesAPIConfig._default_for_annotation(field.annotation)
 
         return patched
 
@@ -520,10 +481,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # Attempt to fill list elements if we know the element annotation
             elem_ann: Any = args[0] if args else None
             if elem_ann is not None:
-                return [
-                    VolcEngineResponsesAPIConfig._maybe_fill_nested(v, elem_ann)
-                    for v in value
-                ]
+                return [VolcEngineResponsesAPIConfig._maybe_fill_nested(v, elem_ann) for v in value]
 
         return value
 

@@ -119,10 +119,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockMutateAsync).toHaveBeenCalledWith(
-        { store_model_in_db: true },
-        expect.any(Object)
-      );
+      expect(mockMutateAsync).toHaveBeenCalledWith({ store_model_in_db: true }, expect.any(Object));
     });
   });
 
@@ -140,10 +137,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockMutateAsync).toHaveBeenCalledWith(
-        { store_model_in_db: false },
-        expect.any(Object)
-      );
+      expect(mockMutateAsync).toHaveBeenCalledWith({ store_model_in_db: false }, expect.any(Object));
     });
   });
 
@@ -179,7 +173,9 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to save model storage settings: Network error");
+      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith(
+        "Failed to save model storage settings: Network error",
+      );
     });
   });
 
@@ -198,7 +194,9 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to save model storage settings: Backend error");
+      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith(
+        "Failed to save model storage settings: Backend error",
+      );
     });
   });
 

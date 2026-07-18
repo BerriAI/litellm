@@ -1,0 +1,13 @@
+[
+  {
+    "user_content": "summarize this giant document",
+    "assistant_content": null,
+    "tool_calls": [
+      {"id": "c1", "name": "summarize", "arguments": {"doc_id": "big"}}
+    ],
+    "tool_results": [
+      {"tool_call_id": "c1", "content": "Error: context length exceeded for this model"}
+    ],
+    "response_status": 200
+  }
+]

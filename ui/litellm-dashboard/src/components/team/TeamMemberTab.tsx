@@ -1,6 +1,7 @@
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Member } from "@/components/networking";
+import { DateCell, MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -45,21 +46,22 @@ export default function TeamMemberTab({
     return "0";
   };
 
-  // Helper function to get spend for a user
-  const getUserSpend = (userId: string | null): number | null => {
+  const getUserCurrentCycleSpend = (userId: string | null): number => {
     if (!userId) return 0;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.spend || 0;
+    return membership?.spend ?? 0;
   };
 
-  const getUserBudget = (userId: string | null): string | null => {
+  const getUserTotalSpend = (userId: string | null): number => {
+    if (!userId) return 0;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return membership?.total_spend ?? 0;
+  };
+
+  const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    const maxBudget = membership?.litellm_budget_table?.max_budget;
-    if (maxBudget === null || maxBudget === undefined) {
-      return null;
-    }
-    return formatNumber(maxBudget);
+    return membership?.litellm_budget_table?.max_budget ?? null;
   };
 
   // Helper function to get rate limits for a user
@@ -82,32 +84,90 @@ export default function TeamMemberTab({
   const isUserTeamAdmin = isUserTeamAdminForSingleTeam(teamData.team_info.members_with_roles, userId || "");
   const isProxyAdmin = isProxyAdminRole(userRole || "");
 
+  const getUserAllowedModels = (userId: string | null): string[] | null => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    const models = membership?.litellm_budget_table?.allowed_models;
+    return models && models.length > 0 ? models : null;
+  };
+
+  const getUserBudgetReset = (userId: string | null): string | null => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return membership?.litellm_budget_table?.budget_reset_at ?? null;
+  };
+
   const extraColumns: ColumnsType<Member> = [
     {
       title: (
         <Space direction="horizontal">
-          Team Member Spend (USD)
-          <Tooltip title="This is the amount spent by a user in the team.">
+          Model Scope
+          <Tooltip title="Models this member can access. Empty means they inherit all team models.">
+            <InfoCircleOutlined />
+          </Tooltip>
+        </Space>
+      ),
+      key: "model_scope",
+      render: (_: unknown, record: Member) => {
+        const models = getUserAllowedModels(record.user_id);
+        if (!models) {
+          return <Typography.Text type="secondary">(all team models)</Typography.Text>;
+        }
+        const displayed = models.slice(0, 2);
+        const remaining = models.length - displayed.length;
+        return (
+          <Space wrap>
+            {displayed.map((m) => (
+              <Typography.Text key={m} code style={{ fontSize: "12px" }}>
+                {m}
+              </Typography.Text>
+            ))}
+            {remaining > 0 && (
+              <Tooltip title={models.slice(2).join(", ")}>
+                <Typography.Text type="secondary">+{remaining} more</Typography.Text>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
+    },
+    {
+      title: (
+        <Space direction="horizontal">
+          Current Cycle Spend (USD)
+          <Tooltip title="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
       ),
       key: "spend",
       render: (_: unknown, record: Member) => (
-        <Typography.Text>${formatNumberWithCommas(getUserSpend(record.user_id), 4)}</Typography.Text>
+        <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={4} />
       ),
+    },
+    {
+      title: (
+        <Space direction="horizontal">
+          Total Spend (USD)
+          <Tooltip title="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
+            <InfoCircleOutlined />
+          </Tooltip>
+        </Space>
+      ),
+      key: "total_spend",
+      render: (_: unknown, record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={4} />,
     },
     {
       title: "Team Member Budget (USD)",
       key: "budget",
-      render: (_: unknown, record: Member) => {
-        const budget = getUserBudget(record.user_id);
-        return (
-          <Typography.Text>
-            {budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}
-          </Typography.Text>
-        );
-      },
+      render: (_: unknown, record: Member) => (
+        <MoneyCell value={getUserBudget(record.user_id)} decimals={4} emptyText="Unlimited" showZero />
+      ),
+    },
+    {
+      title: "Budget Reset",
+      key: "budget_reset",
+      render: (_: unknown, record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
     },
     {
       title: (
@@ -119,9 +179,7 @@ export default function TeamMemberTab({
         </Space>
       ),
       key: "rate_limits",
-      render: (_: unknown, record: Member) => (
-        <Typography.Text>{getUserRateLimits(record.user_id)}</Typography.Text>
-      ),
+      render: (_: unknown, record: Member) => <Typography.Text>{getUserRateLimits(record.user_id)}</Typography.Text>,
     },
   ];
 
@@ -130,14 +188,14 @@ export default function TeamMemberTab({
       members={teamData.team_info.members_with_roles}
       canEdit={canEditTeam}
       onEdit={(record) => {
-        const membership = teamData.team_memberships.find(
-          (tm) => tm.user_id === record.user_id
-        );
+        const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
         const enhancedMember = {
           ...record,
           max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
           tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
           rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+          budget_duration: membership?.litellm_budget_table?.budget_duration || null,
+          allowed_models: membership?.litellm_budget_table?.allowed_models || [],
         };
         setSelectedEditMember(enhancedMember);
         setIsEditMemberModalVisible(true);

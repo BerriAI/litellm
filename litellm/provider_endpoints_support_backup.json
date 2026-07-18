@@ -1288,6 +1288,23 @@
         "interactions": true
       }
     },
+    "libertai": {
+      "display_name": "LibertAI (`libertai`)",
+      "url": "https://docs.litellm.ai/docs/providers/libertai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "litellm_proxy": {
       "display_name": "LiteLLM Proxy (`litellm_proxy`)",
       "url": "https://docs.litellm.ai/docs/providers/litellm_proxy",
@@ -1537,6 +1554,23 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "neosantara": {
+      "display_name": "Neosantara (`neosantara`)",
+      "url": "https://docs.litellm.ai/docs/providers/neosantara",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "nvidia_nim": {
@@ -1801,6 +1835,23 @@
         "interactions": true
       }
     },
+    "darkbloom": {
+      "display_name": "Darkbloom (`darkbloom`)",
+      "url": "https://docs.litellm.ai/docs/providers/darkbloom",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "predibase": {
       "display_name": "Predibase (`predibase`)",
       "url": "https://docs.litellm.ai/docs/providers/predibase",
@@ -1950,7 +2001,7 @@
         "responses": true,
         "embeddings": false,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,

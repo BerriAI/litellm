@@ -7,6 +7,7 @@ with partial results for polling.
 Follows OpenAI Response Streaming format:
 https://platform.openai.com/docs/api-reference/responses-streaming
 """
+
 import asyncio
 import json
 from typing import Any, Optional, cast
@@ -20,7 +21,7 @@ from litellm.proxy.response_polling.polling_handler import ResponsePollingHandle
 from litellm.types.llms.openai import ResponsesAPIStatus
 
 
-async def background_streaming_task(  # noqa: PLR0915
+async def background_streaming_task(
     polling_id: str,
     data: dict,
     polling_handler: ResponsePollingHandler,
@@ -91,9 +92,7 @@ async def background_streaming_task(  # noqa: PLR0915
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
         output_items: dict[str, dict[str, Any]] = {}  # Track output items by ID
-        accumulated_text = (
-            {}
-        )  # Track accumulated text deltas by (item_id, content_index)
+        accumulated_text = {}  # Track accumulated text deltas by (item_id, content_index)
 
         # ResponsesAPIResponse fields to extract from response.completed
         usage_data = None
@@ -118,9 +117,9 @@ async def background_streaming_task(  # noqa: PLR0915
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
-        terminal_status: Optional[
-            ResponsesAPIStatus
-        ] = None  # Will be set by response.completed/failed/incomplete/cancelled
+        terminal_status: Optional[ResponsesAPIStatus] = (
+            None  # Will be set by response.completed/failed/incomplete/cancelled
+        )
         terminal_error = None
         _event_to_status = {
             "response.completed": "completed",
@@ -134,9 +133,7 @@ async def background_streaming_task(  # noqa: PLR0915
             nonlocal state_dirty, last_update_time
 
             current_time = asyncio.get_event_loop().time()
-            if state_dirty and (
-                force or (current_time - last_update_time) >= UPDATE_INTERVAL
-            ):
+            if state_dirty and (force or (current_time - last_update_time) >= UPDATE_INTERVAL):
                 # Convert output_items dict to list for update
                 output_list = list(output_items.values())
                 await polling_handler.update_state(
@@ -208,12 +205,8 @@ async def background_streaming_task(  # noqa: PLR0915
                                     content_list = output_items[item_id]["content"]
                                     if content_index < len(content_list):
                                         # Update existing content part with accumulated text
-                                        if isinstance(
-                                            content_list[content_index], dict
-                                        ):
-                                            content_list[content_index][
-                                                "text"
-                                            ] = accumulated_text[key]
+                                        if isinstance(content_list[content_index], dict):
+                                            content_list[content_index]["text"] = accumulated_text[key]
                                 state_dirty = True
 
                         elif event_type == "response.content_part.done":
@@ -264,10 +257,7 @@ async def background_streaming_task(  # noqa: PLR0915
                             )
 
                             # Extract error for failed and incomplete responses
-                            if (
-                                event_type == "response.failed"
-                                or event_type == "response.incomplete"
-                            ):
+                            if event_type == "response.failed" or event_type == "response.incomplete":
                                 terminal_error = response_data.get("error")
 
                             # Core response fields
@@ -281,22 +271,14 @@ async def background_streaming_task(  # noqa: PLR0915
                             instructions_data = response_data.get("instructions")
                             temperature_data = response_data.get("temperature")
                             top_p_data = response_data.get("top_p")
-                            max_output_tokens_data = response_data.get(
-                                "max_output_tokens"
-                            )
-                            previous_response_id_data = response_data.get(
-                                "previous_response_id"
-                            )
+                            max_output_tokens_data = response_data.get("max_output_tokens")
+                            previous_response_id_data = response_data.get("previous_response_id")
                             text_data = response_data.get("text")
                             truncation_data = response_data.get("truncation")
-                            parallel_tool_calls_data = response_data.get(
-                                "parallel_tool_calls"
-                            )
+                            parallel_tool_calls_data = response_data.get("parallel_tool_calls")
                             user_data = response_data.get("user")
                             store_data = response_data.get("store")
-                            incomplete_details_data = response_data.get(
-                                "incomplete_details"
-                            )
+                            incomplete_details_data = response_data.get("incomplete_details")
 
                             # Also update output from final response if available
                             if "output" in response_data:
@@ -311,9 +293,7 @@ async def background_streaming_task(  # noqa: PLR0915
                         await flush_state_if_needed()
 
                     except json.JSONDecodeError as e:
-                        verbose_proxy_logger.warning(
-                            f"Failed to parse streaming chunk: {e}"
-                        )
+                        verbose_proxy_logger.warning(f"Failed to parse streaming chunk: {e}")
                         pass
 
             # Final flush to ensure all accumulated state is saved
@@ -349,9 +329,7 @@ async def background_streaming_task(  # noqa: PLR0915
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error in background streaming task for {polling_id}: {str(e)}"
-        )
+        verbose_proxy_logger.error(f"Error in background streaming task for {polling_id}: {str(e)}")
         import traceback
 
         verbose_proxy_logger.error(traceback.format_exc())

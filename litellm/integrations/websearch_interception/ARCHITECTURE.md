@@ -244,6 +244,9 @@ search_tools:
   - search_tool_name: "my-tavily-tool"
     litellm_params:
       search_provider: "tavily"
+  - search_tool_name: "my-you-com-tool"
+    litellm_params:
+      search_provider: "you_com"
 ```
 
 ---

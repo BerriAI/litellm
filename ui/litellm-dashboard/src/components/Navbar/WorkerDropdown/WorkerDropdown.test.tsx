@@ -10,12 +10,7 @@ vi.mock("@/hooks/useWorker", () => ({
 // Mock antd Select
 vi.mock("antd", () => ({
   Select: ({ value, options, onChange, style, disabled, ...props }: any) => (
-    <select
-      data-testid="worker-select"
-      value={value}
-      style={style}
-      onChange={(e) => onChange?.(e.target.value)}
-    >
+    <select data-testid="worker-select" value={value} style={style} onChange={(e) => onChange?.(e.target.value)}>
       {options?.map((opt: any) => (
         <option key={opt.value} value={opt.value} disabled={opt.disabled}>
           {opt.label}

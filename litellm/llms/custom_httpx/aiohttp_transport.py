@@ -83,39 +83,28 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
 
     async def __aiter__(self) -> typing.AsyncIterator[bytes]:
         try:
-            async for chunk in self._aiohttp_response.content.iter_chunked(
-                self.CHUNK_SIZE
-            ):
+            async for chunk in self._aiohttp_response.content.iter_chunked(self.CHUNK_SIZE):
                 yield chunk
-        except (
-            aiohttp.ClientPayloadError,
-            aiohttp.client_exceptions.ClientPayloadError,
-        ) as e:
-            # Handle incomplete transfers more gracefully
-            # Log the error but don't re-raise if we've already yielded some data
-            verbose_logger.debug(f"Transfer incomplete, but continuing: {e}")
-            # If the error is due to incomplete transfer encoding, we can still
-            # return what we've received so far, similar to how httpx handles it
-            return
         except RuntimeError as e:
-            # Some providers (e.g., SSE streams) may close the connection
-            # causing aiohttp StreamReader to raise a generic RuntimeError
-            # with message "Connection closed.". Treat this as a graceful
-            # end-of-stream so downstream consumers don't error.
-            if "Connection closed" in str(e):
-                verbose_logger.debug(
-                    "Upstream closed streaming connection; ending iterator gracefully"
-                )
-                return
-            raise
+            if "Connection closed" not in str(e):
+                raise
+            raise httpx.ReadError(str(e)) from e
         except aiohttp.http_exceptions.TransferEncodingError as e:
-            # Handle transfer encoding errors gracefully
-            verbose_logger.debug(f"Transfer encoding error, but continuing: {e}")
-            return
+            raise httpx.ReadError(str(e)) from e
         except Exception:
             # For other exceptions, use the normal mapping
             with map_aiohttp_exceptions():
                 raise
+        finally:
+            # Release the aiohttp connection when iteration ends for any
+            # reason (read timeout, cancellation from a client disconnect,
+            # GeneratorExit). Without this, abnormally terminated streams
+            # permanently hold a slot in the TCPConnector pool; once the
+            # pool is exhausted every request to that host times out (408)
+            # until the proxy is restarted, even after the backend recovers.
+            # On a fully-read response the connection was already released
+            # at EOF and close() is a no-op.
+            self._aiohttp_response.close()
 
     async def aclose(self) -> None:
         with map_aiohttp_exceptions():
@@ -195,11 +184,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             current_loop = asyncio.get_running_loop()
 
             # If session is from a different or closed loop, recreate it
-            if (
-                session_loop is None
-                or session_loop != current_loop
-                or session_loop.is_closed()
-            ):
+            if session_loop is None or session_loop != current_loop or session_loop.is_closed():
                 # Close old session to prevent leaks
                 old_session = self.client
                 try:
@@ -208,9 +193,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                             asyncio.create_task(old_session.close())
                         except RuntimeError:
                             # Different event loop - can't schedule task, rely on GC
-                            verbose_logger.debug(
-                                "Old session from different loop, relying on GC"
-                            )
+                            verbose_logger.debug("Old session from different loop, relying on GC")
                 except Exception as e:
                     verbose_logger.debug(f"Error closing old session: {e}")
 
@@ -256,7 +239,10 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         from yarl import URL as YarlURL
 
         try:
-            data = request.content
+            # Coerce an empty body to None so aiohttp does not attach a
+            # `Content-Type: application/octet-stream` header for bodyless
+            # requests (e.g. DELETE /responses/{id}), which upstream APIs reject.
+            data = request.content or None
         except httpx.RequestNotRead:
             data = request.stream  # type: ignore
             request.headers.pop("transfer-encoding", None)  # handled by aiohttp
@@ -315,9 +301,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         except RuntimeError as e:
             # Handle the case where session was closed between our check and actual use
             if "Session is closed" in str(e):
-                verbose_logger.debug(
-                    f"Session closed during request, retrying with new session: {e}"
-                )
+                verbose_logger.debug(f"Session closed during request, retrying with new session: {e}")
                 # Force creation of a new session
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
                     self.client = self._client_factory()
@@ -348,10 +332,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
     async def _get_proxy_settings(self, request: httpx.Request):
         proxy = None
-        if not (
-            litellm.disable_aiohttp_trust_env
-            or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False"))
-        ):
+        if not (litellm.disable_aiohttp_trust_env or str_to_bool(os.getenv("DISABLE_AIOHTTP_TRUST_ENV", "False"))):
             try:
                 proxy = self._proxy_from_env(request.url)
             except Exception as e:  # pragma: no cover - best effort

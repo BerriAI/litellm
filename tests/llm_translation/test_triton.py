@@ -19,6 +19,7 @@ import pytest
 from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
 import litellm
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 
 def test_split_embedding_by_shape_passes():
@@ -187,15 +188,22 @@ def test_completion_triton_generate_api(stream):
     try:
         mock_response = MagicMock()
         if stream:
+
             def mock_iter_lines():
-                mock_output = ''.join([
-                    'data: {"model_name":"ensemble","model_version":"1","sequence_end":false,"sequence_id":0,"sequence_start":false,"text_output":"' + t + '"}\n\n'
-                    for t in ["I", " am", " an", " AI", " assistant"]
-                ])
-                for out in mock_output.split('\n'):
+                mock_output = "".join(
+                    [
+                        'data: {"model_name":"ensemble","model_version":"1","sequence_end":false,"sequence_id":0,"sequence_start":false,"text_output":"'
+                        + t
+                        + '"}\n\n'
+                        for t in ["I", " am", " an", " AI", " assistant"]
+                    ]
+                )
+                for out in mock_output.split("\n"):
                     yield out
+
             mock_response.iter_lines = mock_iter_lines
         else:
+
             def return_val():
                 return {
                     "text_output": "I am an AI assistant",
@@ -354,7 +362,7 @@ async def test_triton_embeddings():
         litellm.set_verbose = True
         response = await litellm.aembedding(
             model="triton/my-triton-model",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
+            api_base=f"{FAKE_OPENAI_API_BASE}/triton/embeddings",
             input=["good morning from litellm"],
         )
         print(f"response: {response}")
@@ -365,10 +373,10 @@ async def test_triton_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
-
 def test_triton_generate_raw_request():
     from litellm.utils import return_raw_request
     from litellm.types.utils import CallTypes
+
     try:
         kwargs = {
             "model": "triton/llama-3-8b-instruct",
@@ -382,4 +390,3 @@ def test_triton_generate_raw_request():
         assert "stop_words" not in json.dumps(raw_request["raw_request_body"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-

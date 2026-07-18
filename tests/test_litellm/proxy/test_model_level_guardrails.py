@@ -19,7 +19,6 @@ from litellm.proxy.utils import (
     _merge_guardrails_with_existing,
 )
 
-
 # ---------------------------------------------------------------------------
 # Unit tests for _check_and_merge_model_level_guardrails
 # ---------------------------------------------------------------------------
@@ -90,9 +89,7 @@ class TestCheckAndMergeModelLevelGuardrails:
     def test_returns_data_unchanged_when_no_router(self):
         """Returns data unchanged when llm_router is None."""
         data = {"model": "gpt-4", "metadata": {}}
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=None
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=None)
         assert result is data
 
     def test_returns_data_unchanged_when_no_model_info(self):
@@ -162,6 +159,157 @@ class TestCheckAndMergeModelLevelGuardrails:
 
 
 # ---------------------------------------------------------------------------
+# Regression test: pre_call hook must run exactly once with model-level guardrails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_runs_once_with_model_level_guardrails():
+    """
+    A guardrail attached at the model level (litellm_params.guardrails) is
+    spread into the top-level request kwargs by the router. The proxy pre-call
+    loop (async_pre_call_hook) and the deployment-level hook
+    (async_pre_call_deployment_hook) must together invoke async_pre_call_hook
+    exactly once, not twice.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class CountingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="counting-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            return data
+
+    guardrail = CountingGuardrail()
+
+    with patch("litellm.callbacks", [guardrail]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {},
+        }
+
+        # Path A: proxy pre-call loop runs the guardrail and records that it ran
+        data = await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="acompletion",
+        )
+
+        # Path B: the router spreads the deployment's model-level guardrails into
+        # the top-level kwargs, then litellm.acompletion fires the deployment hook
+        data["guardrails"] = ["counting-guardrail"]
+        await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
+
+    assert guardrail.pre_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_runs_once_when_hook_returns_fresh_dict():
+    """
+    async_pre_call_hook may return a brand-new request dict instead of mutating
+    or spreading the one it received. The exactly-once marker must live on the
+    data that flows downstream, so the deployment hook still skips the guardrail
+    even when the proxy loop swapped in a fresh dict that never carried it.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class FreshDictGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="counting-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            return {"model": data["model"], "messages": data["messages"]}
+
+    guardrail = FreshDictGuardrail()
+
+    with patch("litellm.callbacks", [guardrail]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {},
+        }
+
+        data = await proxy_logging.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="acompletion",
+        )
+
+        data["guardrails"] = ["counting-guardrail"]
+        await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
+
+    assert guardrail.pre_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_runs_pre_call_without_proxy_loop():
+    """
+    Direct-SDK usage (litellm.acompletion(..., guardrails=[...]) without the
+    proxy) never runs the proxy pre-call loop, so the deployment hook is the
+    only place the guardrail executes and it must still run exactly once.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import CallTypes
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class CountingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="counting-guardrail",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+            self.pre_call_count = 0
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.pre_call_count += 1
+            return data
+
+    guardrail = CountingGuardrail()
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}],
+        "guardrails": ["counting-guardrail"],
+        "metadata": {},
+    }
+
+    await guardrail.async_pre_call_deployment_hook(data, CallTypes.acompletion)
+
+    assert guardrail.pre_call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # Integration test: post_call_success_hook with model-level guardrails
 # ---------------------------------------------------------------------------
 
@@ -187,9 +335,7 @@ async def test_post_call_success_hook_runs_model_level_guardrail():
             )
             self.was_called = False
 
-        async def async_post_call_success_hook(
-            self, data, user_api_key_dict, response
-        ):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
             self.was_called = True
             return response
 
@@ -201,8 +347,9 @@ async def test_post_call_success_hook_runs_model_level_guardrail():
     mock_deployment.litellm_params.get.return_value = ["test-model-guardrail"]
     mock_router.get_deployment.return_value = mock_deployment
 
-    with patch("litellm.callbacks", [guardrail]), patch(
-        "litellm.proxy.proxy_server.llm_router", mock_router
+    with (
+        patch("litellm.callbacks", [guardrail]),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
     ):
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -254,9 +401,7 @@ async def test_post_call_success_hook_skips_guardrail_not_on_model():
             )
             self.was_called = False
 
-        async def async_post_call_success_hook(
-            self, data, user_api_key_dict, response
-        ):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
             self.was_called = True
             return response
 
@@ -268,8 +413,9 @@ async def test_post_call_success_hook_skips_guardrail_not_on_model():
     mock_deployment.litellm_params.get.return_value = ["some-other-guardrail"]
     mock_router.get_deployment.return_value = mock_deployment
 
-    with patch("litellm.callbacks", [guardrail]), patch(
-        "litellm.proxy.proxy_server.llm_router", mock_router
+    with (
+        patch("litellm.callbacks", [guardrail]),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
     ):
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -298,3 +444,134 @@ async def test_post_call_success_hook_skips_guardrail_not_on_model():
         )
 
         assert guardrail.was_called is False
+
+
+# ---------------------------------------------------------------------------
+# Integration test: async_post_call_streaming_iterator_hook with model-level guardrails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_runs_model_level_guardrail():
+    """
+    Model-level guardrails configured on a deployment should execute in
+    async_post_call_streaming_iterator_hook (streaming path) — even when
+    `default_on: false` and the guardrail is not in the request body.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class TestStreamingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="test-model-guardrail",
+                event_hook=GuardrailEventHooks.post_call,
+            )
+            self.was_called = False
+
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict, response, request_data
+        ):
+            self.was_called = True
+            async for chunk in response:
+                yield chunk
+
+    guardrail = TestStreamingGuardrail()
+
+    mock_router = MagicMock()
+    mock_deployment = MagicMock()
+    mock_deployment.litellm_params.get.return_value = ["test-model-guardrail"]
+    mock_router.get_deployment.return_value = mock_deployment
+
+    async def fake_response():
+        yield "chunk-1"
+        yield "chunk-2"
+
+    with (
+        patch("litellm.callbacks", [guardrail]),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    ):
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        request_data = {
+            "model": "gpt-4",
+            "metadata": {"model_info": {"id": "model-uuid-123"}},
+        }
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        chunks = []
+        async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=fake_response(),
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        ):
+            chunks.append(chunk)
+
+        assert guardrail.was_called is True
+        assert chunks == ["chunk-1", "chunk-2"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_skips_guardrail_not_on_model():
+    """
+    Streaming guardrails NOT configured on the model (and not in the request
+    body / key / team) should not execute, even after the dispatcher merge
+    runs. Confirms the gate stays closed for unrelated guardrails.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class TestStreamingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="unrelated-guardrail",
+                event_hook=GuardrailEventHooks.post_call,
+            )
+            self.was_called = False
+
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict, response, request_data
+        ):
+            self.was_called = True
+            async for chunk in response:
+                yield chunk
+
+    guardrail = TestStreamingGuardrail()
+
+    # Deployment has a DIFFERENT guardrail configured
+    mock_router = MagicMock()
+    mock_deployment = MagicMock()
+    mock_deployment.litellm_params.get.return_value = ["some-other-guardrail"]
+    mock_router.get_deployment.return_value = mock_deployment
+
+    async def fake_response():
+        yield "chunk-1"
+
+    with (
+        patch("litellm.callbacks", [guardrail]),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    ):
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        request_data = {
+            "model": "gpt-4",
+            "metadata": {"model_info": {"id": "model-uuid-123"}},
+        }
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        chunks = []
+        async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=fake_response(),
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        ):
+            chunks.append(chunk)
+
+        assert guardrail.was_called is False
+        assert chunks == ["chunk-1"]

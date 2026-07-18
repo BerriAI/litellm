@@ -122,7 +122,7 @@ def test_convert_to_image_response_with_extra_fields_2():
 def test_convert_to_image_response_with_none_usage_fields():
     """
     Test handling of None values in usage fields, specifically for gpt-image-1 responses.
-    
+
     This test verifies the fix for the bug where gpt-image-1 returns None values
     for usage statistics fields, which caused Pydantic validation errors.
     The fix should clean these None values and let ImageResponse constructor
@@ -136,7 +136,7 @@ def test_convert_to_image_response_with_none_usage_fields():
             "input_tokens_details": None,  # gpt-image-1 returns None instead of object
             "output_tokens": None,  # gpt-image-1 returns None instead of integer
             "total_tokens": None,  # gpt-image-1 returns None instead of integer
-        }
+        },
     }
 
     # This should not raise a ValidationError
@@ -145,7 +145,7 @@ def test_convert_to_image_response_with_none_usage_fields():
     assert isinstance(result, ImageResponse)
     assert result.created == 1234567890
     assert result.data[0].b64_json == "base64encodedstring"
-    
+
     # Usage should be properly initialized with default values
     assert result.usage is not None
     assert result.usage.input_tokens == 0
@@ -168,7 +168,7 @@ def test_convert_to_image_response_with_partial_none_usage_fields():
             "input_tokens_details": None,  # None value (should be cleaned)
             "output_tokens": None,  # None value (should be cleaned)
             "total_tokens": 10,  # Valid value
-        }
+        },
     }
 
     # This should not raise a ValidationError
@@ -177,13 +177,15 @@ def test_convert_to_image_response_with_partial_none_usage_fields():
     assert isinstance(result, ImageResponse)
     assert result.created == 1234567890
     assert result.data[0].b64_json == "base64encodedstring"
-    
+
     # Usage should be properly initialized with defaults where needed
     # Valid values should be preserved, None values should be cleaned and use defaults
     assert result.usage is not None
     assert result.usage.input_tokens == 10  # Valid value should be preserved
     assert result.usage.output_tokens == 0  # None value should become 0
-    assert result.usage.total_tokens == 10  # Calculated as input_tokens + output_tokens (10 + 0)
+    assert (
+        result.usage.total_tokens == 10
+    )  # Calculated as input_tokens + output_tokens (10 + 0)
     assert result.usage.input_tokens_details is not None
     assert result.usage.input_tokens_details.image_tokens == 0
     assert result.usage.input_tokens_details.text_tokens == 0
@@ -204,7 +206,7 @@ def test_convert_to_image_response_with_valid_usage_fields():
             },
             "output_tokens": 10,
             "total_tokens": 60,
-        }
+        },
     }
 
     result = LiteLLMResponseObjectHandler.convert_to_image_response(response_dict)
@@ -212,7 +214,7 @@ def test_convert_to_image_response_with_valid_usage_fields():
     assert isinstance(result, ImageResponse)
     assert result.created == 1234567890
     assert result.data[0].b64_json == "base64encodedstring"
-    
+
     # Valid usage fields should be preserved
     assert result.usage is not None
     assert result.usage.input_tokens == 50

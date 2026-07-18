@@ -34,6 +34,23 @@ class TestStandardizedResetTime(unittest.TestCase):
         custom_day_result = get_next_standardized_reset_time("3d", base_time, "UTC")
         self.assertEqual(custom_day_result, custom_day_expected)
 
+    def test_week_based_resets(self):
+        """Test week-based reset durations (1w, 2w).
+        1w snaps to the next Monday at midnight (same as 7d).
+        2w advances exactly 14 days from the current date at midnight.
+        """
+        # 1w from a Wednesday -> next Monday (5 days away, not 7)
+        wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
+        weekly_expected = datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc)
+        weekly_result = get_next_standardized_reset_time("1w", wednesday, "UTC")
+        self.assertEqual(weekly_result, weekly_expected)
+
+        # 2w from a Wednesday -> exactly 14 days out (lands on a Wednesday, not Monday)
+        base_time = datetime(2023, 5, 17, 10, 30, 0, tzinfo=timezone.utc)
+        two_week_expected = datetime(2023, 5, 31, 0, 0, 0, tzinfo=timezone.utc)
+        two_week_result = get_next_standardized_reset_time("2w", base_time, "UTC")
+        self.assertEqual(two_week_result, two_week_expected)
+
     def test_hour_minute_second_resets(self):
         """Test hour, minute, and second based reset durations"""
         # Base time: 2023-05-15 15:20:30 UTC (3:20:30 PM)
@@ -135,9 +152,7 @@ class TestStandardizedResetTime(unittest.TestCase):
         # Asia/Tokyo (UTC+9): 15:00 UTC = 00:00 JST May 16, exactly on midnight boundary → next day
         tokyo = ZoneInfo("Asia/Tokyo")
         tokyo_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=tokyo)
-        tokyo_result = get_next_standardized_reset_time(
-            "1d", base_time, "Asia/Tokyo"
-        )
+        tokyo_result = get_next_standardized_reset_time("1d", base_time, "Asia/Tokyo")
         self.assertEqual(tokyo_result, tokyo_expected)
 
         # Australia/Sydney (UTC+10): 2023-05-16 01:00 AEST

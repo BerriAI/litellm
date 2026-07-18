@@ -24,38 +24,50 @@ class TestRestEndpointAuthHeaderExtraction:
     def test_call_tool_rest_api_extracts_mcp_auth_header(self):
         """Test that call_tool REST endpoint extracts x-mcp-auth header"""
         headers = Headers({"x-mcp-auth": "Bearer legacy-token"})
-        
+
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
-        
+
         assert mcp_auth_header == "Bearer legacy-token"
 
     def test_call_tool_rest_api_extracts_server_specific_headers(self):
         """Test that call_tool REST endpoint extracts server-specific auth headers"""
-        headers = Headers({
-            "x-mcp-github-authorization": "Bearer github-token",
-            "x-mcp-zapier-x-api-key": "zapier-key-123",
-        })
-        
-        mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        
+        headers = Headers(
+            {
+                "x-mcp-github-authorization": "Bearer github-token",
+                "x-mcp-zapier-x-api-key": "zapier-key-123",
+            }
+        )
+
+        mcp_server_auth_headers = (
+            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        )
+
         assert "github" in mcp_server_auth_headers
-        assert mcp_server_auth_headers["github"]["Authorization"] == "Bearer github-token"
+        assert (
+            mcp_server_auth_headers["github"]["Authorization"] == "Bearer github-token"
+        )
         assert "zapier" in mcp_server_auth_headers
         assert mcp_server_auth_headers["zapier"]["x-api-key"] == "zapier-key-123"
 
     def test_list_tools_rest_api_extracts_auth_headers(self):
         """Test that list_tools REST endpoint extracts auth headers"""
-        headers = Headers({
-            "x-mcp-auth": "Bearer legacy-token",
-            "x-mcp-zapier-authorization": "Bearer zapier-token",
-        })
-        
+        headers = Headers(
+            {
+                "x-mcp-auth": "Bearer legacy-token",
+                "x-mcp-zapier-authorization": "Bearer zapier-token",
+            }
+        )
+
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
-        mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        
+        mcp_server_auth_headers = (
+            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        )
+
         assert mcp_auth_header == "Bearer legacy-token"
         assert "zapier" in mcp_server_auth_headers
-        assert mcp_server_auth_headers["zapier"]["Authorization"] == "Bearer zapier-token"
+        assert (
+            mcp_server_auth_headers["zapier"]["Authorization"] == "Bearer zapier-token"
+        )
 
 
 class TestCaseInsensitiveServerMatching:
@@ -72,15 +84,15 @@ class TestCaseInsensitiveServerMatching:
             transport=MCPTransport.http,
             auth_type=MCPAuth.authorization,
         )
-        
+
         mcp_server_auth_headers = {
             "litellmagcgateway": {"Authorization": "Bearer token"}
         }
-        
+
         # Test the case-insensitive matching logic from _call_regular_mcp_tool
         normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
         server_auth_header = normalized_headers.get(server.alias.lower())
-        
+
         assert server_auth_header is not None
         assert server_auth_header["Authorization"] == "Bearer token"
 
@@ -95,15 +107,13 @@ class TestCaseInsensitiveServerMatching:
             transport=MCPTransport.http,
             auth_type=MCPAuth.authorization,
         )
-        
-        mcp_server_auth_headers = {
-            "myapiserver": {"Authorization": "Bearer token"}
-        }
-        
+
+        mcp_server_auth_headers = {"myapiserver": {"Authorization": "Bearer token"}}
+
         # Test the case-insensitive matching logic from _call_regular_mcp_tool
         normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
         server_auth_header = normalized_headers.get(server.server_name.lower())
-        
+
         assert server_auth_header is not None
         assert server_auth_header["Authorization"] == "Bearer token"
 
@@ -118,18 +128,18 @@ class TestCaseInsensitiveServerMatching:
             transport=MCPTransport.http,
             auth_type=MCPAuth.authorization,
         )
-        
+
         mcp_server_auth_headers = {
             "myalias": {"Authorization": "Bearer alias-token"},
             "myservername": {"Authorization": "Bearer servername-token"},
         }
-        
+
         # Simulate the fix
         normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
         server_auth_header = normalized_headers.get(server.alias.lower())
         if server_auth_header is None and server.server_name:
             server_auth_header = normalized_headers.get(server.server_name.lower())
-        
+
         assert server_auth_header["Authorization"] == "Bearer alias-token"
 
     def test_fallback_to_legacy_auth_header(self):
@@ -143,10 +153,10 @@ class TestCaseInsensitiveServerMatching:
             transport=MCPTransport.http,
             auth_type=MCPAuth.authorization,
         )
-        
+
         mcp_server_auth_headers = {}
         mcp_auth_header = "Bearer legacy-token"
-        
+
         # Simulate the fix
         normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
         server_auth_header = normalized_headers.get(server.alias.lower())
@@ -154,7 +164,7 @@ class TestCaseInsensitiveServerMatching:
             server_auth_header = normalized_headers.get(server.server_name.lower())
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
-        
+
         assert server_auth_header == "Bearer legacy-token"
 
 

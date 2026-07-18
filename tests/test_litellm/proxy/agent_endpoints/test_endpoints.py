@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.endpoints import (
+    _attach_keys_to_agents,
     _check_agent_management_permission,
     get_agent_daily_activity,
     router,
@@ -164,8 +165,12 @@ def test_agent_error_schema_consistency(
 ):
     mock_registry = MagicMock()
     mock_registry.get_agent_by_id = MagicMock(return_value=None)
-    mock_registry.update_agent_in_db = AsyncMock(side_effect=Exception("should not run"))
-    mock_registry.delete_agent_from_db = AsyncMock(side_effect=Exception("should not run"))
+    mock_registry.update_agent_in_db = AsyncMock(
+        side_effect=Exception("should not run")
+    )
+    mock_registry.delete_agent_from_db = AsyncMock(
+        side_effect=Exception("should not run")
+    )
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", mock_registry)
 
     mock_prisma_client.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
@@ -271,6 +276,99 @@ async def test_get_agent_daily_activity_with_agent_names(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+async def test_attach_keys_to_agents_groups_by_agent_and_omits_secret():
+    """
+    The agents response must carry each agent's attached virtual keys (derived
+    from the key table's agent_id FK), grouped per agent, exposing only
+    non-secret summary fields. Agents with no key get None so the UI renders
+    "Needs Setup" rather than a stale badge.
+    """
+
+    class _Row:
+        def __init__(self, token, agent_id, key_alias, key_name):
+            self.token = token
+            self.agent_id = agent_id
+            self.key_alias = key_alias
+            self.key_name = key_name
+            self.user_id = "secret-owner"  # extra field that must NOT leak
+
+    agent_with_keys = _sample_agent_response(agent_id="agent-1")
+    agent_without_keys = _sample_agent_response(agent_id="agent-2")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[
+            _Row("hash-aaa", "agent-1", "primary", "sk-...aaa"),
+            _Row("hash-bbb", "agent-1", "backup", "sk-...bbb"),
+        ]
+    )
+
+    await _attach_keys_to_agents([agent_with_keys, agent_without_keys], mock_prisma)
+
+    # Query is scoped to the agents being returned, not the whole key table.
+    where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert where == {"agent_id": {"in": ["agent-1", "agent-2"]}}
+
+    # agent-1 gets both of its keys; agent-2 gets None.
+    assert agent_without_keys.keys is None
+    assert agent_with_keys.keys is not None
+    assert {k.token for k in agent_with_keys.keys} == {"hash-aaa", "hash-bbb"}
+    assert {k.key_alias for k in agent_with_keys.keys} == {"primary", "backup"}
+
+    # Only summary fields are exposed; the row's user_id must not be carried.
+    summary = agent_with_keys.keys[0]
+    assert set(summary.model_dump().keys()) == {"token", "key_alias", "key_name"}
+
+
+class TestAgentByIdKeyRedaction:
+    """GET /v1/agents/{id} surfaces attached keys to admins but never to
+    non-admins, even when the agent has keys attached."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        self.mock_registry = MagicMock()
+        self.mock_registry.get_agent_by_id = MagicMock(
+            return_value=_sample_agent_response()
+        )
+        monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", self.mock_registry)
+
+    def _get_as(self, role: LitellmUserRoles):
+        key_row = MagicMock()
+        key_row.token = "hash-aaa"
+        key_row.agent_id = "agent-123"
+        key_row.key_alias = "primary"
+        key_row.key_name = "sk-...aaa"
+
+        test_client = _make_app_with_role(role)
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+                return_value=None
+            )
+            mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+                return_value=[key_row]
+            )
+            return test_client.get(
+                "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
+            )
+
+    def test_admin_sees_attached_keys(self):
+        resp = self._get_as(LitellmUserRoles.PROXY_ADMIN)
+        assert resp.status_code == 200
+        keys = resp.json()["keys"]
+        assert keys is not None
+        assert keys[0] == {
+            "token": "hash-aaa",
+            "key_alias": "primary",
+            "key_name": "sk-...aaa",
+        }
+
+    def test_non_admin_never_sees_keys(self):
+        resp = self._get_as(LitellmUserRoles.INTERNAL_USER)
+        assert resp.status_code == 200
+        assert resp.json()["keys"] is None
+
+
 # ---------- RBAC enforcement tests ----------
 
 
@@ -297,6 +395,9 @@ class TestAgentRBACInternalUser:
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
+            )
+            mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+                return_value=[]
             )
             resp = self.internal_client.get(
                 "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
@@ -391,6 +492,36 @@ class TestAgentRBACProxyAdmin:
             )
             assert resp.status_code == 200
 
+    def test_create_agent_applies_litellm_merge_to_stored_card(self):
+        """The card stored in the DB must reflect the LiteLLM-fronting merge."""
+        with patch("litellm.proxy.proxy_server.prisma_client"):
+            self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
+            self.mock_registry.add_agent_to_db = AsyncMock(
+                return_value=_sample_agent_response()
+            )
+            self.mock_registry.register_agent = MagicMock()
+
+            self.admin_client.post(
+                "/v1/agents",
+                json=_sample_agent_config(),
+                headers={"Authorization": "Bearer k"},
+            )
+
+            call_kwargs = self.mock_registry.add_agent_to_db.await_args.kwargs
+            stored_card = call_kwargs["agent"]["agent_card_params"]
+            new_agent_id = call_kwargs["agent_id"]
+
+            # Top-level url is retained for runtime A2A invocation (the public
+            # well-known endpoint rewrites it before exposing to clients);
+            # supportedInterfaces points at the proxy.
+            assert stored_card["url"] == "http://localhost"
+            assert stored_card["supportedInterfaces"][0]["protocolBinding"] == "JSONRPC"
+            assert stored_card["supportedInterfaces"][0]["url"].endswith(
+                f"/a2a/{new_agent_id}"
+            )
+            # Security scheme is the LiteLLM scheme.
+            assert "LiteLLMKey" in stored_card["securitySchemes"]
+
     def test_should_allow_admin_to_delete_agent(self):
         existing = {
             "agent_id": "agent-123",
@@ -413,9 +544,7 @@ class TestCheckAgentManagementPermission:
     """Unit tests for the _check_agent_management_permission helper."""
 
     def test_should_allow_proxy_admin(self):
-        auth = UserAPIKeyAuth(
-            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
-        )
+        auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
         _check_agent_management_permission(auth)
 
     @pytest.mark.parametrize(
@@ -473,7 +602,10 @@ class TestAgentHealthCheck:
         )
 
     def test_should_return_all_agents_when_health_check_disabled(self):
-        agents = [self._make_agent("a1", "http://reachable"), self._make_agent("a2", "http://unreachable")]
+        agents = [
+            self._make_agent("a1", "http://reachable"),
+            self._make_agent("a2", "http://unreachable"),
+        ]
         self.mock_registry.get_agent_list = MagicMock(return_value=agents)
 
         resp = self.admin_client.get(
@@ -482,17 +614,21 @@ class TestAgentHealthCheck:
         assert resp.status_code == 200
         assert len(resp.json()) == 2
 
-    def test_should_filter_unhealthy_agents_when_health_check_enabled(self, monkeypatch):
+    def test_should_filter_unhealthy_agents_when_health_check_enabled(
+        self, monkeypatch
+    ):
         agents = [
             self._make_agent("a1", "http://reachable"),
             self._make_agent("a2", "http://unreachable"),
         ]
         self.mock_registry.get_agent_list = MagicMock(return_value=agents)
 
-        results = iter([
-            {"agent_id": "a1", "healthy": True},
-            {"agent_id": "a2", "healthy": False, "error": "Connection refused"},
-        ])
+        results = iter(
+            [
+                {"agent_id": "a1", "healthy": True},
+                {"agent_id": "a2", "healthy": False, "error": "Connection refused"},
+            ]
+        )
         monkeypatch.setattr(
             agent_endpoints,
             "_check_agent_url_health",
@@ -514,7 +650,9 @@ class TestAgentHealthCheck:
         monkeypatch.setattr(
             agent_endpoints,
             "_check_agent_url_health",
-            AsyncMock(return_value={"agent_id": "a1", "healthy": False, "error": "timeout"}),
+            AsyncMock(
+                return_value={"agent_id": "a1", "healthy": False, "error": "timeout"}
+            ),
         )
 
         resp = self.admin_client.get(
@@ -525,13 +663,18 @@ class TestAgentHealthCheck:
         assert len(resp.json()) == 0
 
     def test_should_return_all_agents_when_all_healthy(self, monkeypatch):
-        agents = [self._make_agent("a1", "http://ok1"), self._make_agent("a2", "http://ok2")]
+        agents = [
+            self._make_agent("a1", "http://ok1"),
+            self._make_agent("a2", "http://ok2"),
+        ]
         self.mock_registry.get_agent_list = MagicMock(return_value=agents)
 
-        results = iter([
-            {"agent_id": "a1", "healthy": True},
-            {"agent_id": "a2", "healthy": True},
-        ])
+        results = iter(
+            [
+                {"agent_id": "a1", "healthy": True},
+                {"agent_id": "a2", "healthy": True},
+            ]
+        )
         monkeypatch.setattr(
             agent_endpoints,
             "_check_agent_url_health",
@@ -643,3 +786,32 @@ class TestCheckAgentUrlHealth:
         )
         result = await _check_agent_url_health(agent)
         assert result["healthy"] is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://0.0.0.0:4000/", "http://localhost:4000/", "https://api.example.com/"],
+)
+def test_merged_agent_card_url_has_no_double_slash_without_proxy_base_url(
+    monkeypatch, base_url
+):
+    """Without PROXY_BASE_URL, request.base_url carries a trailing slash; the merged
+    card's supportedInterfaces URL must still join cleanly (no `//a2a`)."""
+    from litellm.proxy.agent_endpoints.endpoints import _build_merged_agent_card
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+
+    http_request = MagicMock()
+    http_request.base_url = base_url
+
+    merged = _build_merged_agent_card(
+        _sample_agent_card_params(),
+        agent_id="agent-xyz",
+        http_request=http_request,
+        agent_name="Test Agent",
+    )
+
+    interface_url = merged["supportedInterfaces"][0]["url"]
+    assert interface_url == f"{base_url.rstrip('/')}/a2a/agent-xyz"
+    assert "//a2a" not in interface_url

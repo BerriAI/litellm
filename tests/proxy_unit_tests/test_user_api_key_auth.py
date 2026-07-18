@@ -219,8 +219,8 @@ async def test_aaauser_personal_budgets(key_ownership):
     """
     Set a personal budget on a user
 
-    - have it only apply when key belongs to user -> raises BudgetExceededError
-    - if key belongs to team, have key respect team budget -> allows call to go through
+    User budget is enforced regardless of key ownership (personal or team).
+    Both cases should raise BudgetExceededError when the user is over budget.
     """
     import asyncio
     import time
@@ -229,7 +229,12 @@ async def test_aaauser_personal_budgets(key_ownership):
     from starlette.datastructures import URL
     import litellm
 
-    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        ProxyErrorTypes,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
@@ -268,16 +273,14 @@ async def test_aaauser_personal_budgets(key_ownership):
 
     test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
 
-    assert test_user_cache.get_cache(key=hash_token(user_key)) == valid_token
+    assert (
+        test_user_cache.get_cache(key=hash_token(user_key), model_type=UserAPIKeyAuth)
+        == valid_token
+    )
 
-    try:
+    with pytest.raises(ProxyException) as exc_info:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-
-        if key_ownership == "user_key":
-            pytest.fail("Expected this call to fail. User is over limit.")
-    except Exception:
-        if key_ownership == "team_key":
-            pytest.fail("Expected this call to work. Key is below team budget.")
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
 
 
 @pytest.mark.asyncio
@@ -359,27 +362,40 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
 
 
 @pytest.mark.parametrize(
-    "route, user_role, expected_result",
+    "route, user_role, should_be_allowed",
     [
-        # Proxy Admin checks
+        # Admin can access everything
+        ("/config/update", "proxy_admin", True),
         ("/global/spend/logs", "proxy_admin", True),
-        ("/key/delete", "proxy_admin", False),
-        ("/key/generate", "proxy_admin", False),
-        ("/key/regenerate", "proxy_admin", False),
-        # Internal User checks - allowed routes
-        ("/global/spend/logs", "internal_user", True),
-        ("/key/delete", "internal_user", False),
-        ("/key/generate", "internal_user", False),
-        ("/key/82akk800000000jjsk/regenerate", "internal_user", False),
-        # Internal User Viewer
-        ("/key/generate", "internal_user_viewer", False),
-        # Internal User checks - disallowed routes
+        ("/global/activity/cache_hits", "proxy_admin", True),
+        # Internal User - allowed read-only routes
+        ("/spend/logs/ui", "internal_user", True),
+        ("/global/activity/cache_hits", "internal_user", True),
+        ("/health/services", "internal_user", True),
+        # Internal User - BLOCKED from admin routes (security fix)
+        ("/config/update", "internal_user", False),
+        ("/config/pass_through_endpoint", "internal_user", False),
+        ("/config/field/update", "internal_user", False),
         ("/organization/member_add", "internal_user", False),
+        # Internal User - BLOCKED from proxy-wide spend routes
+        ("/global/spend/logs", "internal_user", False),
+        # Internal User Viewer - allowed spend routes only
+        ("/spend/logs/ui", "internal_user_viewer", True),
+        # Internal User Viewer - BLOCKED from proxy-wide spend routes
+        ("/global/spend/all_tag_names", "internal_user_viewer", False),
+        # Internal User Viewer - blocked from admin routes
+        ("/config/update", "internal_user_viewer", False),
+        ("/key/generate", "internal_user_viewer", False),
     ],
 )
-def test_is_ui_route_allowed(route, user_role, expected_result):
-    from litellm.proxy.auth.auth_checks import _is_ui_route
-    from litellm.proxy._types import LiteLLM_UserTable
+def test_ui_token_route_access(route, user_role, should_be_allowed):
+    """
+    Verify that UI tokens (team_id=litellm-dashboard) go through the same
+    RBAC checks as API tokens. Non-admin dashboard users must not be able
+    to access admin-only routes like /config/update.
+    """
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
 
     user_obj = LiteLLM_UserTable(
         user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
@@ -395,18 +411,36 @@ def test_is_ui_route_allowed(route, user_role, expected_result):
         organization_memberships=[],
     )
 
-    received_args: dict = {
-        "route": route,
-        "user_obj": user_obj,
-    }
-    try:
-        assert _is_ui_route(**received_args) == expected_result
-    except Exception as e:
-        # If expected result is False, we expect an error
-        if expected_result is False:
-            pass
-        else:
-            raise e
+    valid_token = UserAPIKeyAuth(
+        user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
+        team_id="litellm-dashboard",
+        user_role=user_role,
+    )
+
+    from starlette.datastructures import URL
+    from fastapi import Request
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+
+    if should_be_allowed:
+        result = _is_api_route_allowed(
+            route=route,
+            request=request,
+            request_data={},
+            valid_token=valid_token,
+            user_obj=user_obj,
+        )
+        assert result is True
+    else:
+        with pytest.raises(Exception):
+            _is_api_route_allowed(
+                route=route,
+                request=request,
+                request_data={},
+                valid_token=valid_token,
+                user_obj=user_obj,
+            )
 
 
 @pytest.mark.parametrize(
@@ -478,34 +512,57 @@ async def test_auth_not_connected_to_db():
     assert valid_token.token == "failed-to-connect-to-db"
 
 
-@pytest.mark.parametrize(
-    "headers, custom_header_name, expected_api_key",
-    [
-        # Test with valid Bearer token
-        ({"x-custom-api-key": "Bearer sk-12345678"}, "x-custom-api-key", "sk-12345678"),
-        # Test with raw token (no Bearer prefix)
-        ({"x-custom-api-key": "Bearer sk-12345678"}, "x-custom-api-key", "sk-12345678"),
-        # Test with empty header value
-        ({"x-custom-api-key": ""}, "x-custom-api-key", ""),
-        # Test with missing header
-        ({}, "X-Custom-API-Key", ""),
-        # Test with different header casing
-        ({"X-CUSTOM-API-KEY": "Bearer sk-12345678"}, "X-Custom-API-Key", "sk-12345678"),
-    ],
-)
-def test_get_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
+def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
     verbose_proxy_logger.setLevel(logging.DEBUG)
-
-    # Mock the Request object
     request = MagicMock(spec=Request)
     request.headers = headers
-
-    # Call the function and verify it doesn't raise an exception
-
     api_key = get_api_key_from_custom_header(
         request=request, custom_litellm_key_header_name=custom_header_name
     )
     assert api_key == expected_api_key
+
+
+def test_get_api_key_from_custom_header_bearer_token():
+    token = "sk-" + "1" * 8
+    _assert_api_key_from_custom_header(
+        headers={"x-custom-api-key": f"Bearer {token}"},
+        custom_header_name="x-custom-api-key",
+        expected_api_key=token,
+    )
+
+
+def test_get_api_key_from_custom_header_raw_token():
+    token = "sk-" + "1" * 8
+    _assert_api_key_from_custom_header(
+        headers={"x-custom-api-key": f"Bearer {token}"},
+        custom_header_name="x-custom-api-key",
+        expected_api_key=token,
+    )
+
+
+def test_get_api_key_from_custom_header_empty_value():
+    _assert_api_key_from_custom_header(
+        headers={"x-custom-api-key": ""},
+        custom_header_name="x-custom-api-key",
+        expected_api_key="",
+    )
+
+
+def test_get_api_key_from_custom_header_missing_header():
+    _assert_api_key_from_custom_header(
+        headers={},
+        custom_header_name="X-Custom-API-Key",
+        expected_api_key="",
+    )
+
+
+def test_get_api_key_from_custom_header_different_casing():
+    token = "sk-" + "1" * 8
+    _assert_api_key_from_custom_header(
+        headers={"X-CUSTOM-API-KEY": f"Bearer {token}"},
+        custom_header_name="X-Custom-API-Key",
+        expected_api_key=token,
+    )
 
 
 from litellm.proxy._types import LitellmUserRoles
@@ -684,7 +741,7 @@ async def test_soft_budget_alert():
 
 
 def test_is_allowed_route():
-    from litellm.proxy.auth.auth_checks import _is_allowed_route
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
     from litellm.proxy._types import UserAPIKeyAuth
     import datetime
 
@@ -692,7 +749,6 @@ def test_is_allowed_route():
 
     args = {
         "route": "/embeddings",
-        "token_type": "api",
         "request": request,
         "request_data": {"input": ["hello world"], "model": "embedding-small"},
         "valid_token": UserAPIKeyAuth(
@@ -752,7 +808,7 @@ def test_is_allowed_route():
         "user_obj": None,
     }
 
-    assert _is_allowed_route(**args)
+    assert _is_api_route_allowed(**args)
 
 
 @pytest.mark.parametrize(
@@ -836,7 +892,6 @@ async def test_user_api_key_auth_websocket():
     with patch(
         "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
     ) as mock_user_api_key_auth:
-
         # Make the call to the WebSocket function
         await user_api_key_auth_websocket(mock_websocket)
 
@@ -845,15 +900,49 @@ async def test_user_api_key_auth_websocket():
 
         # Get the request object that was passed to user_api_key_auth
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
-        
+
         # Verify that the request has headers set
-        assert hasattr(request_arg, "headers"), "Request object should have headers attribute"
-        assert "authorization" in request_arg.headers, "Request headers should contain authorization"
+        assert hasattr(
+            request_arg, "headers"
+        ), "Request object should have headers attribute"
+        assert (
+            "authorization" in request_arg.headers
+        ), "Request headers should contain authorization"
         assert request_arg.headers["authorization"] == "Bearer some_api_key"
 
         assert (
             mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
         )
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_carries_asgi_path():
+    """
+    The synthetic Request must carry the ASGI scope's ``path`` so
+    ``get_request_route`` returns the real WebSocket path, not a value
+    reconstructed from the (Host-poisonable) ``websocket.url``.
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer some_api_key"}
+    mock_websocket.scope = {
+        "type": "websocket",
+        "path": "/v1/realtime",
+        "root_path": "",
+        "headers": [(b"authorization", b"Bearer some_api_key")],
+    }
+    mock_websocket.url = URL(url="/v1/realtime")
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_user_api_key_auth:
+        await user_api_key_auth_websocket(mock_websocket)
+
+        request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
+        assert request_arg.scope.get("path") == "/v1/realtime"
+        assert request_arg.scope.get("root_path") == ""
 
 
 @pytest.mark.parametrize("enforce_rbac", [True, False])
@@ -1036,7 +1125,10 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 
     # Create request
     request = Request(
-        scope={"type": "http", "headers": [(b"authorization", b"Bearer fake.jwt.token")]}
+        scope={
+            "type": "http",
+            "headers": [(b"authorization", b"Bearer fake.jwt.token")],
+        }
     )
     request._url = URL(url="/team/new")
 
@@ -1059,12 +1151,15 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     # Mock enterprise license check and JWTAuthManager.auth_builder
     # License check must be mocked to avoid environment variable pollution
     # in parallel test execution
-    with patch(
-        "litellm.proxy.proxy_server.premium_user",
-        True,
-    ), patch(
-        "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
-        return_value=mock_jwt_response,
+    with (
+        patch(
+            "litellm.proxy.proxy_server.premium_user",
+            True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
+            return_value=mock_jwt_response,
+        ),
     ):
         try:
             await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
@@ -1079,11 +1174,17 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 @pytest.mark.asyncio
 async def test_x_litellm_api_key():
     """
-    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided
+    Check if auth can pick up x-litellm-api-key header, even if Bearer token is provided.
+
+    On a master-key match, ``UserAPIKeyAuth.api_key`` (and the derived
+    ``token``) are now the stable alias ``LITELLM_PROXY_MASTER_KEY_ALIAS``
+    rather than ``hash_token(master_key)`` — the master key (or its hash)
+    must not propagate into spend logs / metrics / audit trails.
     """
     from fastapi import Request
     from starlette.datastructures import URL
 
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
     from litellm.proxy._types import (
         LiteLLM_TeamTable,
         LiteLLM_TeamTableCachedObj,
@@ -1101,15 +1202,16 @@ async def test_x_litellm_api_key():
     ignored_key = "aj12445"
 
     # Create request with headers as bytes
-    request = Request(
-        scope={
-            "type": "http"
-        }
-    )
+    request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key)
-    assert valid_token.token == hash_token(master_key)
+    valid_token = await user_api_key_auth(
+        request=request,
+        api_key="Bearer " + ignored_key,
+        custom_litellm_key_header=master_key,
+    )
+    assert valid_token.token == LITELLM_PROXY_MASTER_KEY_ALIAS
+    assert valid_token.token != hash_token(master_key)
 
 
 @pytest.mark.asyncio
@@ -1123,7 +1225,9 @@ async def test_user_api_key_from_query_param():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     user_key = "sk-query-1234"
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key)))
+    user_api_key_cache.set_cache(
+        key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key))
+    )
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -1136,7 +1240,9 @@ async def test_user_api_key_from_query_param():
             "query_string": f"alt=sse&key={user_key}".encode(),
         }
     )
-    request._url = URL(url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}")
+    request._url = URL(
+        url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}"
+    )
 
     async def return_body():
         return b"{}"
@@ -1145,4 +1251,3 @@ async def test_user_api_key_from_query_param():
 
     valid_token = await user_api_key_auth(request=request, api_key="")
     assert valid_token.token == hash_token(user_key)
-

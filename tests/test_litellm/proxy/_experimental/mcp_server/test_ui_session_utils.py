@@ -78,7 +78,9 @@ async def test_build_effective_auth_contexts_returns_cloned_contexts(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_build_effective_auth_contexts_returns_original_when_no_resolution(monkeypatch):
+async def test_build_effective_auth_contexts_returns_original_when_no_resolution(
+    monkeypatch,
+):
     user_auth = UserAPIKeyAuth(team_id="existing-team", user_id="user-7")
 
     mock_resolve = AsyncMock(return_value=[])
@@ -94,7 +96,9 @@ async def test_build_effective_auth_contexts_returns_original_when_no_resolution
 
 
 @pytest.mark.asyncio
-async def test_build_effective_auth_contexts_handles_unpicklable_parent_span(monkeypatch):
+async def test_build_effective_auth_contexts_handles_unpicklable_parent_span(
+    monkeypatch,
+):
     class DummySpan:
         def __init__(self) -> None:
             self._lock = threading.RLock()

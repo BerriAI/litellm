@@ -198,7 +198,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "us_ssn" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
@@ -454,6 +454,71 @@ class TestContentFilterGuardrail:
         assert "Contact me at [EMAIL_REDACTED] for info" in full_content
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_mask_checks_all_choices(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-mask-all-choices",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.during_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact first@ex"),
+                        index=0,
+                    ),
+                    StreamingChoices(
+                        delta=Delta(content="Email second@ex"),
+                        index=1,
+                    ),
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="chunk2",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="ample.com for help"),
+                        index=0,
+                        finish_reason="stop",
+                    ),
+                    StreamingChoices(
+                        delta=Delta(content="ample.com for support"),
+                        index=1,
+                        finish_reason="stop",
+                    ),
+                ],
+                model="gpt-4",
+            )
+
+        content_by_choice = {0: "", 1: ""}
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=mock_stream(),
+            request_data={},
+        ):
+            for choice in chunk.choices:
+                if choice.delta.content:
+                    content_by_choice[choice.index] += choice.delta.content
+
+        assert "first@example.com" not in content_by_choice[0]
+        assert "second@example.com" not in content_by_choice[1]
+        assert content_by_choice[0] == "Contact [EMAIL_REDACTED] for help"
+        assert content_by_choice[1] == "Email [EMAIL_REDACTED] for support"
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
         """
         Test streaming hook with BLOCK action
@@ -498,8 +563,287 @@ class TestContentFilterGuardrail:
             ):
                 pass
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "us_ssn" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_guardrail_information_clean(self):
+        """
+        Streaming post-call: when no detections fire, still write a success log row
+        into request_data["metadata"]["standard_logging_guardrail_information"].
+
+        Regression test for: UI-created ContentFilterGuardrail in mode=post_call
+        never produced a `standard_logging_object.guardrail_information` entry on
+        streaming responses (Branch 1 dispatcher + iterator hook had no log write).
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-clean",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Hello world, nothing sensitive here."),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+        assert "standard_logging_guardrail_information" in request_data["metadata"]
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert isinstance(entries, list)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_name"] == "test-streaming-logging-clean"
+        assert entry["guardrail_provider"] == "litellm_content_filter"
+        assert entry["guardrail_status"] == "success"
+        assert entry["guardrail_response"] == []
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_guardrail_information_mask(self):
+        """
+        Streaming post-call with a MASK pattern: writes a success row with the
+        detection in guardrail_response and a non-zero masked_entity_count.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-mask",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact me at test@example.com please."),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        full_content = ""
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            if chunk.choices and chunk.choices[0].delta.content:
+                full_content += chunk.choices[0].delta.content
+
+        # Content was masked, not blocked
+        assert "test@example.com" not in full_content
+        assert "[EMAIL_REDACTED]" in full_content
+
+        # And the log row was written
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_status"] == "success"
+        assert entry["guardrail_provider"] == "litellm_content_filter"
+
+        detections = entry["guardrail_response"]
+        assert isinstance(detections, list)
+        # At least one pattern detection for 'email' should be recorded
+        pattern_detections = [d for d in detections if d.get("type") == "pattern"]
+        assert pattern_detections, f"expected pattern detections, got {detections}"
+        assert any(d.get("pattern_name") == "email" for d in pattern_detections)
+        # And masked_entity_count for email should be >= 1
+        assert entry["masked_entity_count"].get("email", 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_guardrail_information_block(self):
+        """
+        Streaming post-call with a BLOCK pattern: the hook raises HTTPException,
+        but the `finally` block still writes a log row with
+        guardrail_status == "guardrail_intervened".
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="us_ssn",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-block",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(delta=Delta(content="SSN: 123-45-6789"), index=0)
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        with pytest.raises(HTTPException):
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        # Even though HTTPException bubbled up, the log row must be written.
+        assert "standard_logging_guardrail_information" in request_data["metadata"]
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_name"] == "test-streaming-logging-block"
+        assert entry["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_no_duplicate_detections_across_chunks(self):
+        """
+        Multi-chunk regression: _filter_single_text re-scans the whole accumulated
+        buffer on every chunk, so without per-chunk reset the same detection would
+        be appended once per chunk after it first appears, inflating
+        masked_entity_count and guardrail_response in the log.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-no-duplicates",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        # The email straddles chunks 1 and 2; chunks 3 and 4 keep streaming after
+        # the match has already been found, exercising the re-scan path.
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="c1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact me at test@"), index=0
+                    )
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c2",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="example.com please."), index=0
+                    )
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c3",
+                choices=[StreamingChoices(delta=Delta(content=" Thanks!"), index=0)],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c4",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content=""), index=0, finish_reason="stop"
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_status"] == "success"
+
+        detections = entry["guardrail_response"]
+        pattern_detections = [d for d in detections if d.get("type") == "pattern"]
+        # Exactly one email detection — not one per chunk after the match appeared.
+        assert len(pattern_detections) == 1, (
+            f"expected exactly 1 email detection, got {len(pattern_detections)}: "
+            f"{detections}"
+        )
+        assert pattern_detections[0].get("pattern_name") == "email"
+        # masked_entity_count for email is the real count, not N×.
+        assert entry["masked_entity_count"].get("email") == 1
 
     def test_init_with_plain_dicts(self):
         """
@@ -666,7 +1010,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "danger_word" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
@@ -954,7 +1298,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         detail = exc_info.value.detail
         if isinstance(detail, dict):
             assert detail.get("category") == "harm_toxic_abuse"
@@ -983,7 +1327,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         detail = exc_info.value.detail
         if isinstance(detail, dict):
             assert detail.get("category") == "harm_toxic_abuse"
@@ -1031,7 +1375,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block: '{test_input}'"
             detail = exc_info.value.detail
             if isinstance(detail, dict):
                 assert detail.get("category") == "harm_toxic_abuse"
@@ -1099,7 +1443,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "te*st" in str(exc_info.value.detail)
 
     def test_check_category_keywords_asterisk_pattern_matching(self):
@@ -1166,7 +1510,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block: '{test_input}'"
             detail = exc_info.value.detail
             if isinstance(detail, dict):
                 assert detail.get("category") == "harm_toxic_abuse"
@@ -1216,7 +1560,7 @@ class TestContentFilterGuardrail:
                     input_type="request",
                 )
 
-            assert exc_info.value.status_code == 403, f"Failed to block: '{test_input}'"
+            assert exc_info.value.status_code == 400, f"Failed to block: '{test_input}'"
             detail = exc_info.value.detail
             if isinstance(detail, dict):
                 assert detail.get("category") == "harm_toxic_abuse"
@@ -1302,7 +1646,7 @@ class TestContentFilterGuardrail:
                 )
 
             assert (
-                exc_info.value.status_code == 403
+                exc_info.value.status_code == 400
             ), f"Failed to block Spanish: '{test_input}'"
 
     @pytest.mark.asyncio
@@ -1339,7 +1683,7 @@ class TestContentFilterGuardrail:
                 )
 
             assert (
-                exc_info.value.status_code == 403
+                exc_info.value.status_code == 400
             ), f"Failed to block French: '{test_input}'"
 
     @pytest.mark.asyncio
@@ -1376,7 +1720,7 @@ class TestContentFilterGuardrail:
                 )
 
             assert (
-                exc_info.value.status_code == 403
+                exc_info.value.status_code == 400
             ), f"Failed to block German: '{test_input}'"
 
     @pytest.mark.asyncio
@@ -1422,7 +1766,7 @@ class TestContentFilterGuardrail:
                 )
 
             assert (
-                exc_info.value.status_code == 403
+                exc_info.value.status_code == 400
             ), f"Failed to block Australian: '{test_input}'"
 
     async def test_html_tags_in_messages_not_blocked(self):
@@ -1598,7 +1942,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "harmful_child_safety" in str(exc_info.value.detail)
 
         # Test case 2: Should BLOCK - identifier + block word combination
@@ -1612,7 +1956,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 3: Should BLOCK - explicit content + minors
         with pytest.raises(HTTPException) as exc_info:
@@ -1623,7 +1967,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 4: Should NOT block - identifier word alone (no block word)
         result = await guardrail.apply_guardrail(
@@ -1665,7 +2009,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_conditional_category_sentence_boundaries(self):
@@ -1749,7 +2093,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "bias_racial" in str(exc_info.value.detail)
 
         # Test case 2: Should BLOCK - identifier + dehumanizing language
@@ -1763,7 +2107,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 3: Should BLOCK - supremacist content
         with pytest.raises(HTTPException) as exc_info:
@@ -1776,7 +2120,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 4: Should BLOCK - elimination rhetoric
         with pytest.raises(HTTPException) as exc_info:
@@ -1789,7 +2133,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 5: Should NOT block - identifier word alone (no block word)
         result = await guardrail.apply_guardrail(
@@ -1827,7 +2171,7 @@ class TestContentFilterGuardrail:
                 request_data={},
                 input_type="request",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
         # Test case 9: Should NOT block - block word alone (no identifier)
         result = await guardrail.apply_guardrail(
@@ -2054,3 +2398,455 @@ class TestTracingFieldsE2E:
         # No detections, so these should be None
         assert slg.get("detection_method") is None
         assert slg.get("match_details") is None
+
+
+class TestContentFilterMCPPreCall:
+    """Test pre_mcp_call support: MCP tool call argument scanning in apply_guardrail"""
+
+    def test_pre_mcp_call_is_supported_event_hook(self):
+        """
+        Constructing the guardrail with mode pre_mcp_call must succeed (LIT-4226)
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-mode",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        assert GuardrailEventHooks.pre_mcp_call in guardrail.supported_event_hooks
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_blocks_mcp_tool_arguments(self):
+        """
+        Blocked word inside MCP tool call arguments raises HTTPException
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-block",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"body": "this is confidential data"},
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "confidential" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_mcp_tool_arguments(self):
+        """
+        MASK pattern match inside MCP arguments writes masked args to modified_arguments
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-mask",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=patterns,
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"contact": "reach me at test@example.com"},
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        modified = request_data["modified_arguments"]
+        assert "[EMAIL_REDACTED]" in modified["contact"]
+        assert "test@example.com" not in modified["contact"]
+        assert request_data["mcp_arguments"] == modified
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_arguments_clean_pass(self):
+        """
+        Clean MCP arguments pass through without modification
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-clean",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        request_data = {
+            "mcp_tool_name": "get_weather",
+            "mcp_arguments": {"city": "Paris"},
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert "modified_arguments" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_anchored_regex_matches_argument_value(self):
+        """
+        Anchored custom regexes apply to each argument value, not to a serialized JSON document
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="regex",
+                pattern="^secret$",
+                name="anchored_secret",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-anchored",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=patterns,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={"mcp_tool_name": "save_note", "mcp_arguments": {"note": "secret"}},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_mask_preserves_nested_structure(self):
+        """
+        Masking rewrites string values inside nested dicts and lists without corrupting the structure
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-nested-mask",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=patterns,
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {
+                "recipients": ["team", "cc jane.doe@example.com"],
+                "meta": {"note": "from bob@example.com", "count": 2},
+            },
+        }
+
+        await guardrail.apply_guardrail(inputs={}, request_data=request_data, input_type="request")
+
+        modified = request_data["modified_arguments"]
+        assert modified["recipients"][0] == "team"
+        assert "[EMAIL_REDACTED]" in modified["recipients"][1]
+        assert "jane.doe@example.com" not in modified["recipients"][1]
+        assert "[EMAIL_REDACTED]" in modified["meta"]["note"]
+        assert modified["meta"]["count"] == 2
+        assert request_data["mcp_arguments"] == modified
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "mcp_arguments",
+        [
+            {"this is confidential data": "x"},
+            {"a": {"contains confidential stuff": "x"}},
+        ],
+    )
+    async def test_apply_guardrail_mcp_argument_keys_scanned(self, mcp_arguments):
+        """
+        Blocked content smuggled in argument keys (top-level or nested) is detected, not just values
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-key-smuggling",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={"mcp_tool_name": "send_email", "mcp_arguments": mcp_arguments},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_numeric_mask_match_blocks(self):
+        """
+        A MASK rule matching a numeric argument blocks the call, since a redaction tag cannot be
+        represented in a number
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="visa",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-numeric-mask",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=patterns,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={"mcp_tool_name": "charge_card", "mcp_arguments": {"card": 4111111111111111}},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "non-rewritable" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_arguments_exceeding_max_depth_block(self):
+        """
+        Arguments nested beyond DEFAULT_MAX_RECURSE_DEPTH block fail-closed instead of passing unscanned
+        """
+        from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-depth-cap",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        deep: dict = {"leaf": "confidential data"}
+        for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+            deep = {"level": deep}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={"mcp_tool_name": "save_note", "mcp_arguments": deep},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "nesting depth" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mixed_mode_chat_call_not_scanned(self):
+        """
+        A mixed pre_call + pre_mcp_call guardrail must not run the MCP scan on a chat invocation,
+        identified by the proxy-owned logging object's call_type, even when MCP keys are planted
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mixed-mode-chat",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call],
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        chat_logging_obj = MagicMock()
+        chat_logging_obj.call_type = "acompletion"
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"body": "this is confidential data"},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+            logging_obj=chat_logging_obj,
+        )
+
+        assert "modified_arguments" not in request_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mcp_call_type", [None, "call_mcp_tool"])
+    async def test_apply_guardrail_mixed_mode_mcp_call_scanned(self, mcp_call_type):
+        """
+        The same mixed mode guardrail still scans genuine MCP invocations, whether the logging
+        object is absent (canonical synthetic payload) or carries the MCP call_type
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mixed-mode-mcp",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call],
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        logging_obj = None
+        if mcp_call_type is not None:
+            logging_obj = MagicMock()
+            logging_obj.call_type = mcp_call_type
+
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={
+                    "mcp_tool_name": "send_email",
+                    "mcp_arguments": {"body": "this is confidential data"},
+                },
+                input_type="request",
+                logging_obj=logging_obj,
+            )
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_non_mcp_name_arguments_not_scanned(self):
+        """
+        A raw body with top-level name + arguments (e.g. pass-through) is not treated as an MCP call;
+        only the canonical mcp_tool_name + mcp_arguments keys trigger the scan
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-non-mcp-shape",
+            event_hook=GuardrailEventHooks.pre_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={"name": "send_email", "arguments": {"body": "confidential data"}},
+            input_type="request",
+        )
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_response_side_not_scanned(self):
+        """
+        input_type response does not run the MCP argument scan
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-response-side",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["clean response"]},
+            request_data={
+                "mcp_tool_name": "send_email",
+                "mcp_arguments": {"body": "this is confidential data"},
+            },
+            input_type="response",
+        )
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_blocks_non_ascii_mcp_arguments(self):
+        """
+        Non-ASCII blocked words in MCP arguments must be detected (json.dumps must not escape them)
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-non-ascii",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="\u673a\u5bc6", action=ContentFilterAction.BLOCK)],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={},
+                request_data={
+                    "mcp_tool_name": "send_email",
+                    "mcp_arguments": {"body": "this is \u673a\u5bc6 data"},
+                },
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_mcp_mask_survives_chained_guardrails(self):
+        """
+        A second masking guardrail must scan the already-masked arguments, not resurrect the originals
+        """
+        email_guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-chain-email",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="email", action=ContentFilterAction.MASK)
+            ],
+        )
+        phone_guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-chain-phone",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_phone", action=ContentFilterAction.MASK)
+            ],
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"contact": "email test@example.com phone 555-123-4567"},
+        }
+
+        await email_guardrail.apply_guardrail(inputs={}, request_data=request_data, input_type="request")
+        await phone_guardrail.apply_guardrail(inputs={}, request_data=request_data, input_type="request")
+
+        final = request_data["modified_arguments"]
+        assert "test@example.com" not in final["contact"]
+        assert "555-123-4567" not in final["contact"]
+        assert "[EMAIL_REDACTED]" in final["contact"]
+        assert "[US_PHONE_REDACTED]" in final["contact"]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_pre_call_mode_ignores_forged_mcp_keys(self):
+        """
+        A pre_call mode guardrail must not run the MCP scan even when a caller plants MCP keys in the body
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-forged-mcp-keys",
+            event_hook=GuardrailEventHooks.pre_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        request_data = {
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"body": "this is confidential data"},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert "modified_arguments" not in request_data
+        assert request_data["mcp_arguments"] == {"body": "this is confidential data"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_data",
+        [
+            {"name": "send_email", "arguments": {"body": "confidential data"}},
+            {"name": "send_email", "mcp_arguments": {"body": "confidential data"}},
+        ],
+    )
+    async def test_apply_guardrail_pre_mcp_mode_requires_canonical_keys(self, request_data):
+        """
+        Even in pre_mcp_call mode, only the canonical mcp_tool_name key identifies an MCP call;
+        a bare name key must not, regardless of which arguments key accompanies it
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mcp-canonical-keys",
+            event_hook=GuardrailEventHooks.pre_mcp_call,
+            blocked_words=[BlockedWord(keyword="confidential", action=ContentFilterAction.BLOCK)],
+        )
+
+        await guardrail.apply_guardrail(
+            inputs={},
+            request_data=request_data,
+            input_type="request",
+        )
+        assert "modified_arguments" not in request_data

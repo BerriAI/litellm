@@ -46,7 +46,9 @@ async def test_azure_ai_agents_acompletion_non_streaming():
     agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
 
     if not api_base or not api_key:
-        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
+        pytest.skip(
+            "AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required"
+        )
 
     response = await litellm.acompletion(
         model=f"azure_ai/agents/{agent_id}",
@@ -81,7 +83,9 @@ async def test_azure_ai_agents_acompletion_streaming():
     agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
 
     if not api_base or not api_key:
-        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
+        pytest.skip(
+            "AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required"
+        )
 
     response = await litellm.acompletion(
         model=f"azure_ai/agents/{agent_id}",
@@ -107,7 +111,6 @@ async def test_azure_ai_agents_acompletion_streaming():
     print(f"Streamed response ({len(chunks)} chunks): {full_content}")
 
 
-
 def test_azure_ai_agents_is_agents_route():
     """
     Test the is_azure_ai_agents_route detection method.
@@ -115,9 +118,11 @@ def test_azure_ai_agents_is_agents_route():
     from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
 
     # Should be recognized as agents route
-    assert AzureAIAgentsConfig.is_azure_ai_agents_route("azure_ai/agents/asst_123") is True
+    assert (
+        AzureAIAgentsConfig.is_azure_ai_agents_route("azure_ai/agents/asst_123") is True
+    )
     assert AzureAIAgentsConfig.is_azure_ai_agents_route("agents/asst_123") is True
-    
+
     # Should NOT be recognized as agents route
     assert AzureAIAgentsConfig.is_azure_ai_agents_route("azure_ai/gpt-4") is False
     assert AzureAIAgentsConfig.is_azure_ai_agents_route("gpt-4") is False
@@ -131,8 +136,10 @@ def test_azure_ai_get_azure_ai_route():
 
     # Should return "agents" for agents routes
     assert AzureFoundryModelInfo.get_azure_ai_route("agents/asst_123") == "agents"
-    assert AzureFoundryModelInfo.get_azure_ai_route("azure_ai/agents/asst_abc") == "agents"
-    
+    assert (
+        AzureFoundryModelInfo.get_azure_ai_route("azure_ai/agents/asst_abc") == "agents"
+    )
+
     # Should return "default" for non-agents routes
     assert AzureFoundryModelInfo.get_azure_ai_route("gpt-4") == "default"
     assert AzureFoundryModelInfo.get_azure_ai_route("claude-3-sonnet") == "default"
@@ -146,7 +153,9 @@ def test_azure_ai_agents_get_agent_id_from_model():
     from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
 
     # Test with full model name
-    agent_id = AzureAIAgentsConfig.get_agent_id_from_model("azure_ai/agents/asst_abc123")
+    agent_id = AzureAIAgentsConfig.get_agent_id_from_model(
+        "azure_ai/agents/asst_abc123"
+    )
     assert agent_id == "asst_abc123"
 
     # Test with just agents/id
@@ -171,11 +180,15 @@ def test_azure_ai_agents_config_get_agent_id():
     assert agent_id == "asst_abc123"
 
     # Test with optional_params override
-    agent_id = config._get_agent_id("azure_ai/agents/asst_abc123", {"agent_id": "asst_override"})
+    agent_id = config._get_agent_id(
+        "azure_ai/agents/asst_abc123", {"agent_id": "asst_override"}
+    )
     assert agent_id == "asst_override"
 
     # Test with assistant_id in optional_params
-    agent_id = config._get_agent_id("azure_ai/agents/asst_abc123", {"assistant_id": "asst_assistant"})
+    agent_id = config._get_agent_id(
+        "azure_ai/agents/asst_abc123", {"assistant_id": "asst_assistant"}
+    )
     assert agent_id == "asst_assistant"
 
 
@@ -258,7 +271,7 @@ def test_azure_ai_agents_provider_detection():
 def test_azure_ai_agents_validate_environment():
     """
     Test that headers are correctly set up with Bearer token authentication.
-    
+
     Azure Foundry Agents uses Bearer token authentication (Azure AD tokens).
     """
     from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
@@ -282,7 +295,7 @@ def test_azure_ai_agents_validate_environment():
 def test_azure_ai_agents_handler_url_builders():
     """
     Test the URL building methods in the handler.
-    
+
     Azure Foundry Agents API uses direct paths without /openai/ prefix.
     See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
     """
@@ -300,7 +313,10 @@ def test_azure_ai_agents_handler_url_builders():
 
     # Test messages URL
     messages_url = handler._build_messages_url(api_base, thread_id, api_version)
-    assert messages_url == f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
+    assert (
+        messages_url
+        == f"{api_base}/threads/{thread_id}/messages?api-version={api_version}"
+    )
 
     # Test runs URL
     runs_url = handler._build_runs_url(api_base, thread_id, api_version)
@@ -308,7 +324,10 @@ def test_azure_ai_agents_handler_url_builders():
 
     # Test run status URL
     status_url = handler._build_run_status_url(api_base, thread_id, run_id, api_version)
-    assert status_url == f"{api_base}/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
+    assert (
+        status_url
+        == f"{api_base}/threads/{thread_id}/runs/{run_id}?api-version={api_version}"
+    )
 
 
 def test_azure_ai_agents_extract_content_from_messages():
@@ -325,23 +344,13 @@ def test_azure_ai_agents_extract_content_from_messages():
             {
                 "id": "msg_123",
                 "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": {"value": "The answer is 100."}
-                    }
-                ]
+                "content": [{"type": "text", "text": {"value": "The answer is 100."}}],
             },
             {
                 "id": "msg_122",
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": {"value": "What is 25 * 4?"}
-                    }
-                ]
-            }
+                "content": [{"type": "text", "text": {"value": "What is 25 * 4?"}}],
+            },
         ]
     }
 
@@ -385,13 +394,13 @@ def test_azure_ai_agents_extract_content_with_annotations():
                                     "end_index": 25,
                                     "url_citation": {
                                         "url": "https://example.com/source",
-                                        "title": "Example Source"
-                                    }
+                                        "title": "Example Source",
+                                    },
                                 }
-                            ]
-                        }
+                            ],
+                        },
                     }
-                ]
+                ],
             }
         ]
     }
@@ -527,7 +536,9 @@ async def test_azure_ai_agents_streaming_annotations_from_completed_message():
     mock_response.aiter_lines = MagicMock(return_value=mock_aiter_lines())
 
     chunks = []
-    async for chunk in handler._process_sse_stream(mock_response, "azure_ai/agents/asst_123"):
+    async for chunk in handler._process_sse_stream(
+        mock_response, "azure_ai/agents/asst_123"
+    ):
         chunks.append(chunk)
 
     # Should have content chunks + final [DONE] chunk
@@ -616,7 +627,9 @@ async def test_azure_ai_agents_streaming_accumulates_annotations_from_multiple_t
     mock_response.aiter_lines = MagicMock(return_value=mock_aiter_lines())
 
     chunks = []
-    async for chunk in handler._process_sse_stream(mock_response, "azure_ai/agents/asst_123"):
+    async for chunk in handler._process_sse_stream(
+        mock_response, "azure_ai/agents/asst_123"
+    ):
         chunks.append(chunk)
 
     final_chunk = chunks[-1]
@@ -637,7 +650,9 @@ async def test_azure_ai_agents_conversation_continuity():
     agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_hbnoK9BOCcHhC3lC4MDroVGG")
 
     if not api_base or not api_key:
-        pytest.skip("AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required")
+        pytest.skip(
+            "AZURE_AGENTS_API_BASE and AZURE_AGENTS_API_KEY environment variables required"
+        )
 
     try:
         # First message
@@ -650,12 +665,12 @@ async def test_azure_ai_agents_conversation_continuity():
         )
 
         assert response1 is not None
-        
+
         # Get thread_id for continuity
         thread_id = None
         if hasattr(response1, "_hidden_params") and response1._hidden_params:
             thread_id = response1._hidden_params.get("thread_id")
-        
+
         if thread_id:
             # Second message using the same thread
             response2 = await litellm.acompletion(

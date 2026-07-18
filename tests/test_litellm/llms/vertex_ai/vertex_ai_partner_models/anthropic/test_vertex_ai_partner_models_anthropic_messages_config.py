@@ -1,10 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -18,11 +19,14 @@ def test_validate_environment_uses_vertex_ai_location():
     }
     optional_params = {}
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
-    ) as mock_get_url:
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ) as mock_get_url,
+    ):
         config.validate_anthropic_messages_environment(
             headers=headers,
             model="claude-3-sonnet",
@@ -45,15 +49,16 @@ def test_web_search_header_added_for_messages_endpoint():
     }
     # Include web search tool in optional_params
     optional_params = {
-        "tools": [
-            {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
-        ]
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
     }
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -63,11 +68,14 @@ def test_web_search_header_added_for_messages_endpoint():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header with web-search is present
-        assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
-        assert updated_headers["anthropic-beta"] == "web-search-2025-03-05", \
-            f"anthropic-beta should be 'web-search-2025-03-05', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "anthropic-beta" in updated_headers
+        ), "anthropic-beta header should be present"
+        assert (
+            updated_headers["anthropic-beta"] == "web-search-2025-03-05"
+        ), f"anthropic-beta should be 'web-search-2025-03-05', got: {updated_headers['anthropic-beta']}"
 
 
 def test_web_search_header_not_added_without_tool():
@@ -82,10 +90,13 @@ def test_web_search_header_not_added_without_tool():
     # No web search tool
     optional_params = {}
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -95,10 +106,11 @@ def test_web_search_header_not_added_without_tool():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header is NOT present when no web search tool
-        assert "anthropic-beta" not in updated_headers, \
-            "anthropic-beta header should not be present without web search tool"
+        assert (
+            "anthropic-beta" not in updated_headers
+        ), "anthropic-beta header should not be present without web search tool"
 
 
 def test_compact_context_management_header_added():
@@ -111,18 +123,15 @@ def test_compact_context_management_header_added():
         "vertex_credentials": "{}",
     }
     # Include context_management with compact_20260112
-    optional_params = {
-        "context_management": {
-            "edits": [
-                {"type": "compact_20260112"}
-            ]
-        }
-    }
+    optional_params = {"context_management": {"edits": [{"type": "compact_20260112"}]}}
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -132,11 +141,14 @@ def test_compact_context_management_header_added():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header with compact-2026-01-12 is present
-        assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
-        assert "compact-2026-01-12" in updated_headers["anthropic-beta"], \
-            f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "anthropic-beta" in updated_headers
+        ), "anthropic-beta header should be present"
+        assert (
+            "compact-2026-01-12" in updated_headers["anthropic-beta"]
+        ), f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
 
 
 def test_context_management_header_added_for_other_edits():
@@ -149,18 +161,15 @@ def test_context_management_header_added_for_other_edits():
         "vertex_credentials": "{}",
     }
     # Include context_management with other edit types
-    optional_params = {
-        "context_management": {
-            "edits": [
-                {"type": "some_other_type"}
-            ]
-        }
-    }
+    optional_params = {"context_management": {"edits": [{"type": "some_other_type"}]}}
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -170,11 +179,14 @@ def test_context_management_header_added_for_other_edits():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
+
         # Assert that the anthropic-beta header with context-management-2025-06-27 is present
-        assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
-        assert "context-management-2025-06-27" in updated_headers["anthropic-beta"], \
-            f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "anthropic-beta" in updated_headers
+        ), "anthropic-beta header should be present"
+        assert (
+            "context-management-2025-06-27" in updated_headers["anthropic-beta"]
+        ), f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
 
 
 def test_both_compact_and_context_management_headers_added():
@@ -189,17 +201,17 @@ def test_both_compact_and_context_management_headers_added():
     # Include context_management with both compact and other edit types
     optional_params = {
         "context_management": {
-            "edits": [
-                {"type": "compact_20260112"},
-                {"type": "some_other_type"}
-            ]
+            "edits": [{"type": "compact_20260112"}, {"type": "some_other_type"}]
         }
     }
 
-    with patch.object(
-        config, "_ensure_access_token", return_value=("token", "test-project")
-    ), patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-url"
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
     ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
@@ -209,46 +221,116 @@ def test_both_compact_and_context_management_headers_added():
             litellm_params=litellm_params,
             api_base=None,
         )
-        
-        # Assert that both beta headers are present
-        assert "anthropic-beta" in updated_headers, "anthropic-beta header should be present"
-        assert "compact-2026-01-12" in updated_headers["anthropic-beta"], \
-            f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
-        assert "context-management-2025-06-27" in updated_headers["anthropic-beta"], \
-            f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
 
-def test_validate_environment_with_authorization_header_calculates_api_base():
-    """Test that api_base is calculated even when Authorization header is already present"""
+        # Assert that both beta headers are present
+        assert (
+            "anthropic-beta" in updated_headers
+        ), "anthropic-beta header should be present"
+        assert (
+            "compact-2026-01-12" in updated_headers["anthropic-beta"]
+        ), f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
+        assert (
+            "context-management-2025-06-27" in updated_headers["anthropic-beta"]
+        ), f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
+
+
+def test_validate_environment_always_refreshes_token_ignoring_stale_bearer():
+    """Regression: stale Authorization in shared deployment extra_headers must not
+    skip token refresh on /v1/messages — _ensure_access_token is always called."""
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
-    # Simulate scenario where Authorization is already in headers (e.g., from cached extra_headers)
-    headers = {"Authorization": "Bearer existing-token"}
+    headers = {"Authorization": "Bearer EXPIRED"}
     litellm_params = {
         "vertex_project": "test-project",
         "vertex_location": "us-central1",
-        "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
     }
-    optional_params = {}
 
-    with patch.object(
-        config, "get_complete_vertex_url", return_value="https://mock-vertex-url"
-    ) as mock_get_url:
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("fresh-token", "test-project")
+        ) as mock_ensure,
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-vertex-url"
+        ),
+    ):
         updated_headers, api_base = config.validate_anthropic_messages_environment(
             headers=headers,
             model="claude-sonnet-4",
             messages=[],
-            optional_params=optional_params,
+            optional_params={},
             litellm_params=litellm_params,
             api_base=None,
         )
-        
-        # Verify that api_base was calculated even though Authorization was already present
-        assert api_base == "https://mock-vertex-url", \
-            f"api_base should be calculated even with Authorization header. Got: {api_base}"
-        assert mock_get_url.called, "get_complete_vertex_url should be called"
-        
-        # Verify Authorization header is still present
-        assert "Authorization" in updated_headers, \
-            "Authorization header should be preserved"
+
+        mock_ensure.assert_called_once()
+        assert updated_headers["Authorization"] == "Bearer fresh-token"
+        assert api_base == "https://mock-vertex-url"
+
+
+def test_validate_environment_appends_stream_raw_predict_with_custom_api_base():
+    """Regression: a custom api_base on /v1/messages must still get the endpoint
+    suffix appended. The old `if api_base is None` guard skipped
+    get_complete_vertex_url entirely, leaving the api_base without
+    `:streamRawPredict`."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "us-central1",
+    }
+
+    with (
+        patch.object(
+            config,
+            "get_complete_vertex_url",
+            wraps=config.get_complete_vertex_url,
+        ) as spy_get_url,
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+    ):
+        _, api_base = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params={"stream": True},
+            litellm_params=litellm_params,
+            api_base="https://my-proxy.example.com",
+        )
+
+    spy_get_url.assert_called_once()
+    assert api_base is not None
+    assert ":streamRawPredict" in api_base
+
+
+def test_validate_environment_appends_raw_predict_with_custom_api_base():
+    """Regression: non-streaming custom api_base must end with `:rawPredict`."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "us-central1",
+    }
+
+    with (
+        patch.object(
+            config,
+            "get_complete_vertex_url",
+            wraps=config.get_complete_vertex_url,
+        ) as spy_get_url,
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+    ):
+        _, api_base = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+            api_base="https://my-proxy.example.com",
+        )
+
+    spy_get_url.assert_called_once()
+    assert api_base is not None
+    assert api_base.endswith(":rawPredict")
 
 
 def test_transform_anthropic_messages_request_removes_scope_from_cache_control():
@@ -293,3 +375,193 @@ def test_transform_anthropic_messages_request_removes_scope_from_cache_control()
     # scope removed from message content
     assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
     assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+
+
+def test_messages_request_strips_effort_for_haiku_45():
+    """Regression: Claude Code (``claude --model claude-haiku-4.5``) sends
+    ``output_config.effort`` in its default Messages payload. Haiku 4.5 on
+    Vertex rejects it with 400 ``output_config.effort: Extra inputs are not
+    permitted``, so the pass-through must strip it for Haiku while keeping it
+    for Opus/Sonnet 4.6+."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    haiku_result = config.transform_anthropic_messages_request(
+        model="claude-haiku-4-5@20251001",
+        messages=messages,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "output_config": {"effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "output_config" not in haiku_result
+
+    opus_result = config.transform_anthropic_messages_request(
+        model="claude-opus-4-6",
+        messages=messages,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "output_config": {"effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert opus_result["output_config"] == {"effort": "high"}
+
+
+def test_provider_config_manager_reuses_vertex_anthropic_messages_config_instance():
+    """
+    Regression test: repeated provider config lookups for the same Vertex Claude model
+    should return the same config instance (which preserves auth cache state).
+    """
+    import litellm
+    from litellm.utils import ProviderConfigManager
+
+    ProviderConfigManager._get_provider_anthropic_messages_config_cached.cache_clear()
+    try:
+        first_config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-opus-4-6",
+            provider=litellm.LlmProviders.VERTEX_AI,
+        )
+        second_config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-opus-4-6",
+            provider=litellm.LlmProviders.VERTEX_AI,
+        )
+
+        assert isinstance(first_config, VertexAIPartnerModelsAnthropicMessagesConfig)
+        assert isinstance(second_config, VertexAIPartnerModelsAnthropicMessagesConfig)
+        assert first_config is second_config
+    finally:
+        ProviderConfigManager._get_provider_anthropic_messages_config_cached.cache_clear()
+
+
+def test_validate_environment_does_not_mutate_caller_headers():
+    """Regression: beta headers (e.g. web-search) must not leak into the caller's
+    headers dict — which may be the shared deployment extra_headers object."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    caller_headers: dict = {}
+
+    with (
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+        patch.object(
+            config, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
+    ):
+        config.validate_anthropic_messages_environment(
+            headers=caller_headers,
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params={
+                "tools": [{"type": "web_search_20250305", "name": "web_search"}]
+            },
+            litellm_params={
+                "vertex_ai_project": "p",
+                "vertex_ai_location": "us-central1",
+            },
+            api_base=None,
+        )
+
+    assert (
+        caller_headers == {}
+    ), "validate_anthropic_messages_environment must not mutate the caller's headers dict"
+
+
+def test_vertex_claude_completion_does_not_mutate_shared_extra_headers():
+    """Regression: router shallow-copies litellm_params so extra_headers is a shared
+    reference. Verify that the chat/completions path builds a new headers dict instead
+    of calling .update() on the shared object."""
+    handler = VertexAIPartnerModels()
+    shared_extra_headers = {}  # simulates deployment["litellm_params"]["extra_headers"]
+
+    mock_response = MagicMock()
+
+    with (
+        patch.object(
+            handler, "_ensure_access_token", return_value=("ya29.fresh", "proj")
+        ),
+        patch.object(
+            handler, "get_complete_vertex_url", return_value="https://mock-url"
+        ),
+        patch(
+            "litellm.llms.anthropic.chat.AnthropicChatCompletion.completion",
+            return_value=mock_response,
+        ),
+    ):
+        handler.completion(
+            model="claude-haiku-4-5@20251001",
+            messages=[{"role": "user", "content": "hi"}],
+            model_response=MagicMock(),
+            print_verbose=lambda *a, **k: None,
+            encoding=None,
+            logging_obj=MagicMock(),
+            api_base=None,
+            optional_params={},
+            custom_prompt_dict={},
+            headers=shared_extra_headers,
+            timeout=30,
+            litellm_params={},
+        )
+
+    assert (
+        shared_extra_headers == {}
+    ), "extra_headers must not be mutated by completion()"
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so capability flags match this branch."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
+
+
+def test_messages_thinking_shape_follows_exact_vertex_entry_flag(local_model_cost_map, monkeypatch):
+    """The Vertex messages config must probe capabilities under ``vertex_ai`` so an
+    operator setting ``supports_adaptive_thinking: false`` on the exact
+    ``vertex_ai/claude-opus-4-8`` entry beats the unmodified ``anthropic`` entry.
+    With the inherited ``"anthropic"`` provider default the flip was ignored and
+    the transform kept emitting ``thinking.type='adaptive'``."""
+    import litellm
+
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+
+    def transform():
+        return config.transform_anthropic_messages_request(
+            model="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "reasoning_effort": "medium",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    result = transform()
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "medium"}
+
+    monkeypatch.setitem(
+        litellm.model_cost["vertex_ai/claude-opus-4-8"], "supports_adaptive_thinking", False
+    )
+    litellm.get_model_info.cache_clear()
+    assert litellm.model_cost["claude-opus-4-8"]["supports_adaptive_thinking"] is True
+
+    flipped = transform()
+    thinking = flipped.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert "output_config" not in flipped

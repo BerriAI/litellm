@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,7 +11,6 @@ sys.path.insert(
 
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.proxy_server import ProxyStartupEvent
-from litellm.types.caching import RedisPipelineRpushOperation
 
 
 @pytest.fixture
@@ -28,7 +27,9 @@ def redis_update_buffer(mock_redis_cache):
 
 
 @pytest.mark.asyncio
-async def test_store_in_memory_spend_updates_uses_pipeline(redis_update_buffer, mock_redis_cache):
+async def test_store_in_memory_spend_updates_uses_pipeline(
+    redis_update_buffer, mock_redis_cache
+):
     """
     Verify store_in_memory_spend_updates_in_redis calls async_rpush_pipeline once
     with the correct operations and skips empty queues.
@@ -37,34 +38,34 @@ async def test_store_in_memory_spend_updates_uses_pipeline(redis_update_buffer, 
 
     # Create mock queues - only 3 of 6 have data
     spend_update_queue = AsyncMock()
-    spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions = AsyncMock(
-        return_value={"key_list_transactions": {"key1": 1.0}}
+    spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions = (
+        AsyncMock(return_value={"key_list_transactions": {"key1": 1.0}})
     )
 
     daily_spend_queue = AsyncMock()
-    daily_spend_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={"user_key1": {"spend": 1.0}}
+    daily_spend_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={"user_key1": {"spend": 1.0}})
     )
 
     daily_team_queue = AsyncMock()
-    daily_team_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={"team_key1": {"spend": 2.0}}
+    daily_team_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={"team_key1": {"spend": 2.0}})
     )
 
     # Empty queues
     daily_org_queue = AsyncMock()
-    daily_org_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={}
+    daily_org_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={})
     )
 
     daily_end_user_queue = AsyncMock()
-    daily_end_user_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value=None
+    daily_end_user_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value=None)
     )
 
     daily_agent_queue = AsyncMock()
-    daily_agent_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={}
+    daily_agent_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={})
     )
 
     await redis_update_buffer.store_in_memory_spend_updates_in_redis(
@@ -86,6 +87,89 @@ async def test_store_in_memory_spend_updates_uses_pipeline(redis_update_buffer, 
 
 
 @pytest.mark.asyncio
+async def test_store_in_memory_spend_updates_restores_on_rpush_failure(
+    redis_update_buffer, mock_redis_cache
+):
+    """
+    If async_rpush_pipeline raises, the already-drained transactions must be
+    put back into the in-memory queues so the next scheduler tick retries.
+    Without this, any transient Redis hiccup silently loses spend data.
+    """
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+        DailySpendUpdateQueue,
+    )
+    from litellm.proxy.db.db_transaction_queue.spend_update_queue import (
+        SpendUpdateQueue,
+    )
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(
+        side_effect=ConnectionError("redis went away")
+    )
+
+    spend_queue = SpendUpdateQueue()
+    daily_user_queue = DailySpendUpdateQueue()
+    daily_team_queue = DailySpendUpdateQueue()
+    daily_org_queue = DailySpendUpdateQueue()
+    daily_end_user_queue = DailySpendUpdateQueue()
+    daily_agent_queue = DailySpendUpdateQueue()
+
+    # Seed real queues with data so flush_and_get_aggregated returns it
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.KEY,
+            "entity_id": "key-abc",
+            "response_cost": 1.5,
+        }
+    )
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.TEAM,
+            "entity_id": "team-xyz",
+            "response_cost": 2.5,
+        }
+    )
+    await daily_user_queue.add_update(
+        {
+            "user1_day_model": {
+                "spend": 1.0,
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+            }
+        }
+    )
+
+    await redis_update_buffer.store_in_memory_spend_updates_in_redis(
+        spend_update_queue=spend_queue,
+        daily_spend_update_queue=daily_user_queue,
+        daily_team_spend_update_queue=daily_team_queue,
+        daily_org_spend_update_queue=daily_org_queue,
+        daily_end_user_spend_update_queue=daily_end_user_queue,
+        daily_agent_spend_update_queue=daily_agent_queue,
+    )
+
+    # After restore, the main spend queue should hold one item per
+    # (entity_type, entity_id) pair with the aggregated cost
+    restored_spend = (
+        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    )
+    assert restored_spend["key_list_transactions"] == {"key-abc": 1.5}
+    assert restored_spend["team_list_transactions"] == {"team-xyz": 2.5}
+
+    # Daily user queue should hold the same aggregated dict
+    restored_daily = (
+        await daily_user_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    )
+    assert restored_daily == {
+        "user1_day_model": {
+            "spend": 1.0,
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+        }
+    }
+
+
+@pytest.mark.asyncio
 async def test_store_in_memory_spend_updates_all_empty_returns_early(
     redis_update_buffer, mock_redis_cache
 ):
@@ -100,8 +184,8 @@ async def test_store_in_memory_spend_updates_all_empty_returns_early(
         return_value={}
     )
     empty_daily_queue = AsyncMock()
-    empty_daily_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={}
+    empty_daily_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={})
     )
 
     await redis_update_buffer.store_in_memory_spend_updates_in_redis(
@@ -141,12 +225,12 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(
 
     mock_redis_cache.async_lpop_pipeline = AsyncMock(
         return_value=[
-            [db_spend_json],        # slot 0: db spend updates
-            [daily_user_json],      # slot 1: daily user
-            [daily_team_json],      # slot 2: daily team
-            None,                    # slot 3: daily org (empty)
-            None,                    # slot 4: daily end-user (empty)
-            None,                    # slot 5: daily agent (empty)
+            [db_spend_json],  # slot 0: db spend updates
+            [daily_user_json],  # slot 1: daily user
+            [daily_team_json],  # slot 2: daily team
+            None,  # slot 3: daily org (empty)
+            None,  # slot 4: daily end-user (empty)
+            None,  # slot 5: daily agent (empty)
         ]
     )
 
@@ -220,3 +304,73 @@ def test_validate_redis_transaction_buffer_passes_when_disabled():
         general_settings={},
         redis_usage_cache=None,
     )
+
+
+def test_get_transaction_buffer_redis_cache_builds_from_env(monkeypatch):
+    """
+    When use_redis_transaction_buffer=true, a standalone RedisCache is built from
+    REDIS_* environment variables so the buffer works without a Redis cache backend.
+    """
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+    monkeypatch.setenv("REDIS_PORT", "6379")
+
+    with patch("litellm.proxy.proxy_server.RedisCache") as mock_redis_cache:
+        result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
+            general_settings={"use_redis_transaction_buffer": True},
+        )
+
+    mock_redis_cache.assert_called_once()
+    assert mock_redis_cache.call_args.kwargs["host"] == "localhost"
+    assert result is mock_redis_cache.return_value
+
+
+def test_get_transaction_buffer_redis_cache_none_when_disabled():
+    """When use_redis_transaction_buffer is not enabled, no standalone cache is built."""
+    result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
+        general_settings={},
+    )
+    assert result is None
+
+
+def test_get_transaction_buffer_redis_cache_none_without_redis_env():
+    """
+    When use_redis_transaction_buffer=true but no REDIS_* env vars are set,
+    no standalone cache is built (startup validation then raises the config error).
+    """
+    with patch("litellm._redis._redis_kwargs_from_environment", return_value={}):
+        result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
+            general_settings={"use_redis_transaction_buffer": True},
+        )
+    assert result is None
+
+
+def test_get_transaction_buffer_redis_cache_none_without_host_or_url():
+    """
+    A REDIS_* var that is not a connection target (e.g. REDIS_SOCKET_TIMEOUT) must not
+    trigger a build. Without a host or url, get_redis_client raises, so return None and
+    let startup validation surface the config error instead of crashing.
+    """
+    with patch(
+        "litellm._redis._redis_kwargs_from_environment",
+        return_value={"socket_timeout": 5.0},
+    ):
+        result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
+            general_settings={"use_redis_transaction_buffer": True},
+        )
+    assert result is None
+
+
+def test_get_transaction_buffer_redis_cache_parses_string_flag(monkeypatch):
+    """
+    use_redis_transaction_buffer accepts a string value (e.g. from env/YAML); "true"
+    is parsed to a bool before the standalone cache is built.
+    """
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+
+    with patch("litellm.proxy.proxy_server.RedisCache") as mock_redis_cache:
+        result = ProxyStartupEvent._get_transaction_buffer_redis_cache(
+            general_settings={"use_redis_transaction_buffer": "true"},
+        )
+
+    mock_redis_cache.assert_called_once()
+    assert result is mock_redis_cache.return_value

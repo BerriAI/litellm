@@ -1,5 +1,6 @@
 # What is this?
 ## Helper utilities
+import copy
 from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
@@ -17,9 +18,7 @@ else:
     Span = Any
 
 
-def safe_divide_seconds(
-    seconds: float, denominator: float, default: Optional[float] = None
-) -> Optional[float]:
+def safe_divide_seconds(seconds: float, denominator: float, default: Optional[float] = None) -> Optional[float]:
     """
     Safely divide seconds by denominator, handling zero division.
 
@@ -89,6 +88,9 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "IMAGE_PROHIBITED_CONTENT": "content_filter",
     "TOO_MANY_TOOL_CALLS": "stop",
     "MALFORMED_RESPONSE": "stop",
+    # Zhipu GLM
+    "network_error": "stop",
+    "sensitive": "content_filter",
     # Bedrock
     "guardrail_intervened": "content_filter",
     # OpenAI passthrough
@@ -105,9 +107,7 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
 def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
     mapped = _FINISH_REASON_MAP.get(finish_reason)
     if mapped is None:
-        verbose_logger.warning(
-            "Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason
-        )
+        verbose_logger.warning("Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason)
         return "stop"
     return mapped
 
@@ -120,9 +120,7 @@ def remove_index_from_tool_calls(
             _tool_calls = message.get("tool_calls")
             if _tool_calls is not None and isinstance(_tool_calls, list):
                 for tool_call in _tool_calls:
-                    if (
-                        isinstance(tool_call, dict) and "index" in tool_call
-                    ):  # Type guard to ensure it's a dict
+                    if isinstance(tool_call, dict) and "index" in tool_call:  # Type guard to ensure it's a dict
                         tool_call.pop("index", None)
 
     return
@@ -137,9 +135,7 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(
-    litellm_metadata: dict, metadata: dict
-) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -181,9 +177,7 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
         metadata = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})
         if litellm_metadata and metadata:
-            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(
-                litellm_metadata, metadata
-            )
+            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(litellm_metadata, metadata)
         if litellm_metadata:
             return litellm_metadata
         elif metadata:
@@ -232,14 +226,31 @@ def _get_parent_otel_span_from_kwargs(
             return kwargs["litellm_parent_otel_span"]
         return None
     except Exception as e:
-        verbose_logger.exception(
-            "Error in _get_parent_otel_span_from_kwargs: " + str(e)
-        )
+        verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None
 
 
-def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> dict:
+def process_response_headers(
+    response_headers: Union[httpx.Headers, dict],
+    preserve_litellm_internal_headers: bool = False,
+) -> dict:
+    """
+    `preserve_litellm_internal_headers` must only be True when the input is a
+    LiteLLM-owned dict (e.g. `_hidden_params["additional_headers"]` that has
+    already been through one round of processing).  For raw upstream provider
+    headers — whether passed as `httpx.Headers` or a plain dict — it must
+    remain False, otherwise a malicious provider returning `x-litellm-*` could
+    spoof LiteLLM-internal markers (e.g. `x-litellm-attempted-fallbacks`).
+
+    When the input is an `httpx.Headers` object the flag is always treated as
+    False regardless of what the caller requested, because `httpx.Headers` is
+    always a raw provider response and can never be LiteLLM-owned.
+    """
     from litellm.types.utils import OPENAI_RESPONSE_HEADERS
+
+    # Raw httpx.Headers objects come directly from provider HTTP responses and
+    # must never be treated as LiteLLM-owned, regardless of caller intent.
+    _preserve = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
     openai_headers = {}
     processed_headers = {}
@@ -248,9 +259,13 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
             openai_headers[k] = v
-        if k.startswith(
-            "llm_provider-"
-        ):  # return raw provider headers (incl. openai-compatible ones)
+        if k.startswith("llm_provider-"):  # return raw provider headers (incl. openai-compatible ones)
+            processed_headers[k] = v
+        elif _preserve and k.startswith("x-litellm-"):
+            # LiteLLM's own internal headers (e.g. x-litellm-attempted-fallbacks,
+            # x-litellm-model-group) are not LLM provider headers and must not be
+            # prefixed. Downstream consumers (proxy override, callers checking
+            # whether a fallback happened) look up the bare key.
             processed_headers[k] = v
         else:
             additional_headers["{}-{}".format("llm_provider", k)] = v
@@ -301,13 +316,8 @@ def safe_deep_copy(data):
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
             data["metadata"]["litellm_parent_otel_span"] = "placeholder"
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            litellm_parent_otel_span = data["litellm_metadata"].pop(
-                "litellm_parent_otel_span"
-            )
+        if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
+            litellm_parent_otel_span = data["litellm_metadata"].pop("litellm_parent_otel_span")
             data["litellm_metadata"]["litellm_parent_otel_span"] = "placeholder"
 
     # Step 2: Per-key deepcopy with fallback
@@ -328,13 +338,8 @@ def safe_deep_copy(data):
     if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            data["litellm_metadata"][
-                "litellm_parent_otel_span"
-            ] = litellm_parent_otel_span
+        if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
+            data["litellm_metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
 
 
@@ -387,9 +392,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         result_list: list[Any] = []
         for item in data:
             # Skip exception and callable items
-            if isinstance(item, Exception) or (
-                callable(item) and not isinstance(item, type)
-            ):
+            if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
                 continue
             try:
                 filtered = filter_exceptions_from_params(item, max_depth - 1)
@@ -403,9 +406,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return data
 
 
-def filter_internal_params(
-    data: dict, additional_internal_params: Optional[set] = None
-) -> dict:
+def filter_internal_params(data: dict, additional_internal_params: Optional[set] = None) -> dict:
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
 
@@ -435,3 +436,42 @@ def filter_internal_params(
 
     # Filter out internal parameters
     return {k: v for k, v in data.items() if k not in internal_params}
+
+
+def redact_nested_match_and_regex_keys(
+    payload: Union[dict, List[Any], str, None],
+) -> Union[dict, List[Any], str, None]:
+    """
+    Deep-copy `payload` and replace every `match` / `regex` string field with
+    "[REDACTED]" anywhere in nested dict/list structures.
+
+    Used for guardrail spend/compliance logging so raw spans are not persisted.
+    """
+    if payload is None or isinstance(payload, str):
+        return payload
+    try:
+        redacted: Union[dict, List[Any], str, None] = copy.deepcopy(payload)
+    except Exception:
+        return payload
+
+    # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
+    try:
+        seen: set = set()
+        stack: List[Any] = [redacted]
+        while stack:
+            node = stack.pop()
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            if isinstance(node, dict):
+                if "match" in node:
+                    node["match"] = "[REDACTED]"
+                if "regex" in node:
+                    node["regex"] = "[REDACTED]"
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
+    except Exception:
+        return payload
+    return redacted

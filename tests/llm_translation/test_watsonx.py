@@ -16,7 +16,8 @@ from typing import Optional
 @pytest.fixture(autouse=True)
 def watsonx_env_vars(monkeypatch):
     """Set required WatsonX env vars so the provider passes validation.
-    Also clear WATSONX_ZENAPIKEY/WATSONX_TOKEN so they don't bypass the IAM token mock."""
+    Also clear WATSONX_ZENAPIKEY/WATSONX_TOKEN so they don't bypass the IAM token mock.
+    """
     monkeypatch.setenv("WATSONX_URL", "https://us-south.ml.cloud.ibm.com")
     monkeypatch.setenv("WATSONX_PROJECT_ID", "test-project-id")
     monkeypatch.delenv("WATSONX_ZENAPIKEY", raising=False)
@@ -47,9 +48,12 @@ def watsonx_chat_completion_call():
             }
             mock_response.raise_for_status = Mock()  # No-op to simulate no exception
 
-            with patch.object(client, "post") as mock_post, patch.object(
-                litellm.module_level_client, "post", return_value=mock_response
-            ) as mock_get:
+            with (
+                patch.object(client, "post") as mock_post,
+                patch.object(
+                    litellm.module_level_client, "post", return_value=mock_response
+                ) as mock_get,
+            ):
                 try:
                     completion(
                         model=model,
@@ -105,9 +109,12 @@ def watsonx_embedding_call():
             }
             mock_response.raise_for_status = Mock()  # No-op to simulate no exception
 
-            with patch.object(client, "post") as mock_post, patch.object(
-                litellm.module_level_client, "post", return_value=mock_response
-            ) as mock_get:
+            with (
+                patch.object(client, "post") as mock_post,
+                patch.object(
+                    litellm.module_level_client, "post", return_value=mock_response
+                ) as mock_get,
+            ):
                 try:
                     embedding(
                         model=model,

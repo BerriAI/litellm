@@ -1,6 +1,26 @@
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+CHAT_COMPLETION_AGENTIC_SURFACE = "chat_completions"
+RESPONSES_AGENTIC_SURFACE = "responses"
+CODE_INTERPRETER_INTERCEPTION_PREFIX = "_code_interpreter_interception"
+NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES = frozenset(
+    ("_websearch_interception", "_compression_interception")
+)
+INTERCEPTION_INTERNAL_PREFIXES = frozenset(
+    (
+        *NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+        CODE_INTERPRETER_INTERCEPTION_PREFIX,
+    )
+)
+
+
+def is_interception_internal_key(
+    key: str,
+    prefixes: frozenset[str] = INTERCEPTION_INTERNAL_PREFIXES,
+) -> bool:
+    return any(key.startswith(prefix) for prefix in prefixes)
 
 
 class StandardCustomLoggerInitParams(BaseModel):
@@ -9,3 +29,29 @@ class StandardCustomLoggerInitParams(BaseModel):
     """
 
     turn_off_message_logging: Optional[bool] = False
+
+
+class AgenticLoopRequestPatch(BaseModel):
+    """
+    Patch returned by callbacks to request a follow-up LLM call.
+    """
+
+    model: Optional[str] = None
+    messages: Optional[List[Dict[str, Any]]] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    max_tokens: Optional[int] = None
+    optional_params: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgenticLoopPlan(BaseModel):
+    """
+    Typed callback response for agentic-loop reruns.
+    """
+
+    run_agentic_loop: bool = False
+    request_patch: Optional[AgenticLoopRequestPatch] = None
+    response_override: Optional[Any] = None
+    terminate: bool = False
+    stop_reason: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)

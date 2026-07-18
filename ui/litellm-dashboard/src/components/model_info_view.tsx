@@ -1,5 +1,6 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useQueryClient } from "@tanstack/react-query";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
@@ -21,7 +22,10 @@ import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
+import { isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
+import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
+import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
@@ -40,6 +44,7 @@ import {
   testConnectionRequest,
 } from "./networking";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
@@ -54,6 +59,66 @@ interface ModelInfoViewProps {
   modelAccessGroups: string[] | null;
 }
 
+const normalizeTierModels = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value) return [value];
+  return [];
+};
+
+interface ComplexityRouterTierConfig {
+  tiers?: {
+    SIMPLE?: unknown;
+    MEDIUM?: unknown;
+    COMPLEX?: unknown;
+    REASONING?: unknown;
+  };
+  semantic_keyword_matching?: boolean;
+  embedding_model?: string;
+}
+
+interface ComplexityRouterModelData {
+  litellm_params?: {
+    complexity_router_config?: ComplexityRouterTierConfig | string;
+    complexity_router_default_model?: string;
+  };
+}
+
+const buildComplexityRouterTestTargets = (
+  modelData: ComplexityRouterModelData | null | undefined,
+): AutoRouterTestTarget[] => {
+  const rawConfig = modelData?.litellm_params?.complexity_router_config;
+  let config: ComplexityRouterTierConfig = {};
+  if (typeof rawConfig === "string") {
+    try {
+      config = JSON.parse(rawConfig);
+    } catch {
+      config = {};
+    }
+  } else if (rawConfig) {
+    config = rawConfig;
+  }
+
+  const tierTargets = buildAutoRouterTestTargets({
+    tiers: {
+      SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
+      MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
+      COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
+      REASONING: normalizeTierModels(config.tiers?.REASONING),
+    },
+    semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
+    embeddingModel: config.embedding_model,
+  });
+
+  const defaultModel = modelData?.litellm_params?.complexity_router_default_model?.trim();
+  if (!defaultModel || tierTargets.some((target) => target.modelGroup === defaultModel)) {
+    return tierTargets;
+  }
+  return [
+    ...tierTargets,
+    { labels: ["Default (unconfigured tiers)"], modelGroup: defaultModel, mode: "chat" as const },
+  ];
+};
+
 export default function ModelInfoView({
   modelId,
   onClose,
@@ -64,10 +129,12 @@ export default function ModelInfoView({
   modelAccessGroups,
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
+  const queryClient = useQueryClient();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
+  const [isUpdateCredentialsModalOpen, setIsUpdateCredentialsModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -75,6 +142,9 @@ export default function ModelInfoView({
   const [showCacheControl, setShowCacheControl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
+  const [isAutoRouterTestModalOpen, setIsAutoRouterTestModalOpen] = useState(false);
+  const [autoRouterTestId, setAutoRouterTestId] = useState(0);
+  const [autoRouterTestTargets, setAutoRouterTestTargets] = useState<AutoRouterTestTarget[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
@@ -108,7 +178,13 @@ export default function ModelInfoView({
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
-  const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
+  const isAutoRouter =
+    modelData?.litellm_params?.auto_router_config != null ||
+    modelData?.litellm_params?.complexity_router_config != null ||
+    modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router");
+  const isComplexityRouter =
+    modelData?.litellm_params?.complexity_router_config != null ||
+    modelData?.litellm_params?.model?.startsWith("auto_router/complexity_router");
 
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
@@ -253,10 +329,57 @@ export default function ModelInfoView({
         max_retries: values.max_retries,
         timeout: values.timeout,
         stream_timeout: values.stream_timeout,
-        input_cost_per_token: values.input_cost / 1_000_000,
-        output_cost_per_token: values.output_cost / 1_000_000,
         tags: values.tags,
       };
+
+      if (form.isFieldTouched("input_cost")) {
+        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
+          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
+        } else {
+          // Explicit null signals the backend to remove the pricing override.
+          updatedLitellmParams.input_cost_per_token = null;
+        }
+      }
+      if (form.isFieldTouched("output_cost")) {
+        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
+          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
+        } else {
+          updatedLitellmParams.output_cost_per_token = null;
+        }
+      }
+
+      // Cache Read Cost:
+      //   - explicit value provided → use it
+      //   - field touched but empty → explicit null (signals backend to remove override)
+      //   - only input_cost touched → fall back to input_cost (guarded against null)
+      if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
+        if (values.cache_read_cost !== undefined && values.cache_read_cost !== null && values.cache_read_cost !== "") {
+          updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
+        } else if (form.isFieldTouched("cache_read_cost")) {
+          updatedLitellmParams.cache_read_input_token_cost = null;
+        } else if (
+          updatedLitellmParams.input_cost_per_token !== undefined &&
+          updatedLitellmParams.input_cost_per_token !== null
+        ) {
+          updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
+        }
+      }
+
+      // Cache Write Cost: explicit value if provided, else explicit null so the
+      // backend removes the override and falls back to the model-level default.
+      // Sending 0 here would persist a zero rate even when the user intended to unset it.
+      if (form.isFieldTouched("cache_write_cost")) {
+        if (
+          values.cache_write_cost !== undefined &&
+          values.cache_write_cost !== null &&
+          values.cache_write_cost !== ""
+        ) {
+          updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
+        } else {
+          updatedLitellmParams.cache_creation_input_token_cost = null;
+        }
+      }
+
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
       } else {
@@ -304,9 +427,15 @@ export default function ModelInfoView({
         return;
       }
 
+      // Final guard: never PATCH a redacted secret. The /model/info snapshot that
+      // seeds this form masks secrets, and any save re-sends the whole params blob;
+      // without this strip a masked value would be re-encrypted over the real secret.
+      // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
+      const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+
       const updateData = {
         model_name: values.model_name,
-        litellm_params: updatedLitellmParams,
+        litellm_params: safeLitellmParams,
         model_info: updatedModelInfo,
       };
 
@@ -316,7 +445,7 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: updatedLitellmParams,
+        litellm_params: safeLitellmParams,
         model_info: updatedModelInfo,
       };
 
@@ -363,6 +492,17 @@ export default function ModelInfoView({
 
   const handleTestConnection = async () => {
     if (!accessToken) return;
+    if (isComplexityRouter) {
+      const targets = buildComplexityRouterTestTargets(localModelData ?? modelData);
+      if (targets.length === 0) {
+        NotificationsManager.warning("No complexity tiers are configured yet, so there is nothing to test.");
+        return;
+      }
+      setAutoRouterTestTargets(targets);
+      setAutoRouterTestId((id) => id + 1);
+      setIsAutoRouterTestModalOpen(true);
+      return;
+    }
     try {
       NotificationsManager.info("Testing connection...");
       const response = await testConnectionRequest(
@@ -373,6 +513,12 @@ export default function ModelInfoView({
           model: localModelData.litellm_model_name,
         },
         {
+          // `id` is required to disambiguate when multiple deployments
+          // share the same model_name (e.g. wildcard `openai/*` with two
+          // different `api_base` values for failover). Without it the
+          // backend silently falls back to deployments[0] and probes
+          // the wrong endpoint.
+          id: localModelData.model_info?.id,
           mode: localModelData.model_info?.mode,
         },
         localModelData.model_info?.mode,
@@ -449,44 +595,55 @@ export default function ModelInfoView({
               size="small"
               icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["model-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["model-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
         </div>
         <div className="flex gap-2">
-          <TremorButton
-            variant="secondary"
-            icon={RefreshIcon}
-            onClick={handleTestConnection}
-            className="flex items-center gap-2"
-            data-testid="test-connection-button"
-          >
-            Test Connection
-          </TremorButton>
+          {(!isAutoRouter || isComplexityRouter) && (
+            <Button
+              icon={<RefreshIcon className="h-4 w-4" />}
+              onClick={handleTestConnection}
+              className="flex items-center gap-2"
+              data-testid="test-connection-button"
+            >
+              Test Connection
+            </Button>
+          )}
 
-          <TremorButton
-            icon={KeyIcon}
-            variant="secondary"
+          <Button
+            icon={<KeyIcon className="h-4 w-4" />}
+            onClick={() => setIsUpdateCredentialsModalOpen(true)}
+            className="flex items-center"
+            disabled={!canEditModel}
+            data-testid="update-api-key-button"
+          >
+            Update API Key
+          </Button>
+
+          <Button
+            icon={<KeyIcon className="h-4 w-4" />}
             onClick={() => setIsCredentialModalOpen(true)}
             className="flex items-center"
             disabled={!isAdmin}
             data-testid="reuse-credentials-button"
           >
             Re-use Credentials
-          </TremorButton>
-          <TremorButton
-            icon={TrashIcon}
-            variant="secondary"
+          </Button>
+          <Button
+            danger
+            icon={<TrashIcon className="h-4 w-4" />}
             onClick={() => setIsDeleteModalOpen(true)}
-            className="flex items-center text-red-500 border-red-500 hover:text-red-700"
+            className="flex items-center"
             disabled={!canEditModel}
             data-testid="delete-model-button"
           >
             Delete Model
-          </TremorButton>
+          </Button>
         </div>
       </div>
 
@@ -563,10 +720,10 @@ export default function ModelInfoView({
                 Created At{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })
                   : "Not Set"}
               </div>
               <div className="flex items-center gap-x-2">
@@ -626,6 +783,22 @@ export default function ModelInfoView({
                     output_cost: localModelData.litellm_params?.output_cost_per_token
                       ? localModelData.litellm_params.output_cost_per_token * 1_000_000
                       : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                    cache_read_cost:
+                      localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_read_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_read_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_read_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_read_input_token_cost !== null
+                          ? localModelData.model_info.cache_read_input_token_cost * 1_000_000
+                          : null,
+                    cache_write_cost:
+                      localModelData.litellm_params?.cache_creation_input_token_cost !== undefined &&
+                      localModelData.litellm_params?.cache_creation_input_token_cost !== null
+                        ? localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000
+                        : localModelData.model_info?.cache_creation_input_token_cost !== undefined &&
+                            localModelData.model_info?.cache_creation_input_token_cost !== null
+                          ? localModelData.model_info.cache_creation_input_token_cost * 1_000_000
+                          : null,
                     cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
                     cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
                     model_access_group: Array.isArray(localModelData.model_info?.access_groups)
@@ -645,7 +818,7 @@ export default function ModelInfoView({
                     litellm_extra_params: JSON.stringify(
                       Object.fromEntries(
                         Object.entries(localModelData.litellm_params || {}).filter(
-                          ([key]) => key !== "litellm_credential_name",
+                          ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
                         ),
                       ),
                       null,
@@ -664,7 +837,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter model name" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.model_name}</div>
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">{localModelData.model_name}</div>
                         )}
                       </div>
 
@@ -675,7 +848,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter LiteLLM model name" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.litellm_model_name}</div>
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">{localModelData.litellm_model_name}</div>
                         )}
                       </div>
 
@@ -686,7 +859,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter input cost" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData?.litellm_params?.input_cost_per_token
                               ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.input_cost_per_token
@@ -703,11 +876,57 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter output cost" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData?.litellm_params?.output_cost_per_token
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
                               : localModelData?.model_info?.output_cost_per_token
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
+                                : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Cache Read Cost (per 1M tokens)</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="cache_read_cost"
+                            className="mb-0"
+                            tooltip="If left blank on save, defaults to Input Cost."
+                          >
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {localModelData?.litellm_params?.cache_read_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_read_input_token_cost !== null
+                              ? (localModelData.litellm_params.cache_read_input_token_cost * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.cache_read_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_read_input_token_cost !== null
+                                ? (localModelData.model_info.cache_read_input_token_cost * 1_000_000).toFixed(4)
+                                : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Cache Write Cost (per 1M tokens)</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="cache_write_cost"
+                            className="mb-0"
+                            tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
+                          >
+                            <NumericalInput placeholder="Defaults to Input Cost if blank" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            {localModelData?.litellm_params?.cache_creation_input_token_cost !== undefined &&
+                            localModelData?.litellm_params?.cache_creation_input_token_cost !== null
+                              ? (localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.cache_creation_input_token_cost !== undefined &&
+                                  localModelData?.model_info?.cache_creation_input_token_cost !== null
+                                ? (localModelData.model_info.cache_creation_input_token_cost * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
                         )}
@@ -720,7 +939,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter API base" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.api_base || "Not Set"}
                           </div>
                         )}
@@ -733,7 +952,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter custom LLM provider" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.custom_llm_provider || "Not Set"}
                           </div>
                         )}
@@ -746,7 +965,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter organization" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.organization || "Not Set"}
                           </div>
                         )}
@@ -759,7 +978,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter TPM" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.tpm || "Not Set"}
                           </div>
                         )}
@@ -772,7 +991,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter RPM" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.rpm || "Not Set"}
                           </div>
                         )}
@@ -785,7 +1004,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter max retries" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.max_retries || "Not Set"}
                           </div>
                         )}
@@ -798,7 +1017,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter timeout" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.timeout || "Not Set"}
                           </div>
                         )}
@@ -811,7 +1030,7 @@ export default function ModelInfoView({
                             <NumericalInput placeholder="Enter stream timeout" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.stream_timeout || "Not Set"}
                           </div>
                         )}
@@ -837,7 +1056,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.model_info?.access_groups ? (
                               Array.isArray(localModelData.model_info.access_groups) ? (
                                 localModelData.model_info.access_groups.length > 0 ? (
@@ -896,7 +1115,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.guardrails ? (
                               Array.isArray(localModelData.litellm_params.guardrails) ? (
                                 localModelData.litellm_params.guardrails.length > 0 ? (
@@ -948,7 +1167,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.vector_store_ids ? (
                               Array.isArray(localModelData.litellm_params.vector_store_ids) ? (
                                 localModelData.litellm_params.vector_store_ids.length > 0 ? (
@@ -961,7 +1180,7 @@ export default function ModelInfoView({
                                         >
                                           {vsId}
                                         </span>
-                                      )
+                                      ),
                                     )}
                                   </div>
                                 ) : (
@@ -998,7 +1217,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.tags ? (
                               Array.isArray(localModelData.litellm_params.tags) ? (
                                 localModelData.litellm_params.tags.length > 0 ? (
@@ -1046,7 +1265,7 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.litellm_credential_name || "Manual"}
                           </div>
                         )}
@@ -1064,23 +1283,25 @@ export default function ModelInfoView({
                                 allowClear
                                 options={(() => {
                                   const wildcardProvider = modelData.litellm_model_name.split("/")[0];
-                                  return modelHubData?.data
-                                    ?.filter((model: any) => {
-                                      // Filter by provider to match the wildcard provider
-                                      return (
-                                        model.providers?.includes(wildcardProvider) &&
-                                        model.model_group !== modelData.litellm_model_name
-                                      );
-                                    })
-                                    .map((model: any) => ({
-                                      value: model.model_group,
-                                      label: model.model_group,
-                                    })) || [];
+                                  return (
+                                    modelHubData?.data
+                                      ?.filter((model: any) => {
+                                        // Filter by provider to match the wildcard provider
+                                        return (
+                                          model.providers?.includes(wildcardProvider) &&
+                                          model.model_group !== modelData.litellm_model_name
+                                        );
+                                      })
+                                      .map((model: any) => ({
+                                        value: model.model_group,
+                                        label: model.model_group,
+                                      })) || []
+                                  );
                                 })()}
                               />
                             </Form.Item>
                           ) : (
-                            <div className="mt-1 p-2 bg-gray-50 rounded">
+                            <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                               {localModelData.model_info?.health_check_model || "Not Set"}
                             </div>
                           )}
@@ -1097,7 +1318,7 @@ export default function ModelInfoView({
                       ) : (
                         <div>
                           <Text className="font-medium">Cache Control</Text>
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
                             {localModelData.litellm_params?.cache_control_injection_points ? (
                               <div>
                                 <p>Enabled</p>
@@ -1130,8 +1351,8 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
-                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                               {JSON.stringify(localModelData.model_info, null, 2)}
                             </pre>
                           </div>
@@ -1163,8 +1384,8 @@ export default function ModelInfoView({
                             />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
-                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                          <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                            <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                               {JSON.stringify(localModelData.litellm_params, null, 2)}
                             </pre>
                           </div>
@@ -1172,7 +1393,9 @@ export default function ModelInfoView({
                       </div>
                       <div>
                         <Text className="font-medium">Team ID</Text>
-                        <div className="mt-1 p-2 bg-gray-50 rounded">{modelData.model_info.team_id || "Not Set"}</div>
+                        <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                          {modelData.model_info.team_id || "Not Set"}
+                        </div>
                       </div>
                     </div>
 
@@ -1204,7 +1427,9 @@ export default function ModelInfoView({
 
           <TabPanel>
             <Card>
-              <pre className="bg-gray-100 p-4 rounded text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
+              <pre className="bg-gray-100 p-4 rounded-sm text-xs overflow-auto">
+                {JSON.stringify(modelData, null, 2)}
+              </pre>
             </Card>
           </TabPanel>
         </TabPanels>
@@ -1257,6 +1482,18 @@ export default function ModelInfoView({
         </Modal>
       )}
 
+      {isUpdateCredentialsModalOpen && accessToken && (
+        <UpdateModelCredentialsModal
+          open={isUpdateCredentialsModalOpen}
+          onCancel={() => setIsUpdateCredentialsModalOpen(false)}
+          accessToken={accessToken}
+          modelId={modelId}
+          onUpdated={() => {
+            queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+          }}
+        />
+      )}
+
       {/* Edit Auto Router Modal */}
       <EditAutoRouterModal
         isVisible={isAutoRouterModalOpen}
@@ -1266,6 +1503,22 @@ export default function ModelInfoView({
         accessToken={accessToken || ""}
         userRole={userRole || ""}
       />
+
+      <Modal
+        title="Connection Test Results"
+        open={isAutoRouterTestModalOpen}
+        onCancel={() => setIsAutoRouterTestModalOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setIsAutoRouterTestModalOpen(false)}>
+            Close
+          </Button>,
+        ]}
+        width={700}
+      >
+        {isAutoRouterTestModalOpen && accessToken && (
+          <AutoRouterConnectionTest key={autoRouterTestId} accessToken={accessToken} targets={autoRouterTestTargets} />
+        )}
+      </Modal>
     </div>
   );
 }

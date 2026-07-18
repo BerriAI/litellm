@@ -1,5 +1,6 @@
 import asyncio
 import time
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -83,6 +84,60 @@ async def test_dual_cache_async_set_cache_injects_default_in_memory_ttl():
     # The TTL stored should reflect default_in_memory_ttl (60s), not
     # InMemoryCache's default_ttl (600s)
     expiry = in_memory_cache.ttl_dict["test_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_redis_backfill_injects_default_in_memory_ttl():
+    """
+    A Redis-hit backfill into the in-memory tier must honor
+    default_in_memory_ttl the same way the write paths do. Without it, the
+    backfilled entry falls to InMemoryCache's own default_ttl (600s), so a
+    replica that primed a management object (e.g. a virtual key's auth blob)
+    from Redis keeps serving it for 10 minutes after the object was updated
+    and invalidated, instead of re-reading within the configured TTL.
+    """
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="redis_value")
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=redis_cache,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = await dual_cache.async_get_cache(key="backfill_key")
+    after = time.time()
+
+    assert result == "redis_value"
+    expiry = in_memory_cache.ttl_dict["backfill_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_batch_redis_backfill_injects_default_in_memory_ttl():
+    """async_batch_get_cache's Redis-to-memory backfill must honor
+    default_in_memory_ttl, same as the single-key path."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.async_batch_get_cache = AsyncMock(
+        return_value={"batch_backfill_key": "redis_value"}
+    )
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=mock_redis,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = await dual_cache.async_batch_get_cache(keys=["batch_backfill_key"])
+    after = time.time()
+
+    assert result == ["redis_value"]
+    expiry = in_memory_cache.ttl_dict["batch_backfill_key"]
     assert expiry >= before + 60
     assert expiry <= after + 60
 
@@ -237,7 +292,70 @@ def test_circuit_breaker_half_open_concurrent_calls_are_fast_failed():
 
     # All subsequent concurrent callers: HALF_OPEN → fast-fail (return True)
     for _ in range(10):
-        assert cb.is_open() is True, "concurrent callers should be fast-failed in HALF_OPEN"
+        assert (
+            cb.is_open() is True
+        ), "concurrent callers should be fast-failed in HALF_OPEN"
+
+
+def test_circuit_breaker_disabled_never_opens():
+    """When disabled, failures never open the circuit and is_open() stays False."""
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, enabled=False)
+
+    for _ in range(100):
+        cb.record_failure()
+
+    assert cb._state == "closed"
+    assert cb.is_open() is False
+
+
+def test_circuit_breaker_disabled_record_success_leaves_state_untouched():
+    """
+    A disabled breaker must not mutate state in any state-machine method. Force
+    a non-default (OPEN) state and assert record_success() returns without
+    resetting it — the same enabled-guard contract as is_open/record_failure.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, enabled=False)
+    cb._state = "open"
+    cb._failure_count = 3
+
+    cb.record_success()
+
+    assert cb._state == "open"
+    assert cb._failure_count == 3
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_disabled_guard_always_calls_method():
+    """A disabled breaker lets every guarded call through, even after failures."""
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _redis_circuit_breaker_guard,
+    )
+
+    class FakeRedis:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(
+                failure_threshold=1, recovery_timeout=60, enabled=False
+            )
+            self.call_count = 0
+
+        @_redis_circuit_breaker_guard
+        async def boom(self):
+            self.call_count += 1
+            raise RuntimeError("redis down")
+
+    fr = FakeRedis()
+    for _ in range(5):
+        with pytest.raises(RuntimeError, match="redis down"):
+            await fr.boom()
+
+    # Every call reached the method body; the breaker never short-circuited.
+    assert fr.call_count == 5
+    assert fr._circuit_breaker.is_open() is False
 
 
 @pytest.mark.asyncio
@@ -258,3 +376,72 @@ async def test_async_increment_cache_returns_none_when_no_in_memory_cache_and_re
         f"Expected None when in_memory_cache is absent and Redis fails, got {result!r}. "
         "Returning the delta (1.0) would silently miscalculate rate-limit counters."
     )
+
+
+def test_dual_cache_late_attach_redis_wires_writes_and_ttl_sync():
+    """
+    Typical lazy startup (sync): DualCache runs with in-memory only, then Redis
+    becomes available and is attached. New writes must reach Redis; keys written
+    before attach are not backfilled. Optional default_redis_ttl is applied on attach.
+    """
+    in_memory = InMemoryCache()
+    dual_cache = DualCache(in_memory_cache=in_memory, redis_cache=None)
+
+    mock_redis = MagicMock()
+    mock_redis.set_cache = MagicMock()
+    mock_redis.async_set_cache = AsyncMock()
+
+    key_before = f"before_attach_{uuid.uuid4()}"
+    val_before = {"phase": "memory_only"}
+    dual_cache.set_cache(key_before, val_before)
+
+    assert in_memory.get_cache(key_before) == val_before
+
+    dual_cache.attach_redis_cache(mock_redis, default_redis_ttl=99.0)
+    assert dual_cache.redis_cache is mock_redis
+    assert dual_cache.default_redis_ttl == 99.0
+
+    mock_redis.set_cache.assert_not_called()
+
+    key_after = f"after_attach_{uuid.uuid4()}"
+    val_after = {"phase": "memory_and_redis"}
+    dual_cache.set_cache(key_after, val_after)
+    mock_redis.set_cache.assert_called_once()
+    assert mock_redis.set_cache.call_args[0][:2] == (key_after, val_after)
+
+    assert in_memory.get_cache(key_after) == val_after
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
+    """
+    Typical lazy startup (async): DualCache runs with in-memory only, then Redis
+    becomes available and is attached. New writes must reach Redis; keys written
+    before attach are not backfilled. Optional default_redis_ttl is applied on attach.
+    """
+    in_memory = InMemoryCache()
+    dual_cache = DualCache(in_memory_cache=in_memory, redis_cache=None)
+
+    mock_redis = MagicMock()
+    mock_redis.set_cache = MagicMock()
+    mock_redis.async_set_cache = AsyncMock()
+
+    key_before = f"before_attach_{uuid.uuid4()}"
+    val_before = {"phase": "memory_only"}
+    await dual_cache.async_set_cache(key_before, val_before)
+
+    assert in_memory.get_cache(key_before) == val_before
+
+    dual_cache.attach_redis_cache(mock_redis, default_redis_ttl=99.0)
+    assert dual_cache.redis_cache is mock_redis
+    assert dual_cache.default_redis_ttl == 99.0
+
+    mock_redis.async_set_cache.assert_not_called()
+
+    key_after = f"after_attach_{uuid.uuid4()}"
+    val_after = {"phase": "memory_and_redis"}
+    await dual_cache.async_set_cache(key_after, val_after)
+    mock_redis.async_set_cache.assert_called_once()
+    assert mock_redis.async_set_cache.call_args[0][:2] == (key_after, val_after)
+
+    assert in_memory.get_cache(key_after) == val_after

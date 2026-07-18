@@ -1,6 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
+
 from typing import (
     Any,
     Coroutine,
@@ -103,9 +104,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             pass
 
         try:
-            if litellm.supports_reasoning(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ):
+            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_params.append("reasoning_effort")
         except Exception as e:
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
@@ -115,8 +114,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -124,8 +122,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -147,23 +144,15 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 messages[idx] = new_message
 
         if is_async:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=True
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=False
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
-        api_base = (
-            api_base
-            or get_secret_str("GROQ_API_BASE")
-            or "https://api.groq.com/openai/v1"
-        )  # type: ignore
+        api_base = api_base or get_secret_str("GROQ_API_BASE") or "https://api.groq.com/openai/v1"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GROQ_API_KEY")
         return api_base, dynamic_api_key
 
@@ -227,9 +216,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
             """
             if json_schema is not None:
                 # Check if model supports native response_schema
-                if not litellm.supports_response_schema(
-                    model=model, custom_llm_provider="groq"
-                ):
+                if not litellm.supports_response_schema(model=model, custom_llm_provider="groq"):
                     # Check if user is also passing tools - this combination won't work
                     # See: https://console.groq.com/docs/structured-outputs
                     # "Streaming and tool use are not currently supported with Structured Outputs"
@@ -259,9 +246,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
                         "response_format", None
                     )  # only remove if it's a json_schema - handled via using groq's tool calling params.
                 # else: model supports native json_schema, let response_format pass through
-        optional_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         return optional_params
 
@@ -293,17 +278,13 @@ class GroqChatConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
 
-        mapped_service_tier: Literal[
-            "auto", "default", "flex"
-        ] = self._map_groq_service_tier(
+        mapped_service_tier: Literal["auto", "default", "flex"] = self._map_groq_service_tier(
             original_service_tier=getattr(model_response, "service_tier")
         )
         setattr(model_response, "service_tier", mapped_service_tier)
         return model_response
 
-    def _map_groq_service_tier(
-        self, original_service_tier: Optional[str]
-    ) -> Literal["auto", "default", "flex"]:
+    def _map_groq_service_tier(self, original_service_tier: Optional[str]) -> Literal["auto", "default", "flex"]:
         """
         Ensure groq service tier is OpenAI compatible.
         """
@@ -319,9 +300,7 @@ class GroqChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         error = chunk.get("error")
         if error:
-            raise OpenAIError(
-                status_code=error.get("code"), message=error.get("message"), body=error
-            )
+            raise OpenAIError(status_code=error.get("code"), message=error.get("message"), body=error)
 
         # Map Groq's 'reasoning' field to LiteLLM's 'reasoning_content' field
         # Groq returns delta.reasoning, but LiteLLM expects delta.reasoning_content

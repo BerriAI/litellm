@@ -1,6 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
+
 from typing import (
     List,
     Optional,
@@ -78,9 +79,7 @@ def _messages_to_sap_template(messages: List[Dict[str, str]]) -> list:  # type: 
     return template
 
 
-def _tools_response_format_and_stream(
-    optional_params: dict, model_params: dict
-) -> Tuple[dict, dict, dict]:
+def _tools_response_format_and_stream(optional_params: dict, model_params: dict) -> Tuple[dict, dict, dict]:
     tools_ = optional_params.pop("tools", [])
     tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
     tools: dict = {"tools": tools_} if tools_ else {}
@@ -89,9 +88,7 @@ def _tools_response_format_and_stream(
     resp_type = response_format.get("type", None)
     if resp_type:
         if resp_type == "json_schema":
-            response_format = validate_dict(
-                response_format, ResponseFormatJSONSchema
-            )
+            response_format = validate_dict(response_format, ResponseFormatJSONSchema)
         else:
             response_format = validate_dict(response_format, ResponseFormat)
         response_format = {"response_format": response_format}
@@ -158,7 +155,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def headers(self) -> Dict[str, str]:
         if self.token_creator is None:
             self.run_env_setup()
-        access_token = self.token_creator()  # type: ignore
+        access_token = self.token_creator()  # pyright: ignore[reportOptionalCall]  # run_env_setup set it or raised
         return {
             "Authorization": access_token,
             "AI-Resource-Group": self.resource_group,
@@ -183,14 +180,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
-        deployments = client.get(
-            f"{self.base_url}/lm/deployments", headers=self.headers
-        ).json()
+        deployments = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
         valid: List[Tuple[str, str]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
                 cfg = client.get(
-                    f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
+                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
                     headers=self.headers,
                 ).json()
                 if cfg.get("executableId") == "orchestration":
@@ -288,9 +283,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         resp_type = response_format.get("type", None)
         if resp_type:
             if resp_type == "json_schema":
-                response_format = validate_dict(
-                    response_format, ResponseFormatJSONSchema
-                )
+                response_format = validate_dict(response_format, ResponseFormatJSONSchema)
             else:
                 response_format = validate_dict(response_format, ResponseFormat)
             response_format = {"response_format": response_format}
@@ -298,9 +291,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             response_format = {}
 
         placeholder_defaults = params.pop("placeholder_defaults", {})
-        placeholder_defaults = (
-            {"defaults": placeholder_defaults} if placeholder_defaults else {}
-        )
+        placeholder_defaults = {"defaults": placeholder_defaults} if placeholder_defaults else {}
 
         optional_modules = {}
         optional_modules_lst = ["grounding", "masking", "filtering", "translation"]
@@ -364,9 +355,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             modules_dict = dict(modules_dict)
             fallback_model = modules_dict.pop("model", None)
             if fallback_model is None:
-                raise ValueError(
-                    "Each entry in `fallback_sap_modules` must include a 'model' key."
-                )
+                raise ValueError("Each entry in `fallback_sap_modules` must include a 'model' key.")
             if fallback_model.startswith("sap/"):
                 fallback_model = fallback_model[4:]
             fallback_template = modules_dict.pop("messages", [])

@@ -5,6 +5,7 @@ Handles extraction of skill content (SKILL.md) from stored ZIP files
 and injection into the system prompt for non-Anthropic models.
 """
 
+import posixpath
 import zipfile
 from io import BytesIO
 from typing import Any, Dict, List, Optional
@@ -103,8 +104,18 @@ class SkillPromptInjectionHandler:
                     else:
                         clean_path = name
 
-                    if clean_path:
-                        files[clean_path] = zf.read(name)
+                    if not clean_path:
+                        continue
+
+                    # Ensure the path stays within the intended directory
+                    normalized = posixpath.normpath(clean_path)
+                    if normalized.startswith("..") or posixpath.isabs(normalized):
+                        verbose_logger.warning(
+                            f"SkillPromptInjectionHandler: Skipping entry with invalid path in skill {skill.skill_id}: {name}"
+                        )
+                        continue
+
+                    files[normalized] = zf.read(name)
         except Exception as e:
             verbose_logger.warning(
                 f"SkillPromptInjectionHandler: Error extracting files from skill {skill.skill_id}: {e}"
@@ -136,9 +147,7 @@ class SkillPromptInjectionHandler:
             return data
 
         # Build the skill injection text
-        skill_section = "\n\n---\n\n# Available Skills\n\n" + "\n\n---\n\n".join(
-            skill_contents
-        )
+        skill_section = "\n\n---\n\n# Available Skills\n\n" + "\n\n---\n\n".join(skill_contents)
 
         if use_anthropic_format:
             # Anthropic messages API: use top-level 'system' parameter
@@ -232,12 +241,7 @@ class SkillPromptInjectionHandler:
         func_name = skill.skill_id.replace("-", "_").replace(" ", "_")
 
         # Use instructions as description, fall back to description or title
-        description = (
-            skill.instructions
-            or skill.description
-            or skill.display_title
-            or f"Skill: {skill.skill_id}"
-        )
+        description = skill.instructions or skill.description or skill.display_title or f"Skill: {skill.skill_id}"
 
         # Truncate description if too long (OpenAI has limits)
         max_desc_length = 1024
@@ -265,9 +269,7 @@ class SkillPromptInjectionHandler:
 
         return tool
 
-    def convert_skill_to_anthropic_tool(
-        self, skill: LiteLLM_SkillsTable
-    ) -> Dict[str, Any]:
+    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> Dict[str, Any]:
         """
         Convert a LiteLLM skill to an Anthropic-style tool (messages API format).
 
@@ -279,12 +281,7 @@ class SkillPromptInjectionHandler:
         """
         func_name = skill.skill_id.replace("-", "_").replace(" ", "_")
 
-        description = (
-            skill.instructions
-            or skill.description
-            or skill.display_title
-            or f"Skill: {skill.skill_id}"
-        )
+        description = skill.instructions or skill.description or skill.display_title or f"Skill: {skill.skill_id}"
 
         max_desc_length = 1024
         if len(description) > max_desc_length:

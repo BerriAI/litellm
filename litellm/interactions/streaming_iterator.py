@@ -57,20 +57,14 @@ class BaseInteractionsAPIStreamingIterator:
         # set hidden params for response headers
         _api_base = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get(
-                "litellm_params", {}
-            ),
+            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
-        _model_info: Dict = (
-            litellm_metadata.get("model_info", {}) if litellm_metadata else {}
-        )
+        _model_info: Dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
         }
-        self._hidden_params["additional_headers"] = process_response_headers(
-            self.response.headers or {}
-        )
+        self._hidden_params["additional_headers"] = process_response_headers(self.response.headers or {})
 
     def _process_chunk(self, chunk: str) -> Optional[InteractionsAPIStreamingResponse]:
         """Process a single chunk of data from the stream."""
@@ -93,18 +87,19 @@ class BaseInteractionsAPIStreamingIterator:
 
             # Format as InteractionsAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
-                streaming_response = (
-                    self.interactions_api_config.transform_streaming_response(
-                        model=self.model,
-                        parsed_chunk=parsed_chunk,
-                        logging_obj=self.logging_obj,
-                    )
+                streaming_response = self.interactions_api_config.transform_streaming_response(
+                    model=self.model,
+                    parsed_chunk=parsed_chunk,
+                    logging_obj=self.logging_obj,
                 )
 
-                # Store the completed response (check for status=completed)
-                if (
-                    streaming_response
-                    and getattr(streaming_response, "status", None) == "completed"
+                # Store the completed response.
+                # Legacy schema signals completion via status="completed".
+                # New schema (Api-Revision: 2026-05-20) uses event_type="interaction.completed".
+                # Remove the legacy check after June 8, 2026.
+                if streaming_response and (
+                    getattr(streaming_response, "status", None) == "completed"
+                    or getattr(streaming_response, "event_type", None) == "interaction.completed"
                 ):
                     self.completed_response = streaming_response
                     self._handle_logging_completed_response()
@@ -114,9 +109,7 @@ class BaseInteractionsAPIStreamingIterator:
             return None
         except json.JSONDecodeError:
             # If we can't parse the chunk, continue
-            verbose_logger.debug(
-                f"Failed to parse streaming chunk: {stripped_chunk[:200]}..."
-            )
+            verbose_logger.debug(f"Failed to parse streaming chunk: {stripped_chunk[:200]}...")
             return None
 
     def _handle_logging_completed_response(self):
@@ -181,20 +174,13 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
         logging_response = copy.deepcopy(self.completed_response)
 
         asyncio.create_task(
-            self.logging_obj.async_success_handler(
-                result=logging_response,
+            self.logging_obj.dispatch_success_handlers(
+                logging_response,
                 start_time=self.start_time,
                 end_time=datetime.now(),
                 cache_hit=None,
+                prefer_async_handlers=True,
             )
-        )
-
-        executor.submit(
-            self.logging_obj.success_handler,
-            result=logging_response,
-            cache_hit=None,
-            start_time=self.start_time,
-            end_time=datetime.now(),
         )
 
 

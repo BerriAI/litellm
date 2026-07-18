@@ -202,22 +202,24 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         # Mock the AsyncOpenAI client that gets created inside _get_openai_client
         mock_async_client = AsyncMock()
         mock_async_client.images.generate = AsyncMock(return_value=mock_openai_response)
-        
-        with patch("litellm.llms.openai.openai.AsyncOpenAI", return_value=mock_async_client) as mock_async_constructor:
+
+        with patch(
+            "litellm.llms.openai.openai.AsyncOpenAI", return_value=mock_async_client
+        ) as mock_async_constructor:
             response = await litellm.aimage_generation(
                 model="litellm_proxy/dall-e-3",
                 prompt="A beautiful sunset over mountains",
                 api_base="http://my-proxy",
                 api_key="sk-1234",
             )
-            
+
             # Verify the AsyncOpenAI client constructor was called with correct parameters
             mock_async_constructor.assert_called_once()
             constructor_kwargs = mock_async_constructor.call_args.kwargs
             print("KWARGS to Async OpenAI constructor=", constructor_kwargs)
             assert constructor_kwargs["api_key"] == "sk-1234"
             assert constructor_kwargs["base_url"] == "http://my-proxy"
-            
+
             # Verify the AsyncOpenAI client was called correctly
             mock_async_client.images.generate.assert_awaited_once()
             call_kwargs = mock_async_client.images.generate.call_args.kwargs
@@ -227,21 +229,23 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         # Mock the sync OpenAI client that gets created inside _get_openai_client
         mock_sync_client = MagicMock()
         mock_sync_client.images.generate.return_value = mock_openai_response
-        
-        with patch("litellm.llms.openai.openai.OpenAI", return_value=mock_sync_client) as mock_sync_constructor:
+
+        with patch(
+            "litellm.llms.openai.openai.OpenAI", return_value=mock_sync_client
+        ) as mock_sync_constructor:
             response = litellm.image_generation(
                 model="litellm_proxy/dall-e-3",
                 prompt="A beautiful sunset over mountains",
                 api_base="http://my-proxy",
                 api_key="sk-1234",
             )
-            
+
             # Verify the OpenAI client constructor was called with correct parameters
             mock_sync_constructor.assert_called_once()
             constructor_kwargs = mock_sync_constructor.call_args.kwargs
             assert constructor_kwargs["api_key"] == "sk-1234"
             assert constructor_kwargs["base_url"] == "http://my-proxy"
-            
+
             # Verify the OpenAI client was called correctly
             mock_sync_client.images.generate.assert_called_once()
             call_kwargs = mock_sync_client.images.generate.call_args.kwargs
@@ -250,7 +254,7 @@ async def test_litellm_gateway_image_generation_direct(is_async):
 
     # Verify the response structure
     assert response is not None
-    assert hasattr(response, 'data') or isinstance(response, dict)
+    assert hasattr(response, "data") or isinstance(response, dict)
 
 
 @pytest.mark.parametrize("is_async", [False, True])
@@ -576,7 +580,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
 def test_litellm_gateway_from_sdk_with_thinking_param():
     try:
         response = litellm.completion(
-            model="litellm_proxy/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            model="litellm_proxy/anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=[{"role": "user", "content": "Hello world"}],
             api_base="http://0.0.0.0:4000",
             api_key="sk-PIp1h0RekR",

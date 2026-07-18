@@ -92,18 +92,62 @@ describe("HealthCheckComponent", () => {
     expect(mockIndividualModelHealthCheckCall).not.toHaveBeenCalledWith("token-123", "gpt-4");
   });
 
+  it("should show pagination controls and request the next page", async () => {
+    const onPageChange = vi.fn();
+    const modelData = {
+      data: [
+        {
+          model_name: "gpt-4",
+          model_info: { id: "deployment-1" },
+          litellm_model_name: "gpt-4",
+        },
+      ],
+    };
+
+    await act(async () => {
+      render(
+        <HealthCheckComponent
+          accessToken="token"
+          modelData={modelData}
+          all_models_on_proxy={["deployment-1"]}
+          getDisplayModelName={getDisplayModelName}
+          paginationMeta={{
+            total_count: 75,
+            current_page: 1,
+            total_pages: 2,
+            size: 50,
+          }}
+          currentPage={1}
+          pageSize={50}
+          onPageChange={onPageChange}
+        />,
+      );
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(screen.getByTestId("health-results-count")).toHaveTextContent("Showing 1 - 50 of 75 results");
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Next" }).click();
+    });
+
+    expect(onPageChange).toHaveBeenCalledWith(2);
+  });
+
   describe("latest_health_checks keyed by model id", () => {
     it("should show status from latest_health_checks when keys match model ids", async () => {
       const modelData = {
         data: [
-          { 
-            model_name: "gpt-4", 
-            model_info: { id: "id-alpha" }, 
-            litellm_model_name: "gpt-4",  
+          {
+            model_name: "gpt-4",
+            model_info: { id: "id-alpha" },
+            litellm_model_name: "gpt-4",
           },
-          { 
-            model_name: "gpt-4", 
-            model_info: { id: "id-beta" }, 
+          {
+            model_name: "gpt-4",
+            model_info: { id: "id-beta" },
             litellm_model_name: "gpt-4",
           },
         ],

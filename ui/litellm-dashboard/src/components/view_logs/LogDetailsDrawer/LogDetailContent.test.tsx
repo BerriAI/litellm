@@ -113,6 +113,35 @@ describe("LogDetailContent", () => {
     expect(screen.getAllByText("$0.00200000").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("should show Input Tokens and Output Tokens for anthropic_messages when uncached text_tokens exist", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          call_type: "anthropic_messages",
+          prompt_tokens: 34548,
+          completion_tokens: 28,
+          total_tokens: 34576,
+          spend: 0.01107885,
+          metadata: {
+            status: "success",
+            additional_usage_values: {
+              prompt_tokens_details: { text_tokens: 3 },
+              cache_read_input_tokens: 34462,
+              cache_creation_input_tokens: 83,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Input Tokens")).toBeInTheDocument();
+    expect(screen.getByText("Output Tokens")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("28")).toBeInTheDocument();
+    // Combined TokenFlow line should not appear (would include "prompt tokens")
+    expect(screen.queryByText(/prompt tokens \+ .* completion tokens/)).not.toBeInTheDocument();
+  });
+
   it("should display ConfigInfoMessage when no messages, response, or error and not loading", () => {
     render(
       <LogDetailContent
@@ -142,34 +171,8 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText("Request/Response Data Not Available")).not.toBeInTheDocument();
   });
 
-  it("should call onOpenSettings when user clicks open settings in ConfigInfoMessage", async () => {
-    const onOpenSettings = vi.fn();
-    const user = userEvent.setup();
-
-    render(
-      <LogDetailContent
-        logEntry={createLogEntry({
-          messages: [],
-          response: {},
-          metadata: {},
-        })}
-        onOpenSettings={onOpenSettings}
-      />,
-    );
-
-    const settingsButton = screen.getByRole("button", { name: /open the settings/i });
-    await user.click(settingsButton);
-
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
-  });
-
   it("should display loading state when isLoadingDetails is true", () => {
-    render(
-      <LogDetailContent
-        logEntry={createLogEntry()}
-        isLoadingDetails={true}
-      />,
-    );
+    render(<LogDetailContent logEntry={createLogEntry()} isLoadingDetails={true} />);
 
     expect(screen.getByText("Loading request & response data...")).toBeInTheDocument();
   });
@@ -288,6 +291,37 @@ describe("LogDetailContent", () => {
 
     expect(screen.getByText("LiteLLM Overhead")).toBeInTheDocument();
     expect(screen.getByText("42.50 ms")).toBeInTheDocument();
+  });
+
+  it("should not display LiteLLM Overhead when litellm_overhead_time_ms is absent from metadata", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success" } })} />);
+
+    expect(screen.queryByText("LiteLLM Overhead")).not.toBeInTheDocument();
+  });
+
+  const retriesItem = () => screen.getByText("Retries").closest(".ant-descriptions-item") as HTMLElement;
+
+  it("should display attempted_retries / max_retries for Retries when attempted_retries > 0", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({ metadata: { status: "success", attempted_retries: 2, max_retries: 3 } })}
+      />,
+    );
+
+    expect(within(retriesItem()).getByText("2 / 3")).toBeInTheDocument();
+  });
+
+  it("should display a green 'None' tag for Retries when attempted_retries is 0", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success", attempted_retries: 0 } })} />);
+
+    const noneTag = within(retriesItem()).getByText("None");
+    expect(noneTag.closest(".ant-tag")).toHaveClass("ant-tag-green");
+  });
+
+  it("should display '-' for Retries when attempted_retries is absent from metadata", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success" } })} />);
+
+    expect(within(retriesItem()).getByText("-")).toBeInTheDocument();
   });
 
   it("should display start and end time in ISO format", () => {

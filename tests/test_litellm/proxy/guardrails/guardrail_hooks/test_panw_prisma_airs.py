@@ -1676,11 +1676,12 @@ class TestPanwAirsApplyGuardrail:
         inputs: GenericGuardrailAPIInputs = {"texts": ["Hello world"]}
         request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
 
-        with patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api, patch(
-            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
-        ) as mock_header:
+        with (
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+            ) as mock_header,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             result = await handler.apply_guardrail(
@@ -2263,7 +2264,7 @@ class TestPanwAirsMcpForceRun:
                 "test_panw_airs",
                 False,
                 "pre_call",
-                _simple_data(disable_global_guardrail=True),
+                _simple_data(disable_global_guardrails=True),
                 GuardrailEventHooks.pre_mcp_call,
                 False,
                 id="honors_disable_global_on_mcp_hooks",
@@ -2371,11 +2372,12 @@ class TestPanwAirsStreamingBytesScan:
             for chunk in sse_bytes:
                 yield chunk
 
-        with patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api, patch(
-            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
-        ) as mock_header:
+        with (
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+            ) as mock_header,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             async for _ in handler.async_post_call_streaming_iterator_hook(
@@ -2392,9 +2394,7 @@ class TestPanwAirsStreamingBytesScan:
 
             # Verify standard logging was recorded in request_data metadata
             metadata = request_data.get("metadata", {})
-            guardrail_info_list = metadata.get(
-                "standard_logging_guardrail_information"
-            )
+            guardrail_info_list = metadata.get("standard_logging_guardrail_information")
             assert guardrail_info_list is not None
             # Find the entry with guardrail_status == "success" from _scan_raw_streaming_text
             success_entries = [
@@ -2509,11 +2509,12 @@ class TestPanwAirsStreamingPydanticEventsScan:
             for event in mock_events:
                 yield event
 
-        with patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api, patch(
-            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
-        ) as mock_header:
+        with (
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+            ) as mock_header,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             async for _ in handler.async_post_call_streaming_iterator_hook(
@@ -2530,9 +2531,7 @@ class TestPanwAirsStreamingPydanticEventsScan:
 
             # Verify standard logging was recorded in request_data metadata
             metadata = request_data.get("metadata", {})
-            guardrail_info_list = metadata.get(
-                "standard_logging_guardrail_information"
-            )
+            guardrail_info_list = metadata.get("standard_logging_guardrail_information")
             assert guardrail_info_list is not None
             # Find the entry with guardrail_status == "success" from _scan_raw_streaming_text
             success_entries = [
@@ -2857,9 +2856,14 @@ class TestPanwAirsMcpToolEventScan:
             "mcp_arguments": {"path": "/etc/passwd"},
         }
 
-        with patch.object(
-            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with (
+            patch.object(
+                PanwPrismaAirsHandler,
+                "_get_mcp_server_name",
+                return_value="test_server",
+            ),
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -2966,9 +2970,14 @@ class TestPanwAirsMcpToolEventScan:
             "mcp_arguments": None,
         }
 
-        with patch.object(
-            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with (
+            patch.object(
+                PanwPrismaAirsHandler,
+                "_get_mcp_server_name",
+                return_value="test_server",
+            ),
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -2998,9 +3007,14 @@ class TestPanwAirsMcpToolEventScan:
             "mcp_arguments": "hello world",
         }
 
-        with patch.object(
-            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with (
+            patch.object(
+                PanwPrismaAirsHandler,
+                "_get_mcp_server_name",
+                return_value="test_server",
+            ),
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -3034,11 +3048,12 @@ class TestPanwAirsMcpToolEventScan:
         mock_server.name = "gmail-mcp"
         mock_server.server_id = "abc-123"
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-        ) as mock_manager, patch.object(
-            handler, "_call_panw_api", new_callable=AsyncMock
-        ) as mock_api:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_manager,
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_manager.get_mcp_server_by_id.return_value = mock_server
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
@@ -3078,9 +3093,14 @@ class TestPanwAirsRestMcpFallback:
             "arguments": {"path": "/etc/shadow"},
         }
 
-        with patch.object(
-            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with (
+            patch.object(
+                PanwPrismaAirsHandler,
+                "_get_mcp_server_name",
+                return_value="test_server",
+            ),
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -3142,9 +3162,14 @@ class TestPanwAirsRestMcpFallback:
             "arguments": {"key": "rest_val"},
         }
 
-        with patch.object(
-            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with (
+            patch.object(
+                PanwPrismaAirsHandler,
+                "_get_mcp_server_name",
+                return_value="test_server",
+            ),
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -3220,9 +3245,14 @@ class TestPanwAirsDuplicateScanRegression:
             "mcp_arguments": {"path": "/tmp/test"},
         }
 
-        with patch.object(
-            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with (
+            patch.object(
+                PanwPrismaAirsHandler,
+                "_get_mcp_server_name",
+                return_value="test_server",
+            ),
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -4115,9 +4145,14 @@ class TestPanwAirsMcpRestToolInvoked:
             "mcp_arguments": {"key": "value"},
         }
 
-        with patch.object(
-            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
-        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with (
+            patch.object(
+                PanwPrismaAirsHandler,
+                "_get_mcp_server_name",
+                return_value="test_server",
+            ),
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -5311,9 +5346,12 @@ class TestPanwAirsDualScanIndependence:
             "mcp_arguments": {"path": "/etc/shadow"},
         }
 
-        with patch.object(
-            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="srv"
-        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with (
+            patch.object(
+                PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="srv"
+            ),
+            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
+        ):
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -5335,6 +5373,94 @@ class TestPanwAirsDualScanIndependence:
             assert te["metadata"]["tool_invoked"] == "file_reader"
             assert te["input"] == '{"path": "/etc/shadow"}'
             assert mcp_call.get("content") is None
+
+
+class TestPanwAirsTimeoutCoercion:
+    """Regression tests for string-valued timeout handling.
+
+    Before the fix, a string `timeout` (which is what the dashboard UI persists
+    and what raw YAML preserves if quoted) survived into httpx, which raised
+    `TypeError: '<=' not supported between instances of 'str' and 'int'`. The
+    broad except in apply_guardrail swallowed it and the proxy returned a
+    misleading 500 'Security scan failed - request blocked for safety'.
+    """
+
+    def test_handler_coerces_string_timeout_to_float(self):
+        handler = make_handler(timeout="30")
+        assert handler.timeout == 30.0
+        assert isinstance(handler.timeout, float)
+
+    def test_handler_accepts_int_timeout(self):
+        handler = make_handler(timeout=15)
+        assert handler.timeout == 15.0
+
+    def test_handler_accepts_float_timeout(self):
+        handler = make_handler(timeout=7.5)
+        assert handler.timeout == 7.5
+
+    def test_handler_none_timeout_falls_back_to_default(self):
+        handler = make_handler(timeout=None)
+        assert handler.timeout == 10.0
+
+    def test_handler_omitted_timeout_uses_default(self):
+        handler = make_handler()
+        assert handler.timeout == 10.0
+
+    def test_litellm_params_coerces_string_timeout(self):
+        """Boundary validation: the Pydantic model itself should normalize
+        string timeouts before any handler reads the value via model_dump()."""
+        params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
+            api_key="test_key",
+            profile_name="test_profile",
+            timeout="30",
+        )
+        assert params.timeout == 30.0
+        assert isinstance(params.timeout, float)
+
+    def test_litellm_params_rejects_garbage_timeout(self):
+        with pytest.raises(ValueError):
+            LitellmParams(
+                guardrail="panw_prisma_airs",
+                mode="pre_call",
+                api_key="test_key",
+                profile_name="test_profile",
+                timeout="not-a-number",
+            )
+
+    def test_litellm_params_empty_string_timeout_becomes_none(self):
+        """Empty-string timeout (which the dashboard form can send) should
+        be coerced to None, not crash, and not produce float('')."""
+        params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
+            api_key="test_key",
+            profile_name="test_profile",
+            timeout="",
+        )
+        assert params.timeout is None
+
+    def test_legacy_initializer_handles_unset_timeout(self):
+        """Regression guard: with timeout now a declared Optional[float] = None
+        on BaseLitellmParams, the legacy panw initializer at
+        guardrail_initializers.py:220 must not crash on float(None) when the
+        caller omits timeout entirely."""
+        from litellm.proxy.guardrails.guardrail_initializers import (
+            initialize_panw_prisma_airs,
+        )
+
+        params = LitellmParams(
+            guardrail="panw_prisma_airs",
+            mode="pre_call",
+            api_key="test_key",
+            profile_name="test_profile",
+            # timeout intentionally omitted - field defaults to None
+        )
+        guardrail_config = {"guardrail_name": "test_legacy"}
+        handler = initialize_panw_prisma_airs(params, guardrail_config)
+        # Default fallback applied, not crashed on float(None)
+        assert handler.timeout == 10.0
 
 
 if __name__ == "__main__":

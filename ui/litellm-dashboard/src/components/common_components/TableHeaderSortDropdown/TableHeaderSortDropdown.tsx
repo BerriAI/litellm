@@ -20,10 +20,7 @@ interface TableHeaderSortDropdownProps {
   columnId?: string;
 }
 
-export const TableHeaderSortDropdown: React.FC<TableHeaderSortDropdownProps> = ({
-  sortState,
-  onSortChange,
-}) => {
+export const TableHeaderSortDropdown: React.FC<TableHeaderSortDropdownProps> = ({ sortState, onSortChange }) => {
   const handleMenuClick: MenuProps["onClick"] = ({ key }) => {
     if (key === "asc") {
       onSortChange("asc");

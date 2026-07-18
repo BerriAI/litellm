@@ -930,7 +930,7 @@ def test_image_generation_openai():
 
         response = litellm.image_generation(
             prompt="A cute baby sea otter",
-            model="openai/dall-e-3",
+            model="openai/gpt-image-1",
             api_key=os.getenv("OPENAI_API_KEY"),
         )
 
@@ -948,7 +948,7 @@ def test_image_generation_openai():
         try:
             response = litellm.image_generation(
                 prompt="A cute baby sea otter",
-                model="dall-e-2",
+                model="gpt-image-1",
                 api_key="my-bad-api-key",
             )
         except Exception:
@@ -1125,7 +1125,7 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
     ) as mock_client:
         try:
             response = litellm.completion(
-                model="gpt-4o-audio-preview",
+                model="gpt-audio-1.5",
                 modalities=["text", "audio"],
                 audio={"voice": "alloy", "format": "pcm16"},
                 messages=[
@@ -1134,8 +1134,14 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
                 stream=stream,
             )
         except Exception as e:
-            if "openai-internal" in str(e):
-                pytest.skip("Skipping test due to openai-internal error")
+            err = str(e).lower()
+            if (
+                "model_not_found" in err
+                or "does not exist" in err
+                or "openai-internal" in err
+            ):
+                pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
+            raise
 
         if stream:
             for chunk in response:
@@ -1410,15 +1416,13 @@ def test_logging_key_masking_gemini():
 
         mock_client.assert_called()
 
-        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
-        assert (
-            "LEAVE_ONLY_LAST_4_CHAR_UNMASKED_THIS_PART"
-            not in mock_client.call_args.kwargs["kwargs"]["litellm_params"]["api_base"]
-        )
-        key = mock_client.call_args.kwargs["kwargs"]["litellm_params"]["api_base"]
-        trimmed_key = key.split("key=")[1]
-        trimmed_key = trimmed_key.replace("*", "")
-        assert "PART" == trimmed_key
+        # Gemini API keys are now transmitted via the x-goog-api-key header
+        # instead of the legacy ?key=... URL query parameter (security commit
+        # 25f93bed91). Verify the key never appears in api_base.
+        api_base = mock_client.call_args.kwargs["kwargs"]["litellm_params"]["api_base"]
+        assert "LEAVE_ONLY_LAST_4_CHAR_UNMASKED_THIS_PART" not in api_base
+        assert "?key=" not in api_base
+        assert "&key=" not in api_base
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

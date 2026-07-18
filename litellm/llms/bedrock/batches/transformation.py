@@ -1,9 +1,14 @@
 import os
+import re
 import time
 from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.cloud_storage_security import (
+    BEDROCK_MANAGED_S3_BATCH_PREFIX,
+)
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -24,6 +29,15 @@ from litellm.types.utils import LiteLLMBatch, LlmProviders
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import CommonBatchFilesUtils
 
+# Bedrock batch input files are uploaded as
+# s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
+# BedrockFilesTransformation._get_s3_object_name). A uuid4 is always 36 hex/dash
+# characters, so it can be stripped off the end unambiguously even though the
+# model name itself may contain dashes.
+_S3_BATCH_FILE_UUID_SUFFIX_PATTERN = re.compile(
+    r"-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.jsonl$"
+)
+
 
 class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     """
@@ -37,6 +51,41 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK
+
+    @classmethod
+    def _get_bare_model_name_from_s3_key(cls, object_key: str) -> Optional[str]:
+        if not object_key.startswith(BEDROCK_MANAGED_S3_BATCH_PREFIX):
+            return None
+        model_part = object_key[len(BEDROCK_MANAGED_S3_BATCH_PREFIX) :]
+        match = _S3_BATCH_FILE_UUID_SUFFIX_PATTERN.search(model_part)
+        if not match or match.start() == 0:
+            return None
+        return model_part[: match.start()]
+
+    @classmethod
+    def is_unmanaged_s3_batch_input_file_id(cls, input_file_id: Optional[str]) -> bool:
+        """
+        Returns True if `input_file_id` is a raw s3:// Bedrock batch input file (i.e. not a
+        LiteLLM-managed unified file id) whose object key embeds the model name in the
+        `litellm-bedrock-files-{model}-{uuid}.jsonl` layout.
+        """
+        if input_file_id is None or not input_file_id.startswith("s3://"):
+            return False
+        object_key = input_file_id.rsplit("/", 1)[-1]
+        return cls._get_bare_model_name_from_s3_key(object_key) is not None
+
+    @classmethod
+    def get_bare_model_name_from_s3_file(cls, input_file_id: str) -> str:
+        """
+        Extracts the bare model name (e.g. "us.anthropic.claude-sonnet-4-20250514-v1-0") from
+        an unmanaged batch's s3:// input file id. Note any ":" in the original model id was
+        replaced with "-" at upload time, so callers must fuzzy-match against configured
+        deployments rather than expect an exact string match.
+        """
+        object_key = input_file_id.rsplit("/", 1)[-1]
+        bare_model_name = cls._get_bare_model_name_from_s3_key(object_key)
+        assert bare_model_name is not None  # narrowed by is_unmanaged_s3_batch_input_file_id
+        return bare_model_name
 
     def validate_environment(
         self,
@@ -72,9 +121,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # Bedrock model invocation job endpoint
         # Format: https://bedrock.{region}.amazonaws.com/model-invocation-job
-        bedrock_endpoint = (
-            f"https://bedrock.{aws_region_name}.amazonaws.com/model-invocation-job"
-        )
+        bedrock_endpoint = f"https://bedrock.{aws_region_name}.amazonaws.com/model-invocation-job"
 
         return bedrock_endpoint
 
@@ -104,9 +151,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         input_bucket, input_key = self.common_utils.parse_s3_uri(input_file_id)
 
         # Get output S3 configuration
-        output_bucket = litellm_params.get("s3_output_bucket_name") or os.getenv(
-            "AWS_S3_OUTPUT_BUCKET_NAME"
-        )
+        output_bucket = litellm_params.get("s3_output_bucket_name") or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
         if not output_bucket:
             # Use same bucket as input if no output bucket specified
             output_bucket = input_bucket
@@ -124,9 +169,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             )
 
         if not model:
-            raise ValueError(
-                "Could not determine Bedrock model ID. Please pass `model` in your request body."
-            )
+            raise ValueError("Could not determine Bedrock model ID. Please pass `model` in your request body.")
 
         # Generate job name with the correct model ID using common utility
         job_name = self.common_utils.generate_unique_job_name(model, prefix="litellm")
@@ -134,9 +177,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # Build input data config
         input_data_config: BedrockInputDataConfig = {
-            "s3InputDataConfig": BedrockS3InputDataConfig(
-                s3Uri=f"s3://{input_bucket}/{input_key}"
-            )
+            "s3InputDataConfig": BedrockS3InputDataConfig(s3Uri=f"s3://{input_bucket}/{input_key}")
         }
 
         # Build output data config
@@ -145,15 +186,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         )
 
         # Add optional KMS encryption key ID if provided
-        s3_encryption_key_id = litellm_params.get(
-            "s3_encryption_key_id"
-        ) or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
+        s3_encryption_key_id = litellm_params.get("s3_encryption_key_id") or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
         if s3_encryption_key_id:
             s3_output_config["s3EncryptionKeyId"] = s3_encryption_key_id
 
-        output_data_config: BedrockOutputDataConfig = {
-            "s3OutputDataConfig": s3_output_config
-        }
+        output_data_config: BedrockOutputDataConfig = {"s3OutputDataConfig": s3_output_config}
 
         # Create Bedrock batch request with proper typing
         bedrock_request: BedrockCreateBatchRequest = {
@@ -174,7 +211,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # For Bedrock, we need to return a pre-signed request with AWS auth headers
         # Use common utility for AWS signing
-        endpoint_url = f"https://bedrock.{self._get_aws_region_name(optional_params, model)}.amazonaws.com/model-invocation-job"
+        endpoint_url = (
+            f"https://bedrock.{self._get_aws_region_name(optional_params, model)}.amazonaws.com/model-invocation-job"
+        )
         signed_headers, signed_data = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data=bedrock_request,
@@ -262,8 +301,29 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             cancelling_at=None,
             cancelled_at=None,
             request_counts=None,
-            metadata=original_request.get("metadata", {}),
+            metadata=self._get_openai_compatible_batch_metadata(original_request.get("metadata", {})),
         )
+
+    @staticmethod
+    def _get_openai_compatible_batch_metadata(metadata: Any) -> Dict[str, str]:
+        """
+        OpenAI Batch metadata only accepts string values.
+        """
+        if not isinstance(metadata, dict):
+            return {}
+
+        sanitized_metadata: Dict[str, str] = {}
+        for key, value in metadata.items():
+            if key == "standard_logging_guardrail_information" or value is None:
+                continue
+
+            str_key = str(key)
+            if isinstance(value, str):
+                sanitized_metadata[str_key] = value
+            else:
+                sanitized_metadata[str_key] = safe_dumps(value)
+
+        return sanitized_metadata
 
     def transform_retrieve_batch_request(
         self,
@@ -294,7 +354,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             raise ValueError(f"Invalid ARN format: {batch_id}")
 
         region = arn_parts[3]
-        # arn_parts[5] contains "model-invocation-job/{jobId}"
+        if not re.match(r"^[a-z][a-z0-9-]*$", region):
+            raise ValueError(f"Invalid region in ARN: {batch_id}")
 
         # Build the endpoint URL for GetModelInvocationJob
         # AWS API format: GET /model-invocation-job/{jobIdentifier}
@@ -302,9 +363,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         import urllib.parse as _ul
 
         encoded_arn = _ul.quote(batch_id, safe="")
-        endpoint_url = (
-            f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}"
-        )
+        endpoint_url = f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}"
 
         # Use common utility for AWS signing
         signed_headers, _ = self.common_utils.sign_aws_request(
@@ -337,9 +396,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
                 return None
 
         created_at = parse_timestamp(
-            str(response_data.get("submitTime"))
-            if response_data.get("submitTime") is not None
-            else None
+            str(response_data.get("submitTime")) if response_data.get("submitTime") is not None else None
         )
         in_progress_states = {"InProgress", "Validating", "Scheduled"}
         in_progress_at = (
@@ -352,36 +409,22 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             else None
         )
         completed_at = (
-            parse_timestamp(
-                str(response_data.get("endTime"))
-                if response_data.get("endTime") is not None
-                else None
-            )
+            parse_timestamp(str(response_data.get("endTime")) if response_data.get("endTime") is not None else None)
             if status_str in {"Completed", "PartiallyCompleted"}
             else None
         )
         failed_at = (
-            parse_timestamp(
-                str(response_data.get("endTime"))
-                if response_data.get("endTime") is not None
-                else None
-            )
+            parse_timestamp(str(response_data.get("endTime")) if response_data.get("endTime") is not None else None)
             if status_str == "Failed"
             else None
         )
         cancelled_at = (
-            parse_timestamp(
-                str(response_data.get("endTime"))
-                if response_data.get("endTime") is not None
-                else None
-            )
+            parse_timestamp(str(response_data.get("endTime")) if response_data.get("endTime") is not None else None)
             if status_str == "Stopped"
             else None
         )
         expires_at = parse_timestamp(
-            str(response_data.get("jobExpirationTime"))
-            if response_data.get("jobExpirationTime") is not None
-            else None
+            str(response_data.get("jobExpirationTime")) if response_data.get("jobExpirationTime") is not None else None
         )
 
         return (
@@ -513,9 +556,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         input_file_id, output_file_id = self._extract_file_configs(response_data)
 
         # Extract errors and metadata
-        errors, enriched_metadata = self._extract_errors_and_metadata(
-            response_data, raw_response
-        )
+        errors, enriched_metadata = self._extract_errors_and_metadata(response_data, raw_response)
 
         return LiteLLMBatch(
             id=job_arn,
@@ -540,9 +581,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             metadata=enriched_metadata,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[Dict, Headers]) -> BaseLLMException:
         """
         Get Bedrock-specific error class using common utility.
         """

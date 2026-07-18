@@ -205,6 +205,12 @@ class PatchAgentRequest(TypedDict, total=False):
 # Request/Response models for CRUD endpoints
 
 
+class AgentKeySummary(BaseModel):
+    token: str
+    key_alias: Optional[str] = None
+    key_name: Optional[str] = None
+
+
 class AgentResponse(BaseModel):
     agent_id: str
     agent_name: str
@@ -218,6 +224,7 @@ class AgentResponse(BaseModel):
     session_rpm_limit: Optional[int] = None
     static_headers: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
+    keys: Optional[List[AgentKeySummary]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
@@ -228,6 +235,66 @@ class ListAgentsResponse(BaseModel):
     agents: List[AgentResponse]
 
 
+class AgentCreateResponse(LiteLLMPydanticObjectBase):
+    """
+    Response from a provider-side agent creation or get call (e.g. Gemini v1beta/agents).
+
+    Gemini returns ``"id"`` as the agent identifier; we surface both ``id``
+    (Gemini's value) and ``name`` (the user-supplied name, equal to ``id`` for
+    Gemini) so callers can use either.  All extra fields returned by the
+    provider (e.g. ``base_agent``, ``system_instruction``, ``base_environment``)
+    are preserved via extra="allow".
+    """
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentDeleteResult(LiteLLMPydanticObjectBase):
+    """Result of a provider-side agent deletion (e.g. Gemini DELETE /v1beta/agents/{name}).
+
+    Gemini returns an empty body ``{}`` on success; we synthesise ``name`` and
+    ``deleted`` so callers always get a consistent response object.
+    """
+
+    name: str
+    deleted: bool = True
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentListResponse(LiteLLMPydanticObjectBase):
+    """Response from listing agents on the provider side (e.g. Gemini GET /v1beta/agents).
+
+    Gemini returns ``{"agents": [{"id": "..."}, ...]}``; each item is kept as
+    a plain dict so no fields are silently dropped.
+    """
+
+    agents: List[Dict[str, Any]] = []
+    next_page_token: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
+class AgentVersionsResponse(LiteLLMPydanticObjectBase):
+    """Response from listing versions of an agent (e.g. Gemini GET /v1beta/agents/{name}/versions).
+
+    Gemini returns ``{"agentVersions": [...]}``; each version has a ``name``
+    field of the form ``agents/{agent_id}/versions/{uuid}``.
+    """
+
+    agent_versions: List[Dict[str, Any]] = []
+    next_page_token: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+
 class AgentMakePublicResponse(BaseModel):
     message: str
     public_agent_groups: List[str]
@@ -236,6 +303,23 @@ class AgentMakePublicResponse(BaseModel):
 
 class MakeAgentsPublicRequest(BaseModel):
     agent_ids: List[str]
+
+
+def _normalize_a2a_jsonrpc_response(
+    response_dict: Dict[str, Any],
+    request_id: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Ensure JSON-RPC responses include ``id`` when the caller supplied one.
+
+    The a2a SDK may omit ``id`` on error payloads even when the upstream agent
+    returned it. Backfill from the outbound request id so LiteLLM can surface the
+    agent error instead of failing Pydantic validation.
+    """
+    normalized = dict(response_dict)
+    if normalized.get("id") is None and request_id is not None:
+        normalized["id"] = str(request_id)
+    return normalized
 
 
 class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
@@ -262,31 +346,38 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
 
     @classmethod
     def from_a2a_response(
-        cls, response: "SendMessageResponse"
+        cls,
+        response: "SendMessageResponse",
+        request_id: Optional[Any] = None,
     ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from an a2a SDK SendMessageResponse.
 
         Args:
             response: The a2a SDK SendMessageResponse
+            request_id: JSON-RPC request id to backfill when the SDK omits it on errors
 
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        # Convert the a2a response to a dict
         response_dict = response.model_dump(mode="json", exclude_none=True)
-
+        response_dict = _normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
         return cls(**response_dict)
 
     @classmethod
-    def from_dict(cls, response_dict: Dict[str, Any]) -> "LiteLLMSendMessageResponse":
+    def from_dict(
+        cls,
+        response_dict: Dict[str, Any],
+        request_id: Optional[Any] = None,
+    ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from a dict.
 
         Args:
             response_dict: Dict with A2A response structure
+            request_id: JSON-RPC request id to backfill when missing on error payloads
 
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls(**response_dict)
+        return cls(**_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

@@ -28,11 +28,7 @@ def _is_azure_model_router(model: str) -> bool:
         bool: True if this is a model router model
     """
     model_lower = model.lower()
-    return (
-        "model-router" in model_lower
-        or "model_router" in model_lower
-        or model_lower == "azure-model-router"
-    )
+    return "model-router" in model_lower or "model_router" in model_lower or model_lower == "azure-model-router"
 
 
 def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> float:
@@ -65,6 +61,7 @@ def cost_per_token(
     usage: Usage,
     response_time_ms: Optional[float] = 0.0,
     request_model: Optional[str] = None,
+    service_tier: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculate the cost per token for Azure AI models.
@@ -102,6 +99,7 @@ def cost_per_token(
             model=model,
             usage=usage,
             custom_llm_provider="azure_ai",
+            service_tier=service_tier,
         )
     except Exception as e:
         # For Model Router, the model name (e.g., "azure-model-router") may not be in the cost map
@@ -119,9 +117,7 @@ def cost_per_token(
     if is_router_request:
         # Use the request model for flat cost calculation if available, otherwise use response model
         router_model_for_calc = request_model if request_model else model
-        router_flat_cost = calculate_azure_model_router_flat_cost(
-            router_model_for_calc, usage.prompt_tokens
-        )
+        router_flat_cost = calculate_azure_model_router_flat_cost(router_model_for_calc, usage.prompt_tokens)
 
         if router_flat_cost > 0:
             verbose_logger.debug(

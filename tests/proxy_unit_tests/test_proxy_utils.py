@@ -10,7 +10,7 @@ import pytest
 from fastapi import Request
 from starlette.datastructures import State
 
-from litellm.proxy.utils import _get_docs_url, _get_redoc_url
+from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -19,7 +19,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.auth.auth_utils import (
+    check_complete_credentials,
+    is_request_body_safe,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
@@ -33,7 +36,9 @@ def mock_request(monkeypatch):
     mock_request = Mock(spec=Request)
     mock_request.query_params = {}  # Set mock query_params to an empty dictionary
     mock_request.headers = {"traceparent": "test_traceparent"}
-    mock_request.state = State()  # Real State so _safe_get_request_headers caching works
+    mock_request.state = (
+        State()
+    )  # Real State so _safe_get_request_headers caching works
     monkeypatch.setattr(
         "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request", mock_request
     )
@@ -226,18 +231,10 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
             "langfuse_host": "https://us.cloud.langfuse.com",
             "langfuse_public_key": "pk-lf-9636b7a6-c066",
             "langfuse_secret_key": "sk-lf-7cc8b620",
-        },
-        {
-            "langfuse_host": "os.environ/LANGFUSE_HOST_TEMP",
-            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY_TEMP",
-            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
-        },
+        }
     ],
 )
 def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
-    os.environ["LANGFUSE_PUBLIC_KEY_TEMP"] = "pk-lf-9636b7a6-c066"
-    os.environ["LANGFUSE_SECRET_KEY_TEMP"] = "sk-lf-7cc8b620"
-    os.environ["LANGFUSE_HOST_TEMP"] = "https://us.cloud.langfuse.com"
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -306,6 +303,41 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
     for var in callbacks.callback_vars.values():
         assert "os.environ" not in var
+
+
+def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
+    monkeypatch,
+):
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY_TEMP", "server-side-secret")
+    monkeypatch.setattr(
+        litellm.utils,
+        "get_secret",
+        lambda *args, **kwargs: pytest.fail("get_secret should not be called"),
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
+                    },
+                }
+            ]
+        },
+        team_metadata={},
+    )
+
+    callbacks = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
+
+    assert callbacks is None
 
 
 @pytest.mark.parametrize(
@@ -384,9 +416,10 @@ def test_dynamic_turn_off_message_logging(callback_vars):
     )
 
     assert callbacks is not None
-    assert (
-        callbacks.callback_vars["turn_off_message_logging"]
-        == callback_vars["turn_off_message_logging"]
+    # AddTeamCallback's validator stringifies callback_var values, so compare
+    # against the str() of the input rather than the input bool directly.
+    assert callbacks.callback_vars["turn_off_message_logging"] == str(
+        callback_vars["turn_off_message_logging"]
     )
 
 
@@ -465,6 +498,30 @@ def test_is_request_body_safe_model_enabled(
     assert expect_error == error_raised
 
 
+def _assert_check_complete_credentials(api_key_value, expect_complete):
+    request_body = {"model": "gpt-3.5-turbo", "api_key": api_key_value}
+    result = check_complete_credentials(request_body=request_body)
+    assert result == expect_complete
+
+
+def test_check_complete_credentials_with_real_key():
+    _assert_check_complete_credentials(
+        api_key_value="sk-" + "x" * 8, expect_complete=True
+    )
+
+
+def test_check_complete_credentials_with_empty_string():
+    _assert_check_complete_credentials(api_key_value="", expect_complete=False)
+
+
+def test_check_complete_credentials_with_none():
+    _assert_check_complete_credentials(api_key_value=None, expect_complete=False)
+
+
+def test_check_complete_credentials_with_whitespace():
+    _assert_check_complete_credentials(api_key_value="   ", expect_complete=False)
+
+
 def test_reading_openai_org_id_from_headers():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -527,12 +584,21 @@ def test_foward_litellm_user_info_to_backend_llm_call():
         user_api_key_dict=user_api_key_dict,
     )
 
+    # All header values must be str/bytes so httpx won't reject them when the
+    # downstream client builds the request (regression: #27458).
+    for k, v in data.items():
+        assert isinstance(v, (str, bytes)), (
+            f"header {k!r} has non-str value {v!r} ({type(v).__name__}); "
+            "httpx will raise 'Header value must be str or bytes' when the LLM "
+            "request is built."
+        )
+
     expected_data = {
         "x-litellm-user_api_key_user_id": "test_user_id",
         "x-litellm-user_api_key_org_id": "test_org_id",
         "x-litellm-user_api_key_hash": "test_api_key",
-        "x-litellm-user_api_key_spend": 0.0,
-        "x-litellm-user_api_key_auth_metadata": {},
+        "x-litellm-user_api_key_spend": "0.0",
+        "x-litellm-user_api_key_auth_metadata": "{}",
     }
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
@@ -662,12 +728,13 @@ async def test_proxy_config_update_from_db():
 
 @pytest.mark.asyncio
 async def test_prepare_key_update_data():
-    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
     )
 
-    existing_key_row = MagicMock()
+    existing_key_row = MagicMock(spec=LiteLLM_VerificationToken)
+    existing_key_row.metadata = {}
     data = UpdateKeyRequest(key="test_key", models=["gpt-4"], duration="120s")
     updated_data = await prepare_key_update_data(data, existing_key_row)
     assert "expires" in updated_data
@@ -733,6 +800,31 @@ def test_get_docs_url(env_vars, expected_url):
         os.environ[key] = value
 
     result = _get_docs_url()
+    assert result == expected_url
+
+
+@pytest.mark.parametrize(
+    "env_vars, expected_url",
+    [
+        ({}, "/openapi.json"),  # default case
+        ({"OPENAPI_URL": "/custom-openapi.json"}, "/custom-openapi.json"),  # custom URL
+        (
+            {"OPENAPI_URL": "https://example.com/openapi.json"},
+            "https://example.com/openapi.json",
+        ),  # full URL
+        ({"NO_OPENAPI": "True"}, None),  # openapi disabled
+    ],
+)
+def test_get_openapi_url(env_vars, expected_url):
+    # Clear relevant environment variables
+    for key in ["OPENAPI_URL", "NO_OPENAPI"]:
+        os.environ.pop(key, None)
+
+    # Set test environment variables
+    for key, value in env_vars.items():
+        os.environ[key] = value
+
+    result = _get_openapi_url()
     assert result == expected_url
 
 
@@ -814,7 +906,7 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.headers = {}
     mock_request.state = State()
 
-    # Setup key with tags in metadata
+    # Setup key with tags in metadata.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
         user_id="test_user_id",
@@ -1212,10 +1304,15 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
         }
     )
 
-    LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+    callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
         team_id="test",
         proxy_config=pc,
     )
+
+    assert callback_metadata is not None
+    assert callback_metadata.callback_vars is not None
+    assert callback_metadata.callback_vars["langfuse_public_key"] == "test_public_key"
+    assert callback_metadata.callback_vars["langfuse_secret"] == "test_secret_key"
 
     config = pc.get_config_state()
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
@@ -1492,7 +1589,7 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
-    
+
     async def get_data(
         self,
         token: Optional[Union[str, list]] = None,
@@ -1510,7 +1607,7 @@ class MockPrismaClientDB:
     ):
         """Mock get_data method to return user info for admin"""
         from litellm.proxy._types import LiteLLM_UserTable
-        
+
         # Return a proper LiteLLM_UserTable object when querying by user_id
         if user_id:
             return LiteLLM_UserTable(
@@ -2048,7 +2145,7 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     import litellm.proxy.litellm_pre_call_utils as pre_call_utils
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
-    
+
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
@@ -2073,7 +2170,7 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
 def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     import litellm.proxy.litellm_pre_call_utils as pre_call_utils
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
-    
+
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
@@ -2370,16 +2467,17 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
         captured_logging_obj["logging_obj"] = logging_obj
         return logging_obj, data
 
-    with patch(
-        "litellm.proxy.utils.litellm.utils.function_setup",
-        side_effect=_capture_function_setup,
-    ), patch.object(
-        Logging, "async_failure_handler", new=AsyncMock(return_value=None)
-    ), patch.object(
-        Logging, "failure_handler", return_value=None
-    ), patch(
-        "litellm.proxy.utils.threading.Thread"
-    ) as mock_thread:
+    with (
+        patch(
+            "litellm.proxy.utils.litellm.utils.function_setup",
+            side_effect=_capture_function_setup,
+        ),
+        patch.object(
+            Logging, "async_failure_handler", new=AsyncMock(return_value=None)
+        ),
+        patch.object(Logging, "failure_handler", return_value=None),
+        patch("litellm.proxy.utils.threading.Thread") as mock_thread,
+    ):
         mock_thread.return_value.start = Mock()
 
         await proxy_logging._handle_logging_proxy_only_error(
@@ -2623,7 +2721,9 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
         "model": "claude-3-5-sonnet",
     }
 
-    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock) as mock_async:
+    with patch.object(
+        logging_obj, "async_failure_handler", new_callable=AsyncMock
+    ) as mock_async:
         with patch.object(logging_obj, "failure_handler") as mock_sync:
             await proxy_logging._handle_logging_proxy_only_error(
                 request_data=request_data,
