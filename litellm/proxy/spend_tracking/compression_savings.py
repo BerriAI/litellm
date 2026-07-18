@@ -10,11 +10,11 @@ HEADROOM_GUARDRAIL_PROVIDER = "headroom"
 
 
 def _saved_tokens_or_zero(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0
     if value < 0:
         return 0
-    return value
+    return int(value)
 
 
 def _tokens_saved_from_stats(stats: object) -> int:
@@ -32,9 +32,10 @@ def _headroom_entry_saved_tokens(entry: object) -> int:
 
 
 def _headroom_saved_tokens(guardrail_information: object) -> int:
-    if not isinstance(guardrail_information, list):
+    entries = [guardrail_information] if isinstance(guardrail_information, Mapping) else guardrail_information
+    if not isinstance(entries, list):
         return 0
-    return sum(_headroom_entry_saved_tokens(entry) for entry in guardrail_information)
+    return sum(_headroom_entry_saved_tokens(entry) for entry in entries)
 
 
 def extract_compression_saved_tokens(metadata: Mapping[str, object]) -> int:
@@ -52,6 +53,8 @@ def extract_compression_saved_tokens(metadata: Mapping[str, object]) -> int:
     different stages (guardrail pre-call vs deployment pre-call), so when both
     fire on one request their measured savings are independent and additive;
     summing them never double-counts. Malformed or missing values contribute 0.
+    A bare dict ``guardrail_information`` is treated as a single entry, matching
+    the spend-log redactor's normalization of that legacy shape.
     """
     return _tokens_saved_from_stats(metadata.get("compression_savings")) + _headroom_saved_tokens(
         metadata.get("guardrail_information")

@@ -69,7 +69,6 @@ def test_non_headroom_guardrail_entries_ignored():
         {},
         {"tokens_saved": None},
         {"tokens_saved": "7000"},
-        {"tokens_saved": 12.5},
         {"tokens_saved": True},
         {"tokens_saved": -5},
         {"tokens_before": 100, "tokens_after": 50},
@@ -108,3 +107,25 @@ def test_valid_headroom_entry_survives_alongside_malformed_ones():
         ]
     }
     assert extract_compression_saved_tokens(metadata) == 600
+
+
+def test_float_tokens_saved_counts_as_int():
+    entry = {"guardrail_provider": "headroom", "guardrail_response": {"tokens_saved": 600.0}}
+    assert extract_compression_saved_tokens({"guardrail_information": [entry]}) == 600
+    assert extract_compression_saved_tokens({"compression_savings": {"tokens_saved": 7000.0}}) == 7000
+    assert extract_compression_saved_tokens({"compression_savings": {"tokens_saved": 12.5}}) == 12
+
+
+def test_bare_dict_guardrail_information_counts_as_single_entry():
+    assert extract_compression_saved_tokens({"guardrail_information": HEADROOM_ENTRY}) == 600
+
+
+def test_headroom_writer_and_reader_share_provider_slug():
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
+        HEADROOM_GUARDRAIL_PROVIDER as writer_slug,
+    )
+    from litellm.proxy.spend_tracking.compression_savings import (
+        HEADROOM_GUARDRAIL_PROVIDER as reader_slug,
+    )
+
+    assert writer_slug == reader_slug == "headroom"
