@@ -96,11 +96,25 @@ const AllModelsTab = ({
     return sort.desc ? "desc" : "asc";
   }, [sorting]);
 
+  const modelNameFilter =
+    selectedModelGroup && selectedModelGroup !== "all" && selectedModelGroup !== "wildcard"
+      ? selectedModelGroup
+      : undefined;
+
   const {
     data: rawModelData,
     isLoading: isLoadingModelsInfo,
     refetch: refetchModels,
-  } = useModelsInfo(currentPage, pageSize, debouncedSearch || undefined, undefined, teamIdForQuery, sortBy, sortOrder);
+  } = useModelsInfo(
+    currentPage,
+    pageSize,
+    debouncedSearch || undefined,
+    undefined,
+    teamIdForQuery,
+    sortBy,
+    sortOrder,
+    modelNameFilter,
+  );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const getProviderFromModel = (model: string) => {
@@ -145,11 +159,7 @@ const AllModelsTab = ({
 
     // Server-side search is now handled by the API, so we only filter by other criteria
     return modelData.data.filter((model: any) => {
-      const modelNameMatch =
-        selectedModelGroup === "all" ||
-        model.model_name === selectedModelGroup ||
-        !selectedModelGroup ||
-        (selectedModelGroup === "wildcard" && model.model_name?.includes("*"));
+      const modelNameMatch = selectedModelGroup !== "wildcard" || Boolean(model.model_name?.includes("*"));
 
       const accessGroupMatch =
         selectedModelAccessGroupFilter === "all" ||
