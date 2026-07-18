@@ -252,6 +252,28 @@ async def _resolve_member_budget_id(
     return response.budget_id
 
 
+async def _atomic_add_team_to_user(
+    prisma_client: PrismaClient,
+    user_id: str,
+    team_id: str,
+) -> None:
+    """Atomically add team_id to user.teams, skipping if already present.
+
+    Uses a single UPDATE with array dedup so concurrent calls for the
+    same (user, team) pair never produce duplicate entries.  The row-level
+    lock acquired by UPDATE serialises concurrent writers.
+    """
+    await prisma_client.db.execute_raw(
+        'UPDATE "LiteLLM_UserTable" '
+        "SET teams = ("
+        "  SELECT ARRAY(SELECT DISTINCT unnest(teams || ARRAY[$1]::text[]))"
+        ") "
+        "WHERE user_id = $2",
+        team_id,
+        user_id,
+    )
+
+
 async def add_new_member(
     new_member: Member,
     max_budget_in_team: Optional[float],
@@ -279,10 +301,11 @@ async def add_new_member(
         _returned_user = await UserRepository(prisma_client).table.upsert(
             where={"user_id": new_member.user_id},
             data={
-                "update": {"teams": {"push": [team_id]}},
-                "create": {"teams": [team_id], **new_user_defaults},  # type: ignore
+                "update": {},
+                "create": {**new_user_defaults},  # type: ignore
             },
         )
+        await _atomic_add_team_to_user(prisma_client, new_member.user_id, team_id)
         if _returned_user is not None:
             returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
     elif new_member.user_email is not None:
@@ -302,12 +325,8 @@ async def add_new_member(
                 returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) == 1:
             user_info = existing_user_row[0]
-            _returned_user = await UserRepository(prisma_client).table.update(
-                where={"user_id": user_info.user_id},  # type: ignore
-                data={"teams": {"push": [team_id]}},
-            )
-            if _returned_user is not None:
-                returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
+            await _atomic_add_team_to_user(prisma_client, user_info.user_id, team_id)
+            returned_user = LiteLLM_UserTable(**user_info.model_dump())
         elif len(existing_user_row) > 1:
             raise HTTPException(
                 status_code=400,
@@ -325,11 +344,20 @@ async def add_new_member(
     )
 
     if _budget_id and returned_user is not None and returned_user.user_id is not None:
-        _returned_team_membership = await TeamMembershipRepository(prisma_client).table.create(
+        _returned_team_membership = await TeamMembershipRepository(prisma_client).table.upsert(
+            where={
+                "user_id_team_id": {
+                    "user_id": returned_user.user_id,
+                    "team_id": team_id,
+                }
+            },
             data={
-                "team_id": team_id,
-                "user_id": returned_user.user_id,
-                "budget_id": _budget_id,
+                "create": {
+                    "team_id": team_id,
+                    "user_id": returned_user.user_id,
+                    "budget_id": _budget_id,
+                },
+                "update": {},
             },
             include={"litellm_budget_table": True},
         )

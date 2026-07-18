@@ -238,7 +238,7 @@ async def test_add_new_member_clones_default_team_budget_id():
         "budget_id": test_cloned_budget_id,
         "litellm_budget_table": None,
     }
-    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+    mock_prisma_client.db.litellm_teammembership.upsert = AsyncMock(
         return_value=mock_team_membership_response
     )
 
@@ -261,7 +261,7 @@ async def test_add_new_member_clones_default_team_budget_id():
     assert result_team_membership.budget_id != test_default_budget_id
 
     mock_prisma_client.db.litellm_usertable.upsert.assert_called_once()
-    mock_prisma_client.db.litellm_teammembership.create.assert_called_once()
+    mock_prisma_client.db.litellm_teammembership.upsert.assert_called_once()
 
     # The clone must have happened: find_unique on the default, create for the clone.
     mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
@@ -278,9 +278,9 @@ async def test_add_new_member_clones_default_team_budget_id():
     assert cloned_create_data["created_by"] == user_api_key_dict.user_id
 
     team_membership_call_args = (
-        mock_prisma_client.db.litellm_teammembership.create.call_args
+        mock_prisma_client.db.litellm_teammembership.upsert.call_args
     )
-    create_data = team_membership_call_args.kwargs["data"]
+    create_data = team_membership_call_args.kwargs["data"]["create"]
     assert create_data["budget_id"] == test_cloned_budget_id
 
 
@@ -335,7 +335,7 @@ async def test_add_new_member_budget_duration_only_clones_default_max_budget():
         "budget_id": "cloned-dc",
         "litellm_budget_table": None,
     }
-    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+    mock_prisma_client.db.litellm_teammembership.upsert = AsyncMock(
         return_value=mock_team_membership_response
     )
 
@@ -395,7 +395,7 @@ async def test_add_new_member_no_budget_when_no_default_and_no_max_budget():
     # Even though we mock these, they must NOT be called on the no-budget path.
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock()
     mock_prisma_client.db.litellm_budgettable.create = AsyncMock()
-    mock_prisma_client.db.litellm_teammembership.create = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.upsert = AsyncMock()
 
     result_user, result_team_membership = await add_new_member(
         new_member=new_member,
@@ -414,7 +414,7 @@ async def test_add_new_member_no_budget_when_no_default_and_no_max_budget():
     assert result_team_membership is None
     mock_prisma_client.db.litellm_budgettable.find_unique.assert_not_called()
     mock_prisma_client.db.litellm_budgettable.create.assert_not_called()
-    mock_prisma_client.db.litellm_teammembership.create.assert_not_called()
+    mock_prisma_client.db.litellm_teammembership.upsert.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -474,7 +474,7 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
         "budget_id": test_new_budget_id,
         "litellm_budget_table": None,
     }
-    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+    mock_prisma_client.db.litellm_teammembership.upsert = AsyncMock(
         return_value=mock_team_membership_response
     )
 
@@ -503,10 +503,10 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
 
     # Verify the team membership was created with the correct budget_id
     team_membership_call_args = (
-        mock_prisma_client.db.litellm_teammembership.create.call_args
+        mock_prisma_client.db.litellm_teammembership.upsert.call_args
     )
     assert team_membership_call_args is not None
-    create_data = team_membership_call_args.kwargs["data"]
+    create_data = team_membership_call_args.kwargs["data"]["create"]
     assert create_data["budget_id"] == test_new_budget_id
 
 
@@ -546,7 +546,7 @@ async def test_add_new_member_persists_budget_duration():
         "budget_id": "budget-dur",
         "litellm_budget_table": None,
     }
-    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+    mock_prisma_client.db.litellm_teammembership.upsert = AsyncMock(
         return_value=mock_team_membership_response
     )
 
@@ -609,7 +609,7 @@ async def test_add_new_member_persists_budget_duration_without_max_budget():
         "budget_id": "budget-dur2",
         "litellm_budget_table": None,
     }
-    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+    mock_prisma_client.db.litellm_teammembership.upsert = AsyncMock(
         return_value=mock_team_membership_response
     )
 
@@ -699,7 +699,7 @@ async def test_add_new_member_with_user_email_clones_default_budget():
         "budget_id": test_cloned_budget_id,
         "litellm_budget_table": None,
     }
-    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+    mock_prisma_client.db.litellm_teammembership.upsert = AsyncMock(
         return_value=mock_team_membership_response
     )
 
@@ -737,6 +737,102 @@ async def test_add_new_member_with_user_email_clones_default_budget():
         where={"budget_id": test_default_budget_id}
     )
     mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_uses_atomic_team_append():
+    """Regression for LIT-4168: concurrent team/member_add requests must not
+    produce duplicate team_id entries in user.teams.  add_new_member must call
+    execute_raw with an atomic array-dedup SQL instead of Prisma's blind push.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="race-user", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": "race-user",
+        "user_email": None,
+        "teams": [],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
+        return_value=mock_user_response
+    )
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id="team-race",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="test_admin",
+    )
+
+    # The upsert must NOT push team_id into user.teams (that was the race bug)
+    upsert_args = mock_prisma_client.db.litellm_usertable.upsert.call_args
+    update_clause = upsert_args.kwargs["data"]["update"]
+    assert "teams" not in update_clause, (
+        "upsert update clause must not touch teams; atomic SQL handles it"
+    )
+
+    # execute_raw must be called with the atomic array-dedup query
+    mock_prisma_client.db.execute_raw.assert_called_once()
+    raw_call = mock_prisma_client.db.execute_raw.call_args
+    sql = raw_call.args[0]
+    assert "DISTINCT" in sql
+    assert "unnest" in sql
+    assert raw_call.args[1] == "team-race"
+    assert raw_call.args[2] == "race-user"
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_email_path_uses_atomic_team_append():
+    """Same as above but for the user_email lookup path where an existing user
+    is found by email.  The old code used Prisma update with push; the fix must
+    use the same atomic execute_raw approach.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_email="race@example.com", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    existing_user = MagicMock()
+    existing_user.user_id = "existing-uid"
+    existing_user.user_email = "race@example.com"
+    existing_user.model_dump.return_value = {
+        "user_id": "existing-uid",
+        "user_email": "race@example.com",
+        "teams": ["other-team"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.get_data = AsyncMock(return_value=[existing_user])
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id="team-race-email",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="test_admin",
+    )
+
+    # The old Prisma update with push must NOT be called
+    mock_prisma_client.db.litellm_usertable.update.assert_not_called()
+
+    # execute_raw must be called with the atomic query
+    mock_prisma_client.db.execute_raw.assert_called_once()
+    raw_call = mock_prisma_client.db.execute_raw.call_args
+    assert raw_call.args[1] == "team-race-email"
+    assert raw_call.args[2] == "existing-uid"
 
 
 @pytest.mark.asyncio

@@ -1420,6 +1420,10 @@ async def test_create_team_member_add_team_admin(
             "litellm.proxy.proxy_server.prisma_client.get_data",
             new=AsyncMock(return_value=[]),
         ) as mock_get_data,
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.db.execute_raw",
+            new_callable=AsyncMock,
+        ),
     ):
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
