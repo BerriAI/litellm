@@ -6,6 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
@@ -63,7 +64,7 @@ class DeepKeepGuardrail(CustomGuardrail):
               mode: pre_call
               api_key: os.environ/DEEPKEEP_API_KEY
               api_base: https://your-deepkeep-instance.example.com
-              firewall_id: your-firewall-id
+              deepkeep_firewall_id: your-firewall-id
     """
 
     def __init__(
@@ -72,7 +73,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         api_base: str | None = None,
         firewall_id: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        extra_headers: dict[str, str] | None = None,
+        extra_headers: Mapping[str, str] | list[str] | None = None,
         **kwargs: Any,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -91,7 +92,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         if not self.firewall_id:
             raise DeepKeepGuardrailMissingSecrets(
                 "DeepKeep firewall_id is required. Set the `DEEPKEEP_FIREWALL_ID` environment "
-                "variable or pass `firewall_id` in the guardrail config."
+                "variable or pass `deepkeep_firewall_id` in the guardrail config."
             )
 
         # API base URL
@@ -110,7 +111,13 @@ class DeepKeepGuardrail(CustomGuardrail):
             self.api_base = f"{base_url}{_DEEPKEEP_GUARDRAIL_ENDPOINT}"
 
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
-        self.extra_headers: dict[str, str] = extra_headers or {}
+        if extra_headers is not None and not isinstance(extra_headers, Mapping):
+            verbose_proxy_logger.warning(
+                "DeepKeep guardrail ignoring `extra_headers`: expected a mapping of header name to value, got %s. "
+                "`litellm_params.extra_headers` is a list of header names to forward and is not supported by this guardrail",
+                type(extra_headers).__name__,
+            )
+        self.extra_headers: dict[str, str] = dict(extra_headers) if isinstance(extra_headers, Mapping) else {}
 
         # Set supported event hooks
         if "supported_event_hooks" not in kwargs:

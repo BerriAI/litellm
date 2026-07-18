@@ -447,6 +447,32 @@ class TestDeepKeepGuardrail:
         headers = guardrail._build_request_headers()
         assert set(headers.keys()) == {"Content-Type", "X-API-Key"}
 
+    def test_build_request_headers_ignores_list_extra_headers(self):
+        """should ignore a list-shaped extra_headers instead of raising when building headers."""
+        guardrail = DeepKeepGuardrail(
+            api_key="test-api-key-123",
+            api_base="https://test.deepkeep.ai",
+            firewall_id="fw-123",
+            extra_headers=["x-request-id", "x-tenant"],
+            guardrail_name="test",
+            event_hook="pre_call",
+        )
+
+        headers = guardrail._build_request_headers()
+        assert set(headers.keys()) == {"Content-Type", "X-API-Key"}
+
+    def test_missing_firewall_id_error_names_the_config_key(self):
+        """should point users at the deepkeep_firewall_id config key that is actually read."""
+        with pytest.raises(DeepKeepGuardrailMissingSecrets) as excinfo:
+            DeepKeepGuardrail(
+                api_key="test-api-key-123",
+                api_base="https://test.deepkeep.ai",
+                guardrail_name="test",
+                event_hook="pre_call",
+            )
+
+        assert "deepkeep_firewall_id" in str(excinfo.value)
+
     def test_extract_user_api_key_metadata_token_does_not_overwrite_hash(self):
         """should not overwrite user_api_key_hash with user_api_key_token when hash is already set."""
         guardrail = DeepKeepGuardrail(
