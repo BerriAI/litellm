@@ -8357,6 +8357,27 @@ class Router:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
 
+    def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
+        """
+        Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
+        deployment's model_info for model_name, via O(1) index lookup.
+
+        Returns (None, None) for wildcard-expanded or unknown names. Unlike
+        get_model_group_info, this never triggers pattern matching or deep copies, so it
+        is safe to call per listed model on the /v1/models hot path.
+        """
+        deployment = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return (None, None)
+
+        model_info = deployment.model_info
+        max_input = model_info.get("max_input_tokens")
+        max_output = model_info.get("max_output_tokens")
+        return (
+            int(max_input) if max_input is not None else None,
+            int(max_output) if max_output is not None else None,
+        )
+
     def get_deployment_credentials_with_provider(self, model_id: str) -> Optional[Dict[str, Any]]:
         """
         Get API credentials and provider info from a model name in model_list.
