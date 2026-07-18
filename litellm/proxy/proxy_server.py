@@ -3708,22 +3708,22 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     litellm_config_cache.redis_cache = redis_cache
 
 
-def resolve_complexity_router_plugins(
-    model_name: str,
-    complexity_router_config: dict,
+def resolve_routing_plugins(
+    plugin_paths: list,
     config_file_path: str | None,
-) -> None:
+    source_label: str,
+) -> list:
     """
-    Resolves `complexity_router_config["plugins"]` dotted-path strings to live
-    instances via `get_instance_fn` (the same convention `litellm_settings.callbacks`
-    uses), in place. Raises at config-load time if a path resolves to something that
-    doesn't implement `RoutingPlugin`, rather than deferring to a confusing
-    `AttributeError` on the first request that reaches the plugin pipeline.
+    Resolves a list of routing-plugin entries to live `RoutingPlugin` instances.
+    Each string entry is resolved through `get_instance_fn` (the same dotted-path
+    convention `litellm_settings.callbacks` uses, which resolves both local module
+    files next to the config and modules installed as Python packages); non-string
+    entries are assumed to already be instances and passed through. Raises at
+    config-load time if any entry resolves to something that doesn't implement
+    `RoutingPlugin`, rather than deferring to a confusing `AttributeError` on the
+    first request that reaches the plugin pipeline. `source_label` names the config
+    key being resolved so the error points the operator at the right place.
     """
-    plugin_paths = complexity_router_config.get("plugins")
-    if not isinstance(plugin_paths, list):
-        return
-
     resolved_plugins = [
         get_instance_fn(value=plugin_path, config_file_path=config_file_path)
         if isinstance(plugin_path, str)
@@ -3739,12 +3739,31 @@ def resolve_complexity_router_plugins(
             getattr(resolved_plugin, "run", None)
         ):
             raise ValueError(
-                f"complexity_router_config.plugins entry {plugin_path!r} on model {model_name!r} "
-                f"resolved to {resolved_plugin!r}, which does not implement the RoutingPlugin "
-                "interface (an async `run(context)` method). Fix the referenced module before "
-                "starting the proxy."
+                f"{source_label} entry {plugin_path!r} resolved to {resolved_plugin!r}, which does "
+                "not implement the RoutingPlugin interface (an async `run(context)` method). Fix the "
+                "referenced module before starting the proxy."
             )
-    complexity_router_config["plugins"] = resolved_plugins
+    return resolved_plugins
+
+
+def resolve_complexity_router_plugins(
+    model_name: str,
+    complexity_router_config: dict,
+    config_file_path: str | None,
+) -> None:
+    """
+    Resolves `complexity_router_config["plugins"]` dotted-path strings to live
+    instances in place, via `resolve_routing_plugins`.
+    """
+    plugin_paths = complexity_router_config.get("plugins")
+    if not isinstance(plugin_paths, list):
+        return
+
+    complexity_router_config["plugins"] = resolve_routing_plugins(
+        plugin_paths=plugin_paths,
+        config_file_path=config_file_path,
+        source_label=f"complexity_router_config.plugins on model {model_name!r}",
+    )
 
 
 class ProxyConfig:
@@ -4874,6 +4893,12 @@ class ProxyConfig:
 
             for k, v in router_settings.items():
                 if k in available_args:
+                    if k == "plugins" and isinstance(v, list):
+                        v = resolve_routing_plugins(
+                            plugin_paths=v,
+                            config_file_path=config_file_path,
+                            source_label="router_settings.plugins",
+                        )
                     router_params[k] = v
                 elif k in {"health_check_interval", "health_check_concurrency"}:
                     raise ValueError(
@@ -7376,12 +7401,13 @@ async def async_data_generator(
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
         # BaseException, so they bypass the success/failure logging callbacks
-        # that normally release the pre-call max_parallel_requests +1; release
-        # it here. This is the outermost generator Starlette closes on
+        # that normally release the pre-call max_parallel_requests +1. Flag the
+        # disconnect; the shielded cleanup in `finally` owns the slot release
+        # so it can coordinate with disconnect-time success billing and release
+        # exactly once. This is the outermost generator Starlette closes on
         # disconnect, so it fires reliably regardless of needs_iterator_wrap
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
             client_disconnected = True
         raise
     except Exception as e:
@@ -7427,6 +7453,8 @@ async def async_data_generator(
             response=response,
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
 
