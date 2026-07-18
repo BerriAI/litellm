@@ -2,37 +2,29 @@
 
 Seeds a chat completion whose prompt carries a unique `e2e-datadog-mcp-*`
 marker so the proxy's DataDogLogger ships a StandardLoggingPayload the org can
-search. Registers https://mcp.<site>/v1/mcp with the stage DD_API_KEY /
-DD_APP_KEY as static headers (Datadog's documented CI/header auth; the browser
-OAuth authorize/token flow is not headless-automatable). A key granted that
-server lists tools, calls search_datadog_logs for the marker, and the response
-must contain it. The dual read via datadog_reader proves the log is also in
-the Logs Search API. The MCP server row is deleted on teardown.
+search. Registers the regional Datadog MCP endpoint with DD_API_KEY /
+DD_APP_KEY as static headers (Datadog's documented CI/header auth). A key
+granted that server lists tools, calls search_datadog_logs for the marker, and
+the response must contain it. The dual read via datadog_reader proves the log
+is also in the Logs Search API. The MCP server row is deleted on teardown.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from e2e_config import (
-    CHEAP_ANTHROPIC_MODEL,
-    DD_API_KEY,
-    DD_APP_KEY,
-    DD_SEARCH_FROM,
-    datadog_mcp_url,
-    unique_marker,
-)
-from e2e_http import NoBody, unwrap
-from e2e_gateway import Gateway
-from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage
-from mcp_client import McpClient
 from conftest import DdLogsReader
+from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
+from e2e_config import CHEAP_ANTHROPIC_MODEL, DD_SEARCH_FROM, unique_marker
+from e2e_gateway import Gateway
+from e2e_http import NoBody, unwrap
+from lifecycle import ResourceManager
+from mcp_client import McpClient
+from models import ChatBody, ChatMessage
 
 pytestmark = pytest.mark.e2e
 
 DD_LOGGER_NAME = "DataDogLogger"
-SEARCH_LOGS_TOOL = "search_datadog_logs"
 MARKER_PREFIX = "e2e-datadog-mcp-"
 
 
@@ -47,15 +39,6 @@ def _assert_datadog_logger_active(gateway: Gateway) -> None:
     )
 
 
-def _assert_dd_mcp_creds() -> None:
-    if not DD_API_KEY or not DD_APP_KEY:
-        pytest.fail(
-            "Datadog MCP e2e requires DD_API_KEY and DD_APP_KEY "
-            "(header auth to mcp.<site>/v1/mcp; on the cluster the secret manager "
-            "injects them, locally tests/e2e/.env)"
-        )
-
-
 def _seed_completion(gateway: Gateway, *, key: str, marker: str) -> None:
     body = ChatBody(
         model=CHEAP_ANTHROPIC_MODEL,
@@ -63,23 +46,6 @@ def _seed_completion(gateway: Gateway, *, key: str, marker: str) -> None:
         max_tokens=16,
     )
     unwrap(gateway.chat(key, body))
-
-
-def _register_datadog_mcp(client: McpClient, resources: ResourceManager) -> str:
-    name = f"e2e_dd_mcp_{unique_marker()}"
-    server_id = client.register_server(
-        server_name=name,
-        alias=name,
-        url=datadog_mcp_url(toolsets="core"),
-        transport="http",
-        static_headers={
-            "DD-API-KEY": DD_API_KEY,
-            "DD-APPLICATION-KEY": DD_APP_KEY,
-        },
-        allowed_tools=[SEARCH_LOGS_TOOL],
-    )
-    resources.defer(lambda: client.delete_server(server_id))
-    return server_id
 
 
 class TestDatadogMcpRoundTrip:
@@ -90,10 +56,10 @@ class TestDatadogMcpRoundTrip:
         dd_logs: DdLogsReader,
         resources: ResourceManager,
     ) -> None:
-        _assert_dd_mcp_creds()
+        assert_dd_mcp_creds()
         _assert_datadog_logger_active(client.gateway)
 
-        server_id = _register_datadog_mcp(client, resources)
+        server_id = register_datadog_mcp(client, resources)
         marker = f"{MARKER_PREFIX}{unique_marker()}"
 
         key = client.generate_key(

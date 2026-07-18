@@ -13,7 +13,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
-- `mcp/` - the MCP server surface over api_key auth: an admin registers an upstream MCP server through the management API and grants keys access via `object_permission.mcp_servers`, then the suite asserts tool listing and calling honor that permission (a key without the grant sees none of the server's tools and is refused a `tools/call` with a 403)
+- `mcp/` - the MCP server surface over api_key auth against the real Datadog remote MCP server (`mcp.<site>/v1/mcp`, header auth via DD_API_KEY / DD_APP_KEY): an admin registers it through the management API and grants keys access via `object_permission.mcp_servers`, then the suite asserts tool listing and calling honor that permission and that `search_datadog_logs` finds a seeded completion log
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)

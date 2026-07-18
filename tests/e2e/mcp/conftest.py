@@ -9,17 +9,12 @@ creates (keys via the Gateway, MCP servers via the deferred cleanups).
 from __future__ import annotations
 
 import importlib.util
-import os
-import socket
 from pathlib import Path
 from typing import Protocol, cast
-from urllib.parse import urlparse
 
 import pytest
 
 from mcp_client import McpClient, build_client
-
-MCP_UPSTREAM_URL = os.environ.get("E2E_MCP_UPSTREAM_URL", "http://mcp-upstream:8090/mcp")
 
 
 class DdLogsReader(Protocol):
@@ -40,19 +35,6 @@ def _build_dd_logs_reader() -> DdLogsReader:
     return builder()
 
 
-def _mcp_upstream_reachable(url: str) -> bool:
-    parsed = urlparse(url)
-    host = parsed.hostname
-    if host is None:
-        return False
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    try:
-        with socket.create_connection((host, port), timeout=3.0):
-            return True
-    except OSError:
-        return False
-
-
 @pytest.fixture(scope="session")
 def client() -> McpClient:
     return build_client()
@@ -61,12 +43,3 @@ def client() -> McpClient:
 @pytest.fixture(scope="session")
 def dd_logs() -> DdLogsReader:
     return _build_dd_logs_reader()
-
-
-@pytest.fixture
-def require_math_upstream() -> None:
-    if not _mcp_upstream_reachable(MCP_UPSTREAM_URL):
-        pytest.skip(
-            f"MCP math upstream not reachable at {MCP_UPSTREAM_URL}; "
-            "start the mcp-upstream compose service or set E2E_MCP_UPSTREAM_URL"
-        )

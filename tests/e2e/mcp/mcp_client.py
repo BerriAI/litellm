@@ -12,11 +12,12 @@ request/response bodies are co-located here because only this suite speaks MCP.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 McpToolArg = str | int | float | bool | list[str] | dict[str, str]
-McpToolArguments = dict[str, McpToolArg]
+McpToolArguments = Mapping[str, McpToolArg]
 
 from e2e_gateway import Gateway, build_gateway
 from e2e_http import Headers, NoBody, Result, unwrap
@@ -86,7 +87,7 @@ class McpToolsListResponse(BaseModel):
 
 class McpCallToolBody(BaseModel):
     name: str
-    arguments: McpToolArguments
+    arguments: dict[str, McpToolArg]
     server_id: str
 
 
@@ -196,7 +197,9 @@ class McpClient:
         return self.gateway.transport.post(
             "/mcp-rest/tools/call",
             headers=ApiKeyHeaders(x_litellm_api_key=key),
-            json=McpCallToolBody(name=name, arguments=arguments, server_id=server_id),
+            json=McpCallToolBody(
+                name=name, arguments=dict(arguments), server_id=server_id
+            ),
             response_type=McpCallToolResponse,
         )
 
