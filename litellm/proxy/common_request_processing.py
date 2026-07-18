@@ -50,7 +50,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
@@ -1174,14 +1174,6 @@ class ProxyBaseLLMRequestProcessing:
         # guardrails actually execute on pre_call. Without this, guardrails set
         # via litellm_params.guardrails are only honored on post_call paths
         # (#29652, partial fix in #23774 covered non-streaming post_call only).
-        # Inline import is intentional: litellm.proxy.utils imports
-        # common_request_processing at module load (cyclic) and the helper is
-        # defined later in utils.py; module-level import here would risk a
-        # NameError on the import-order CodeQL flagged.
-        from litellm.proxy.utils import (  # noqa: PLC0415
-            _check_and_merge_model_level_guardrails,
-        )
-
         # trust_client_model_info=False on pre_call: route_request hasn't run
         # and add_litellm_data_to_request preserves client-supplied
         # model_info when allow_client_pricing_override is set, so a caller
