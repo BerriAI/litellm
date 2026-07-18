@@ -88,6 +88,30 @@ def test_with_token_tags_merges_prompt_and_completion_tokens() -> None:
     }
 
 
+def test_with_token_tags_merges_cache_token_columns() -> None:
+    data = pl.DataFrame(
+        {
+            "prompt_tokens": [57],
+            "completion_tokens": [753],
+            "cache_creation_input_tokens": [10],
+            "cache_read_input_tokens": [5],
+        }
+    )
+    normalized = pl.DataFrame({"Tags": [json.dumps({"model": "azure/gpt-4o-mini"})]})
+
+    result = _with_token_tags(data, normalized)
+
+    tags = json.loads(result["Tags"][0])
+    assert tags == {
+        "model": "azure/gpt-4o-mini",
+        "prompt_tokens": "57",
+        "completion_tokens": "753",
+        "cache_creation_input_tokens": "10",
+        "cache_read_input_tokens": "5",
+        "total_tokens": "810",
+    }
+
+
 def test_with_token_tags_recovers_from_malformed_tags_json() -> None:
     data = pl.DataFrame({"prompt_tokens": [57], "completion_tokens": [753]})
     normalized = pl.DataFrame({"Tags": ["not-valid-json"]})

@@ -38,19 +38,26 @@ else:
     AsyncIOScheduler = Any
 
 # FOCUS v1.2 has no standard column for token counts; core's transformer
-# drops prompt_tokens/completion_tokens even though the source query selects
-# them. Mavvrik carries them through as extra keys in the existing Tags JSON
-# column (the spec's own escape hatch for non-standard fields), rather than
-# changing the shared transformer used by every FOCUS destination. total_tokens
-# isn't a stored column at all -- it's derived here as their sum.
-_TOKEN_TAG_KEYS = ("prompt_tokens", "completion_tokens")
+# drops prompt_tokens/completion_tokens/cache_creation_input_tokens/
+# cache_read_input_tokens even though the source query selects them. Mavvrik
+# carries them through as extra keys in the existing Tags JSON column (the
+# spec's own escape hatch for non-standard fields), rather than changing the
+# shared transformer used by every FOCUS destination. total_tokens isn't a
+# stored column at all -- it's derived here as the sum of prompt and
+# completion tokens.
+_TOKEN_TAG_KEYS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
 
 
 def _with_token_tags(data: pl.DataFrame, normalized: pl.DataFrame) -> pl.DataFrame:
-    """Merge prompt/completion token counts (and their sum, total_tokens) from
-    the pre-transform frame into ``normalized``'s Tags column. Rows correspond
-    1:1 and in the same order across both frames -- transform() only
-    adds/renames columns, it never filters or reorders rows.
+    """Merge token counts (and their sum, total_tokens) from the pre-transform
+    frame into ``normalized``'s Tags column. Rows correspond 1:1 and in the
+    same order across both frames -- transform() only adds/renames columns,
+    it never filters or reorders rows.
     """
     available = [k for k in _TOKEN_TAG_KEYS if k in data.columns]
     if not available or len(data) != len(normalized) or "Tags" not in normalized.columns:
@@ -77,6 +84,11 @@ def _with_token_tags(data: pl.DataFrame, normalized: pl.DataFrame) -> pl.DataFra
                 tags["total_tokens"] = str(prompt + completion)
         return json.dumps(tags)
 
+    verbose_proxy_logger.debug(
+        "Mavvrik FOCUS export: merging token tags for %d row(s) (keys=%s)",
+        len(token_rows),
+        available,
+    )
     merged_tags = pl.Series(
         [_merge(tags_json, row) for tags_json, row in zip(normalized["Tags"].to_list(), token_rows)]
     )
