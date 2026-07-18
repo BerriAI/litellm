@@ -495,6 +495,41 @@ async def test_non_streamed_response_intervention_redacts():
 
 
 @pytest.mark.asyncio
+async def test_guardrail_intervened_without_texts_blocks():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("GUARDRAIL_INTERVENED")
+    with pytest.raises(GuardrailRaisedException):
+        await g.apply_guardrail(
+            inputs={"texts": ["my ssn is 123"]},
+            request_data={"model": "m"},
+            input_type="request",
+            logging_obj=_logging_obj(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_streamed_via_proxy_server_request_body_converts_to_block():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("GUARDRAIL_INTERVENED", texts=["[redacted]"])
+    response = ModelResponse(
+        choices=[Choices(finish_reason="stop", index=0, message=Message(content="secret", role="assistant"))],
+        model="gpt-4o-mini",
+    )
+    request_data = {
+        "model": "gpt-4o-mini",
+        "proxy_server_request": {"body": {"stream": True}},
+        "response": response,
+    }
+    with pytest.raises(ModifyResponseException):
+        await g.apply_guardrail(
+            inputs={"texts": ["secret"], "model": "gpt-4o-mini"},
+            request_data=request_data,
+            input_type="response",
+            logging_obj=_logging_obj(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_response_envelope_and_block_replaces_response():
     g = _make_guardrail(verbose=True)
     g.async_handler.post.return_value = _mock_response("BLOCKED")

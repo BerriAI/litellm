@@ -171,7 +171,7 @@ def _build_usage(response: object) -> StraikerWebhookUsage | None:
 def _is_streamed_request(request_data: dict) -> bool:
     if request_data.get("stream") is True:
         return True
-    body = _as_dict(request_data.get("body"))
+    body = _as_dict(_as_dict(request_data.get("proxy_server_request")).get("body"))
     return body.get("stream") is True
 
 
@@ -529,7 +529,8 @@ class StraikerGuardrail(CustomGuardrail):
                 message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
             )
         if parsed.action == "GUARDRAIL_INTERVENED":
-            if input_type == "response" and _is_streamed_request(request_data):
+            is_streamed_response = input_type == "response" and _is_streamed_request(request_data)
+            if parsed.texts is None or is_streamed_response:
                 self._block(
                     request_data=request_data,
                     input_type=input_type,
