@@ -2286,6 +2286,49 @@ def test_bedrock_tool_call_invoke_non_dict_arguments():
     assert result[0]["toolUse"]["input"] == {}
 
 
+def test_bedrock_tool_call_invoke_malformed_json_does_not_raise():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/18667.
+
+    When the model emits malformed JSON in tool-call arguments (here a
+    missing comma between keys), replaying that history must NOT raise
+    `Unable to convert openai tool calls ... Expecting ',' delimiter`.
+    It degrades to an empty-object input so the conversation can continue.
+    """
+    tool_calls = [
+        {
+            "id": "toolu_abc123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston" "unit": "celsius"}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["toolUseId"] == "toolu_abc123"
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_salvages_valid_prefix_before_truncated_tail():
+    """
+    A valid leading object followed by a truncated tail keeps the valid
+    object rather than dropping everything or raising.
+    """
+    tool_calls = [
+        {
+            "id": "call_partial",
+            "type": "function",
+            "function": {"name": "shell", "arguments": '{"cmd": "ls"}{"cmd":'},
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {"cmd": "ls"}
+
+
 def test_make_valid_bedrock_tool_name_preserves_hyphens():
     assert make_valid_bedrock_tool_name("my-tool") == "my-tool"
     assert (
