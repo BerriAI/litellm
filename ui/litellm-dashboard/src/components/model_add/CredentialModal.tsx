@@ -1,23 +1,47 @@
 import { TextInput } from "@tremor/react";
 import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "antd";
 import type { UploadProps } from "antd/es/upload";
-import React, { useState } from "react";
+import { useState } from "react";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
+import { CredentialItem } from "../networking";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+
 const { Link } = Typography;
 
-interface AddCredentialsModalProps {
+interface CredentialModalProps {
   open: boolean;
   onCancel: () => void;
-  onAddCredential: (values: any) => void;
+  onSubmit: (values: any) => void;
   uploadProps: UploadProps;
+  mode: "add" | "edit";
+  existingCredential?: CredentialItem | null;
 }
 
-const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps }) => {
+export default function CredentialModal({
+  open,
+  onCancel,
+  onSubmit,
+  uploadProps,
+  mode,
+  existingCredential = null,
+}: CredentialModalProps) {
+  const isEdit = mode === "edit";
   const [form] = Form.useForm();
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(
+    (existingCredential?.credential_info.custom_llm_provider as Providers) ?? Providers.OpenAI,
+  );
+
+  const initialValues = existingCredential
+    ? {
+        credential_name: existingCredential.credential_name,
+        custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
+        ...Object.fromEntries(
+          Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
+        ),
+      }
+    : undefined;
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -26,32 +50,33 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
       }
       return acc;
     }, {} as any);
-    onAddCredential(filteredValues);
+    onSubmit(filteredValues);
+    form.resetFields();
+  };
+
+  const closeAndReset = () => {
+    onCancel();
     form.resetFields();
   };
 
   return (
     <Modal
-      title="Add New Credential"
+      title={isEdit ? "Edit Credential" : "Add New Credential"}
       open={open}
-      onCancel={() => {
-        onCancel();
-        form.resetFields();
-      }}
+      onCancel={closeAndReset}
       footer={null}
       width={600}
+      destroyOnHidden={isEdit}
     >
-      <Form form={form} onFinish={handleSubmit} layout="vertical">
-        {/* Credential Name */}
+      <Form form={form} onFinish={handleSubmit} layout="vertical" initialValues={initialValues}>
         <Form.Item
           label="Credential Name:"
           name="credential_name"
           rules={[{ required: true, message: "Credential name is required" }]}
         >
-          <TextInput placeholder="Enter a friendly name for these credentials" />
+          <TextInput placeholder="Enter a friendly name for these credentials" disabled={isEdit} />
         </Form.Item>
 
-        {/* Provider Selection */}
         <Form.Item
           rules={[{ required: true, message: "Required" }]}
           label="Provider:"
@@ -92,28 +117,19 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
 
         <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
 
-        {/* Modal Footer */}
         <div className="flex justify-between items-center">
           <Tooltip title="Get help on our github">
             <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
           </Tooltip>
 
           <div>
-            <Button
-              onClick={() => {
-                onCancel();
-                form.resetFields();
-              }}
-              style={{ marginRight: 10 }}
-            >
+            <Button onClick={closeAndReset} style={{ marginRight: 10 }}>
               Cancel
             </Button>
-            <Button htmlType="submit">{"Add Credential"}</Button>
+            <Button htmlType="submit">{isEdit ? "Update Credential" : "Add Credential"}</Button>
           </div>
         </div>
       </Form>
     </Modal>
   );
-};
-
-export default AddCredentialsModal;
+}
