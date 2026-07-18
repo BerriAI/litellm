@@ -8,13 +8,12 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import (
     EndpointsClient,
-    ResponsesCompletedEvent,
     ResponsesOutputTextDeltaEvent,
     ResponsesResult,
 )
@@ -56,31 +55,28 @@ class TestResponses:
 
         result = endpoints_client.responses(key, model, "reply with one word", stream=True)
         require_successful_call(result)
-        parsed_events = tuple(
+        delta_events = tuple(
             parsed
             for event in result.stream_events
             if (parsed := _parse_stream_event(event)) is not None
         )
-        delta_events = tuple(
-            event for event in parsed_events if isinstance(event, ResponsesOutputTextDeltaEvent)
-        )
-        completed_events = tuple(
-            event for event in parsed_events if isinstance(event, ResponsesCompletedEvent)
-        )
 
         assert any(event.delta for event in delta_events), "responses stream returned no text deltas"
-        assert completed_events and isinstance(parsed_events[-1], ResponsesCompletedEvent), (
-            "responses stream did not terminate with response.completed"
-        )
+        assert result.stream_events, "responses stream returned no events"
+        assert (
+            ResponsesStreamEventType.model_validate_json(result.stream_events[-1]).type
+            == "response.completed"
+        ), "responses stream did not terminate with response.completed"
+
+
+class ResponsesStreamEventType(BaseModel):
+    type: str
 
 
 def _parse_stream_event(
     event: str,
-) -> ResponsesOutputTextDeltaEvent | ResponsesCompletedEvent | None:
+) -> ResponsesOutputTextDeltaEvent | None:
     try:
         return ResponsesOutputTextDeltaEvent.model_validate_json(event)
     except ValidationError:
-        try:
-            return ResponsesCompletedEvent.model_validate_json(event)
-        except ValidationError:
-            return None
+        return None
