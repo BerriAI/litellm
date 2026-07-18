@@ -4,7 +4,6 @@ from httpx import Headers
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Usage
 
 from ..base_llm.chat.transformation import BaseLLMException
 
@@ -28,20 +27,6 @@ def get_fireworks_session_id(litellm_params: dict) -> str | None:
     if value:
         return str(value)
     return None
-
-
-def normalize_fireworks_usage(usage: Usage) -> Usage:
-    if "cache_read_input_tokens" in usage:
-        return usage
-
-    prompt_tokens_details = usage.prompt_tokens_details
-    cached_tokens = getattr(prompt_tokens_details, "cached_tokens", 0) or 0
-    if not isinstance(cached_tokens, int) or cached_tokens <= 0:
-        return usage
-
-    usage.cache_read_input_tokens = cached_tokens
-    usage._cache_read_input_tokens = cached_tokens
-    return usage
 
 
 class FireworksAIMixin:

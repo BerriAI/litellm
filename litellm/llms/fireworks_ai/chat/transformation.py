@@ -48,7 +48,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIMixin, FireworksAIException, normalize_fireworks_usage
+from ..common_utils import FireworksAIMixin, FireworksAIException
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -534,9 +534,6 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         additional_headers = get_response_headers(raw_response_headers)
 
         response = ModelResponse(**completion_response)
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            response.usage = normalize_fireworks_usage(usage)
 
         if response.model is not None:
             response.model = "fireworks_ai/" + response.model
