@@ -1,8 +1,8 @@
-"""Gateway: the shared proxy operations, DI'd into every client (composition).
+"""ProxyClient: the shared proxy operations, DI'd into every client (composition).
 
 A frozen-slots dataclass holding a Transport plus poll config. Clients hold a
-Gateway and add their own route methods; the lifecycle ResourceManager uses the
-Gateway's key/customer methods for cleanup. Read-backs are eventually consistent
+ProxyClient and add their own route methods; the lifecycle ResourceManager uses the
+ProxyClient's key/customer methods for cleanup. Read-backs are eventually consistent
 (proxy_batch_write_at ~60s) so they poll to a deadline.
 """
 
@@ -69,7 +69,7 @@ RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
 
 @dataclass(frozen=True, slots=True)
-class Gateway:
+class ProxyClient:
     transport: Transport
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
@@ -319,13 +319,13 @@ class Gateway:
         return self.transport.probe(path, params=params)
 
 
-def build_gateway(
+def build_proxy_client(
     *,
     base_url: str = PROXY_BASE_URL,
     master_key: str = MASTER_KEY,
     control_plane_base_url: str = CONTROL_PLANE_BASE_URL,
-) -> Gateway:
-    """The Gateway every suite's client is built from: a SplitTransport that routes
+) -> ProxyClient:
+    """The ProxyClient every suite's client is built from: a SplitTransport that routes
     LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
     control plane (CONTROL_PLANE_BASE_URL), with the shared poll budget. The two
     base URLs are the same for a monolithic proxy, so routing is then a no-op.
@@ -334,7 +334,7 @@ def build_gateway(
     way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
     pass all three together, since a caller that overrides only the data plane
     would leave management calls pointed at the env default."""
-    return Gateway(
+    return ProxyClient(
         transport=SplitTransport(
             data=HttpTransport(
                 base_url=base_url,
