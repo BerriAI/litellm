@@ -33,6 +33,7 @@ _TEAM_READY_SLEEP_SECONDS = 0.4
 
 class UserNewBody(BaseModel):
     max_budget: float
+    budget_duration: str | None = None
 
 
 class UserNewResponse(BaseModel):
@@ -64,6 +65,7 @@ class CustomerNewBody(BaseModel):
 class OrgNewBody(BaseModel):
     organization_alias: str
     max_budget: float
+    budget_duration: str | None = None
 
 
 class OrgNewResponse(BaseModel):
@@ -74,6 +76,14 @@ class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
 
 
+class OrgInfoParams(BaseModel):
+    organization_id: str
+
+
+class OrgInfoResponse(BaseModel):
+    budget_id: str | None = None
+
+
 class TeamMember(BaseModel):
     role: str
     user_id: str
@@ -82,6 +92,7 @@ class TeamMember(BaseModel):
 class TeamNewBody(BaseModel):
     team_alias: str
     max_budget: float | None = None
+    budget_duration: str | None = None
     organization_id: str | None = None
     budget_limits: list[BudgetWindow] | None = None
 
@@ -257,12 +268,12 @@ class BudgetClient:
 
     # ---- internal user --------------------------------------------------
 
-    def create_user(self, *, max_budget: float) -> str:
+    def create_user(self, *, max_budget: float, budget_duration: str | None = None) -> str:
         return unwrap(
             self.gateway.transport.post(
                 "/user/new",
                 headers=self.gateway.transport.master,
-                json=UserNewBody(max_budget=max_budget),
+                json=UserNewBody(max_budget=max_budget, budget_duration=budget_duration),
                 response_type=UserNewResponse,
             )
         ).user_id
@@ -301,15 +312,35 @@ class BudgetClient:
 
     # ---- organization ---------------------------------------------------
 
-    def create_org(self, *, max_budget: float, alias: str) -> str:
+    def create_org(self, *, max_budget: float, alias: str, budget_duration: str | None = None) -> str:
         return unwrap(
             self.gateway.transport.post(
                 "/organization/new",
                 headers=self.gateway.transport.master,
-                json=OrgNewBody(organization_alias=alias, max_budget=max_budget),
+                json=OrgNewBody(
+                    organization_alias=alias,
+                    max_budget=max_budget,
+                    budget_duration=budget_duration,
+                ),
                 response_type=OrgNewResponse,
             )
         ).organization_id
+
+    def org_budget_id(self, org_id: str) -> str | None:
+        """The id of the budget row backing an org; its budget_reset_at is read via
+        budget_info (LIT-4570: /organization/new stores budget_duration without
+        scheduling budget_reset_at, so the reset job's first tick schedules it)."""
+        result = self.gateway.transport.get(
+            "/organization/info",
+            headers=self.gateway.transport.master,
+            params=OrgInfoParams(organization_id=org_id),
+            response_type=OrgInfoResponse,
+        )
+        match result:
+            case Success(data=data):
+                return data.budget_id
+            case _:
+                return None
 
     def delete_org(self, org_id: str) -> None:
         _ = self.gateway.transport.delete(
@@ -326,6 +357,7 @@ class BudgetClient:
         *,
         alias: str,
         max_budget: float | None = None,
+        budget_duration: str | None = None,
         organization_id: str | None = None,
         budget_limits: list[BudgetWindow] | None = None,
     ) -> str:
@@ -336,6 +368,7 @@ class BudgetClient:
                 json=TeamNewBody(
                     team_alias=alias,
                     max_budget=max_budget,
+                    budget_duration=budget_duration,
                     organization_id=organization_id,
                     budget_limits=budget_limits,
                 ),
