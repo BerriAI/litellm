@@ -1,6 +1,6 @@
 import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
@@ -235,84 +235,90 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
   return (
     <div className="w-full p-6 overflow-x-hidden box-border">
-      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
-        <TabList>
-          <Tab>Request Logs</Tab>
-          <Tab>Audit Logs</Tab>
-          <Tab>Deleted Keys</Tab>
-          <Tab>Deleted Teams</Tab>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <div className="flex items-center justify-between mb-4">
-              <h1 className="text-xl font-semibold">Request Logs</h1>
-            </div>
-            {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
-              <KeyInfoView
-                keyId={selectedKeyIdInfoView}
-                keyData={selectedKeyInfo}
-                teams={allTeams ?? []}
-                onClose={() => setSelectedKeyIdInfoView(null)}
-                backButtonText="Back to Logs"
-              />
-            ) : (
-              <>
-                <FilterComponent
-                  options={getLogFilterOptions(accessToken)}
-                  onApplyFilters={handleFilterChange}
-                  onResetFilters={handleFilterReset}
-                />
-                <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
-                  <LogsTableToolbar
-                    searchTerm={searchTerm}
-                    onSearchChange={setSearchTerm}
-                    startTime={startTime}
-                    onStartTimeChange={setStartTime}
-                    endTime={endTime}
-                    onEndTimeChange={setEndTime}
-                    isCustomDate={isCustomDate}
-                    onIsCustomDateChange={setIsCustomDate}
-                    selectedTimeInterval={selectedTimeInterval}
-                    onSelectedTimeIntervalChange={setSelectedTimeInterval}
-                    isLiveTail={isLiveTail}
-                    onIsLiveTailChange={setIsLiveTail}
-                    currentPage={currentPage}
-                    onCurrentPageChange={setCurrentPage}
-                    pageSize={pageSize}
-                    isLoading={isLogsLoading}
-                    isButtonLoading={isButtonLoading}
-                    onRefetch={() => logsQuery.refetch()}
-                    filteredLogs={filteredLogs}
-                  />
-                  <DataTable
-                    columns={columns}
-                    data={deferredData}
-                    getRowId={(row) => row.request_id}
-                    onRowClick={handleRowClick}
-                    isLoading={isLogsLoading}
-                  />
-                </div>
-              </>
-            )}
-          </TabPanel>
-          <TabPanel>
-            <AuditLogs
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              isActive={activeTab === "audit logs"}
-              premiumUser={premiumUser}
+      <Tabs defaultValue="request logs" onValueChange={setActiveTab} className="w-full">
+        <TabsList variant="line" className="border-b rounded-none w-full justify-start h-auto p-0">
+          <TabsTrigger value="request logs" className="rounded-none px-4 py-2">
+            Request Logs
+          </TabsTrigger>
+          <TabsTrigger value="audit logs" className="rounded-none px-4 py-2">
+            Audit Logs
+          </TabsTrigger>
+          <TabsTrigger value="deleted keys" className="rounded-none px-4 py-2">
+            Deleted Keys
+          </TabsTrigger>
+          <TabsTrigger value="deleted teams" className="rounded-none px-4 py-2">
+            Deleted Teams
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="request logs" className="mt-4">
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-xl font-semibold">Request Logs</h1>
+          </div>
+          {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
+            <KeyInfoView
+              keyId={selectedKeyIdInfoView}
+              keyData={selectedKeyInfo}
+              teams={allTeams ?? []}
+              onClose={() => setSelectedKeyIdInfoView(null)}
+              backButtonText="Back to Logs"
             />
-          </TabPanel>
-          <TabPanel>
-            <DeletedKeysPage />
-          </TabPanel>
-          <TabPanel>
-            <DeletedTeamsPage />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+          ) : (
+            <>
+              <FilterComponent
+                options={getLogFilterOptions(accessToken)}
+                onApplyFilters={handleFilterChange}
+                onResetFilters={handleFilterReset}
+              />
+              <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
+                <LogsTableToolbar
+                  searchTerm={searchTerm}
+                  onSearchChange={setSearchTerm}
+                  startTime={startTime}
+                  onStartTimeChange={setStartTime}
+                  endTime={endTime}
+                  onEndTimeChange={setEndTime}
+                  isCustomDate={isCustomDate}
+                  onIsCustomDateChange={setIsCustomDate}
+                  selectedTimeInterval={selectedTimeInterval}
+                  onSelectedTimeIntervalChange={setSelectedTimeInterval}
+                  isLiveTail={isLiveTail}
+                  onIsLiveTailChange={setIsLiveTail}
+                  currentPage={currentPage}
+                  onCurrentPageChange={setCurrentPage}
+                  pageSize={pageSize}
+                  isLoading={isLogsLoading}
+                  isButtonLoading={isButtonLoading}
+                  onRefetch={() => logsQuery.refetch()}
+                  filteredLogs={filteredLogs}
+                />
+                <DataTable
+                  columns={columns}
+                  data={deferredData}
+                  getRowId={(row) => row.request_id}
+                  onRowClick={handleRowClick}
+                  isLoading={isLogsLoading}
+                />
+              </div>
+            </>
+          )}
+        </TabsContent>
+        <TabsContent value="audit logs" className="mt-4">
+          <AuditLogs
+            userID={userID}
+            userRole={userRole}
+            token={token}
+            accessToken={accessToken}
+            isActive={activeTab === "audit logs"}
+            premiumUser={premiumUser}
+          />
+        </TabsContent>
+        <TabsContent value="deleted keys" className="mt-4">
+          <DeletedKeysPage />
+        </TabsContent>
+        <TabsContent value="deleted teams" className="mt-4">
+          <DeletedTeamsPage />
+        </TabsContent>
+      </Tabs>
 
       {/* Log Details Drawer */}
       <LogDetailsDrawer
