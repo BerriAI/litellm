@@ -131,6 +131,7 @@ class SupportedGuardrailIntegrations(Enum):
     SINGULR = "singulr"
     HEADROOM = "headroom"
     COMPRESR = "compresr"
+    STRAIKER = "straiker"
 
 
 class Role(Enum):

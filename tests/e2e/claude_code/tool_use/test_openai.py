@@ -29,6 +29,7 @@ from typing import Any, Mapping, Sequence
 import pytest
 
 from claude_code._env import require_proxy
+from claude_code._gpt_cells import skip_unless_openai_gpt_cells_enabled
 from claude_code.cli_driver import (
     ClaudeCLIError,
     failure_diagnostic,
@@ -69,6 +70,7 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
 def test_tool_use_openai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     tool call was emitted on the wire by each GPT-5.6 tier."""
+    skip_unless_openai_gpt_cells_enabled()
     proxy = require_proxy(compat_result)
 
     outcomes = run_claude_models_parallel(
