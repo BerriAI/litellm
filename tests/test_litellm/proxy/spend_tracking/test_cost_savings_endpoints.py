@@ -139,10 +139,11 @@ class TestBuildActivityResponse:
         rows = [
             _row(model="mystery-model", custom_llm_provider="", cache_read_input_tokens=100),
             _row(model="no-cache-price-model", custom_llm_provider="", cache_read_input_tokens=100),
+            _row(model="mystery-write-only", custom_llm_provider="", cache_creation_input_tokens=100),
             _row(model="mystery-idle", custom_llm_provider="", spend=1.0),
         ]
         response = build_activity_response(rows, COST_MAP)
-        assert response.unpriced_models == ["mystery-model", "no-cache-price-model"]
+        assert response.unpriced_models == ["mystery-model", "mystery-write-only", "no-cache-price-model"]
         assert response.totals.cache_savings == 0.0
 
 

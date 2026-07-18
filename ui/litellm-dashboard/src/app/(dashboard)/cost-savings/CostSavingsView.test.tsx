@@ -93,6 +93,11 @@ describe("formatUsd", () => {
     expect(formatUsd(0.002625)).toBe("$0.002625");
     expect(formatUsd(1234.5)).toBe("$1,234.50");
   });
+
+  it("puts the sign before the dollar symbol for negative net savings", () => {
+    expect(formatUsd(-1.23)).toBe("-$1.23");
+    expect(formatUsd(-0.002625)).toBe("-$0.002625");
+  });
 });
 
 describe("CostSavingsView", () => {

@@ -159,9 +159,14 @@ def compute_savings_amounts(
     )
 
 
-def _is_unpriced(cache_read_tokens: int, compression_saved_tokens: int, pricing: ModelPricing | None) -> bool:
+def _is_unpriced(
+    cache_read_tokens: int,
+    cache_creation_tokens: int,
+    compression_saved_tokens: int,
+    pricing: ModelPricing | None,
+) -> bool:
     if pricing is None:
-        return cache_read_tokens > 0 or compression_saved_tokens > 0
+        return cache_read_tokens > 0 or cache_creation_tokens > 0 or compression_saved_tokens > 0
     return cache_read_tokens > 0 and pricing.cache_read_cost_per_token is None
 
 
@@ -208,6 +213,7 @@ def build_activity_response(
             for row in rows
             if _is_unpriced(
                 row.cache_read_input_tokens,
+                row.cache_creation_input_tokens,
                 row.compression_saved_tokens,
                 pricing_by_key[(row.model, row.custom_llm_provider)],
             )
