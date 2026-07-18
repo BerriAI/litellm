@@ -172,7 +172,7 @@ fn aocr(
             litellm_call_id: None,
         })
         .await
-        .map_err(|err| Python::with_gil(|py| core_error_to_pyerr(py, err)))?;
+        .map_err(|err| Python::attach(|py| core_error_to_pyerr(py, err)))?;
 
         Python::attach(|py| json_to_py(py, value))
     })

@@ -222,7 +222,7 @@ def _resolve_ocr_call_context(
 def _run_pre_call_logging(
     litellm_logging_obj: LiteLLMLoggingObj,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     extra_headers: dict[str, object] | None,
@@ -246,7 +246,7 @@ def _run_pre_call_logging(
 def _run_rust_ocr(
     rust_ocr: RustOcr,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str,
@@ -267,7 +267,7 @@ def _run_rust_ocr(
     return OCRResponse.model_validate(
         rust_ocr(
             model=model,
-            document=cast(dict[str, object], document),
+            document=document,
             api_key=api_key,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
@@ -287,7 +287,7 @@ def _missing_rust_bridge_error() -> RuntimeError:
 async def _run_rust_aocr(
     rust_aocr: RustAocr,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str,
@@ -308,7 +308,7 @@ async def _run_rust_aocr(
     return OCRResponse.model_validate(
         await rust_aocr(
             model=model,
-            document=cast(dict[str, object], document),
+            document=document,
             api_key=api_key,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,

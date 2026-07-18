@@ -158,6 +158,7 @@ class GatewayConfig(BaseModel):
 
     model_list: tuple[GatewayConfigEntry, ...]
 
+
 TEST_PDF_URL = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
     "@d769e81c90d453240c61fc572cdb27fae06a89d0"
@@ -282,16 +283,8 @@ def _wire_payload(
         {
             "model": model,
             "document": document.model_dump(mode="json", exclude_none=True),
-            **(
-                params.model_dump(mode="json", by_alias=True)
-                if params is not None
-                else {}
-            ),
-            **(
-                canaries.model_dump(mode="json", by_alias=True)
-                if canaries is not None
-                else {}
-            ),
+            **(params.model_dump(mode="json", by_alias=True) if params is not None else {}),
+            **(canaries.model_dump(mode="json", by_alias=True) if canaries is not None else {}),
         }
     )
 
@@ -330,9 +323,7 @@ class OcrGateway:
                 content=_wire_payload(model, document, params),
             )
 
-    def create_model(
-        self, model_name: str, litellm_params: dict[str, str]
-    ) -> httpx.Response:
+    def create_model(self, model_name: str, litellm_params: dict[str, str]) -> httpx.Response:
         with self._client() as client:
             return client.post(
                 f"{self.base_url.rstrip('/')}/model/new",
@@ -366,18 +357,14 @@ class OcrGateway:
             if model_name in self.model_names():
                 return
             time.sleep(1)
-        raise AssertionError(
-            f"{model_name} did not appear on /model/info within {attempts}s"
-        )
+        raise AssertionError(f"{model_name} did not appear on /model/info within {attempts}s")
 
     def wait_for_model_absent(self, model_name: str, attempts: int = 20) -> None:
         for _ in range(attempts):
             if model_name not in self.model_names():
                 return
             time.sleep(1)
-        raise AssertionError(
-            f"{model_name} still present on /model/info after {attempts}s"
-        )
+        raise AssertionError(f"{model_name} still present on /model/info after {attempts}s")
 
 
 @dataclass(frozen=True)
@@ -389,9 +376,7 @@ class OcrResources:
 def resources() -> OcrResources:
     proxy_url = os.getenv("LITELLM_PROXY_URL")
     if not proxy_url:
-        pytest.skip(
-            "Start a Rust OCR proxy and set LITELLM_PROXY_URL, e.g. http://localhost:4000"
-        )
+        pytest.skip("Start a Rust OCR proxy and set LITELLM_PROXY_URL, e.g. http://localhost:4000")
     return OcrResources(
         gateway=OcrGateway(
             base_url=proxy_url,
@@ -402,39 +387,29 @@ def resources() -> OcrResources:
 
 class TestRustOcrGateway:
     def test_rust_ocr_models_are_on_gateway_config(self) -> None:
-        config = GatewayConfig.model_validate(
-            cast(object, yaml.safe_load(CONFIG_PATH.read_text()))
-        )
+        config = GatewayConfig.model_validate(cast(object, yaml.safe_load(CONFIG_PATH.read_text())))
         configured_models = frozenset(entry.model_name for entry in config.model_list)
 
         expected_models = {str(case.values[0]) for case in RUST_OCR_GATEWAY_CASES}
         assert expected_models.issubset(configured_models)
 
-    def test_running_gateway_loaded_rust_ocr_models(
-        self, resources: OcrResources
-    ) -> None:
+    def test_running_gateway_loaded_rust_ocr_models(self, resources: OcrResources) -> None:
         expected_models = {str(case.values[0]) for case in RUST_OCR_GATEWAY_CASES}
         assert expected_models.issubset(resources.gateway.model_names())
 
     @pytest.mark.parametrize(("model", "document"), RUST_OCR_GATEWAY_CASES)
-    def test_rust_ocr_model_gateway_response(
-        self, resources: OcrResources, model: str, document: OcrDocument
-    ) -> None:
+    def test_rust_ocr_model_gateway_response(self, resources: OcrResources, model: str, document: OcrDocument) -> None:
         response = resources.gateway.ocr(model, document)
 
         assert response.status_code == 200, response.text
         OcrResponseEnvelope.model_validate_json(response.content)
 
     @pytest.mark.e2e
-    def test_rust_ocr_mistral_live_forwards_supported_params(
-        self, resources: OcrResources
-    ) -> None:
+    def test_rust_ocr_mistral_live_forwards_supported_params(self, resources: OcrResources) -> None:
         if not os.getenv("MISTRAL_API_KEY"):
             pytest.skip("MISTRAL_API_KEY not set for live Mistral OCR call")
 
-        response = resources.gateway.ocr(
-            "rust-ocr-mistral", CAPTURE_DOCUMENT, SUPPORTED_PARAMS
-        )
+        response = resources.gateway.ocr("rust-ocr-mistral", CAPTURE_DOCUMENT, SUPPORTED_PARAMS)
 
         assert response.status_code == 200, response.text
         parsed = OcrResponseEnvelope.model_validate_json(response.content)
@@ -463,16 +438,12 @@ def test_rust_ocr_proxy_forwards_full_contract_to_capture_endpoint(
     assert response.status_code == 200, response.text
     OcrResponseEnvelope.model_validate_json(response.content)
 
-    captured = MistralOcrUpstreamRequest.model_validate_json(
-        capture_proxy.captures.get(timeout=10)
-    )
+    captured = MistralOcrUpstreamRequest.model_validate_json(capture_proxy.captures.get(timeout=10))
     assert captured == EXPECTED_UPSTREAM
 
 
 class TestRustOcrDynamicDeployment:
-    def test_os_environ_api_key_deployment_lifecycle(
-        self, resources: OcrResources
-    ) -> None:
+    def test_os_environ_api_key_deployment_lifecycle(self, resources: OcrResources) -> None:
         if not os.getenv("MISTRAL_API_KEY"):
             pytest.skip("Set MISTRAL_API_KEY on the proxy for the live OCR lifecycle")
 

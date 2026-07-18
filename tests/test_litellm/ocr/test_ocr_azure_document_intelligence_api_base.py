@@ -29,25 +29,16 @@ class TestDocIntelligenceApiBaseResolution:
     def test_generic_azure_ai_base_does_not_hijack_doc_intelligence(self, monkeypatch):
         monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
 
-        assert (
-            _resolved_api_base("azure_ai/doc-intelligence/prebuilt-layout", None)
-            is None
-        )
+        assert _resolved_api_base("azure_ai/doc-intelligence/prebuilt-layout", None) is None
 
     def test_explicit_api_base_is_honoured_for_doc_intelligence(self, monkeypatch):
         monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
 
         custom = "https://my-di.cognitiveservices.azure.com"
 
-        assert (
-            _resolved_api_base("azure_ai/doc-intelligence/prebuilt-layout", custom)
-            == custom
-        )
+        assert _resolved_api_base("azure_ai/doc-intelligence/prebuilt-layout", custom) == custom
 
     def test_generic_azure_ai_base_still_applies_to_mistral_ocr(self, monkeypatch):
         monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
 
-        assert (
-            _resolved_api_base("azure_ai/mistral-document-ai-2505", None)
-            == _AZURE_AI_API_BASE
-        )
+        assert _resolved_api_base("azure_ai/mistral-document-ai-2505", None) == _AZURE_AI_API_BASE

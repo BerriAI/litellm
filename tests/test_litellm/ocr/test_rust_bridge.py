@@ -633,9 +633,7 @@ RUST_OCR_ERROR_CASES = [
     pytest.param(403, litellm.PermissionDeniedError, 403, id="403_permission_denied"),
     pytest.param(404, litellm.NotFoundError, 404, id="404_not_found"),
     pytest.param(408, litellm.Timeout, 408, id="408_timeout"),
-    pytest.param(
-        422, litellm.UnprocessableEntityError, 422, id="422_unprocessable_entity"
-    ),
+    pytest.param(422, litellm.UnprocessableEntityError, 422, id="422_unprocessable_entity"),
     pytest.param(429, litellm.RateLimitError, 429, id="429_rate_limit"),
     pytest.param(500, litellm.InternalServerError, 500, id="500_internal"),
     pytest.param(502, litellm.BadGatewayError, 502, id="502_bad_gateway"),
@@ -644,9 +642,7 @@ RUST_OCR_ERROR_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    ("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES
-)
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
 def test_rust_ocr_error_maps_to_public_exception(
     status_code: int | None,
     expected_exception: type[Exception],
@@ -666,9 +662,7 @@ def test_rust_ocr_error_maps_to_public_exception(
     assert "upstream boom" in str(exc)
 
 
-@pytest.mark.parametrize(
-    ("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES
-)
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
 def test_ocr_raises_typed_exception_from_rust_error(
     status_code: int | None,
     expected_exception: type[Exception],
@@ -683,18 +677,14 @@ def test_ocr_raises_typed_exception_from_rust_error(
     assert exc_info.value.llm_provider == "mistral"
 
 
-@pytest.mark.parametrize(
-    ("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES
-)
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
 @pytest.mark.asyncio
 async def test_aocr_raises_typed_exception_from_rust_error(
     status_code: int | None,
     expected_exception: type[Exception],
     expected_status: int,
 ) -> None:
-    rust_bridge._set_rust_ocr_bridge(
-        aocr=RustErrorAsyncBridge("upstream boom", status_code)
-    )
+    rust_bridge._set_rust_ocr_bridge(aocr=RustErrorAsyncBridge("upstream boom", status_code))
 
     with pytest.raises(expected_exception) as exc_info:
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -885,9 +875,7 @@ def test_raise_ocr_exception_keeps_validation_error_off_bad_request(
 def test_ocr_forwards_os_environ_api_key_reference_to_rust(
     fake_bridge: RecordingBridge,
 ) -> None:
-    litellm.ocr(
-        model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY"
-    )
+    litellm.ocr(model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY")
 
     assert fake_bridge.calls[0]["api_key"] == "os.environ/MISTRAL_OCR_TEST_KEY"
 
@@ -922,8 +910,6 @@ def test_ocr_forwards_provider_derived_os_environ_references_to_rust(
 async def test_aocr_forwards_os_environ_api_key_reference_to_rust(
     fake_async_bridge: RecordingAsyncBridge,
 ) -> None:
-    await litellm.aocr(
-        model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY"
-    )
+    await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY")
 
     assert fake_async_bridge.calls[0]["api_key"] == "os.environ/MISTRAL_OCR_TEST_KEY"
