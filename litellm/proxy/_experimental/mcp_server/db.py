@@ -375,6 +375,12 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: Optional[st
             value=client_secret,
             new_encryption_key=encryption_key,
         )
+    client_private_key = credentials.get("client_private_key")
+    if client_private_key is not None:
+        credentials["client_private_key"] = encrypt_value_helper(
+            value=client_private_key,
+            new_encryption_key=encryption_key,
+        )
     # AWS SigV4 credential fields
     aws_access_key_id = credentials.get("aws_access_key_id")
     if aws_access_key_id is not None:
@@ -406,6 +412,7 @@ def decrypt_credentials(
         "auth_value",
         "client_id",
         "client_secret",
+        "client_private_key",
         "aws_access_key_id",
         "aws_secret_access_key",
         "aws_session_token",
