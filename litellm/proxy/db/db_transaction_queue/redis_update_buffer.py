@@ -8,6 +8,8 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
+from redis.exceptions import RedisError
+
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
@@ -373,6 +375,59 @@ class RedisUpdateBuffer:
         for daily_txns, daily_queue in daily_pairs:
             if daily_txns:
                 await daily_queue.update_queue.put(daily_txns)
+
+    async def restore_transactions_to_redis(
+        self,
+        db_spend_update_transactions: DBSpendUpdateTransactions | None = None,
+        daily_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
+        daily_team_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
+        daily_org_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
+        daily_end_user_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
+        daily_agent_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
+        daily_tag_spend_update_transactions: dict[str, BaseDailySpendTransaction] | None = None,
+    ) -> None:
+        """
+        Re-push transactions that were popped from Redis but not committed to the DB.
+
+        The leader drains the buffers with a destructive ``lpop`` before committing to
+        the database. When a commit fails after its retries are exhausted, the popped
+        transactions must be pushed back so a later scheduler tick can retry them;
+        otherwise the aggregated spend is lost permanently. The re-pushed payloads use
+        the same JSON encoding as the store path, so the next drain parses them normally.
+        """
+        if self.redis_cache is None:
+            return
+
+        _configs = (
+            (db_spend_update_transactions, REDIS_UPDATE_BUFFER_KEY),
+            (daily_spend_update_transactions, REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY),
+            (daily_team_spend_update_transactions, REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY),
+            (daily_org_spend_update_transactions, REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY),
+            (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY),
+            (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY),
+            (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY),
+        )
+
+        rpush_list: list[RedisPipelineRpushOperation] = [  # mutable-ok: async_rpush_pipeline requires a list arg
+            RedisPipelineRpushOperation(key=redis_key, values=[safe_dumps(transactions)])
+            for transactions, redis_key in _configs
+            if transactions
+        ]
+        if len(rpush_list) == 0:
+            return
+
+        try:
+            await self.redis_cache.async_rpush_pipeline(rpush_list=rpush_list)
+            verbose_proxy_logger.info(
+                "Spend tracking - restored %d uncommitted transaction set(s) to Redis for retry on next tick.",
+                len(rpush_list),
+            )
+        except RedisError as e:
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to restore uncommitted transactions to Redis. "
+                "These spend updates are lost. Error: %s",
+                str(e),
+            )
 
     @staticmethod
     def _number_of_transactions_to_store_in_redis(

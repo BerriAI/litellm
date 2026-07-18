@@ -270,6 +270,52 @@ async def test_get_all_transactions_from_redis_buffer_pipeline_no_redis():
     assert result == (None, None, None, None, None, None)
 
 
+@pytest.mark.asyncio
+async def test_restore_transactions_to_redis_pushes_only_provided(
+    redis_update_buffer, mock_redis_cache
+):
+    """
+    restore_transactions_to_redis re-pushes only the transaction sets it was
+    given, to their matching buffer keys, so uncommitted spend can be retried.
+    """
+    from litellm.constants import (
+        REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_UPDATE_BUFFER_KEY,
+    )
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(return_value=[1, 1])
+
+    db_spend = {"key_list_transactions": {"key1": 1.0}}
+    daily_user = {"user_key1": {"spend": 1.0}}
+
+    await redis_update_buffer.restore_transactions_to_redis(
+        db_spend_update_transactions=db_spend,
+        daily_spend_update_transactions=daily_user,
+    )
+
+    mock_redis_cache.async_rpush_pipeline.assert_called_once()
+    rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
+    pushed_keys = {op["key"] for op in rpush_list}
+    assert pushed_keys == {
+        REDIS_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+    }
+    # Payloads round-trip through the same JSON encoding used on the store path
+    payloads = {op["key"]: json.loads(op["values"][0]) for op in rpush_list}
+    assert payloads[REDIS_UPDATE_BUFFER_KEY] == db_spend
+    assert payloads[REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY] == daily_user
+
+
+@pytest.mark.asyncio
+async def test_restore_transactions_to_redis_noop_when_empty(
+    redis_update_buffer, mock_redis_cache
+):
+    """Nothing to restore -> no Redis call."""
+    mock_redis_cache.async_rpush_pipeline = AsyncMock()
+    await redis_update_buffer.restore_transactions_to_redis()
+    mock_redis_cache.async_rpush_pipeline.assert_not_called()
+
+
 def test_validate_redis_transaction_buffer_raises_without_redis():
     """
     When use_redis_transaction_buffer=true but no Redis cache is configured,
