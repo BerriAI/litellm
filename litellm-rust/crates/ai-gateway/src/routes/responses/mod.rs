@@ -64,10 +64,18 @@ fn validate_model(router: &ModelRouter, model: &str) -> Result<(), (StatusCode, 
             "missing 'model' query param".to_string(),
         ));
     }
-    if !router.has_deployment(model) {
+    let Some(deployment) = router.get_available_deployment(model) else {
         return Err((
             StatusCode::NOT_FOUND,
             format!("no deployment for model '{model}'"),
+        ));
+    };
+    if deployment.litellm_params.model.contains('/')
+        && !deployment.litellm_params.model.starts_with("openai/")
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Responses WebSocket route supports OpenAI deployments only".to_string(),
         ));
     }
     Ok(())
