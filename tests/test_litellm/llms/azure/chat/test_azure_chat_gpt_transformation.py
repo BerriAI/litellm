@@ -1,9 +1,7 @@
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 
@@ -41,6 +39,25 @@ class TestAzureOpenAIConfig:
         supported_params = config.get_supported_openai_params("gpt-4.1")
         assert "prompt_cache_key" in supported_params
 
+    def test_prompt_cache_retention_supported(self):
+        config = AzureOpenAIConfig()
+
+        supported_params = config.get_supported_openai_params("gpt-4.1")
+
+        assert "prompt_cache_retention" in supported_params
+
+    def test_prompt_cache_retention_is_mapped(self):
+        config = AzureOpenAIConfig()
+
+        optional_params = config.map_openai_params(
+            non_default_params={"prompt_cache_retention": "24h"},
+            optional_params={},
+            model="gpt-4.1",
+            drop_params=False,
+        )
+
+        assert optional_params == {"prompt_cache_retention": "24h"}
+
 
 def test_map_openai_params_with_preview_api_version():
     config = AzureOpenAIConfig()
@@ -51,6 +68,4 @@ def test_map_openai_params_with_preview_api_version():
     model = "azure/gpt-4-1"
     drop_params = False
     api_version = "preview"
-    assert config.map_openai_params(
-        non_default_params, optional_params, model, drop_params, api_version
-    )
+    assert config.map_openai_params(non_default_params, optional_params, model, drop_params, api_version)
