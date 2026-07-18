@@ -60,7 +60,7 @@
     "limit": 4
   },
   "BLE001": {
-    "limit": 2903
+    "limit": 2898
   },
   "C401": {
     "limit": 11
@@ -90,7 +90,7 @@
     "limit": 5
   },
   "DTZ003": {
-    "limit": 33
+    "limit": 30
   },
   "DTZ005": {
     "limit": 244
@@ -225,7 +225,7 @@
     "limit": 721
   },
   "RUF010": {
-    "limit": 874
+    "limit": 869
   },
   "RUF012": {
     "limit": 168

@@ -18,13 +18,13 @@
     "limit": 59
   },
   "reportDeprecated": {
-    "limit": 326
+    "limit": 323
   },
   "reportDuplicateImport": {
     "limit": 42
   },
   "reportExplicitAny": {
-    "limit": 10397
+    "limit": 10395
   },
   "reportFunctionMemberAccess": {
     "limit": 11

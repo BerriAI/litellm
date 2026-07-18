@@ -19,8 +19,7 @@ import functools
 import importlib
 import json
 import os
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Set
 
 from fastapi import (
@@ -44,8 +43,8 @@ except ImportError:
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.proxy._experimental.mcp_server.db import DRAFT_MCP_SERVER_TTL_SECONDS
 from litellm.proxy._experimental.mcp_server.utils import (
     build_env_var_setup_url,
     collect_env_var_references,
@@ -57,10 +56,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
-)
+
 from litellm.proxy.management_helpers.audit_logs import get_audit_log_changed_by
 from litellm.repositories.table_repositories import (
     MCPServerRepository,
@@ -71,8 +67,7 @@ router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
 MCP_AVAILABLE: bool = True
 
-TEMPORARY_MCP_SERVER_TTL_SECONDS = 300
-TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX = "litellm:mcp:temporary_server"
+TEMPORARY_MCP_SERVER_TTL_SECONDS = DRAFT_MCP_SERVER_TTL_SECONDS
 
 
 def does_mcp_server_exist(mcp_server_records: Iterable[Any], mcp_server_id: str) -> bool:
@@ -112,12 +107,15 @@ if MCP_AVAILABLE:
             return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
+        _delete_draft_mcp_server,
         approve_mcp_server,
+        create_draft_mcp_server,
         create_mcp_server,
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
         get_all_mcp_servers_for_user,
+        get_draft_mcp_server,
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
@@ -180,11 +178,6 @@ if MCP_AVAILABLE:
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPAuth, MCPCredentials
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
-
-    @dataclass
-    class _TemporaryMCPServerEntry:
-        server: MCPServer
-        expires_at: datetime
 
     def _validate_mcp_server_name_fields(payload: Any) -> None:
         candidates: List[tuple[str, Optional[str]]] = []
@@ -352,123 +345,21 @@ if MCP_AVAILABLE:
             ],
         }
 
-    _temporary_mcp_servers: Dict[str, _TemporaryMCPServerEntry] = {}
-
-    def _prune_expired_temporary_mcp_servers() -> None:
-        if not _temporary_mcp_servers:
-            return
-
-        now = datetime.utcnow()
-        expired_ids = [server_id for server_id, entry in _temporary_mcp_servers.items() if entry.expires_at <= now]
-        for server_id in expired_ids:
-            _temporary_mcp_servers.pop(server_id, None)
-
-    def _cache_temporary_mcp_server(server: MCPServer, ttl_seconds: int) -> MCPServer:
-        ttl_seconds = max(1, ttl_seconds)
-        _prune_expired_temporary_mcp_servers()
-        expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
-        _temporary_mcp_servers[server.server_id] = _TemporaryMCPServerEntry(
-            server=server,
-            expires_at=expires_at,
-        )
-        return server
-
-    async def _cache_temporary_mcp_server_in_redis(server: MCPServer, ttl_seconds: int) -> None:
-        """
-        Best-effort write-through to Redis so temporary MCP OAuth sessions are
-        shared across proxy instances. Keep local in-memory cache as fallback.
-        """
-        if litellm.cache is None or not hasattr(litellm.cache, "cache"):
-            return
-        cache_backend = getattr(litellm.cache, "cache", None)
-        if cache_backend is None or not hasattr(cache_backend, "async_set_cache"):
-            return
-
-        payload: Dict[str, Any] = server.model_dump(mode="json")
-        payload_json = json.dumps(payload)
-        try:
-            encrypted_payload = encrypt_value_helper(payload_json)
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to encrypt temporary MCP server payload for Redis cache: {str(e)}")
-            return
-
-        if not isinstance(encrypted_payload, str):
-            verbose_proxy_logger.debug("Encrypted temporary MCP payload is not a string; skipping Redis cache write")
-            return
-
-        try:
-            await cache_backend.async_set_cache(
-                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server.server_id}",
-                value=encrypted_payload,
-                ttl=max(1, ttl_seconds),
-            )
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Failed to write temporary MCP server to Redis cache: {str(e)}")
-
-    async def _get_temporary_mcp_server_from_redis(
+    async def _get_draft_mcp_server_as_mcp_server(
         server_id: str,
     ) -> Optional[MCPServer]:
-        """
-        Best-effort read from Redis shared cache. Returns None on miss/errors.
-
-        Values must be encrypted strings (same contract as _cache_temporary_mcp_server_in_redis);
-        legacy plaintext dict payloads are rejected.
-        """
-        if litellm.cache is None or not hasattr(litellm.cache, "cache"):
-            return None
-        cache_backend = getattr(litellm.cache, "cache", None)
-        if cache_backend is None or not hasattr(cache_backend, "async_get_cache"):
-            return None
-
         try:
-            cached_server = await cache_backend.async_get_cache(
-                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
-            )
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Failed reading temporary MCP server from Redis cache: {str(e)}")
+            prisma_client = get_prisma_client_or_throw("")
+        except HTTPException:
             return None
-
-        if not isinstance(cached_server, str):
-            verbose_proxy_logger.debug(
-                "Temporary MCP Redis cache value must be an encrypted string; rejecting non-string payload"
-            )
+        draft = await get_draft_mcp_server(prisma_client, server_id, ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS)
+        if draft is None:
             return None
-
-        decrypted_json = decrypt_value_helper(
-            value=cached_server,
-            key="temporary_mcp_server",
-            exception_type="debug",
+        return await global_mcp_server_manager.build_mcp_server_from_table(
+            draft,
+            credentials_are_encrypted=True,
+            persist_discovered_endpoints=False,
         )
-        if decrypted_json is None:
-            return None
-        try:
-            loaded = json.loads(decrypted_json)
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Invalid decrypted temporary MCP payload in Redis cache: {str(e)}")
-            return None
-        if not isinstance(loaded, dict):
-            return None
-        payload_dict: Dict[str, Any] = loaded
-
-        try:
-            return MCPServer(**payload_dict)
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Invalid temporary MCP server payload in Redis cache: {str(e)}")
-            return None
-
-    async def get_cached_temporary_mcp_server(
-        server_id: str,
-    ) -> Optional[MCPServer]:
-        _prune_expired_temporary_mcp_servers()
-        entry = _temporary_mcp_servers.get(server_id)
-        if entry is None:
-            redis_server = await _get_temporary_mcp_server_from_redis(server_id)
-            if redis_server is None:
-                return None
-            # Intentionally avoid repopulating local cache from Redis to prevent
-            # extending effective lifetime beyond the remaining Redis TTL.
-            return redis_server
-        return entry.server
 
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
@@ -658,45 +549,6 @@ if MCP_AVAILABLE:
             payload_dict = payload.dict()  # type: ignore[attr-defined]
         payload_dict["credentials"] = inherited_credentials
         return NewMCPServerRequest(**payload_dict)
-
-    def _build_temporary_mcp_server_record(
-        payload: NewMCPServerRequest,
-        created_by: Optional[str],
-    ) -> LiteLLM_MCPServerTable:
-        now = datetime.utcnow()
-        server_id = payload.server_id or str(uuid.uuid4())
-        server_name = payload.server_name or payload.alias or server_id
-        return LiteLLM_MCPServerTable(
-            server_id=server_id,
-            server_name=server_name,
-            alias=payload.alias,
-            description=payload.description,
-            url=payload.url,
-            transport=payload.transport,
-            auth_type=payload.auth_type,
-            credentials=payload.credentials,
-            created_at=now,
-            updated_at=now,
-            created_by=created_by,
-            updated_by=created_by,
-            teams=[],
-            mcp_access_groups=payload.mcp_access_groups,
-            allowed_tools=payload.allowed_tools or [],
-            extra_headers=payload.extra_headers or [],
-            mcp_info=payload.mcp_info,
-            static_headers=payload.static_headers,
-            command=payload.command,
-            args=payload.args,
-            env=payload.env,
-            issuer=payload.issuer,
-            authorization_url=payload.authorization_url,
-            token_url=payload.token_url,
-            registration_url=payload.registration_url,
-            allow_all_keys=payload.allow_all_keys,
-            available_on_public_internet=payload.available_on_public_internet,
-            timeout=payload.timeout,
-            max_concurrent_requests=payload.max_concurrent_requests,
-        )
 
     def get_prisma_client_or_throw(message: str):
         from litellm.proxy.proxy_server import prisma_client
@@ -1387,7 +1239,8 @@ if MCP_AVAILABLE:
             )
 
         if payload.server_id is not None:
-            # fail if the mcp server with id already exists
+            await _delete_draft_mcp_server(prisma_client, payload.server_id)
+
             mcp_server = await get_mcp_server(prisma_client, payload.server_id)
             if mcp_server is not None:
                 raise HTTPException(
@@ -1435,7 +1288,7 @@ if MCP_AVAILABLE:
 
     @router.post(
         "/server/oauth/session",
-        description="Temporarily cache an MCP server in memory without writing to the database",
+        description="Persist a draft MCP server in the database for the OAuth session flow",
         dependencies=[Depends(user_api_key_auth)],
         status_code=status.HTTP_200_OK,
     )
@@ -1449,17 +1302,15 @@ if MCP_AVAILABLE:
         ),
     ):
         """
-        Cache MCP server info in memory for a short duration (~5 minutes).
-
-        This endpoint does not write to the database. If the same server_id is provided
-        again while the cache entry is active, it will refresh the cached data + TTL.
+        Persist a draft MCP server row in the database for the duration of the
+        OAuth authorization flow (~5 minutes). The draft is promoted to a real
+        server when the user finalizes via POST /v1/mcp/server, or cleaned up
+        by a periodic job if the user abandons the flow.
         """
 
-        # Validate and normalize payload fields (alias/server name rules)
         validate_and_normalize_mcp_server_payload(payload)
         stamp_omitted_oauth2_flow(payload)
 
-        # Restrict to proxy admins similar to the persistent create endpoint
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1468,35 +1319,24 @@ if MCP_AVAILABLE:
                 },
             )
 
+        prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         created_by = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
         payload_with_credentials = _inherit_credentials_from_existing_server(payload)
-        temp_record = _build_temporary_mcp_server_record(
-            payload_with_credentials,
-            created_by,
-        )
 
         try:
-            temporary_server = await global_mcp_server_manager.build_mcp_server_from_table(
-                temp_record,
-                credentials_are_encrypted=False,
-                persist_discovered_endpoints=False,
-            )
-            _cache_temporary_mcp_server(
-                temporary_server,
-                ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
-            )
-            await _cache_temporary_mcp_server_in_redis(
-                temporary_server,
-                ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
+            draft_record = await create_draft_mcp_server(
+                prisma_client,
+                payload_with_credentials,
+                touched_by=created_by,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error caching temporary mcp server: {str(e)}")
+            verbose_proxy_logger.exception(f"Error creating draft mcp server: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error caching temporary mcp server: {str(e)}"},
+                detail={"error": f"Error creating draft mcp server: {str(e)}"},
             )
 
-        return _redact_mcp_credentials(temp_record)
+        return _redact_mcp_credentials(draft_record)
 
     async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
         """
@@ -1603,7 +1443,7 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
         request: Optional[Request] = None,
     ) -> MCPServer:
-        server = await get_cached_temporary_mcp_server(server_id)
+        server = await _get_draft_mcp_server_as_mcp_server(server_id)
         resolved_from_temp_cache = server is not None
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow

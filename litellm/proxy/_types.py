@@ -1221,6 +1221,7 @@ class MCPApprovalStatus(str, enum.Enum):
     pending_review = "pending_review"
     active = "active"
     rejected = "rejected"
+    draft = "draft"
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -1263,7 +1264,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
-    issuer: Optional[str] = None
+    issuer: str | None = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -1280,7 +1281,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
-    dcr_bridge: Optional[bool] = None
+    dcr_bridge: bool | None = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1289,15 +1290,15 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     max_concurrent_requests: Optional[int] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
-    approval_status: Optional[str] = Field(
+    approval_status: str | None = Field(
         None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
-    submitted_by: Optional[str] = Field(
+    submitted_by: str | None = Field(
         None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
-    submitted_at: Optional[datetime] = Field(
+    submitted_at: datetime | None = Field(
         None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
@@ -1369,7 +1370,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
-    issuer: Optional[str] = None
+    issuer: str | None = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -1386,7 +1387,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
-    dcr_bridge: Optional[bool] = None
+    dcr_bridge: bool | None = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None

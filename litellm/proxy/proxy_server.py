@@ -253,6 +253,10 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.proxy._experimental.mcp_server.db import (
+    DRAFT_MCP_SERVER_TTL_SECONDS,
+    delete_expired_draft_mcp_servers,
+)
 from litellm.proxy._lazy_features import attach_lazy_features
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -460,7 +464,7 @@ try:
     )
 
     build_billing_metrics_recorder: Optional[Callable[..., Optional[BillingRecorder]]] = _build_billing_metrics_recorder
-    shutdown_billing_metrics_recorder: Optional[Callable[[], None]] = _shutdown_billing_metrics_recorder
+    shutdown_billing_metrics_recorder: Callable[[], None] | None = _shutdown_billing_metrics_recorder
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
@@ -7558,7 +7562,7 @@ class ProxyStartupEvent:
     @staticmethod
     async def _init_coordination_redis_from_db(
         litellm_settings: Mapping[str, object],
-        llm_router: Optional[Router],
+        llm_router: Router | None,
     ) -> RedisCache | None:
         """
         Applies a coordination_redis block saved to the database, which the admin
@@ -7868,6 +7872,17 @@ class ProxyStartupEvent:
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
+
+        ### CLEANUP EXPIRED DRAFT MCP SERVERS ###
+        scheduler.add_job(
+            delete_expired_draft_mcp_servers,
+            "interval",
+            seconds=DRAFT_MCP_SERVER_TTL_SECONDS,
+            args=[prisma_client, DRAFT_MCP_SERVER_TTL_SECONDS],
+            id="cleanup_draft_mcp_servers_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
         ### UPDATE SPEND ###
         scheduler.add_job(

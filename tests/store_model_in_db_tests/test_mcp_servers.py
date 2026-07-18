@@ -142,6 +142,10 @@ async def test_create_mcp_server_direct():
             new_callable=mock.AsyncMock,
         ) as mock_get_server,
         mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._delete_draft_mcp_server",
+            new_callable=mock.AsyncMock,
+        ) as mock_delete_draft,
+        mock.patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager"
         ) as mock_manager,
     ):
@@ -209,6 +213,7 @@ async def test_create_mcp_server_direct():
         assert result.credentials is None
 
         # Verify mocks were called
+        mock_delete_draft.assert_awaited_once_with(mock_prisma, server_id)
         mock_get_server.assert_called_once_with(mock_prisma, server_id)
         mock_create.assert_called_once()
         mock_manager.add_server.assert_called_once_with(expected_response)
@@ -233,6 +238,10 @@ async def test_create_duplicate_mcp_server():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
             new_callable=mock.AsyncMock,
         ) as mock_get_server,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._delete_draft_mcp_server",
+            new_callable=mock.AsyncMock,
+        ) as mock_delete_draft,
     ):
         # Import after mocking
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -277,6 +286,7 @@ async def test_create_duplicate_mcp_server():
         # Verify the exception details
         assert exc_info.value.status_code == 400
         assert "already exists" in str(exc_info.value.detail)
+        mock_delete_draft.assert_awaited_once_with(mock_prisma, server_id)
 
 
 @_SKIP_NO_MCP
