@@ -41849,6 +41849,14 @@
         "output_cost_per_token": 9e-07,
         "supports_function_calling": true
     },
+    "novita/seedream-4.0": {
+        "litellm_provider": "novita",
+        "mode": "image_generation",
+        "source": "https://novita.ai/docs/api-reference/model-apis-seedream-4-0",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "novita/deepseek/deepseek-v3.2": {
         "litellm_provider": "novita",
         "mode": "chat",
