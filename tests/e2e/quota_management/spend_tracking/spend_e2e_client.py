@@ -29,6 +29,7 @@ from e2e_http import (
 )
 from proxy_client import ProxyClient
 from models import (
+    AnthropicMessagesBody,
     ChatBody,
     ChatMessage,
     ChatMetadata,
@@ -117,6 +118,19 @@ class SpendClient:
     ) -> StreamingResponse:
         return self.proxy.chat_stream(
             key, _chat_body(model, content, max_tokens=max_tokens, stream=True)
+        )
+
+    def messages_stream(
+        self, key: str, model: str, content: str, *, max_tokens: int
+    ) -> StreamingResponse:
+        return self.proxy.messages_stream(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=content)],
+                max_tokens=max_tokens,
+                stream=True,
+            ),
         )
 
     def embed(self, key: str, model: str, content: str) -> Result[EmbedResponse]:
