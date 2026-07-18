@@ -104,6 +104,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -5572,63 +5573,65 @@ def _get_month_end_date(today: date) -> date:
     return date(today.year, today.month + 1, 1) - timedelta(days=1)
 
 
-def _is_projected_spend_over_limit(current_spend: float, soft_budget_limit: Optional[float]):
-    if soft_budget_limit is None:
-        # If there's no limit, we can't exceed it.
-        return False
-
-    today = date.today()
-
-    # Finding the first day of the next month, then subtracting one day to get the end of the current month.
-    end_month = _get_month_end_date(today)
-
-    remaining_days = (end_month - today).days
-
-    # Check for the start of the month to avoid division by zero
-    if today.day == 1:
-        daily_spend_estimate = current_spend
-    else:
-        daily_spend_estimate = current_spend / (today.day - 1)
-
-    # Total projected spend for the month
-    projected_spend = current_spend + (daily_spend_estimate * remaining_days)
-
-    if projected_spend > soft_budget_limit:
-        print_verbose("Projected spend exceeds soft budget limit!")
-        return True
-    return False
+def _get_budget_window(
+    today: date,
+    budget_duration: Optional[str],
+    budget_reset_at: Optional[datetime],
+) -> tuple[date, int]:
+    if budget_duration is None or budget_reset_at is None:
+        return _get_month_end_date(today), max(today.day - 1, 1)
+    try:
+        window_days = max(duration_in_seconds(duration=budget_duration) // 86400, 1)
+    except ValueError:
+        return _get_month_end_date(today), max(today.day - 1, 1)
+    window_end = budget_reset_at.date()
+    window_start = window_end - timedelta(days=window_days)
+    return window_end, max((today - window_start).days, 1)
 
 
-def _get_projected_spend_over_limit(current_spend: float, soft_budget_limit: Optional[float]) -> Optional[tuple]:
+def _is_projected_spend_over_limit(
+    current_spend: float,
+    soft_budget_limit: Optional[float],
+    budget_duration: Optional[str] = None,
+    budget_reset_at: Optional[datetime] = None,
+) -> bool:
+    return (
+        _get_projected_spend_over_limit(
+            current_spend=current_spend,
+            soft_budget_limit=soft_budget_limit,
+            budget_duration=budget_duration,
+            budget_reset_at=budget_reset_at,
+        )
+        is not None
+    )
+
+
+def _get_projected_spend_over_limit(
+    current_spend: float,
+    soft_budget_limit: Optional[float],
+    budget_duration: Optional[str] = None,
+    budget_reset_at: Optional[datetime] = None,
+) -> Optional[tuple[float, date]]:
     if soft_budget_limit is None:
         return None
 
-    today = date.today()
-    end_month = _get_month_end_date(today)
-    remaining_days = (end_month - today).days
-
-    # assuming the current spend till today (not including today)
-    if today.day == 1:
-        daily_spend = current_spend
-    else:
-        daily_spend = current_spend / (today.day - 1)
+    today = (
+        datetime.now(budget_reset_at.tzinfo).date()
+        if budget_reset_at is not None and budget_reset_at.tzinfo is not None
+        else date.today()
+    )
+    window_end, elapsed_days = _get_budget_window(today, budget_duration, budget_reset_at)
+    remaining_days = max((window_end - today).days, 0)
+    daily_spend = current_spend / elapsed_days
     projected_spend = current_spend + (daily_spend * remaining_days)
 
-    if projected_spend > soft_budget_limit:
-        if daily_spend <= 0:
-            limit_exceed_date = today
-        else:
-            remaining_budget = soft_budget_limit - current_spend
-            if remaining_budget <= 0:
-                limit_exceed_date = today
-            else:
-                approx_days = remaining_budget / daily_spend
-                limit_exceed_date = today + timedelta(days=approx_days)
+    if projected_spend <= soft_budget_limit:
+        return None
 
-        # return the projected spend and the date it will exceeded
-        return projected_spend, limit_exceed_date
-
-    return None
+    remaining_budget = soft_budget_limit - current_spend
+    if daily_spend <= 0 or remaining_budget <= 0:
+        return projected_spend, today
+    return projected_spend, min(today + timedelta(days=remaining_budget / daily_spend), window_end)
 
 
 def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):

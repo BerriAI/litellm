@@ -2789,6 +2789,8 @@ async def update_cache(
                 _is_projected_spend_over_limit(
                     current_spend=new_spend,
                     soft_budget_limit=existing_spend_obj.soft_budget,
+                    budget_duration=existing_spend_obj.budget_duration,
+                    budget_reset_at=existing_spend_obj.budget_reset_at,
                 )
                 is True
             )
@@ -2796,6 +2798,8 @@ async def update_cache(
             projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
                 current_spend=new_spend,
                 soft_budget_limit=existing_spend_obj.soft_budget,
+                budget_duration=existing_spend_obj.budget_duration,
+                budget_reset_at=existing_spend_obj.budget_reset_at,
             )  # type: ignore
             soft_limit = existing_spend_obj.soft_budget
             call_info = CallInfo(
