@@ -82,8 +82,8 @@ def _as_optional_str(value: object) -> str | None:
 
 def _build_webhook_metadata(request_data: dict, default_metadata: dict[str, str]) -> dict[str, object] | None:
     out: dict[str, object] = {}
-    for key, value in _as_dict(request_data.get("metadata")).items():
-        if key in _APPLICATION_METADATA_KEYS or key.startswith("user_api_key_"):
+    for key, value in _merged_metadata(request_data).items():
+        if key in _APPLICATION_METADATA_KEYS or key.startswith("user_api"):
             continue
         if key == "session_id":
             continue

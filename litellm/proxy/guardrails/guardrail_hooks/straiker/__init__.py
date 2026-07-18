@@ -24,7 +24,10 @@ _OPTIONAL_INIT_FIELDS = (
 
 def _get_config_value(litellm_params: "LitellmParams", optional_params: object, attribute_name: str) -> object:
     if optional_params is not None:
-        value = getattr(optional_params, attribute_name, None)
+        if isinstance(optional_params, dict):
+            value = optional_params.get(attribute_name)
+        else:
+            value = getattr(optional_params, attribute_name, None)
         if value is not None:
             return value
     return getattr(litellm_params, attribute_name, None)

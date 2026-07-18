@@ -180,6 +180,23 @@ def test_initializer_reads_nested_optional_params():
     assert callback.unreachable_fallback == "fail_open"
 
 
+def test_initializer_reads_dict_optional_params():
+    from litellm.types.guardrails import LitellmParams
+
+    params = LitellmParams.model_construct(
+        guardrail="straiker",
+        mode="pre_call",
+        api_key="abc",
+        api_base="https://x.straiker.ai",
+        optional_params={"timeout": 7.25, "verbose": True, "unreachable_fallback": "fail_open"},
+    )
+    callback = initialize_guardrail(params, {"guardrail_name": "straiker"})
+    assert isinstance(callback, StraikerGuardrail)
+    assert callback.timeout == 7.25
+    assert callback.verbose is True
+    assert callback.unreachable_fallback == "fail_open"
+
+
 @pytest.mark.asyncio
 async def test_request_envelope_transport_and_shape():
     g = _make_guardrail()
@@ -244,6 +261,26 @@ async def test_webhook_metadata_session_id_and_opaque_passthrough():
         "custom_tag": "experiment-7",
         "client_ip": "10.0.0.1",
     }
+
+
+@pytest.mark.asyncio
+async def test_webhook_metadata_reads_litellm_metadata_and_skips_internal():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]},
+        request_data={
+            "model": "m",
+            "litellm_metadata": {
+                "custom_tag": "experiment-7",
+                "user_api_end_user_max_budget": 12.5,
+            },
+        },
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    payload = _posted_payload(g)
+    assert payload["metadata"] == {"custom_tag": "experiment-7"}
 
 
 @pytest.mark.asyncio
