@@ -340,6 +340,10 @@ class RedisUpdateBuffer:
                     db_spend_update_transactions.get("org_list_transactions"),
                 ),
                 (
+                    Litellm_EntityType.PROJECT,
+                    db_spend_update_transactions.get("project_list_transactions"),
+                ),
+                (
                     Litellm_EntityType.TAG,
                     db_spend_update_transactions.get("tag_list_transactions"),
                 ),
@@ -717,6 +721,7 @@ class RedisUpdateBuffer:
             team_list_transactions={},
             team_member_list_transactions={},
             org_list_transactions={},
+            project_list_transactions={},
             tag_list_transactions={},
             agent_list_transactions={},
         )
@@ -729,6 +734,7 @@ class RedisUpdateBuffer:
             "team_list_transactions",
             "team_member_list_transactions",
             "org_list_transactions",
+            "project_list_transactions",
             "tag_list_transactions",
             "agent_list_transactions",
         ]

@@ -4505,6 +4505,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: Optional[Dict[str, float]]
     team_member_list_transactions: Optional[Dict[str, float]]
     org_list_transactions: Optional[Dict[str, float]]
+    project_list_transactions: Dict[str, float] | None
     tag_list_transactions: Optional[Dict[str, float]]
     agent_list_transactions: Optional[Dict[str, float]]
 
