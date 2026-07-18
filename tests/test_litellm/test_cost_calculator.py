@@ -3479,3 +3479,36 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["moonshot/kimi-k3", "openrouter/moonshotai/kimi-k3"],
+)
+def test_kimi_k3_pricing(model_name):
+    """
+    Kimi K3 (Moonshot's 1M-context flagship, launched 2026-07-16) had no pricing
+    entry for either the native moonshot/ prefix or the openrouter/ prefix, so
+    cost tracking billed it at zero. Prices verified against Moonshot's official
+    pricing page (https://platform.kimi.ai/docs/pricing/chat-k3: $3.00/M input
+    cache miss, $0.30/M cache hit, $15.00/M output, 1,048,576 context) and the
+    OpenRouter models API, which quote identical numbers.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost.get(model_name)
+    assert model_info is not None, f"Missing model pricing entry: {model_name}"
+    assert model_info["input_cost_per_token"] == 3e-06
+    assert model_info["output_cost_per_token"] == 1.5e-05
+    assert model_info["cache_read_input_token_cost"] == 3e-07
+    assert model_info["max_input_tokens"] == 1048576
+    assert model_info["supports_reasoning"] is True
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model_name,
+        prompt_tokens=1000,
+        completion_tokens=100,
+    )
+    assert prompt_cost == pytest.approx(1000 * 3e-06)
+    assert completion_cost_value == pytest.approx(100 * 1.5e-05)

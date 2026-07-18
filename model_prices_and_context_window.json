@@ -27598,6 +27598,22 @@
         "supports_video_input": true,
         "supports_vision": true
     },
+    "moonshot/kimi-k3": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://platform.kimi.ai/docs/pricing/chat-k3",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "moonshot/kimi-latest": {
         "cache_read_input_token_cost": 1.5e-07,
         "deprecation_date": "2026-01-28",
@@ -30541,6 +30557,22 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
+        "supports_vision": true
+    },
+    "openrouter/moonshotai/kimi-k3": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://openrouter.ai/moonshotai/kimi-k3",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "openrouter/openai/gpt-3.5-turbo": {
