@@ -19,6 +19,7 @@ from typing import (
     Union,
     cast,
 )
+from urllib.parse import urlparse
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -31,6 +32,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -51,15 +53,36 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 _RESPONSES_API_PROVIDERS = frozenset({"openai"})
 
 
-def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
+def _is_openai_native_api_base(api_base: str | None) -> bool:
+    """Whether the effective OpenAI base URL points at the genuine OpenAI API.
+
+    OpenAI-compatible third parties (a custom ``api_base``, e.g. Zhipu / GLM)
+    generally expose only chat/completions, not the Responses API, so routing
+    /v1/messages there would hit a non-existent ``/responses`` path and 404.
+    Genuine OpenAI (no override, or an ``api.openai.com`` host) supports it.
+    """
+    effective = api_base or get_secret_str("OPENAI_API_BASE") or litellm.api_base
+    if not effective:
+        return True
+    hostname = urlparse(effective).hostname or ""
+    return hostname == "api.openai.com" or hostname.endswith(".api.openai.com")
+
+
+def _should_route_to_responses_api(custom_llm_provider: str | None, api_base: str | None) -> bool:
     """Return True when the provider should use the Responses API path.
 
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
     opt out and route OpenAI/Azure requests through chat/completions instead.
+
+    Only genuine OpenAI endpoints route to the Responses API. OpenAI-compatible
+    providers configured with a custom ``api_base`` fall back to chat/completions
+    since they typically do not implement ``/responses``.
     """
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
-    return custom_llm_provider in _RESPONSES_API_PROVIDERS
+    if custom_llm_provider not in _RESPONSES_API_PROVIDERS:
+        return False
+    return _is_openai_native_api_base(api_base)
 
 
 def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
@@ -523,7 +546,7 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider):
+        if _should_route_to_responses_api(custom_llm_provider, api_base or dynamic_api_base):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
 
         # The in-gateway context_management polyfill runs inside
