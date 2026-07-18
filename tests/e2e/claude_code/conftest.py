@@ -577,30 +577,30 @@ from claude_code._compat_models import (  # noqa: E402
 )
 
 
-def _build_control_gateway(proxy: ProxyConfig):
+def _build_control_plane_client(proxy_config: ProxyConfig):
     """Local import of the shared harness so the pure-unit-test tree
     under ``_driver_unit_tests/`` etc. never has to pull it in. The
     control plane transport is what /model/new lives on; SplitTransport
     routes it correctly for both monolithic and split deployments.
 
-    The endpoints come from the *resolved* proxy, not from a second
+    The endpoints come from the *resolved* proxy config, not from a second
     independent env read, so registration and the cells always hit the
     same host and key. Both planes get the one URL the cells use; the
     deployment is fronted by a single address that routes management
     and LLM paths itself."""
-    from e2e_gateway import build_gateway
+    from proxy_client import build_proxy_client
 
-    return build_gateway(
-        base_url=proxy.base_url,
-        master_key=proxy.api_key,
-        control_plane_base_url=proxy.base_url,
+    return build_proxy_client(
+        base_url=proxy_config.base_url,
+        master_key=proxy_config.api_key,
+        control_plane_base_url=proxy_config.base_url,
     )
 
 
-def _register_deployment(gateway, deployment: CompatDeployment) -> str:
+def _register_deployment(proxy, deployment: CompatDeployment) -> str:
     """Register one deployment and return its proxy-assigned model_id
     once it is servable on the data plane."""
-    return gateway.create_model(
+    return proxy.create_model(
         deployment.model_name,
         deployment.litellm_params,
     )
@@ -624,20 +624,20 @@ def _compat_models_registered() -> Any:
     but do not abort the session: the cells that need that specific
     deployment will 400 with "Invalid model name" and fail loudly,
     which is the right signal (missing cred on the proxy side)."""
-    proxy = resolve_proxy()
-    if proxy is None:
+    proxy_config = resolve_proxy()
+    if proxy_config is None:
         yield
         return
 
     from requests import RequestException
 
-    gateway = _build_control_gateway(proxy)
+    proxy = _build_control_plane_client(proxy_config)
     registered_ids: list[str] = []
     failures: list[tuple[str, str]] = []
     try:
         for deployment in load_all_deployments():
             try:
-                model_id = _register_deployment(gateway, deployment)
+                model_id = _register_deployment(proxy, deployment)
                 registered_ids.append(model_id)
             except (AssertionError, RequestException) as exc:
                 failures.append((deployment.model_name, str(exc)))
@@ -656,7 +656,7 @@ def _compat_models_registered() -> Any:
     finally:
         for model_id in registered_ids:
             try:
-                gateway.delete_model(model_id)
+                proxy.delete_model(model_id)
             except (AssertionError, RequestException):
                 # Best-effort — teardown surfaces via warnings inside
                 # ``delete_model`` already; swallowing here so one flaky

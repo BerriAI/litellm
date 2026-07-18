@@ -48,7 +48,7 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
     """Recorded state: the proxy reports the OTEL v2 logger among its active
     callbacks, so a missing/failed destination config fails here, before any
     traffic-based assertion can time out confusingly."""
-    result = client.gateway.probe("/health/readiness/details", params=NoBody())
+    result = client.proxy.probe("/health/readiness/details", params=NoBody())
     assert result.status_code == 200, (
         f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
     )
@@ -698,13 +698,13 @@ class TestOtelTraceCompleteness:
         key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
         resources.defer(lambda: client.delete_key(key))
 
-        deadline = time.monotonic() + client.gateway.poll_timeout
+        deadline = time.monotonic() + client.proxy.poll_timeout
         while True:
             outcome = client.chat_raw(key, model_name, "trigger an upstream auth failure", max_tokens=16)
             assert not outcome.ok, "the call must fail; the deployment's upstream key is invalid"
             if "AnthropicException" in outcome.body or time.monotonic() >= deadline:
                 break
-            time.sleep(client.gateway.poll_interval)
+            time.sleep(client.proxy.poll_interval)
         assert "AnthropicException" in outcome.body, (
             "never saw the upstream provider failure before the deadline; the key may still be "
             f"propagating - last outcome {outcome.status_code}: {outcome.body[:200]}"

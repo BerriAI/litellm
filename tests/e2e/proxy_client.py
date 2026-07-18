@@ -1,8 +1,8 @@
-"""Gateway: the shared proxy operations, DI'd into every client (composition).
+"""ProxyClient: the shared proxy operations, DI'd into every client (composition).
 
 A frozen-slots dataclass holding a Transport plus poll config. Clients hold a
-Gateway and add their own route methods; the lifecycle ResourceManager uses the
-Gateway's key/customer methods for cleanup. Read-backs are eventually consistent
+ProxyClient and add their own route methods; the lifecycle ResourceManager uses the
+ProxyClient's key/customer methods for cleanup. Read-backs are eventually consistent
 (proxy_batch_write_at ~60s) so they poll to a deadline.
 """
 
@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from e2e_http import (
+    AnthropicHeaders,
     NoBody,
     ProbeResult,
     Result,
@@ -24,8 +25,12 @@ from e2e_http import (
     unwrap,
 )
 from models import (
+    AnthropicMessagesBody,
+    AnthropicMessagesResponse,
     ChatBody,
     ChatResponse,
+    CountTokensBody,
+    CountTokensResponse,
     CustomerDeleteBody,
     EmbedBody,
     EmbedResponse,
@@ -69,7 +74,7 @@ RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
 
 @dataclass(frozen=True, slots=True)
-class Gateway:
+class ProxyClient:
     transport: Transport
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
@@ -243,6 +248,31 @@ class Gateway:
             response_type=OcrResponse,
         )
 
+    def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
+        """POST /v1/messages/count_tokens (Anthropic-native). Sends the
+        anthropic-version header so the native path accepts it; harmless on the
+        other providers the proxy fronts."""
+        return self.transport.post(
+            "/v1/messages/count_tokens",
+            headers=self._anthropic_headers(key),
+            json=body,
+            response_type=CountTokensResponse,
+        )
+
+    def messages(self, key: str, body: AnthropicMessagesBody) -> Result[AnthropicMessagesResponse]:
+        """POST /v1/messages (Anthropic-native). The response is either the
+        Anthropic-shape passthrough (`content`) or the OpenAI-normalized shape
+        (`choices`); AnthropicMessagesResponse models both."""
+        return self.transport.post(
+            "/v1/messages",
+            headers=self._anthropic_headers(key),
+            json=body,
+            response_type=AnthropicMessagesResponse,
+        )
+
+    def _anthropic_headers(self, key: str) -> AnthropicHeaders:
+        return AnthropicHeaders(authorization=self.transport.bearer(key).authorization)
+
     # ---- spend read-back ------------------------------------------------
 
     def spend_logs(self, params: SpendLogsParams) -> list[SpendLogRow]:
@@ -319,13 +349,13 @@ class Gateway:
         return self.transport.probe(path, params=params)
 
 
-def build_gateway(
+def build_proxy_client(
     *,
     base_url: str = PROXY_BASE_URL,
     master_key: str = MASTER_KEY,
     control_plane_base_url: str = CONTROL_PLANE_BASE_URL,
-) -> Gateway:
-    """The Gateway every suite's client is built from: a SplitTransport that routes
+) -> ProxyClient:
+    """The ProxyClient every suite's client is built from: a SplitTransport that routes
     LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
     control plane (CONTROL_PLANE_BASE_URL), with the shared poll budget. The two
     base URLs are the same for a monolithic proxy, so routing is then a no-op.
@@ -334,7 +364,7 @@ def build_gateway(
     way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
     pass all three together, since a caller that overrides only the data plane
     would leave management calls pointed at the env default."""
-    return Gateway(
+    return ProxyClient(
         transport=SplitTransport(
             data=HttpTransport(
                 base_url=base_url,
