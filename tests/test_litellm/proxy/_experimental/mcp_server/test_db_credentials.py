@@ -978,3 +978,67 @@ def test_prepare_mcp_server_data_update_carries_token_exchange_columns():
     assert data["audience"] == "https://upstream.example.com"
     assert data["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt"
     assert data["token_exchange_profile"] == "entra_obo"
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
+    """The server-scoped DCR client store (LiteLLM_MCPServerOAuthClient) is encrypted at rest, so a
+    master-key rotation must re-encrypt it alongside the server rows. Skipping it leaves
+    config-declared DCR clients under the retired key, where they decrypt back to ciphertext and
+    force a full re-authorization."""
+    import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+    from litellm.proxy._experimental.mcp_server.db import (
+        decrypt_credentials,
+        encrypt_credentials,
+        rotate_mcp_server_credentials_master_key,
+    )
+
+    key_old, key_new = "salt-old-key", "salt-new-key"
+
+    blob_old = safe_dumps(
+        encrypt_credentials(
+            credentials={"client_id": "cid-123", "client_secret": "sec-456"},
+            encryption_key=key_old,
+        )
+    )
+
+    monkeypatch.setattr(enc, "_get_salt_key", lambda: key_old)
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(
+        return_value=[SimpleNamespace(server_id="config_faros", credentials=blob_old)]
+    )
+    store_update = AsyncMock()
+    prisma.db.litellm_mcpserveroauthclient.update = store_update
+
+    await rotate_mcp_server_credentials_master_key(prisma, touched_by="test", new_master_key=key_new)
+
+    store_update.assert_awaited_once()
+    assert store_update.await_args.kwargs["where"] == {"server_id": "config_faros"}
+    rotated_blob = store_update.await_args.kwargs["data"]["credentials"]
+
+    monkeypatch.setattr(enc, "_get_salt_key", lambda: key_new)
+    recovered = decrypt_credentials(credentials=json.loads(rotated_blob))
+    assert recovered["client_id"] == "cid-123"
+    assert recovered["client_secret"] == "sec-456"
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_cleans_oauth_client_store():
+    """Deleting a server must remove its server-scoped DCR client store entry alongside the per-user
+    credential and env-var rows, or a re-created server reusing the same server_id would inherit the
+    deleted server's OAuth client."""
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=SimpleNamespace(server_id="s1"))
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
+    prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock()
+    prisma.db.litellm_mcpserveroauthclient.delete_many = AsyncMock()
+
+    await delete_mcp_server(prisma, "s1", invalidate_token_cache=AsyncMock())
+
+    prisma.db.litellm_mcpserveroauthclient.delete_many.assert_awaited_once_with(where={"server_id": "s1"})
