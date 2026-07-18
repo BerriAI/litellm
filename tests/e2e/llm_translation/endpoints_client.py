@@ -138,13 +138,13 @@ class ResponsesStreamEvent(BaseModel):
     event_id: str | None = None
 
 
+class ResponsesStreamEventType(BaseModel):
+    type: str
+
+
 class ResponsesOutputTextDeltaEvent(ResponsesStreamEvent):
     type: Literal["response.output_text.delta"]
     delta: str
-
-
-class ResponsesCompletedEvent(ResponsesStreamEvent):
-    type: Literal["response.completed"]
 
 
 class AnthropicContentBlock(BaseModel):

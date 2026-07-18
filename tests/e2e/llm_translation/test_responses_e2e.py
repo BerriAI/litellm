@@ -19,9 +19,10 @@ from endpoints_client import (
     EndpointsClient,
     FunctionParameterProperty,
     FunctionParameters,
-    ResponsesOutputTextDeltaEvent,
     ResponsesFunctionTool,
+    ResponsesOutputTextDeltaEvent,
     ResponsesResult,
+    ResponsesStreamEventType,
 )
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
@@ -31,10 +32,6 @@ pytestmark = pytest.mark.e2e
 
 class WeatherArguments(BaseModel):
     location: str
-
-
-class ResponsesStreamEventType(BaseModel):
-    type: str
 
 
 class TestResponses:
@@ -148,7 +145,9 @@ class TestResponses:
         assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
 
 
-def _parse_stream_event(event: str) -> ResponsesOutputTextDeltaEvent | None:
+def _parse_stream_event(
+    event: str,
+) -> ResponsesOutputTextDeltaEvent | None:
     try:
         return ResponsesOutputTextDeltaEvent.model_validate_json(event)
     except ValidationError:
