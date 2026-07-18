@@ -1585,6 +1585,47 @@ class TestGuardrailInterventionClassification:
         )
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
 
+    @pytest.mark.parametrize("status_code", [400, 403, 422, 429, 451, 499])
+    def test_4xx_http_exception_is_intervention(self, status_code):
+        from fastapi.exceptions import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="blocked by guardrail")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.parametrize("status_code", [300, 500, 502, 503])
+    def test_non_4xx_http_exception_is_not_intervention(self, status_code):
+        from fastapi.exceptions import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="guardrail api error")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is False
+
+    @pytest.mark.asyncio
+    async def test_non_400_4xx_logged_as_intervened_not_failed(self):
+        from fastapi.exceptions import HTTPException
+
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class BlockingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-rail",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data, **kwargs):
+                raise HTTPException(status_code=403, detail="blocked by guardrail")
+
+        guardrail = BlockingGuardrail()
+        request_data: dict = {"metadata": {}}
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(data=request_data)
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"
+
     @pytest.mark.asyncio
     async def test_routing_logged_as_intervened_not_failed(self):
         from litellm.exceptions import SensitiveDataRouteException
