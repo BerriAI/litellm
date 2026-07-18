@@ -103,6 +103,25 @@ def test_get_complete_url(api_base, expected):
     assert config.get_complete_url(api_base=api_base, litellm_params={}) == expected
 
 
+def test_get_complete_url_adds_api_version_from_params():
+    config = AzureAIResponsesAPIConfig()
+    url = config.get_complete_url(
+        api_base="https://res.services.ai.azure.com/api/projects/proj",
+        litellm_params={"api_version": "2025-04-01-preview"},
+    )
+    assert url == (
+        "https://res.services.ai.azure.com/api/projects/proj/openai/v1/responses?api-version=2025-04-01-preview"
+    )
+
+
+def test_get_complete_url_raises_without_api_base(monkeypatch):
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    config = AzureAIResponsesAPIConfig()
+    with pytest.raises(ValueError):
+        config.get_complete_url(api_base=None, litellm_params={})
+
+
 def test_validate_environment_api_key_header_for_foundry_host():
     config = AzureAIResponsesAPIConfig()
     headers = config.validate_environment(
@@ -126,6 +145,22 @@ def test_validate_environment_bearer_for_serverless_host():
         ),
     )
     assert headers["Authorization"] == "Bearer secret"
+    assert "api-key" not in headers
+
+
+def test_validate_environment_falls_back_to_base_azure_env_without_key(monkeypatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    config = AzureAIResponsesAPIConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="gpt-5.6-luna",
+        litellm_params=GenericLiteLLMParams(api_base="https://res.services.ai.azure.com/api/projects/proj"),
+    )
+    assert headers["Content-Type"] == "application/json"
     assert "api-key" not in headers
 
 
