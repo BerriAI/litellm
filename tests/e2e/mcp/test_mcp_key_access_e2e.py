@@ -26,7 +26,7 @@ pytestmark = pytest.mark.e2e
 def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str] | None) -> str:
     label = "allowed" if mcp_servers else "denied"
     key = client.generate_key(user_id=f"e2e-mcp-{label}-{unique_marker()}", mcp_servers=mcp_servers)
-    resources.defer(lambda: client.gateway.delete_key(key))
+    resources.defer(lambda: client.proxy.delete_key(key))
     return key
 
 

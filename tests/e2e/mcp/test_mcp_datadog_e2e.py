@@ -16,11 +16,11 @@ import pytest
 from conftest import DdLogsReader
 from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
 from e2e_config import CHEAP_ANTHROPIC_MODEL, DD_SEARCH_FROM, unique_marker
-from e2e_gateway import Gateway
 from e2e_http import NoBody, unwrap
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 from models import ChatBody, ChatMessage
+from proxy_client import ProxyClient
 
 pytestmark = pytest.mark.e2e
 
@@ -28,8 +28,8 @@ DD_LOGGER_NAME = "DataDogLogger"
 MARKER_PREFIX = "e2e-datadog-mcp-"
 
 
-def _assert_datadog_logger_active(gateway: Gateway) -> None:
-    result = gateway.probe("/health/readiness/details", params=NoBody())
+def _assert_datadog_logger_active(proxy: ProxyClient) -> None:
+    result = proxy.probe("/health/readiness/details", params=NoBody())
     assert result.status_code == 200, (
         f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
     )
@@ -39,13 +39,13 @@ def _assert_datadog_logger_active(gateway: Gateway) -> None:
     )
 
 
-def _seed_completion(gateway: Gateway, *, key: str, marker: str) -> None:
+def _seed_completion(proxy: ProxyClient, *, key: str, marker: str) -> None:
     body = ChatBody(
         model=CHEAP_ANTHROPIC_MODEL,
         messages=[ChatMessage(role="user", content=f"reply with one word {marker}")],
         max_tokens=16,
     )
-    unwrap(gateway.chat(key, body))
+    unwrap(proxy.chat(key, body))
 
 
 class TestDatadogMcpRoundTrip:
@@ -57,7 +57,7 @@ class TestDatadogMcpRoundTrip:
         resources: ResourceManager,
     ) -> None:
         assert_dd_mcp_creds()
-        _assert_datadog_logger_active(client.gateway)
+        _assert_datadog_logger_active(client.proxy)
 
         server_id = register_datadog_mcp(client, resources)
         marker = f"{MARKER_PREFIX}{unique_marker()}"
@@ -67,9 +67,9 @@ class TestDatadogMcpRoundTrip:
             mcp_servers=[server_id],
             models=[CHEAP_ANTHROPIC_MODEL],
         )
-        resources.defer(lambda: client.gateway.delete_key(key))
+        resources.defer(lambda: client.proxy.delete_key(key))
 
-        _seed_completion(client.gateway, key=key, marker=marker)
+        _seed_completion(client.proxy, key=key, marker=marker)
 
         shipped = dd_logs.poll_events_for_marker(marker)
         assert shipped, (
