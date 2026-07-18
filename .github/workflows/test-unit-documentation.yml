@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_staging
+      - litellm_oss_branch
       - "litellm_**"
 
 permissions:
@@ -25,24 +25,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          repository: BerriAI/litellm-docs
-          path: docs/my-website
-          persist-credentials: false
-
-      - name: Detect backend-relevant changes
-        id: changes
-        uses: ./.github/actions/detect-backend-changes
-
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.10.9"
 
@@ -57,12 +46,10 @@ jobs:
             ${{ runner.os }}-uv-
 
       - name: Install dependencies
-        if: steps.changes.outputs.decision != 'skip'
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+          uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
 
       - name: Generate Prisma client
-        if: steps.changes.outputs.decision != 'skip'
         env:
           PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
@@ -70,7 +57,6 @@ jobs:
 
       # Run the same documentation tests that CircleCI ran (as direct Python scripts)
       - name: Run documentation validation tests
-        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
           uv run --no-sync python ./tests/documentation_tests/test_router_settings.py
