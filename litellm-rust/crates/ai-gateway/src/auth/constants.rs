@@ -1,0 +1,12 @@
+pub const AWS_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
+pub const AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
+pub const AWS_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";
+pub const AWS_REGION_NAME: &str = "AWS_REGION_NAME";
+pub const AWS_SESSION_NAME: &str = "AWS_SESSION_NAME";
+pub const AWS_PROFILE_NAME: &str = "AWS_PROFILE_NAME";
+pub const AWS_ROLE_NAME: &str = "AWS_ROLE_NAME";
+pub const AWS_WEB_IDENTITY_TOKEN: &str = "AWS_WEB_IDENTITY_TOKEN";
+pub const AWS_STS_ENDPOINT: &str = "AWS_STS_ENDPOINT";
+pub const AWS_EXTERNAL_ID: &str = "AWS_EXTERNAL_ID";
+pub const BEDROCK_SERVICE: &str = "bedrock";
+pub const DEFAULT_SESSION_NAME_PREFIX: &str = "litellm-session";
