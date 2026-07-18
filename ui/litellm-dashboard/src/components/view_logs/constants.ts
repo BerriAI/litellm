@@ -22,7 +22,7 @@ export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string 
   { label: "Last Minute", value: 1, unit: "minutes" },
   { label: "Last 15 Minutes", value: 15, unit: "minutes" },
   { label: "Last Hour", value: 1, unit: "hours" },
-  { label: "Last 4 Hours", value: 4, unit: "hours" },
+  { label: "Last 5 Hours", value: 5, unit: "hours" },
   { label: "Last 24 Hours", value: 24, unit: "hours" },
   { label: "Last 7 Days", value: 7, unit: "days" },
 ];

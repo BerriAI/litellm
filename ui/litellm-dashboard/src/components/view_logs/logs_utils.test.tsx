@@ -19,8 +19,8 @@ describe("getTimeRangeDisplay", () => {
     expect(getTimeRangeDisplay(false, ago(30, "minutes"), "")).toBe("Last Hour");
   });
 
-  it("labels a ~2-hour window as 'Last 4 Hours'", () => {
-    expect(getTimeRangeDisplay(false, ago(2, "hours"), "")).toBe("Last 4 Hours");
+  it("labels a ~2-hour window as 'Last 5 Hours'", () => {
+    expect(getTimeRangeDisplay(false, ago(2, "hours"), "")).toBe("Last 5 Hours");
   });
 
   it("labels a ~10-hour window as 'Last 24 Hours'", () => {
