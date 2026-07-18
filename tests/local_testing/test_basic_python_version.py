@@ -142,6 +142,48 @@ def test_cli_extra_is_a_thin_client_install():
     assert not leaked, f"`cli` extra leaks proxy-server deps onto laptops: {leaked}"
 
 
+def test_aiohttp_constraint_excludes_314():
+    """aiohttp 3.14.x re-arms the sock_read timeout on a keep-alive connection after it
+    is returned to the pool (aio-libs/aiohttp#12953), poisoning it so the next request
+    fails instantly with a sub-millisecond `Connection timed out`. This surfaces as
+    sporadic cross-provider timeouts (issue #33820). Until a 3.14.x release ships the
+    aio-libs/aiohttp#12954 fix, the uv constraint must keep aiohttp below 3.14.
+    """
+    import pathlib
+
+    import litellm
+    from packaging.specifiers import SpecifierSet
+    from packaging.version import Version
+
+    try:
+        import tomllib as tomli
+    except ImportError:
+        try:
+            import tomli
+        except ImportError:
+            pytest.skip("tomli/tomllib not available - skipping dependency check")
+
+    pyproject_path = pathlib.Path(litellm.__file__).parent.parent / "pyproject.toml"
+    with open(pyproject_path, "rb") as f:
+        constraints = tomli.load(f)["tool"]["uv"]["constraint-dependencies"]
+
+    aiohttp_constraint = next(
+        (c for c in constraints if c.replace(" ", "").lower().startswith("aiohttp")),
+        None,
+    )
+    assert (
+        aiohttp_constraint is not None
+    ), "Expected an aiohttp entry in [tool.uv].constraint-dependencies"
+
+    specifier = SpecifierSet(aiohttp_constraint.split("aiohttp", 1)[1].strip())
+    poisoned = [v for v in ("3.14.0", "3.14.1") if specifier.contains(Version(v))]
+    assert not poisoned, (
+        f"aiohttp constraint '{aiohttp_constraint}' allows {poisoned}, which poison "
+        "pooled keep-alive connections (aio-libs/aiohttp#12953, litellm #33820). "
+        "Keep the pin below 3.14 until a release with the aio-libs/aiohttp#12954 fix ships"
+    )
+
+
 import os
 import subprocess
 import time
