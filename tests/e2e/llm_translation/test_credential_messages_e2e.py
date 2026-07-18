@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from e2e_config import unique_marker
@@ -19,11 +21,13 @@ class TestCredentialBackedMessages:
         marker = unique_marker()
         credential_name = f"e2e-cred-{marker}"
         model = f"e2e-cred-messages-{marker}"
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        assert anthropic_api_key, "ANTHROPIC_API_KEY must be set for this live e2e test"
 
         endpoints_client.proxy.create_credential(
             CredentialCreateBody(
                 credential_name=credential_name,
-                credential_values={"api_key": "os.environ/ANTHROPIC_API_KEY"},
+                credential_values={"api_key": anthropic_api_key},
             )
         )
         resources.defer(lambda: endpoints_client.proxy.delete_credential(credential_name))
