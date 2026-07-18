@@ -62,7 +62,7 @@ def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
-def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:  # type: ignore[type-arg]
+def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:  # pyright: ignore[reportMissingTypeArgument]  # SAP template items are heterogeneous dicts; full typing deferred
     template = []
     for message in messages:
         if message["role"] == "user":
@@ -177,7 +177,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def deployment_url(self) -> str:
         if self._cached_deployment_url is _UNSET:
             self._cached_deployment_url = self._resolve_deployment_url()
-        return self._cached_deployment_url  # type: ignore[return-value]
+        return self._cached_deployment_url  # pyright: ignore[reportReturnType]  # _UNSET is excluded by the guard above
 
     def _resolve_deployment_url(self) -> str:
         """Discover the orchestration deployment URL from SAP AI Core.
@@ -354,7 +354,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[dict[str, str]],  # type: ignore
+        messages: list[dict[str, str]],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
