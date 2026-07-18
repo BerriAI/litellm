@@ -45,28 +45,41 @@ def _models_dropdown_texts(page: Page, must_contain: str) -> list[str]:
     return dropdown.locator(".ant-select-item-option-content").all_inner_texts()
 
 
+def _create_key_button(page: Page) -> Locator:
+    return page.get_by_role("button", name="+ Create New Key")
+
+
 def _goto_api_keys(page: Page) -> None:
+    # Stage SPA auth often aborts the first post-login navigation to
+    # /ui/api-keys/ (net::ERR_ABORTED / "interrupted by another navigation"):
+    # the client router redirects while Playwright is still waiting on the
+    # initial load. That is not a product failure - the page often ends on
+    # api-keys anyway. Treat the shell (Create New Key) as success, and only
+    # re-goto when it never appears.
+    url = f"{UI_BASE_URL}/ui/api-keys/"
     last_error: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            page.goto(f"{UI_BASE_URL}/ui/api-keys/", wait_until="domcontentloaded")
-            return
+            page.goto(url, wait_until="domcontentloaded")
         except Exception as exc:
             msg = str(exc)
             if "ERR_ABORTED" not in msg and "interrupted" not in msg.lower():
                 raise
             last_error = exc
-            if attempt < 2:
-                page.wait_for_timeout(1000)
+        try:
+            expect(_create_key_button(page)).to_be_visible(timeout=20_000)
+            return
+        except Exception as shell_exc:
+            last_error = shell_exc if last_error is None else last_error
+            if attempt < 3:
+                page.wait_for_timeout(1500)
     assert last_error is not None
     raise last_error
 
 
 def _open_create_key_modal(page: Page) -> None:
     _goto_api_keys(page)
-    create_btn = page.get_by_role("button", name="+ Create New Key")
-    expect(create_btn).to_be_visible(timeout=60_000)
-    create_btn.click()
+    _create_key_button(page).click()
     expect(page.locator(".ant-modal").first).to_be_visible(timeout=15_000)
 
 

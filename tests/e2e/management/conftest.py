@@ -58,6 +58,10 @@ def ui_page(browser: "Browser") -> "Iterator[Page]":
         page.get_by_placeholder("Enter your password").fill(UI_PASSWORD)
         page.get_by_role("button", name="Login", exact=True).click()
         page.wait_for_function("() => document.cookie.includes('token=')")
+        # Let the post-login client redirect finish before any test navigates
+        # to /ui/api-keys/; otherwise the first goto races the SPA and throws
+        # net::ERR_ABORTED even though auth succeeded.
+        page.wait_for_url(lambda url: "/ui/login" not in url, timeout=30_000)
         yield page
     finally:
         context.close()
