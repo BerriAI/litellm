@@ -65,7 +65,7 @@ Each suite provides its own `client` fixture (see `llm_translation/passthrough_c
 
 Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
-Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
+Mark live tests with `@pytest.mark.e2e` (on the class or the module). Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
 ## Typing
 
@@ -186,7 +186,7 @@ other.<area>.<case>.<assertion>
 ```
 
 ## Hard Rules
-- no monkeypatching or mock tests, and never substitute a unit test for e2e feature coverage: a product feature is proven end to end against a live proxy, not with a unit test. if a contributor asks you to write an end to end test, do NOT stage a unit test of the feature with it; if you find a product gap, call it out in the PR description. tests that cover the harness itself are the exception and are allowed (for example `coverage_registry/test_collector.py`, which unit-tests the coverage collector): they carry no `e2e` marker, exercise harness plumbing rather than a product feature, and run whether or not a proxy is up
+- no unit tests of any kind under `tests/e2e`. a product feature is proven end to end against a live proxy, never with a unit test, and the harness itself is not unit-tested here either. no monkeypatching or mock tests. if a contributor asks you to write an end to end test, do NOT stage a unit test with it; if you find a product gap, call it out in the PR description
 
 - use model management endpoints to create new models for a test. this could be in a conftest / inline for each test. ask the user what they want.
 
