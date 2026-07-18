@@ -8226,7 +8226,7 @@ class ProviderConfigManager:
                 azure_ai_supports_native_responses,
             )
 
-            if azure_ai_supports_native_responses(model):
+            if model is None or azure_ai_supports_native_responses(model):
                 return litellm.AzureAIResponsesAPIConfig()
             return None
         elif litellm.LlmProviders.XAI == provider:
