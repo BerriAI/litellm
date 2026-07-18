@@ -244,3 +244,114 @@ async fn bridge(
         })
         .await;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::realtime_pool::RealtimePool;
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::Request;
+    use litellm_core::router::Router as ModelRouter;
+    use serde_json::json;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
+    use tower::ServiceExt;
+
+    struct RecordingSink {
+        messages: Vec<Message>,
+    }
+
+    impl Sink<Message> for RecordingSink {
+        type Error = std::convert::Infallible;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+            self.messages.push(item);
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn pre_call_error_matches_python_frame_and_close() {
+        let mut sink = RecordingSink {
+            messages: Vec::new(),
+        };
+        send_error_and_close(&mut sink, "missing model".to_string()).await;
+        let Message::Text(payload) = &sink.messages[0] else {
+            panic!("expected error text frame");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(payload).expect("error json"),
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "missing model"
+                }
+            })
+        );
+        assert_eq!(
+            sink.messages[1],
+            Message::Close(Some(axum::extract::ws::CloseFrame {
+                code: 1008,
+                reason: "Pre-call error".into(),
+            }))
+        );
+    }
+
+    fn state() -> AppState {
+        AppState {
+            router: Arc::new(ModelRouter::default()),
+            master_key: Some(Arc::from("master-key")),
+            loggers: Arc::new(Vec::new()),
+            realtime_pool: RealtimePool::disabled(),
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_rejects_responses_upgrade_before_handler() {
+        let request = Request::builder()
+            .uri("/responses?model=known")
+            .body(Body::empty())
+            .expect("request");
+        let response = router()
+            .with_state(state())
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn unknown_query_model_is_rejected_before_upgrade() {
+        assert_eq!(
+            validate_model(&ModelRouter::default(), "unknown").expect_err("unknown model"),
+            (
+                StatusCode::NOT_FOUND,
+                "no deployment for model 'unknown'".to_string()
+            )
+        );
+    }
+}

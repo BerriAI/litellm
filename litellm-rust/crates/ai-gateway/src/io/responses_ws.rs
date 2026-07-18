@@ -174,6 +174,74 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_channel::mpsc;
+    use futures_util::{SinkExt, StreamExt};
+    use litellm_core::responses::types::ResponsesWsEventType;
+    use serde_json::json;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
+    async fn websocket_base() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local address");
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let mut socket = accept_async(stream).await.expect("websocket handshake");
+            while let Some(Ok(Message::Text(text))) = socket.next().await {
+                let request: serde_json::Value = serde_json::from_str(&text).expect("request json");
+                let model = request
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        request
+                            .get("response")
+                            .and_then(serde_json::Value::as_object)
+                            .and_then(|response| {
+                                response.get("model").and_then(serde_json::Value::as_str)
+                            })
+                    })
+                    .expect("enforced model");
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "response.created",
+                            "response": {
+                                "id": format!("resp-{model}"),
+                                "model": model,
+                                "extra": "preserved"
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .expect("created event");
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "response.completed",
+                            "response": {
+                                "id": format!("resp-{model}"),
+                                "model": model,
+                                "usage": {
+                                    "input_tokens": 1,
+                                    "output_tokens": 2,
+                                    "total_tokens": 3
+                                }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .expect("completed event");
+            }
+        });
+        (format!("http://{address}"), task)
+    }
+
+    fn event(value: serde_json::Value) -> ResponsesWsEvent {
+        serde_json::from_value(value).expect("event")
+    }
 
     #[test]
     fn explicit_nonblank_key_wins() {
@@ -188,5 +256,148 @@ mod tests {
         if std::env::var(OPENAI_API_KEY_ENV).is_err() {
             assert!(resolve_api_key(Some("  ")).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn forwards_events_sequentially_and_enforces_model() {
+        let (api_base, server) = websocket_base().await;
+        let (client_tx, client_rx) = mpsc::unbounded();
+        let (output_tx, mut output_rx) = mpsc::unbounded();
+        let (observed_tx, observed_rx) = mpsc::unbounded();
+        client_tx
+            .unbounded_send(event(json!({
+                "type": "response.create",
+                "model": "wrong"
+            })))
+            .expect("first request");
+        client_tx
+            .unbounded_send(event(json!({
+                "type": "response.create",
+                "response": {"model": "also-wrong"}
+            })))
+            .expect("second request");
+
+        let task = tokio::spawn(async move {
+            responses_ws(
+                "authorized-model",
+                Some("test-key"),
+                Some(&api_base),
+                None,
+                Some(Duration::from_secs(1)),
+                move |event| {
+                    observed_tx
+                        .unbounded_send(event.clone())
+                        .expect("observe event");
+                },
+                client_rx,
+                output_tx,
+            )
+            .await
+        });
+
+        let first = output_rx.next().await.expect("first output");
+        let second = output_rx.next().await.expect("second output");
+        let third = output_rx.next().await.expect("third output");
+        let fourth = output_rx.next().await.expect("fourth output");
+        drop(client_tx);
+        task.await.expect("splice task").expect("successful splice");
+        server.await.expect("server task");
+
+        assert_eq!(first.event_type, ResponsesWsEventType::ResponseCreated);
+        assert_eq!(first.model(), Some("authorized-model"));
+        assert_eq!(first.data["response"]["extra"], "preserved");
+        assert_eq!(second.event_type, ResponsesWsEventType::ResponseCompleted);
+        assert_eq!(third.event_type, ResponsesWsEventType::ResponseCreated);
+        assert_eq!(fourth.event_type, ResponsesWsEventType::ResponseCompleted);
+        let observed: Vec<_> = observed_rx.collect().await;
+        assert_eq!(observed.len(), 4);
+        assert!(observed
+            .iter()
+            .all(|event| event.event_type != ResponsesWsEventType::ResponseCreate));
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_ends_without_upstream_events() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept");
+            let _socket = accept_async(stream).await.expect("handshake");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+        let (_client_tx, client_rx) = mpsc::unbounded::<ResponsesWsEvent>();
+        let (output_tx, mut output_rx) = mpsc::unbounded();
+        let result = responses_ws(
+            "model",
+            Some("key"),
+            Some(&format!("http://{address}")),
+            None,
+            Some(Duration::from_millis(20)),
+            |_| {},
+            client_rx,
+            output_tx,
+        )
+        .await;
+        assert!(result.is_ok());
+        assert!(output_rx.next().await.is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn dial_http_status_is_preserved() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            stream
+                .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .expect("response");
+        });
+        let (_client_tx, client_rx) = mpsc::unbounded::<ResponsesWsEvent>();
+        let (output_tx, _output_rx) = mpsc::unbounded();
+        let error = responses_ws(
+            "model",
+            Some("key"),
+            Some(&format!("http://{address}")),
+            None,
+            Some(Duration::from_millis(20)),
+            |_| {},
+            client_rx,
+            output_tx,
+        )
+        .await
+        .expect_err("status error");
+        assert!(matches!(error, CoreError::Http { status: 401, .. }));
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn dial_http_500_status_is_preserved() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            stream
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .expect("response");
+        });
+        let (_client_tx, client_rx) = mpsc::unbounded::<ResponsesWsEvent>();
+        let (output_tx, _output_rx) = mpsc::unbounded();
+        let error = responses_ws(
+            "model",
+            Some("key"),
+            Some(&format!("http://{address}")),
+            None,
+            Some(Duration::from_millis(20)),
+            |_| {},
+            client_rx,
+            output_tx,
+        )
+        .await
+        .expect_err("status error");
+        assert!(matches!(error, CoreError::Http { status: 500, .. }));
+        server.await.expect("server task");
     }
 }
