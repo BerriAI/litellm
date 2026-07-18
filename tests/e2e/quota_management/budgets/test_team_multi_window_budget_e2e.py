@@ -21,13 +21,11 @@ key after the 30s window's reset_at provably advanced in /team/info.
 """
 
 import time
-from datetime import datetime
 
 import pytest
 
-from budget_client import BudgetClient, is_budget_block
+from budget_client import BudgetClient, as_datetime, drive_to_block, is_budget_block
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 from models import BudgetWindow
 
@@ -44,18 +42,13 @@ def _call(client: BudgetClient, key: str):
     return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
 
 
-def _as_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 def _drive_to_block(client: BudgetClient, key: str) -> None:
-    for _ in range(30):
-        result = _call(client, key)
-        if is_budget_block(result):
-            return
-        require_successful_call(result)
-        time.sleep(1)
-    pytest.fail("team budget never enforced before block")
+    drive_to_block(
+        lambda: _call(client, key),
+        attempts=30,
+        pause_seconds=1,
+        fail_message="team budget never enforced before block",
+    )
 
 
 @pytest.mark.covers("quota_management.budget.team_multi_window.blocks_then_resets")
@@ -109,12 +102,13 @@ def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient,
     blocked_reset_at = client.team_window_reset_at(team_id, SHORT_WINDOW)
     assert blocked_reset_at is not None, "short window missing from /team/info budget_limits"
     blocked_long_reset_at = client.team_window_reset_at(team_id, LONG_WINDOW)
+    assert blocked_long_reset_at is not None, "long window missing from /team/info budget_limits"
 
     deadline = time.monotonic() + RESET_DEADLINE_SECONDS
     while time.monotonic() < deadline:
         time.sleep(5)
         current = client.team_window_reset_at(team_id, SHORT_WINDOW)
-        if current is not None and _as_datetime(current) > _as_datetime(blocked_reset_at):
+        if current is not None and as_datetime(current) > as_datetime(blocked_reset_at):
             break
     else:
         pytest.fail(

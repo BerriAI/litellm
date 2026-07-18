@@ -1,19 +1,15 @@
 import time
-from datetime import datetime
 
 import pytest
 
-from budget_client import BudgetClient
+from budget_client import BudgetClient, as_datetime
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
-MEMBER_BUDGET = 1.0 # default member budget is $50, we're testing with a smaller value
-
-def _as_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+MEMBER_BUDGET = 1.0  # default member budget is $50, we're testing with a smaller value
 
 
 @pytest.mark.covers("quota_management.budget.team_member.resets_after_window")
@@ -29,7 +25,7 @@ def test_team_member_budget_reset_keeps_advancing(client: BudgetClient, resource
 
     scheduled = client.member_budget_reset_at(team_id, user_id)
     assert scheduled, "updating the member with a budget_duration set no budget_reset_at"
-    first_reset = _as_datetime(scheduled)
+    first_reset = as_datetime(scheduled)
 
     # the member can spend within the team while the window is live
     key = client.generate_key(team_id=team_id, user_id=user_id)
@@ -43,6 +39,6 @@ def test_team_member_budget_reset_keeps_advancing(client: BudgetClient, resource
     while time.monotonic() < deadline:
         time.sleep(5)
         current = client.member_budget_reset_at(team_id, user_id)
-        if current and _as_datetime(current) > first_reset:
+        if current and as_datetime(current) > first_reset:
             return
     pytest.fail(f"member budget_reset_at never advanced past {first_reset.isoformat()} in 150s")

@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from budget_client import BudgetClient, is_budget_block
+from budget_client import BudgetClient, drive_to_block, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
 from lifecycle import ResourceManager
@@ -30,13 +30,12 @@ def _call(client: BudgetClient, key: str) -> StreamingResponse:
 
 
 def _drive_to_block(client: BudgetClient, key: str, subject: str) -> None:
-    for _ in range(40):
-        result = _call(client, key)
-        if is_budget_block(result):
-            return
-        require_successful_call(result)
-        time.sleep(2)
-    pytest.fail(f"user budget never enforced on {subject} within the call budget")
+    drive_to_block(
+        lambda: _call(client, key),
+        attempts=40,
+        pause_seconds=2,
+        fail_message=f"user budget never enforced on {subject} within the call budget",
+    )
 
 
 def _expect_prompt_block(client: BudgetClient, key: str, subject: str) -> None:
@@ -51,9 +50,7 @@ def _expect_prompt_block(client: BudgetClient, key: str, subject: str) -> None:
             return
         require_successful_call(result)
         time.sleep(2)
-    pytest.fail(
-        f"{subject} was not blocked by the shared user budget within {SECOND_KEY_BLOCK_ATTEMPTS} calls"
-    )
+    pytest.fail(f"{subject} was not blocked by the shared user budget within {SECOND_KEY_BLOCK_ATTEMPTS} calls")
 
 
 class TestUserBudgetAcrossKeys:

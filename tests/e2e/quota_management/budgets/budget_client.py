@@ -11,12 +11,16 @@ and response models are co-located here because only this suite uses them.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+
+import pytest
 
 from pydantic import AliasPath, BaseModel, Field, RootModel
 
+from e2e_http import NoBody, Result, StreamingResponse, Success, require_successful_call, unwrap
 from proxy_client import ProxyClient
-from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from models import (
     AnthropicMessagesBody,
     BudgetWindow,
@@ -183,9 +187,32 @@ def _window_reset_at(windows: list[BudgetWindowState], budget_duration: str) -> 
     return next((w.reset_at for w in windows if w.budget_duration == budget_duration), None)
 
 
+def as_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def is_budget_block(result: StreamingResponse) -> bool:
     """True if the call was rejected for being over budget (vs a provider error)."""
     return not result.ok and "budget_exceeded" in result.body
+
+
+def drive_to_block(
+    call: Callable[[], StreamingResponse],
+    *,
+    attempts: int,
+    pause_seconds: float,
+    fail_message: str,
+) -> None:
+    """Spend through ``call`` until the cap blocks; every pre-block response must be
+    a success (never a provider error), and ``fail_message`` fails the test loudly
+    if enforcement never trips within ``attempts``."""
+    for _ in range(attempts):
+        result = call()
+        if is_budget_block(result):
+            return
+        require_successful_call(result)
+        time.sleep(pause_seconds)
+    pytest.fail(fail_message)
 
 
 def model_budget(model: str, limit: float, period: str = "30d") -> dict[str, ModelBudgetEntry]:
@@ -241,13 +268,7 @@ class BudgetClient:
 
     def team_window_reset_at(self, team_id: str, budget_duration: str) -> str | None:
         """Team analog of key_window_reset_at, read from /team/info."""
-        result = self.proxy.transport.get(
-            "/team/info",
-            headers=self.proxy.transport.master,
-            params=TeamInfoParams(team_id=team_id),
-            response_type=TeamInfoResponse,
-        )
-        match result:
+        match self._team_info(team_id):
             case Success(data=data) if data.team_info is not None:
                 return _window_reset_at(data.team_info.budget_limits or [], budget_duration)
             case _:
@@ -418,15 +439,18 @@ class BudgetClient:
             response_type=NoBody,
         )
 
+    def _team_info(self, team_id: str) -> Result[TeamInfoResponse]:
+        return self.proxy.transport.get(
+            "/team/info",
+            headers=self.proxy.transport.master,
+            params=TeamInfoParams(team_id=team_id),
+            response_type=TeamInfoResponse,
+        )
+
     def _wait_for_team(self, team_id: str) -> None:
         last: Result[TeamInfoResponse] | None = None
         for _ in range(_TEAM_READY_ATTEMPTS):
-            last = self.proxy.transport.get(
-                "/team/info",
-                headers=self.proxy.transport.master,
-                params=TeamInfoParams(team_id=team_id),
-                response_type=TeamInfoResponse,
-            )
+            last = self._team_info(team_id)
             match last:
                 case Success():
                     return
@@ -480,13 +504,7 @@ class BudgetClient:
         """The member's per-team budget_reset_at as /team/info reports it, or None if
         no reset is scheduled. The reset job advances this each time the window
         elapses; a job that skips the row leaves it pinned forever."""
-        result = self.proxy.transport.get(
-            "/team/info",
-            headers=self.proxy.transport.master,
-            params=TeamInfoParams(team_id=team_id),
-            response_type=TeamInfoResponse,
-        )
-        match result:
+        match self._team_info(team_id):
             case Success(data=data):
                 return next(
                     (row.budget_reset_at for row in data.team_memberships if row.user_id == user_id),
