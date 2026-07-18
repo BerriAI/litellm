@@ -7940,6 +7940,7 @@ class Router:
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
         self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        self.team_pattern_routers = {}
         self.team_public_model_names = frozenset()
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
@@ -8296,6 +8297,12 @@ class Router:
             public_model_name for _, public_model_name in self.team_model_to_deployment_indices
         )
 
+        for team_id in list(self.team_pattern_routers.keys()):
+            team_pattern_router = self.team_pattern_routers[team_id]
+            team_pattern_router.remove_deployment(model_id)
+            if not team_pattern_router.patterns:
+                del self.team_pattern_routers[team_id]
+
     def _update_team_model_index(self, model: dict, idx: int) -> None:
         """
         Helper to update team_model_to_deployment_indices for a single deployment.
@@ -8544,7 +8551,9 @@ class Router:
             int(max_output) if max_output is not None else None,
         )
 
-    def get_deployment_credentials_with_provider(self, model_id: str) -> Optional[Dict[str, Any]]:
+    def get_deployment_credentials_with_provider(
+        self, model_id: str, team_id: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Get API credentials and provider info from a model name in model_list.
         Useful for passthrough endpoints (files, batches, etc.) that need credentials.
@@ -8554,6 +8563,9 @@ class Router:
 
         Args:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
+            team_id: Optional team id of the caller. When set, team-scoped
+                deployments (indexed by team public model name, including team
+                wildcard models like "openai/*") are also considered.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -8572,9 +8584,22 @@ class Router:
         if deployment is None:
             deployment = self.get_deployment_by_model_group_name(model_group_name=model_id)
 
-        # If still not found, check for wildcard pattern matches
+        # If not found, check team-scoped deployments whose team public model
+        # name exactly matches model_id (wildcard team names are matched via
+        # team_pattern_routers below).
+        if deployment is None and team_id is not None:
+            team_indices = self.team_model_to_deployment_indices.get((team_id, model_id), [])
+            if team_indices:
+                team_model = self.model_list[team_indices[0]]
+                deployment = Deployment(**team_model) if isinstance(team_model, dict) else team_model
+
+        # If still not found, check for wildcard pattern matches. Team wildcard
+        # matches take priority so a global pattern (e.g. "openai/*") doesn't
+        # shadow the team's own entry.
         if deployment is None:
-            potential_wildcard_models = self.pattern_router.route(model_id) or []
+            team_pattern_router = self.team_pattern_routers.get(team_id) if team_id is not None else None
+            team_wildcard_models = (team_pattern_router.route(model_id) or []) if team_pattern_router else []
+            potential_wildcard_models = team_wildcard_models or self.pattern_router.route(model_id) or []
             if potential_wildcard_models:
                 # Use the first matching wildcard deployment
                 deployment_dict = potential_wildcard_models[0]
