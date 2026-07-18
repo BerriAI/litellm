@@ -8,7 +8,7 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
@@ -16,6 +16,7 @@ from endpoints_client import (
     EndpointsClient,
     ResponsesOutputTextDeltaEvent,
     ResponsesResult,
+    ResponsesStreamEventType,
 )
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
@@ -67,10 +68,6 @@ class TestResponses:
             ResponsesStreamEventType.model_validate_json(result.stream_events[-1]).type
             == "response.completed"
         ), "responses stream did not terminate with response.completed"
-
-
-class ResponsesStreamEventType(BaseModel):
-    type: str
 
 
 def _parse_stream_event(
