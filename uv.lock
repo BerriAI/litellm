@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-15T01:55:15.469432Z"
+exclude-newer = "2026-07-15T02:04:45.513604Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3990,7 +3990,7 @@ requires-dist = [
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = ">=0.3.39,<1.0" },
     { name = "mangum", marker = "extra == 'proxy-runtime'", specifier = ">=0.17.0,<1.0" },
-    { name = "mcp", marker = "extra == 'proxy'", specifier = ">=1.26.0,<2.0" },
+    { name = "mcp", marker = "extra == 'proxy'", specifier = ">=1.28.1,<2.0" },
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.11.1,<4.0" },
     { name = "numpy", marker = "extra == 'stt-nvidia-riva'", specifier = ">=1.26.0" },
     { name = "numpydoc", marker = "extra == 'utils'", specifier = ">=1.8.0,<2.0" },
