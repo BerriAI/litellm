@@ -1,8 +1,8 @@
 //! End-to-end OpenAI realtime invocation.
 //!
-//! The host-facing entry point, mirroring `crate::io::ocr::run_ocr`: open the
-//! WebSocket to OpenAI, then splice a client realtime stream to the upstream,
-//! driving typed events through the pure `OPENAI_REALTIME_CONFIG` transforms.
+//! The host-facing entry point opens the WebSocket to OpenAI, then splices a
+//! client realtime stream to the upstream, driving typed events through the pure
+//! `OPENAI_REALTIME_CONFIG` transforms.
 //! Network, auth header, key resolution, and wire (de)serialization live here so
 //! the `transformation` module stays pure and typed.
 //!

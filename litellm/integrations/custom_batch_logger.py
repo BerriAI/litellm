@@ -41,20 +41,14 @@ class CustomBatchLogger(CustomLogger):
         self.batch_size: int = batch_size or litellm.DEFAULT_BATCH_SIZE
         self.last_flush_time = time.time()
         self.flush_lock = flush_lock
-        self.max_queue_size: int = (
-            max_queue_size
-            if max_queue_size is not None
-            else self.DEFAULT_MAX_QUEUE_SIZE
-        )
+        self.max_queue_size: int = max_queue_size if max_queue_size is not None else self.DEFAULT_MAX_QUEUE_SIZE
 
         super().__init__(**kwargs)
 
     async def periodic_flush(self):
         while True:
             await asyncio.sleep(self.flush_interval)
-            verbose_logger.debug(
-                f"CustomLogger periodic flush after {self.flush_interval} seconds"
-            )
+            verbose_logger.debug(f"CustomLogger periodic flush after {self.flush_interval} seconds")
             await self.flush_queue()
 
     async def flush_queue(self):
@@ -64,9 +58,7 @@ class CustomBatchLogger(CustomLogger):
         async with self.flush_lock:
             if self.log_queue:
                 log_queue_length = len(self.log_queue)
-                verbose_logger.debug(
-                    "CustomLogger: Flushing batch of %s events", len(self.log_queue)
-                )
+                verbose_logger.debug("CustomLogger: Flushing batch of %s events", len(self.log_queue))
                 try:
                     await self.async_send_batch()
                 except Exception:
@@ -76,8 +68,7 @@ class CustomBatchLogger(CustomLogger):
                     # their own errors, so this only affects loggers that opt
                     # in to surfacing failures (e.g. Rubrik).
                     verbose_logger.exception(
-                        "CustomLogger: async_send_batch raised; preserving "
-                        "%s events in queue for retry",
+                        "CustomLogger: async_send_batch raised; preserving %s events in queue for retry",
                         log_queue_length,
                     )
                     # Guard against unbounded queue growth if the destination
@@ -87,8 +78,7 @@ class CustomBatchLogger(CustomLogger):
                     if overflow > 0:
                         del self.log_queue[:overflow]
                         verbose_logger.warning(
-                            "CustomLogger: log queue exceeded max_queue_size=%s; "
-                            "dropped %s oldest events.",
+                            "CustomLogger: log queue exceeded max_queue_size=%s; dropped %s oldest events.",
                             self.max_queue_size,
                             overflow,
                         )

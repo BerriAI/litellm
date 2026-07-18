@@ -37,7 +37,6 @@ export async function makeOpenAIChatCompletionRequest(
   if (isLocal !== true) {
     console.log = function () {};
   }
-  console.log("isLocal:", isLocal);
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
@@ -134,25 +133,17 @@ export async function makeOpenAIChatCompletionRequest(
     );
 
     for await (const chunk of response) {
-      console.log("Stream chunk:", chunk);
-
       // Process content and measure time to first token
       const delta = chunk.choices[0]?.delta as any;
 
       // Debug what's in the delta
-      console.log("Delta content:", chunk.choices[0]?.delta?.content);
-      console.log("Delta reasoning content:", delta?.reasoning_content);
 
       // Measure time to first token for either content or reasoning_content
       if (!firstTokenReceived && (chunk.choices[0]?.delta?.content || (delta && delta.reasoning_content))) {
         firstTokenReceived = true;
         timeToFirstToken = Date.now() - startTime;
-        console.log("First token received! Time:", timeToFirstToken, "ms");
         if (onTimingData) {
-          console.log("Calling onTimingData with:", timeToFirstToken);
           onTimingData(timeToFirstToken);
-        } else {
-          console.log("onTimingData callback is not defined!");
         }
       }
 
@@ -165,7 +156,6 @@ export async function makeOpenAIChatCompletionRequest(
 
       // Process image generation if present
       if (delta && delta.image && onImageGenerated) {
-        console.log("Image generated:", delta.image);
         onImageGenerated(delta.image.url, chunk.model);
       }
 
@@ -180,7 +170,6 @@ export async function makeOpenAIChatCompletionRequest(
 
       // Check for search results in provider_specific_fields
       if (delta && delta.provider_specific_fields?.search_results && onSearchResults) {
-        console.log("Search results found:", delta.provider_specific_fields.search_results);
         onSearchResults(delta.provider_specific_fields.search_results);
       }
 
@@ -208,7 +197,6 @@ export async function makeOpenAIChatCompletionRequest(
               timestamp: Date.now(),
             };
             onMCPEvent(toolsEvent);
-            console.log("MCP list_tools event sent:", toolsEvent);
           }
         }
 
@@ -219,20 +207,11 @@ export async function makeOpenAIChatCompletionRequest(
         if (providerFields.mcp_call_results) {
           mcpMetadata.mcp_call_results = providerFields.mcp_call_results;
         }
-
-        if (providerFields.mcp_list_tools || providerFields.mcp_tool_calls || providerFields.mcp_call_results) {
-          console.log("MCP metadata found in chunk:", {
-            mcp_list_tools: providerFields.mcp_list_tools ? "present" : "absent",
-            mcp_tool_calls: providerFields.mcp_tool_calls ? "present" : "absent",
-            mcp_call_results: providerFields.mcp_call_results ? "present" : "absent",
-          });
-        }
       }
 
       // Check for usage data using type assertion
       const chunkWithUsage = chunk as any;
       if (chunkWithUsage.usage && onUsageData) {
-        console.log("Usage data found:", chunkWithUsage.usage);
         const usageData: TokenUsage = {
           completionTokens: chunkWithUsage.usage.completion_tokens,
           promptTokens: chunkWithUsage.usage.prompt_tokens,
@@ -284,7 +263,6 @@ export async function makeOpenAIChatCompletionRequest(
             timestamp: Date.now(),
           };
           onMCPEvent(callEvent);
-          console.log("MCP call event sent:", callEvent);
         });
       }
     }
@@ -295,9 +273,6 @@ export async function makeOpenAIChatCompletionRequest(
       onTotalLatency(totalLatency);
     }
   } catch (error) {
-    if (signal?.aborted) {
-      console.log("Chat completion request was cancelled");
-    }
     throw error; // Re-throw to allow the caller to handle the error
   }
 }

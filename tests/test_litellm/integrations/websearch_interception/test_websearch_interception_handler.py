@@ -8,9 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
+from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, ProxyException, UserAPIKeyAuth
 from litellm.types.utils import LlmProviders
 
 
@@ -55,9 +58,7 @@ def test_initialize_from_proxy_config_honors_dict_callback_specific_params():
     """A valid dict under callback_settings.websearch_interception is applied."""
     logger = WebSearchInterceptionLogger.initialize_from_proxy_config(
         litellm_settings={},
-        callback_specific_params={
-            "websearch_interception": {"search_tool_name": "ws-tool"}
-        },
+        callback_specific_params={"websearch_interception": {"search_tool_name": "ws-tool"}},
     )
 
     assert logger.search_tool_name == "ws-tool"
@@ -118,9 +119,7 @@ async def test_async_build_agentic_loop_plan_returns_request_patch():
         "response_format": "anthropic",
     }
     logging_obj = MagicMock()
-    logging_obj.model_call_details = {
-        "agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}
-    }
+    logging_obj.model_call_details = {"agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}}
     kwargs = {
         "temperature": 0.2,
         "_websearch_interception_converted_stream": True,
@@ -161,8 +160,6 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     to the follow-up LLM request, causing "Extra inputs are not permitted" errors
     from providers like Bedrock that use strict parameter validation.
     """
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
     # Simulate kwargs that would be passed during agentic loop execution
     kwargs_with_internal_flags = {
         "_websearch_interception_converted_stream": True,
@@ -173,9 +170,7 @@ async def test_internal_flags_filtered_from_followup_kwargs():
 
     # Apply the same filtering logic used in _execute_agentic_loop
     kwargs_for_followup = {
-        k: v
-        for k, v in kwargs_with_internal_flags.items()
-        if not k.startswith("_websearch_interception")
+        k: v for k, v in kwargs_with_internal_flags.items() if not k.startswith("_websearch_interception")
     }
 
     # Verify internal flags are filtered out
@@ -185,6 +180,138 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     # Verify regular kwargs are preserved
     assert kwargs_for_followup["temperature"] == 0.7
     assert kwargs_for_followup["max_tokens"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_execute_search_passes_selected_search_tool_litellm_params(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"],
+        search_tool_name="ui-tavily",
+    )
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "ui-tavily",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "fake-ui-key",
+                "api_base": "https://api.tavily.com",
+                "timeout": 10.0,
+                "max_retries": 2,
+                "country": None,
+            },
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    user_api_key_auth = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-allowed-search",
+            search_tools=["ui-tavily"],
+        )
+    )
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await logger._execute_search(
+        "what is litellm",
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": user_api_key_auth}}},
+    )
+
+    mock_asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="tavily",
+        api_key="fake-ui-key",
+        api_base="https://api.tavily.com",
+        timeout=10.0,
+        max_retries=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_enforces_key_search_tool_permission(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"],
+        search_tool_name="blocked-search",
+    )
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "blocked-search",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "fake-ui-key",
+            },
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    user_api_key_auth = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key-search",
+            search_tools=["allowed-search"],
+        )
+    )
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    with pytest.raises(ProxyException):
+        await logger._execute_search(
+            "what is litellm",
+            kwargs={"metadata": {"user_api_key_auth": user_api_key_auth}},
+        )
+
+    mock_asearch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_search_enforces_team_search_tool_permission(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"],
+        search_tool_name="blocked-search",
+    )
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "blocked-search",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "fake-ui-key",
+            },
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    team_key_auth = UserAPIKeyAuth(team_id="team-1")
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-team-search",
+            search_tools=["allowed-search"],
+        ),
+    )
+    mock_get_team_object = AsyncMock(return_value=team_object)
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", mock_get_team_object)
+
+    with pytest.raises(ProxyException):
+        await logger._execute_search(
+            "what is litellm",
+            kwargs={"metadata": {"user_api_key_auth": team_key_auth}},
+        )
+
+    mock_get_team_object.assert_awaited_once()
+    mock_asearch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -215,15 +342,12 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     assert result is not None
     # The web_search tool should be converted to litellm_web_search (OpenAI format)
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # The non-web-search tool should be preserved
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "other_tool"
-        for t in result["tools"]
+        t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool" for t in result["tools"]
     )
 
 
@@ -260,8 +384,7 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     assert result["custom_llm_provider"] == "openai"
     # Tools should be converted
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
 
@@ -322,8 +445,7 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
 
     assert result is not None
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
@@ -356,8 +478,7 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
     assert result is not None
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
@@ -409,3 +530,100 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+
+def test_sync_forced_tool_choice_repoints_converted_web_search():
+    """Regression (tool_choice 400): a forced tool_choice naming the original
+    web_search tool must be repointed to litellm_web_search after conversion.
+
+    Native clients (e.g. Claude Code) send
+    tool_choice={"type": "tool", "name": "web_search"}. The tool definition is
+    renamed to litellm_web_search, so an unrewritten tool_choice points at a
+    tool that no longer exists and Anthropic rejects with
+    "Tool 'web_search' not found in provided tools".
+    """
+    converted_tools = [
+        {
+            "type": "function",
+            "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "parameters": {}},
+        }
+    ]
+
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
+        {"type": "tool", "name": "web_search"}, converted_tools
+    )
+
+    assert result == {"type": "tool", "name": LITELLM_WEB_SEARCH_TOOL_NAME}
+
+
+def test_sync_forced_tool_choice_leaves_existing_tool_untouched():
+    """A native Anthropic tool_choice already naming a tool on the converted
+    list (top-level name, no function wrapper) must not be rewritten."""
+    converted_tools = [{"name": LITELLM_WEB_SEARCH_TOOL_NAME}]
+
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
+        {"type": "tool", "name": LITELLM_WEB_SEARCH_TOOL_NAME}, converted_tools
+    )
+
+    assert result == {"type": "tool", "name": LITELLM_WEB_SEARCH_TOOL_NAME}
+
+
+def test_sync_forced_tool_choice_preserves_extra_tool_choice_fields():
+    """Repointing must keep other tool_choice keys intact."""
+    converted_tools = [
+        {
+            "type": "function",
+            "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "parameters": {}},
+        }
+    ]
+
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
+        {"type": "tool", "name": "web_search", "disable_parallel_tool_use": True},
+        converted_tools,
+    )
+
+    assert result == {
+        "type": "tool",
+        "name": LITELLM_WEB_SEARCH_TOOL_NAME,
+        "disable_parallel_tool_use": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["auto", {"type": "auto"}, {"type": "any"}, None],
+)
+def test_sync_forced_tool_choice_leaves_non_forced_untouched(tool_choice):
+    """Only a forced {"type": "tool", ...} choice is rewritten; auto/any/string
+    and None pass through unchanged."""
+    converted_tools = [{"name": LITELLM_WEB_SEARCH_TOOL_NAME}]
+
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(tool_choice, converted_tools)
+
+    assert result == tool_choice
+
+
+@pytest.mark.asyncio
+async def test_pre_request_hook_syncs_forced_tool_choice():
+    """End-to-end: async_pre_request_hook converts web_search and repoints the
+    forced tool_choice in the same pass, so the outgoing request is consistent.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+
+    kwargs = {
+        "litellm_params": {"custom_llm_provider": "anthropic"},
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+        "tool_choice": {"type": "tool", "name": "web_search"},
+    }
+
+    result = await logger.async_pre_request_hook(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "search the web"}],
+        kwargs=kwargs,
+    )
+
+    assert result is not None
+    assert result["tool_choice"] == {
+        "type": "tool",
+        "name": LITELLM_WEB_SEARCH_TOOL_NAME,
+    }

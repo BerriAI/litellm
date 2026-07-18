@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator, List, Literal
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic import BaseModel
@@ -64,6 +64,13 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isin
 
 
 class RepelloAIGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     @staticmethod
     def _get_field(obj: object, key: str) -> object:
         if _is_object_dict(obj):
@@ -107,9 +114,7 @@ class RepelloAIGuardrail(CustomGuardrail):
                         for item in items:
                             if isinstance(item, str) and item:
                                 texts.append(item)
-                remaining: list[object] = [
-                    v for k, v in current.items() if k not in _SCHEMA_EXTRACTED_KEYS
-                ]
+                remaining: list[object] = [v for k, v in current.items() if k not in _SCHEMA_EXTRACTED_KEYS]
                 stack.extend(reversed(remaining))
             elif _is_object_list(current):
                 stack.extend(reversed(current))
@@ -142,17 +147,10 @@ class RepelloAIGuardrail(CustomGuardrail):
         asset_id: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         guardrail_name: str | None = None,
-        event_hook: (
-            GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None
-        ) = None,
+        event_hook: (GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None) = None,
         default_on: bool = False,
     ):
-        self.repelloai_api_key = (
-            api_key
-            or get_secret_str("ARGUS_API_KEY")
-            or get_secret_str("REPELLOAI_API_KEY")
-            or ""
-        )
+        self.repelloai_api_key = api_key or get_secret_str("ARGUS_API_KEY") or get_secret_str("REPELLOAI_API_KEY") or ""
         if not self.repelloai_api_key:
             raise RepelloAIGuardrailMissingSecrets(
                 "Couldn't get Repello API key. Set `ARGUS_API_KEY` in the environment "
@@ -166,11 +164,7 @@ class RepelloAIGuardrail(CustomGuardrail):
                 "dashboard and set `asset_id` on the guardrail in the config file."
             )
 
-        self.api_base = (
-            api_base
-            or get_secret_str("REPELLOAI_API_BASE")
-            or DEFAULT_REPELLOAI_API_BASE
-        )
+        self.api_base = api_base or get_secret_str("REPELLOAI_API_BASE") or DEFAULT_REPELLOAI_API_BASE
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
@@ -182,6 +176,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
         )
 
     async def _call_analyze(
@@ -214,9 +209,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             self._raise_for_config_error(response)
             response.raise_for_status()
             try:
-                repelloai_response = TypeAdapter(
-                    RepelloAIAnalyzeResponse
-                ).validate_json(response.text)
+                repelloai_response = TypeAdapter(RepelloAIAnalyzeResponse).validate_json(response.text)
             except ValidationError as e:
                 raise HTTPException(
                     status_code=500,
@@ -225,17 +218,13 @@ class RepelloAIGuardrail(CustomGuardrail):
                         "status_code": response.status_code,
                     },
                 ) from e
-            verbose_proxy_logger.debug(
-                "RepelloAI Argus response: %s", repelloai_response
-            )
+            verbose_proxy_logger.debug("RepelloAI Argus response: %s", repelloai_response)
             if self._verdict_blocks(repelloai_response):
                 status = "guardrail_intervened"
             return repelloai_response
         except HTTPException as e:
             status = "guardrail_failed_to_respond"
-            guardrail_json_response = (
-                str(e.detail) if not isinstance(e.detail, (dict, list)) else e.detail
-            )  # type: ignore[assignment]
+            guardrail_json_response = str(e.detail) if not isinstance(e.detail, (dict, list)) else e.detail  # type: ignore[assignment]
             raise
         except HTTPError as e:
             status = "guardrail_failed_to_respond"
@@ -244,9 +233,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         except Exception as e:
             status = "guardrail_failed_to_respond"
             guardrail_json_response = str(e)
-            raise HTTPException(
-                status_code=500, detail={"error": "RepelloAI Argus guardrail failed"}
-            ) from e
+            raise HTTPException(status_code=500, detail={"error": "RepelloAI Argus guardrail failed"}) from e
         finally:
             end_time = datetime.now()
             if repelloai_response is not None:
@@ -273,9 +260,7 @@ class RepelloAIGuardrail(CustomGuardrail):
                 },
             )
 
-    def _verdict_blocks(
-        self, repelloai_response: RepelloAIAnalyzeResponse | None
-    ) -> bool:
+    def _verdict_blocks(self, repelloai_response: RepelloAIAnalyzeResponse | None) -> bool:
         if repelloai_response is None:
             return False
         verdict = repelloai_response.get("verdict")
@@ -298,9 +283,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             )
         return None
 
-    def _raise_if_blocked(
-        self, repelloai_response: RepelloAIAnalyzeResponse | None
-    ) -> None:
+    def _raise_if_blocked(self, repelloai_response: RepelloAIAnalyzeResponse | None) -> None:
         if repelloai_response is None:
             return
         if self._verdict_blocks(repelloai_response):
@@ -311,9 +294,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         self._log_flagged_verdict(repelloai_response)
 
     @classmethod
-    def _format_blocked_detail(
-        cls, repelloai_response: RepelloAIAnalyzeResponse
-    ) -> str:
+    def _format_blocked_detail(cls, repelloai_response: RepelloAIAnalyzeResponse) -> str:
         policies = repelloai_response.get("policies_violated")
         if not isinstance(policies, list) or not policies:
             return "Blocked by RepelloAI Argus guardrail."
@@ -348,11 +329,7 @@ class RepelloAIGuardrail(CustomGuardrail):
     @staticmethod
     def _extract_prompt_message_text(data: dict[str, object]) -> list[str]:
         messages = build_inspection_messages(data)
-        return [
-            content
-            for message in messages
-            if isinstance(content := message.get("content"), str) and content
-        ]
+        return [content for message in messages if isinstance(content := message.get("content"), str) and content]
 
     @staticmethod
     def _extract_input_text_parts(content: object) -> list[str]:
@@ -420,9 +397,7 @@ class RepelloAIGuardrail(CustomGuardrail):
 
         text = self._extract_prompt_text(data)
         if not text:
-            verbose_proxy_logger.warning(
-                "RepelloAI Argus: no inspectable prompt text in data - skipping."
-            )
+            verbose_proxy_logger.warning("RepelloAI Argus: no inspectable prompt text in data - skipping.")
             return data
 
         repelloai_response = await self._call_analyze(
@@ -433,9 +408,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         )
         self._raise_if_blocked(repelloai_response)
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return data
 
     async def async_post_call_success_hook(
@@ -457,9 +430,7 @@ class RepelloAIGuardrail(CustomGuardrail):
 
         text = self._extract_response_text(response)
         if not text:
-            verbose_proxy_logger.warning(
-                "RepelloAI Argus: no inspectable response text - skipping."
-            )
+            verbose_proxy_logger.warning("RepelloAI Argus: no inspectable response text - skipping.")
             return response
 
         repelloai_response = await self._call_analyze(
@@ -470,9 +441,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         )
         self._raise_if_blocked(repelloai_response)
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         return response
 
     async def async_post_call_streaming_iterator_hook(
@@ -501,11 +470,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         assembled = litellm_main.stream_chunk_builder(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             chunks=chunks
         )
-        text = (
-            self._extract_response_text(assembled)
-            if isinstance(assembled, ModelResponse)
-            else None
-        )
+        text = self._extract_response_text(assembled) if isinstance(assembled, ModelResponse) else None
         if text:
             repelloai_response = await self._call_analyze(
                 text=text,
@@ -519,9 +484,7 @@ class RepelloAIGuardrail(CustomGuardrail):
                 from litellm.proxy.proxy_server import StreamingCallbackError
 
                 raise StreamingCallbackError("Blocked by RepelloAI Argus guardrail")
-            add_guardrail_to_applied_guardrails_header(
-                request_data=request_data, guardrail_name=self.guardrail_name
-            )
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
         else:
             verbose_proxy_logger.warning(
                 "RepelloAI Argus: no inspectable text in streamed response; skipping scan. "
@@ -553,9 +516,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         return RepelloAIGuardrail._extract_responses_api_text(response_dict)
 
     @classmethod
-    def _extract_chat_completion_text(
-        cls, response_dict: dict[str, object]
-    ) -> str | None:
+    def _extract_chat_completion_text(cls, response_dict: dict[str, object]) -> str | None:
         choices = response_dict.get("choices")
         if not _is_object_list(choices):
             return None

@@ -4,7 +4,7 @@
 #
 # +-------------------------------------------------------------+
 import os
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -27,6 +28,13 @@ GUARDRAIL_TIMEOUT = 5
 
 
 class ZscalerAIGuard(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -37,16 +45,13 @@ class ZscalerAIGuard(CustomGuardrail):
         send_user_api_key_team_id: Optional[bool] = None,
         **kwargs,
     ):
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.optional_params = kwargs
         self.zscaler_ai_guard_url = api_base or os.getenv(
             "ZSCALER_AI_GUARD_URL",
             "https://api.us1.zseclipse.net/v1/detection/execute-policy",
         )
-        self.policy_id = (
-            policy_id
-            if policy_id is not None
-            else int(os.getenv("ZSCALER_AI_GUARD_POLICY_ID", -1))
-        )
+        self.policy_id = policy_id if policy_id is not None else int(os.getenv("ZSCALER_AI_GUARD_POLICY_ID", -1))
         self.api_key = api_key or os.getenv("ZSCALER_AI_GUARD_API_KEY")
         self.send_user_api_key_alias = (
             send_user_api_key_alias
@@ -56,14 +61,12 @@ class ZscalerAIGuard(CustomGuardrail):
         self.send_user_api_key_user_id = (
             send_user_api_key_user_id
             if send_user_api_key_user_id is not None
-            else os.getenv("SEND_USER_API_KEY_USER_ID", "False").lower()
-            in ("true", "1")
+            else os.getenv("SEND_USER_API_KEY_USER_ID", "False").lower() in ("true", "1")
         )
         self.send_user_api_key_team_id = (
             send_user_api_key_team_id
             if send_user_api_key_team_id is not None
-            else os.getenv("SEND_USER_API_KEY_TEAM_ID", "False").lower()
-            in ("true", "1")
+            else os.getenv("SEND_USER_API_KEY_TEAM_ID", "False").lower() in ("true", "1")
         )
 
         verbose_proxy_logger.debug(
@@ -77,9 +80,7 @@ class ZscalerAIGuard(CustomGuardrail):
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
 
     @staticmethod
-    def _resolve_metadata_value(
-        request_data: Optional[dict], key: str
-    ) -> Optional[str]:
+    def _resolve_metadata_value(request_data: Optional[dict], key: str) -> Optional[str]:
         """
         Resolve metadata value from request_data, checking both metadata locations.
 
@@ -161,9 +162,7 @@ class ZscalerAIGuard(CustomGuardrail):
                     user_api_key_metadata.get("zguard_policy_id")
                     if "zguard_policy_id" in user_api_key_metadata
                     else (
-                        team_metadata.get("zguard_policy_id")
-                        if "zguard_policy_id" in team_metadata
-                        else self.policy_id
+                        team_metadata.get("zguard_policy_id") if "zguard_policy_id" in team_metadata else self.policy_id
                     )
                 )
             )
@@ -171,19 +170,14 @@ class ZscalerAIGuard(CustomGuardrail):
 
             kwargs = {}
             if self.send_user_api_key_alias:
-                kwargs["user_api_key_alias"] = (
-                    self._resolve_metadata_value(request_data, "user_api_key_alias")
-                    or "N/A"
-                )
+                kwargs["user_api_key_alias"] = self._resolve_metadata_value(request_data, "user_api_key_alias") or "N/A"
             if self.send_user_api_key_team_id:
                 kwargs["user_api_key_team_id"] = (
-                    self._resolve_metadata_value(request_data, "user_api_key_team_id")
-                    or "N/A"
+                    self._resolve_metadata_value(request_data, "user_api_key_team_id") or "N/A"
                 )
             if self.send_user_api_key_user_id:
                 kwargs["user_api_key_user_id"] = (
-                    self._resolve_metadata_value(request_data, "user_api_key_user_id")
-                    or "N/A"
+                    self._resolve_metadata_value(request_data, "user_api_key_user_id") or "N/A"
                 )
             verbose_proxy_logger.debug(f"inside apply_guardrail kwargs: {kwargs}")
 
@@ -201,20 +195,13 @@ class ZscalerAIGuard(CustomGuardrail):
                     content=concatenated_text,
                     **kwargs,
                 )
-                verbose_proxy_logger.debug(
-                    f"response from zscaler ai guards: {zscaler_ai_guard_result}"
-                )
-            if (
-                zscaler_ai_guard_result
-                and zscaler_ai_guard_result.get("action") == "BLOCK"
-            ):
+                verbose_proxy_logger.debug(f"response from zscaler ai guards: {zscaler_ai_guard_result}")
+            if zscaler_ai_guard_result and zscaler_ai_guard_result.get("action") == "BLOCK":
                 blocking_info = zscaler_ai_guard_result.get("zscaler_ai_guard_response")
                 error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
                 raise Exception(error_message)
         except Exception as e:
-            verbose_proxy_logger.error(
-                "ZscalerAIGuard: Failed to apply guardrail: %s", str(e)
-            )
+            verbose_proxy_logger.error("ZscalerAIGuard: Failed to apply guardrail: %s", str(e))
             raise e
 
         verbose_proxy_logger.debug("ZscalerAIGuard: Successfully applied guardrail.")
@@ -256,9 +243,7 @@ class ZscalerAIGuard(CustomGuardrail):
         if self.send_user_api_key_alias:
             verbose_proxy_logger.debug(f"kwargs: {kwargs}")
             user_api_key_alias = kwargs.get("user_api_key_alias", "N/A")
-            verbose_proxy_logger.debug(
-                f"kwargs user_api_key_alias: {user_api_key_alias}"
-            )
+            verbose_proxy_logger.debug(f"kwargs user_api_key_alias: {user_api_key_alias}")
             extra_headers.update({"user-api-key-alias": user_api_key_alias})
 
         if self.send_user_api_key_team_id:
@@ -273,9 +258,7 @@ class ZscalerAIGuard(CustomGuardrail):
         return extra_headers
 
     async def _send_request(self, url, headers, data):
-        async_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         response = await async_client.post(
             f"{url}",
@@ -289,12 +272,8 @@ class ZscalerAIGuard(CustomGuardrail):
     def _handle_response(self, response, direction):
         # Raise exceptions on critical errors to stop the request
         if response.status_code == 429:  # Rate limit
-            verbose_proxy_logger.error(
-                "Zscaler AI Guard rate limit reached. Blocking request."
-            )
-            user_facing_error = self._create_user_facing_error(
-                "Rate limit reached. status_code: 429"
-            )
+            verbose_proxy_logger.error("Zscaler AI Guard rate limit reached. Blocking request.")
+            user_facing_error = self._create_user_facing_error("Rate limit reached. status_code: 429")
             # This exception will be caught by the proxy and returned to the user
             raise HTTPException(status_code=500, detail=user_facing_error)
 
@@ -302,9 +281,7 @@ class ZscalerAIGuard(CustomGuardrail):
             verbose_proxy_logger.error(
                 f"Zscaler AI Guard service is unavailable (Status: {response.status_code}). Blocking request."
             )
-            user_facing_error = self._create_user_facing_error(
-                f"Service is unavailable (HTTP {response.status_code})"
-            )
+            user_facing_error = self._create_user_facing_error(f"Service is unavailable (HTTP {response.status_code})")
             raise HTTPException(status_code=500, detail=user_facing_error)
 
         if response.status_code == 200:
@@ -341,23 +318,15 @@ class ZscalerAIGuard(CustomGuardrail):
                     raise HTTPException(status_code=500, detail=user_facing_error)
             else:
                 errorMsg = json_response.get("errorMsg", None)
-                verbose_proxy_logger.error(
-                    f"statusCode in response: {statusCode_in_response}, errorMsg: {errorMsg}"
-                )
+                verbose_proxy_logger.error(f"statusCode in response: {statusCode_in_response}, errorMsg: {errorMsg}")
                 user_facing_error = self._create_user_facing_error(
                     f"statusCode in response: {statusCode_in_response}, errorMsg: {errorMsg}"
                 )
                 raise HTTPException(status_code=500, detail=user_facing_error)
         else:
-            verbose_proxy_logger.error(
-                f"Zscaler AI Guard status_code - {response.status_code}"
-            )
-            user_facing_error = self._create_user_facing_error(
-                f"Response status code: {response.status_code}"
-            )
-            raise HTTPException(
-                status_code=response.status_code, detail=user_facing_error
-            )
+            verbose_proxy_logger.error(f"Zscaler AI Guard status_code - {response.status_code}")
+            user_facing_error = self._create_user_facing_error(f"Response status code: {response.status_code}")
+            raise HTTPException(status_code=response.status_code, detail=user_facing_error)
 
     async def make_zscaler_ai_guard_api_call(
         self, zscaler_ai_guard_url, api_key, policy_id, direction, content, **kwargs
@@ -378,9 +347,7 @@ class ZscalerAIGuard(CustomGuardrail):
         if policy_id is not None and policy_id >= 1:
             data["policyId"] = policy_id
         try:
-            response = await self._send_request(
-                zscaler_ai_guard_url, extra_headers, data
-            )
+            response = await self._send_request(zscaler_ai_guard_url, extra_headers, data)
             return self._handle_response(response, direction)
         except Exception as e:
             verbose_proxy_logger.error(f"{e}. Blocking request.")

@@ -63,9 +63,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "response_format":
-                optional_params["responseFormat"] = self._normalize_response_format(
-                    value
-                )
+                optional_params["responseFormat"] = self._normalize_response_format(value)
         return optional_params
 
     def _normalize_response_format(self, value: Any) -> Any:
@@ -131,15 +129,11 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         return request_data
 
     def _build_media_source(self, optional_params: dict) -> Optional[dict]:
-        direct_source = optional_params.get("mediaSource") or optional_params.get(
-            "media_source"
-        )
+        direct_source = optional_params.get("mediaSource") or optional_params.get("media_source")
         if isinstance(direct_source, dict):
             return direct_source
 
-        base64_input = optional_params.get("video_base64") or optional_params.get(
-            "base64_string"
-        )
+        base64_input = optional_params.get("video_base64") or optional_params.get("base64_string")
         if base64_input:
             return {"base64String": get_base64_str(base64_input)}
 
@@ -235,8 +229,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             if (
                 message_content
                 and hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None)
-                is None
+                and getattr(model_response.choices[0].message, "tool_calls", None) is None
             ):
                 model_response.choices[0].message.content = message_content  # type: ignore
                 model_response.choices[0].finish_reason = finish_reason
@@ -249,16 +242,10 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             )
 
         # Calculate usage from headers
-        bedrock_input_tokens = raw_response.headers.get(
-            "x-amzn-bedrock-input-token-count", None
-        )
-        bedrock_output_tokens = raw_response.headers.get(
-            "x-amzn-bedrock-output-token-count", None
-        )
+        bedrock_input_tokens = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
+        bedrock_output_tokens = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
 
-        prompt_tokens = int(
-            bedrock_input_tokens or litellm.token_counter(messages=messages)
-        )
+        prompt_tokens = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 
         completion_tokens = int(
             bedrock_output_tokens

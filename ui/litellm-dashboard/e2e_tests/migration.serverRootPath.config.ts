@@ -6,14 +6,6 @@ import { defineConfig, devices } from "@playwright/test";
  * running. globalSetup logs in at `${SERVER_ROOT_PATH}/ui/login` so the admin
  * storage state is valid under the prefix.
  */
-if (!process.env.SERVER_ROOT_PATH) {
-  throw new Error(
-    "migration.serverRootPath.config.ts requires SERVER_ROOT_PATH to be set (e.g. SERVER_ROOT_PATH=/litellm). " +
-      "Without it this config silently re-runs the default mount and never exercises the prefix. " +
-      "For the root-less run use the default playwright.config.ts (npm run e2e:migration).",
-  );
-}
-
 export default defineConfig({
   testDir: "./tests/migration",
   testMatch: ["migratedPages.spec.ts"],
@@ -34,5 +26,5 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   timeout: 3 * 60 * 1000,
   expect: { timeout: 10 * 1000 },
-  globalSetup: require.resolve("./globalSetup"),
+  globalSetup: require.resolve("./migration.serverRootPath.globalSetup"),
 });

@@ -17,7 +17,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.ocr.rust_bridge import (
+from litellm.rust_bridge.ocr import (
     RustAocr,
     RustOcr,
     RustOcrError,
@@ -182,6 +182,8 @@ def _resolve_ocr_call_context(
             "Must be 'document_url', 'image_url', or 'file'"
         )
 
+    caller_supplied_api_base = api_base is not None
+
     (
         model,
         custom_llm_provider,
@@ -196,7 +198,15 @@ def _resolve_ocr_call_context(
 
     if dynamic_api_key:
         api_key = dynamic_api_key
-    if dynamic_api_base:
+    suppress_dynamic_api_base = (
+        not caller_supplied_api_base
+        and custom_llm_provider == "azure_ai"
+        and (
+            "doc-intelligence" in model.lower()
+            or "documentintelligence" in model.lower()
+        )
+    )
+    if dynamic_api_base and not suppress_dynamic_api_base:
         api_base = dynamic_api_base
 
     verbose_logger.debug(f"OCR call - model: {model}, provider: {custom_llm_provider}")
@@ -225,7 +235,7 @@ def _resolve_ocr_call_context(
         optional_params=optional_params,
         litellm_params={
             "litellm_call_id": litellm_call_id,
-            "api_base": api_base,
+            "api_base": api_base or "",
         },
         custom_llm_provider=custom_llm_provider,
     )
@@ -261,7 +271,7 @@ def _run_pre_call_logging(
                 "document": document,
                 **optional_params,
             },
-            "api_base": api_base,
+            "api_base": api_base or "",
             "headers": extra_headers or {},
         },
     )

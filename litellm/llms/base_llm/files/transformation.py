@@ -65,9 +65,7 @@ class BaseFilesConfig(BaseConfig):
         return "POST"
 
     @abstractmethod
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
         pass
 
     def get_complete_file_url(

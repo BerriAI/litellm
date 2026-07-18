@@ -4,8 +4,6 @@ import { provider_map } from "../provider_info_helpers";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
-    console.log("handling submit for formValues:", formValues);
-
     // Get model mappings and safely remove from formValues
     const modelMappings = formValues["model_mappings"] || [];
     if ("model_mappings" in formValues) {
@@ -88,7 +86,6 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
       // Iterate through the key-value pairs in formValues
       litellmParamsObj["model"] = mapping.litellm_model;
-      console.log("formValues add deployment:", formValues);
       for (const [key, value] of Object.entries(formValues)) {
         if (value === "") {
           continue;
@@ -100,11 +97,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (key == "model_name") {
           litellmParamsObj["model"] = value;
         } else if (key == "custom_llm_provider") {
-          console.log("custom_llm_provider:", value);
           const providerKey = value as string;
           const mappingResult = provider_map[providerKey as keyof typeof provider_map] ?? providerKey.toLowerCase();
           litellmParamsObj["custom_llm_provider"] = mappingResult;
-          console.log("custom_llm_provider mappingResult:", mappingResult);
         } else if (key == "model") {
           continue;
         }
@@ -117,7 +112,6 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         } else if (key === "model_access_group") {
           modelInfoObj["access_groups"] = value;
         } else if (key == "mode") {
-          console.log("placing mode in modelInfo");
           modelInfoObj["mode"] = value;
 
           // remove "mode" from litellmParams
@@ -125,7 +119,6 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         } else if (key === "custom_model_name") {
           litellmParamsObj["model"] = value;
         } else if (key == "litellm_extra_params") {
-          console.log("litellm_extra_params:", value);
           let litellmExtraParams = {};
           if (value && value != undefined) {
             try {
@@ -142,7 +135,6 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
             }
           }
         } else if (key == "model_info_params") {
-          console.log("model_info_params:", value);
           let modelInfoParams = {};
           if (value && value != undefined) {
             try {
@@ -206,7 +198,6 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
       };
 
       const response: any = await modelCreateCall(accessToken, new_model);
-      console.log(`response for model create call: ${response["data"]}`);
     }
 
     callback && callback();

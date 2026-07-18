@@ -314,12 +314,45 @@ class TestEnforceMemberCanAssignAccessGroups:
             access_group_ids=["ag-1"],
         )
 
-    def test_personal_key_out_of_scope(self):
-        """Personal (non-team) keys are not gated by team-member permissions."""
+    def test_personal_key_non_admin_denied(self):
+        """A non-admin cannot self-grant access_group_ids on a personal (no
+        team) key. The access_group_id grants model access at use-time
+        without any team-membership cross-check, so the assignment is the
+        authorization boundary."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+                user_api_key_dict=self._user(),
+                team_table=None,
+                access_group_ids=["ag-private"],
+            )
+        assert exc.value.status_code == 403
+        assert "ag-private" in str(exc.value.detail)
+
+    def test_personal_key_proxy_admin_can_assign(self):
+        """Proxy admins bypass the personal-key gate and may assign access
+        groups on personal keys."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=self._user(role=LitellmUserRoles.PROXY_ADMIN.value),
+            team_table=None,
+            access_group_ids=["ag-private"],
+        )
+
+    def test_personal_key_empty_access_groups_passes(self):
+        """An empty / absent access_group_ids list must not be rejected even
+        on a personal key — the gate only fires when the field is non-empty."""
         TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
             user_api_key_dict=self._user(),
             team_table=None,
-            access_group_ids=["ag-1"],
+            access_group_ids=None,
+        )
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=self._user(),
+            team_table=None,
+            access_group_ids=[],
         )
 
     def test_team_admin_bypasses(self, monkeypatch):

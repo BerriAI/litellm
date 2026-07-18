@@ -27,9 +27,7 @@ async def make_call(
     logging_obj,
     timeout: Optional[Union[float, httpx.Timeout]],
 ):
-    response = await client.post(
-        api_base, headers=headers, data=data, stream=True, timeout=timeout
-    )
+    response = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
 
     if response.status_code != 200:
         raise PredibaseError(status_code=response.status_code, message=response.text)
@@ -216,9 +214,7 @@ class PredibaseChatCompletion:
             params={"timeout": timeout},
         )
         try:
-            response = await async_handler.post(
-                api_base, headers=headers, data=json.dumps(data)
-            )
+            response = await async_handler.post(api_base, headers=headers, data=json.dumps(data))
         except httpx.HTTPStatusError as e:
             raise PredibaseError(
                 status_code=e.response.status_code,

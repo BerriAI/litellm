@@ -29,9 +29,7 @@ class BaseRepository(ABC, Generic[T]):
     @property
     def prisma_client(self) -> Any:
         if self._prisma_client is None:
-            raise RuntimeError(
-                "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
-            )
+            raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
@@ -95,9 +93,7 @@ class BaseRepository(ABC, Generic[T]):
         assert model is not None
         return model
 
-    async def update(
-        self, id_value: str, data: Dict[str, Any], id_field: str = "id"
-    ) -> Optional[T]:
+    async def update(self, id_value: str, data: Dict[str, Any], id_field: str = "id") -> Optional[T]:
         """Update an existing record."""
         record = await self.table.update(where={id_field: id_value}, data=data)
         return self._to_model(record)

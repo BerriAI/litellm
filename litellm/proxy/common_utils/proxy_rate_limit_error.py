@@ -144,9 +144,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         self,
         detail: Any,
         headers: Optional[Mapping[str, Any]] = None,
-        category: Union[
-            str, RateLimitErrorCategory
-        ] = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+        category: Union[str, RateLimitErrorCategory] = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         model: Optional[str] = None,
         llm_provider: Optional[str] = "litellm_proxy",
@@ -159,9 +157,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         model = model or ""
         llm_provider = llm_provider or "litellm_proxy"
         message = _coerce_message(detail)
-        stringified_headers: Optional[Dict[str, str]] = (
-            {k: str(v) for k, v in headers.items()} if headers else None
-        )
+        stringified_headers: Optional[Dict[str, str]] = {k: str(v) for k, v in headers.items()} if headers else None
 
         # Initialize the FastAPI HTTPException portion first so its attributes
         # (status_code, detail, headers) are already on the instance before

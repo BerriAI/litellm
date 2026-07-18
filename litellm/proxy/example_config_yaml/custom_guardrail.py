@@ -23,9 +23,7 @@ class GuardrailForLBTestingA(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         guardrail_lb_call_count["A"] += 1
-        verbose_proxy_logger.info(
-            f"GuardrailForLBTestingA called. Total A calls: {guardrail_lb_call_count['A']}"
-        )
+        verbose_proxy_logger.info(f"GuardrailForLBTestingA called. Total A calls: {guardrail_lb_call_count['A']}")
         return data
 
 
@@ -40,9 +38,7 @@ class GuardrailForLBTestingB(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         guardrail_lb_call_count["B"] += 1
-        verbose_proxy_logger.info(
-            f"GuardrailForLBTestingB called. Total B calls: {guardrail_lb_call_count['B']}"
-        )
+        verbose_proxy_logger.info(f"GuardrailForLBTestingB called. Total B calls: {guardrail_lb_call_count['B']}")
         return data
 
 
@@ -79,9 +75,7 @@ class myCustomGuardrail(CustomGuardrail):
                         _content = _content.replace("litellm", "********")
                         message["content"] = _content
 
-        verbose_proxy_logger.debug(
-            "async_pre_call_hook: Message after masking %s", _messages
-        )
+        verbose_proxy_logger.debug("async_pre_call_hook: Message after masking %s", _messages)
 
         return data
 

@@ -19,9 +19,7 @@ from pydantic import SecretStr
 class NoOpAuth(httpx.Auth):
     """Attaches nothing — the `none` mode (and the seam-level default)."""
 
-    def auth_flow(
-        self, request: httpx.Request
-    ) -> Generator[httpx.Request, httpx.Response, None]:
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
         yield request
 
 
@@ -38,8 +36,6 @@ class StaticHeaderAuth(httpx.Auth):
         self.header_name = header_name
         self._header_value = SecretStr(header_value)
 
-    def auth_flow(
-        self, request: httpx.Request
-    ) -> Generator[httpx.Request, httpx.Response, None]:
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
         request.headers[self.header_name] = self._header_value.get_secret_value()
         yield request

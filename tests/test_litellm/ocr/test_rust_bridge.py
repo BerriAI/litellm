@@ -1,4 +1,4 @@
-"""Tests for the Rust-backed OCR path (``litellm/ocr/rust_bridge.py``)."""
+"""Tests for the Rust-backed OCR path."""
 
 import importlib
 import builtins
@@ -11,13 +11,13 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.ocr.rust_bridge import RustOcrError
+from litellm.rust_bridge.ocr import RustOcrError
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
 # explicitly via importlib rather than attribute traversal.
 ocr_main = importlib.import_module("litellm.ocr.main")
-rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
+rust_bridge = importlib.import_module("litellm.rust_bridge.ocr")
 rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
 
 MODEL = "mistral/mistral-ocr-latest"
@@ -418,6 +418,27 @@ def test_run_rust_ocr_runs_pre_call_logging():
     assert complete_input["include_image_base64"] is True
     assert additional_args["api_base"] == "https://api.mistral.ai/v1"
     assert additional_args["headers"] == {"x-trace-id": "trace-1"}
+
+
+def test_run_rust_ocr_logs_empty_api_base_when_rust_resolves_it():
+    logging_obj = RecordingLogging()
+
+    ocr_main._run_rust_ocr(
+        rust_ocr=RecordingBridge(),
+        model="mistral-ocr-latest",
+        document=DOCUMENT,
+        api_key=None,
+        api_base=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        optional_params={},
+        timeout=12.5,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.pre_call_kwargs is not None
+    additional_args = logging_obj.pre_call_kwargs["additional_args"]
+    assert additional_args["api_base"] == ""
 
 
 def test_ocr_routes_to_rust_by_default(fake_bridge):

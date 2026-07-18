@@ -426,6 +426,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "arerank",
             "arealtime",
             "anthropic_messages",
+            "aanthropic_messages",
             "add_message",
             "arun_thread_stream",
             "aresponses",
