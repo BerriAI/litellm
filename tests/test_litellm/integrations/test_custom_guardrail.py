@@ -1585,6 +1585,60 @@ class TestGuardrailInterventionClassification:
         )
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
 
+    @pytest.mark.parametrize("status_code", [400, 403, 422, 429])
+    def test_4xx_http_exception_is_intervention(self, status_code):
+        """A custom guardrail blocking a request with any 4xx HTTPException (not
+        just 400) is a deliberate rejection, not an infra failure."""
+        from fastapi import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="blocked")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.parametrize("status_code", [500, 502, 503])
+    def test_5xx_http_exception_is_not_intervention(self, status_code):
+        """A 5xx HTTPException signals the guardrail infrastructure itself
+        errored out, not a deliberate content decision."""
+        from fastapi import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="upstream error")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is False
+
+    def test_bare_exception_is_not_intervention(self):
+        """A plain exception (e.g. a bug or unhandled error in the guardrail's own
+        code) must still be classified as a failure, not a block."""
+        assert CustomGuardrail._is_guardrail_intervention(ValueError("boom")) is False
+
+    @pytest.mark.asyncio
+    async def test_403_http_exception_logged_as_intervened_not_failed(self):
+        """Regression test: a custom guardrail that blocks a request via
+        HTTPException(status_code=403) (e.g. content policy violation) must be
+        logged as guardrail_intervened ("Blocked" in the Guardrail Monitor UI),
+        not guardrail_failed_to_respond ("Flagged")."""
+        from fastapi import HTTPException
+
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class BlockOnTriggerWordGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-on-trigger-word",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data, **kwargs):
+                raise HTTPException(status_code=403, detail="Blocked by BlockOnTriggerWordGuardrail")
+
+        guardrail = BlockOnTriggerWordGuardrail()
+        request_data: dict = {"metadata": {}}
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(data=request_data)
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"
+
     @pytest.mark.asyncio
     async def test_routing_logged_as_intervened_not_failed(self):
         from litellm.exceptions import SensitiveDataRouteException
