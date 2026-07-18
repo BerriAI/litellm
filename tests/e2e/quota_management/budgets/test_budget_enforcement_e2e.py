@@ -119,12 +119,36 @@ class TeamBudgetCase(_BudgetCase):
 
 
 class InternalUserBudgetCase(_BudgetCase):
+    """A user's max_budget follows the person, not the key. The capped user holds
+    two personal keys (no team, no key budgets) plus a team-member key on an
+    uncapped team; once the first personal key is refused, the other two must be
+    refused as well - a second key is not a fresh allowance, and since #32005 the
+    user budget draws down team keys too. All refusals must be 429 budget_exceeded."""
+
     def init(self) -> None:
         user_id = self.client.create_user(max_budget=3e-6)
         self._undo.append(lambda: self.client.delete_user(user_id))
-        # personal key (no team) -> the user budget governs
         self.key = self.client.generate_key(user_id=user_id)
         self._undo.append(lambda: self.client.delete_key(self.key))
+        self._second_key = self.client.generate_key(user_id=user_id)
+        self._undo.append(lambda: self.client.delete_key(self._second_key))
+        team_id = self.client.create_team(alias=f"e2e-budget-team-{unique_marker()}")
+        self._undo.append(lambda: self.client.delete_team(team_id))
+        self.client.add_team_member(team_id, user_id)
+        self._team_key = self.client.generate_key(team_id=team_id, user_id=user_id)
+        self._undo.append(lambda: self.client.delete_key(self._team_key))
+
+    def run(self) -> None:
+        blocked = _assert_budget_blocks(self.client, self.key)
+        assert blocked.status_code == 429, (
+            f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+        )
+        for label, key in (("second personal key", self._second_key), ("team-member key", self._team_key)):
+            result = self.client.chat(key, "claude-haiku-4-5", f"spend {unique_marker()}", max_tokens=16)
+            assert is_budget_block(result) and result.status_code == 429, (
+                f"the {label} of a user over budget must get the same 429 budget_exceeded, "
+                f"got {result.status_code}: {result.body[:200]}"
+            )
 
 
 class EndUserBudgetCase(_BudgetCase):
