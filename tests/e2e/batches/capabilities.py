@@ -98,7 +98,11 @@ class Capability:
 
     @property
     def jsonl_model(self) -> str:
-        return self.model if self.scenario == "unified" else self.raw_model
+        # Always the provider deployment name. Unified routes via
+        # target_model_names; the JSONL body.model must still be a name Azure /
+        # Vertex accept. Putting the proxy alias here used to depend on a perfect
+        # rewrite, and a stale or mis-selected deployment produced model_not_found.
+        return self.raw_model
 
 
 PROVIDERS: tuple[Provider, ...] = (
