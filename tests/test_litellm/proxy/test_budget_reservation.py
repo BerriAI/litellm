@@ -2280,7 +2280,7 @@ def _drive_streaming_cancel(valid_token, iterator_hook):
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook
     streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
-    return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+    generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),
         user_api_key_dict=valid_token,
         request_data=_request_body(),
@@ -2288,6 +2288,7 @@ def _drive_streaming_cancel(valid_token, iterator_hook):
         serialize_chunk=lambda chunk: chunk,
         serialize_error=lambda exc: str(exc),
     )
+    return generator, streaming_logging_obj
 
 
 @pytest.mark.asyncio
@@ -2306,7 +2307,7 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
             yield ""  # make this an async generator
         raise asyncio.CancelledError()
 
-    generator = _drive_streaming_cancel(valid_token, cancel_before_chunk)
+    generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_before_chunk)
     received = []
     with pytest.raises(asyncio.CancelledError):
         async for chunk in generator:
@@ -2319,6 +2320,7 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
         key="spend:key:key-cancel-no-chunk"
     ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2337,7 +2339,7 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
         yield "data: chunk\n\n"
         raise asyncio.CancelledError()
 
-    generator = _drive_streaming_cancel(valid_token, cancel_after_chunk)
+    generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_after_chunk)
     received = []
     with pytest.raises(asyncio.CancelledError):
         async for chunk in generator:
@@ -2349,6 +2351,7 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
         key="spend:key:key-cancel-after-chunk"
     ) == pytest.approx(2.0)
     assert reservation.get("finalized") is not True
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2383,6 +2386,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
 
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
     # On the slow path the per-chunk hook is awaited before the chunk is yielded
     # to the client; cancel there. Nothing has reached the client yet.
     streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
@@ -2413,6 +2417,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
         key="spend:key:key-cancel-slowpath"
     ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2429,7 +2434,7 @@ async def test_streaming_disconnect_after_consuming_chunk_keeps_reservation(
         yield "data: a\n\n"
         yield "data: b\n\n"
 
-    generator = _drive_streaming_cancel(valid_token, two_chunks)
+    generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, two_chunks)
 
     # Client consumes one chunk, then disconnects. aclose() raises GeneratorExit
     # at the suspended yield, after the chunk already reached the client.
@@ -2442,6 +2447,7 @@ async def test_streaming_disconnect_after_consuming_chunk_keeps_reservation(
         key="spend:key:key-disconnect-after-chunk"
     ) == pytest.approx(2.0)
     assert reservation.get("finalized") is not True
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
