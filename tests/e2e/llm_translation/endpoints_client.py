@@ -70,6 +70,7 @@ class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[ChatMessage]
+    stream: bool | None = None
 
 
 class CacheControl(BaseModel):
@@ -292,7 +293,13 @@ class EndpointsClient:
         )
 
     def messages(
-        self, key: str, model: str, text: str, *, max_tokens: int = 64
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        max_tokens: int = 64,
+        stream: bool = False,
     ) -> StreamingResponse:
         return self._send(
             "/v1/messages",
@@ -301,7 +308,9 @@ class EndpointsClient:
                 model=model,
                 max_tokens=max_tokens,
                 messages=[ChatMessage(role="user", content=text)],
+                stream=True if stream else None,
             ),
+            stream=stream,
         )
 
     def embeddings(self, key: str, model: str, text: str) -> StreamingResponse:

@@ -66,6 +66,7 @@ class TestResponses:
 
         result = endpoints_client.responses(key, model, "reply with one word", stream=True)
         require_successful_call(result)
+        assert result.call_id, "streamed /v1/responses must set x-litellm-call-id"
         delta_events = tuple(
             parsed
             for event in result.stream_events
@@ -74,6 +75,9 @@ class TestResponses:
 
         assert any(event.delta for event in delta_events), "responses stream returned no text deltas"
         assert result.stream_events, "responses stream returned no events"
+        assert result.stream_error is None, (
+            f"stream carried an upstream error after HTTP 200: {result.stream_error}"
+        )
         assert (
             ResponsesStreamEventType.model_validate_json(result.stream_events[-1]).type
             == "response.completed"
@@ -97,6 +101,10 @@ class TestResponses:
         assert parsed.text.strip(), f"/responses returned no output text: {result.body[:300]}"
         assert result.call_id and parsed.id, f"missing response identifiers: {result.body[:300]}"
 
+        assert result.response_cost is not None and result.response_cost > 0, (
+            f"nonstream /v1/responses must set x-litellm-response-cost > 0; "
+            f"got {result.response_cost!r}"
+        )
         rows = endpoints_client.proxy.poll_logs_for_request_id(
             parsed.id,
             predicate=lambda logged_rows: any((row.spend or 0) > 0 for row in logged_rows),
@@ -104,6 +112,40 @@ class TestResponses:
         row = next((logged_row for logged_row in rows if (logged_row.spend or 0) > 0), None)
         assert row is not None, f"no costed spend row for response id {parsed.id}"
         assert "gpt-4o-mini" in (row.model or ""), f"unexpected spend row model: {row.model}"
+
+    @pytest.mark.covers(
+        "llm.responses.openai.basic.stream.works",
+        "llm.responses.openai.basic.nonstream.cost_logged",
+    )
+    def test_responses_stream_logs_spend(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-stream-cost-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.responses(
+            key, model, f"reply with one word {unique_marker()}", stream=True
+        )
+        require_successful_call(result)
+        assert result.call_id, "streamed /v1/responses must set x-litellm-call-id"
+        assert result.stream_events, "responses stream returned no events"
+        assert result.stream_error is None, (
+            f"stream carried an upstream error after HTTP 200: {result.stream_error}"
+        )
+
+        rows = endpoints_client.proxy.poll_logs_for_key(
+            key,
+            min_rows=1,
+            predicate=lambda logged_rows: any((row.spend or 0) > 0 for row in logged_rows),
+        )
+        row = next((logged_row for logged_row in rows if (logged_row.spend or 0) > 0), None)
+        assert row is not None, "streamed /v1/responses must land a costed SpendLogs row"
+        assert (row.spend or 0) > 0
 
     @pytest.mark.covers("llm.responses.openai.tool_use.nonstream.works")
     def test_responses_returns_function_call(
@@ -187,8 +229,13 @@ class TestResponses:
 
         result = endpoints_client.responses(key, model, "reply with one word")
         require_successful_call(result)
+        assert result.call_id, "Responses→Anthropic must set x-litellm-call-id"
         parsed = ResponsesResult.model_validate_json(result.body)
         assert parsed.text.strip(), f"/responses returned no output text: {result.body[:300]}"
+        assert result.response_cost is not None and result.response_cost > 0, (
+            f"Responses→Anthropic must set x-litellm-response-cost > 0; "
+            f"got {result.response_cost!r}"
+        )
 
 
 def _parse_stream_event(
