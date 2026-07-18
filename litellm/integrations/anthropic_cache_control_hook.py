@@ -322,7 +322,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         stand down entirely rather than add more, per the auto-caching contract.
         Tools count: they are a breakpoint the client can mark, they count toward
         the provider's four-block limit, and caching only the tool definitions is
-        a common pattern, so injecting alongside them can exceed the cap.
+        a common pattern, so injecting alongside them can exceed the cap. Tools
+        carry the mark either at the top level (Anthropic shape) or nested under
+        ``function`` (OpenAI shape); the Anthropic chat transform accepts both.
         """
         if any(AnthropicCacheControlHook._count_cache_control_blocks(msg) for msg in messages):
             return True
@@ -330,7 +332,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             if any(isinstance(block, dict) and block.get("cache_control") is not None for block in system):
                 return True
         if tools is not None:
-            return any(isinstance(tool, dict) and tool.get("cache_control") is not None for tool in tools)
+            return any(
+                isinstance(tool, dict)
+                and (
+                    tool.get("cache_control") is not None
+                    or (isinstance(tool.get("function"), dict) and tool["function"].get("cache_control") is not None)
+                )
+                for tool in tools
+            )
         return False
 
     @staticmethod
@@ -391,14 +400,24 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         model: str,
         custom_llm_provider: str | None,
         tools: list | None = None,
+        is_first_pass: bool = True,
     ) -> None:
-        """For /chat/completions: add default injection points to the request params.
+        """For /chat/completions: resolve the injection points the request should carry.
 
-        No-op when injection points are already configured (explicit config wins).
-        Seeding the param lets the existing prompt-management gate and the
-        AnthropicCacheControlHook run unchanged.
+        Configured injection points win over the automatic defaults, but stand
+        down entirely when the client already marked its own cache_control
+        breakpoints (messages or tools): injecting alongside them clashes with
+        the client's caching strategy and can exceed the provider's four-block
+        limit. Only the first pass over a request may make that judgment;
+        ``acompletion`` re-enters ``completion`` after injection has already
+        run, and a later pass would mistake litellm's own injected marks for
+        client ones and drop the non-message points reserved for provider
+        transforms. Seeding the param lets the existing prompt-management gate
+        and the AnthropicCacheControlHook run unchanged.
         """
         if non_default_params.get("cache_control_injection_points"):
+            if is_first_pass and AnthropicCacheControlHook._request_has_cache_control(messages, None, tools):
+                non_default_params.pop("cache_control_injection_points")
             return
         points = AnthropicCacheControlHook.get_default_injection_points(
             messages=messages,
@@ -418,21 +437,35 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         model: str | None = None,
         custom_llm_provider: str | None = None,
         tools: list[dict] | None = None,
+        is_first_pass: bool = True,
     ) -> Tuple[List[Dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
-        When none are configured but ``litellm.enable_anthropic_prompt_caching``
-        is on, synthesize default breakpoints for the native /v1/messages path.
-        Pops the key from kwargs; if remaining (non-message) points exist they
-        are written back so downstream transforms can handle them.
+        Configured points stand down entirely when the client already marked
+        its own cache_control breakpoints anywhere in the request, judged only
+        on the first pass: the async entry re-dispatches into the sync handler
+        after injection has run, and a later pass would mistake litellm's own
+        injected marks for client ones and drop the written-back non-message
+        points. When none are configured but
+        ``litellm.enable_anthropic_prompt_caching`` is on, synthesize default
+        breakpoints for the native /v1/messages path. Pops the key from kwargs;
+        if remaining (non-message) points exist they are written back so
+        downstream transforms can handle them.
         """
+        typed_messages = cast(list[AllMessageValues], messages)  # cast-ok: Anthropic-shaped dicts from v1/messages
         configured = cast(  # cast-ok: kwargs is untyped; this key only holds the documented injection-point list
             list[CacheControlInjectionPoint] | None, kwargs.pop("cache_control_injection_points", None)
         )
+        if (
+            configured
+            and is_first_pass
+            and AnthropicCacheControlHook._request_has_cache_control(typed_messages, system, tools)
+        ):
+            return messages, system
         injection_points: list[CacheControlInjectionPoint] = configured or []
         if not injection_points and model is not None:
             injection_points = AnthropicCacheControlHook.get_default_injection_points(
-                messages=cast(list[AllMessageValues], messages),  # cast-ok: Anthropic-shaped dicts from v1/messages
+                messages=typed_messages,
                 system=system,
                 tools=tools,
                 model=model,
