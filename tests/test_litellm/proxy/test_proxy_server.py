@@ -9029,6 +9029,51 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_general_settings_ui_fields_are_db_overridable():
+    """Every field the Admin UI can edit is a `litellm.<attr>` set via setattr on the handling
+    worker (`_persist_general_settings_ui_litellm_field`). Unless it is also in
+    LITELLM_SETTINGS_SAFE_DB_OVERRIDES, a config reload on a peer worker merges the DB value but
+    never applies it to the live attribute, so peer workers stay on their startup value.
+
+    This invariant is the guard against the two registries drifting: adding a UI-editable field
+    without enrolling it in the DB-override allowlist silently breaks cross-worker propagation.
+    """
+    from litellm.constants import LITELLM_SETTINGS_SAFE_DB_OVERRIDES
+    from litellm.proxy.proxy_server import _GENERAL_SETTINGS_UI_LITELLM_FIELDS
+
+    missing = set(_GENERAL_SETTINGS_UI_LITELLM_FIELDS) - set(LITELLM_SETTINGS_SAFE_DB_OVERRIDES)
+    assert not missing, (
+        f"UI-editable litellm_settings fields missing from LITELLM_SETTINGS_SAFE_DB_OVERRIDES: {sorted(missing)}. "
+        "Add them, or they will not propagate to other workers when changed from the UI."
+    )
+
+
+@pytest.mark.parametrize(
+    "field_name, db_value",
+    [
+        ("enable_anthropic_prompt_caching", True),
+        ("anthropic_prompt_caching_ttl", "1h"),
+    ],
+)
+def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_name, db_value):
+    """A UI toggle on one worker persists to the DB; a peer worker picks it up only when the
+    config reload applies the safe-override allowlist. Regression for the fields being absent
+    from that allowlist, which left peer workers stale."""
+    import litellm.proxy.proxy_server as ps
+
+    # peer worker booted with the opposite/absent value
+    monkeypatch.setattr(litellm, field_name, False if isinstance(db_value, bool) else None)
+
+    pc = ps.ProxyConfig()
+    pc._update_config_fields(
+        current_config={"litellm_settings": {}},
+        param_name="litellm_settings",
+        db_param_value={field_name: db_value},
+    )
+
+    assert getattr(litellm, field_name) == db_value
+
+
 def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
     """The flag defaults to False rather than None, so a plain 'is not None' check would
     report the default as 'In Config' and imply an admin had set it."""
