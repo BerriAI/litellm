@@ -12,10 +12,10 @@ const mockModelInfo = [
 
 const defaultValue: ComplexityRouterConfigValue = {
   tiers: {
-    SIMPLE: "gpt-3.5-turbo",
-    MEDIUM: "gpt-3.5-turbo",
-    COMPLEX: "gpt-4",
-    REASONING: "claude-3-opus",
+    SIMPLE: ["gpt-3.5-turbo"],
+    MEDIUM: ["gpt-3.5-turbo"],
+    COMPLEX: ["gpt-4"],
+    REASONING: ["claude-3-opus"],
   },
   classifier_type: "heuristic",
 };
@@ -58,11 +58,13 @@ describe("ComplexityRouterConfig", () => {
 
   it("should display the how classification works section", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("How Classification Works")).toBeInTheDocument();
   });
 
   it("should show score thresholds in the classification section", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText(/Score < 0.15/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.15 - 0.35/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.35 - 0.60/)).toBeInTheDocument();
@@ -107,6 +109,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("should render the custom technical keywords field", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("Custom Technical Keywords")).toBeInTheDocument();
   });
 
@@ -118,6 +121,7 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={vi.fn()}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("udp")).toBeInTheDocument();
     expect(screen.getByText("kafka")).toBeInTheDocument();
   });
@@ -132,14 +136,16 @@ describe("ComplexityRouterConfig", () => {
         onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
       />,
     );
-    const keywordsCard = screen.getByText("Custom Technical Keywords").closest(".ant-card") as HTMLElement;
-    const input = within(keywordsCard).getByRole("combobox");
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
+    const input = within(keywordsSection).getByRole("combobox");
     await user.type(input, "udp,");
     expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp"]);
   });
 
   it("should render an empty state when no keyword tier rules exist", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Keyword Tier Overrides")).toBeInTheDocument();
     expect(screen.getByText("No keyword tier overrides configured")).toBeInTheDocument();
   });
@@ -158,6 +164,7 @@ describe("ComplexityRouterConfig", () => {
     const user = userEvent.setup();
     const onKeywordTierRulesChange = vi.fn();
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onKeywordTierRulesChange={onKeywordTierRulesChange} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     expect(onKeywordTierRulesChange).toHaveBeenCalledTimes(1);
     const newRules = onKeywordTierRulesChange.mock.calls[0][0];
@@ -175,6 +182,7 @@ describe("ComplexityRouterConfig", () => {
         onKeywordTierRulesChange={onKeywordTierRulesChange}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("invoice")).toBeInTheDocument();
     expect(screen.getByText("refund")).toBeInTheDocument();
 
@@ -184,6 +192,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("should not show embedding model or match score fields when semantic matching is disabled", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} semanticMatchingEnabled={false} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Semantic keyword matching")).toBeInTheDocument();
     expect(screen.queryByText("Embedding model")).not.toBeInTheDocument();
     expect(screen.queryByText("Minimum match score")).not.toBeInTheDocument();
@@ -191,6 +200,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("should show embedding model and match score fields when semantic matching is enabled", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} semanticMatchingEnabled={true} />);
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     expect(screen.getByText("Embedding model")).toBeInTheDocument();
     expect(screen.getByText("Minimum match score")).toBeInTheDocument();
   });
@@ -205,6 +215,7 @@ describe("ComplexityRouterConfig", () => {
         onSemanticMatchingEnabledChange={onSemanticMatchingEnabledChange}
       />,
     );
+    fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("switch"));
     expect(onSemanticMatchingEnabledChange).toHaveBeenCalledWith(true, expect.anything());
   });
@@ -252,10 +263,28 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(
       <ComplexityRouterConfig
         {...baseProps}
-        value={{ ...defaultValue, tiers: { ...defaultValue.tiers, REASONING: "" } }}
+        value={{ ...defaultValue, tiers: { ...defaultValue.tiers, REASONING: [] } }}
         showValidationErrors={true}
       />,
     );
     expect(screen.getAllByText("This tier is required")).toHaveLength(1);
+  });
+
+  it("renders the escalation keywords section with current keywords when the handler is provided", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        escalationKeywords={["LITELLM ESCALATE"]}
+        onEscalationKeywordsChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Escalation Keywords"));
+    expect(screen.getByText("Escalation Keywords")).toBeInTheDocument();
+    expect(screen.getByText("LITELLM ESCALATE")).toBeInTheDocument();
+  });
+
+  it("hides the escalation keywords section when no handler is provided", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.queryByText("Advanced: Escalation Keywords")).not.toBeInTheDocument();
   });
 });

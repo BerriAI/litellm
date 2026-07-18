@@ -62,7 +62,7 @@ def test_key_with_budget_duration_schedules_reset_at_creation(
     key = client.generate_key(max_budget=TINY_CAP, budget_duration=f"{WINDOW_SECONDS}s")
     resources.defer(lambda: client.delete_key(key))
 
-    info = client.gateway.key_info(key)
+    info = client.proxy.key_info(key)
     assert info.budget_reset_at is not None, "budget_duration set no budget_reset_at"
     assert _as_datetime(info.budget_reset_at) > _as_datetime("1970-01-01T00:00:00Z")
 
@@ -99,7 +99,7 @@ def test_key_budget_reset_at_advances_after_window(
     key = client.generate_key(max_budget=TINY_CAP, budget_duration=f"{WINDOW_SECONDS}s")
     resources.defer(lambda: client.delete_key(key))
 
-    before_raw = client.gateway.key_info(key).budget_reset_at
+    before_raw = client.proxy.key_info(key).budget_reset_at
     assert before_raw is not None, "no budget_reset_at scheduled at creation"
     before = _as_datetime(before_raw)
 
@@ -112,7 +112,7 @@ def test_key_budget_reset_at_advances_after_window(
         if not result.ok:
             assert is_budget_block(result), f"non-budget error during reset wait: {result.body[:200]}"
             continue
-        info = client.gateway.key_info(key)
+        info = client.proxy.key_info(key)
         assert info.budget_reset_at is not None, "budget_reset_at cleared by reset"
         assert _as_datetime(info.budget_reset_at) > before, (
             "budget_reset_at did not advance past the pre-reset value"
@@ -145,7 +145,7 @@ def test_multi_window_key_resets_each_window_independently(
 
     start = time.monotonic()
     _drive_to_block(client, key)
-    spend_at_block = client.gateway.key_info(key).spend or 0.0
+    spend_at_block = client.proxy.key_info(key).spend or 0.0
 
     deadline = time.monotonic() + RESET_DEADLINE_SECONDS
     while time.monotonic() < deadline:
@@ -156,7 +156,7 @@ def test_multi_window_key_resets_each_window_independently(
             assert elapsed < WINDOW_SECONDS + 90, (
                 f"tight window reset took {elapsed:.0f}s - too long for {WINDOW_SECONDS}s"
             )
-            assert (client.gateway.key_info(key).spend or 0.0) >= spend_at_block, (
+            assert (client.proxy.key_info(key).spend or 0.0) >= spend_at_block, (
                 "roomy window spend was wiped when only the tight window should reset"
             )
             return

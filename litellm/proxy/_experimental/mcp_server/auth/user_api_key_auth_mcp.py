@@ -18,6 +18,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
     is_bridge_envelope_shaped,
     resolve_bridge_envelope,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+    EnvelopeIdentity,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_TeamTable,
@@ -543,7 +546,7 @@ class MCPRequestHandler:
                 header_key = server.alias or server.server_name
                 if header_key is None:
                     raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-                admitted = await MCPRequestHandler._reload_admitted_key(result.identity.key_hash)
+                admitted = await MCPRequestHandler._reload_admitted_principal(result.identity)
                 await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
                 injected = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
                 new_headers = {**(mcp_server_auth_headers or {}), **injected}
@@ -570,6 +573,89 @@ class MCPRequestHandler:
             request=request,
             request_data=await _read_request_body(request=request),
             route=route,
+        )
+
+    @staticmethod
+    async def _reload_admitted_principal(identity: EnvelopeIdentity) -> UserAPIKeyAuth:
+        """Reload the live litellm record the envelope's subject references.
+
+        Dispatches on the sealed subject type: a ``key_hash`` reloads the virtual key that
+        minted the envelope (the scripted two-header client that presents a litellm key at the
+        token endpoint), a ``user_id`` reloads the user that authenticated interactively (the
+        DCR client, whose SSO login at the bridged authorize yields a user, not a key). Both
+        return a ``UserAPIKeyAuth`` the caller runs through the centralized policy gate, so
+        team/project/org/budget/SCIM enforcement is identical to the principal presenting
+        itself directly."""
+        match identity.subject_type:
+            case "key_hash":
+                return await MCPRequestHandler._reload_admitted_key(identity.subject)
+            case "user_id":
+                return await MCPRequestHandler._reload_admitted_user(identity.subject)
+            case _:
+                assert_never(identity.subject_type)
+
+    @staticmethod
+    async def _reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
+        """Reload the live user an interactively-minted envelope references and admit them as
+        themselves.
+
+        The DCR client authenticates via SSO at the bridged authorize, which yields a user
+        subject rather than a virtual key, so the envelope admits under the user's own
+        identity: the reloaded ``user_id`` and the user's own MCP object permission ride on the
+        returned ``UserAPIKeyAuth``, and the SAME ``get_allowed_mcp_servers`` the key path uses then
+        computes which servers the user may reach, so the user's litellm MCP grants and access groups
+        gate the request exactly as a key's do. Only the user's OWN object permission is bound: a
+        ``UserAPIKeyAuth`` carries a single ``team_id`` while a user may belong to many teams, so
+        team-inherited MCP grants for a user are a follow-up (they need a many-teams union
+        ``get_allowed_mcp_servers`` does not do off one auth object). The caller's centralized policy
+        gate enforces the user's live budget and org state, and a SCIM-deactivated owner fails closed.
+
+        Error handling mirrors the key path's retryable-503 contract, but ``get_user_object`` defeats a
+        type-based check: where ``get_key_object`` raises a typed ``ProxyException`` for a missing key
+        and lets a DB outage propagate raw, ``get_user_object`` catches every DB failure and re-raises a
+        bare ``ValueError``, so a missing user and a real outage look identical and the original error
+        survives only as ``__context__``. ``_raise_503_if_db_unavailable`` therefore walks the cause
+        chain: a transient DB outage still surfaces as a retryable 503, while a missing user, or any
+        other non-outage resolution failure, fails closed as a 401 rather than an opaque 500. The
+        object-permission load shares this one boundary, so an outage there is classified the same
+        way (``get_object_permission`` itself swallows a failed load to ``None``, matching how
+        ``get_key_object`` best-effort-loads a key's object permission)."""
+        from litellm.proxy.auth.auth_checks import get_object_permission, get_user_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
+        try:
+            user_object = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+            )
+            # Resolve the user's own MCP object permission (get_user_object does not load it) so the shared
+            # get_allowed_mcp_servers can grant the user their litellm-granted servers. Reuses the same
+            # get_object_permission resolver the key and team paths use; no permission logic is duplicated.
+            object_permission = user_object.object_permission if user_object is not None else None
+            if user_object is not None and object_permission is None and user_object.object_permission_id:
+                object_permission = await get_object_permission(
+                    object_permission_id=user_object.object_permission_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+        except (ProxyException, HTTPException):
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+        except Exception as e:  # noqa: BLE001  # a DB outage anywhere in the resolution is a retryable 503, not an opaque 500; anything else fails closed as 401
+            MCPRequestHandler._raise_503_if_db_unavailable(e)
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+        if user_object is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired credential")
+        if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
+            raise HTTPException(status_code=401, detail="Invalid or expired credential")
+        return UserAPIKeyAuth(
+            user_id=user_object.user_id,
+            user_role=user_object.user_role,
+            object_permission=object_permission,
+            object_permission_id=user_object.object_permission_id,
         )
 
     @staticmethod
@@ -615,10 +701,14 @@ class MCPRequestHandler:
         """Raise a retryable 503 when ``e`` means the auth database is unreachable, else return so the
         caller applies its own fail-closed mapping. A DB outage must not masquerade as an auth failure
         (401) or surface as an opaque 500; the caller retries. Mirrors ``UserAPIKeyAuthExceptionHandler``,
-        which renders a service-unavailable database error as 503 on the standard pipeline."""
+        which renders a service-unavailable database error as 503 on the standard pipeline.
+
+        Classifies across the ``__cause__``/``__context__`` chain, not just ``e`` itself: ``get_user_object``
+        re-raises every DB failure as a bare ``ValueError``, so a type-based check on the top exception
+        would miss a real outage wrapped inside it."""
         from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
             raise HTTPException(
                 status_code=503,
                 detail="Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
@@ -1130,9 +1220,27 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            key_tools = (
+            key_direct_tools = (
                 global_mcp_server_manager.expand_tool_permissions(key_obj_perm.mcp_tool_permissions).get(server_id)
                 if key_obj_perm
+                else None
+            )
+
+            # Tools granted through the key's toolsets restrict this server exactly
+            # as direct tool permissions do; union with any direct grants so the
+            # tool-level check sees the key's full effective tool scope
+            key_toolset_ids = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
+            key_toolset_tools = (
+                (await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=key_toolset_ids)).get(
+                    server_id
+                )
+                if key_toolset_ids
+                else None
+            )
+
+            key_tools = (
+                list(set(key_direct_tools or []) | set(key_toolset_tools or []))
+                if key_direct_tools is not None or key_toolset_tools is not None
                 else None
             )
             team_tools = (
@@ -1340,8 +1448,18 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(key_object_permission.mcp_tool_permissions).keys()
             )
 
+            # servers referenced by the key's toolset grants are part of the key's
+            # scope on every path (list, call, REST), subject to the same team/org
+            # ceilings as any other key-level grant
+            toolset_ids = key_object_permission.mcp_toolsets or []
+            toolset_servers = (
+                list((await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=toolset_ids)).keys())
+                if toolset_ids
+                else []
+            )
+
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers for key: {str(e)}")

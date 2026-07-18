@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from e2e_http import StreamingResponse
 from models import ChatMessage, LiteLLMParamsBody
 
@@ -28,6 +28,28 @@ class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[ChatMessage]
+
+
+class CacheControl(BaseModel):
+    type: str = "ephemeral"
+
+
+class TextBlock(BaseModel):
+    type: str = "text"
+    text: str
+    cache_control: CacheControl | None = None
+
+
+class RichMessage(BaseModel):
+    role: str
+    content: list[TextBlock]
+
+
+class RichMessagesRequest(BaseModel):
+    model: str
+    max_tokens: int = 64
+    system: list[TextBlock]
+    messages: list[RichMessage]
 
 
 class EmbeddingsRequest(BaseModel):
@@ -83,11 +105,19 @@ class AnthropicContentBlock(BaseModel):
     text: str | None = None
 
 
+class MessagesUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
 class MessagesResult(BaseModel):
     id: str | None = None
     role: str | None = None
     model: str | None = None
     content: list[AnthropicContentBlock] = []
+    usage: MessagesUsage = MessagesUsage()
 
     @property
     def text(self) -> str:
@@ -126,17 +156,17 @@ class ImagesResult(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class EndpointsClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
-        return self.gateway.create_model(model_name, litellm_params)
+        return self.proxy.create_model(model_name, litellm_params)
 
     def delete_model(self, model_id: str) -> None:
-        self.gateway.delete_model(model_id)
+        self.proxy.delete_model(model_id)
 
     def _send(self, path: str, key: str, body: BaseModel) -> StreamingResponse:
-        return self.gateway.transport.send(
-            path, headers=self.gateway.transport.bearer(key), json=body
+        return self.proxy.transport.send(
+            path, headers=self.proxy.transport.bearer(key), json=body
         )
 
     def responses(self, key: str, model: str, text: str) -> StreamingResponse:
@@ -186,5 +216,5 @@ class EndpointsClient:
         )
 
 
-def build_endpoints_client() -> EndpointsClient:
-    return EndpointsClient(gateway=build_gateway())
+def build_endpoints_client(proxy: ProxyClient) -> EndpointsClient:
+    return EndpointsClient(proxy=proxy)

@@ -173,6 +173,70 @@ async def test_create_user_ingests_enterprise_extension(mocker, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_user_ingests_entitlements_and_roles(mocker, monkeypatch):
+    """A SCIM create payload carrying entitlements and roles should land in the
+    created user's metadata under scim_entitlements and scim_roles"""
+
+    scim_user = SCIMUser.model_validate(
+        {
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": "entitled-user",
+            "name": {"familyName": "User", "givenName": "Entitled"},
+            "emails": [{"value": "entitled@example.com"}],
+            "entitlements": [
+                {
+                    "value": "jira-software",
+                    "display": "Jira Software",
+                    "type": "app",
+                    "primary": True,
+                },
+                "bare-entitlement",
+            ],
+            "roles": [{"value": "engineering-admin", "type": "role"}],
+        }
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="entitled-user")),
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    created_metadata = new_user_mock.call_args.kwargs["data"].metadata
+    assert created_metadata["scim_entitlements"] == [
+        {
+            "value": "jira-software",
+            "display": "Jira Software",
+            "type": "app",
+            "primary": True,
+        },
+        {"value": "bare-entitlement"},
+    ]
+    assert created_metadata["scim_roles"] == [
+        {"value": "engineering-admin", "type": "role"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_user_uses_default_internal_user_params_role(mocker, monkeypatch):
     """If role is set in default_internal_user_params, new user should use that role"""
 

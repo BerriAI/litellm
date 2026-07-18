@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel, model_validator
 
 # ---------- keys ----------
 
@@ -39,6 +39,10 @@ class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
 
 
+class ObjectPermission(BaseModel):
+    mcp_servers: list[str] | None = None
+
+
 class KeyGenerateBody(BaseModel):
     models: list[str] = []
     duration: str | None = None
@@ -57,6 +61,7 @@ class KeyGenerateBody(BaseModel):
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -82,6 +87,7 @@ class KeyInfo(BaseModel):
     key_alias: str | None = None
     models: list[str] = []
     tpm_limit: int | None = None
+    rpm_limit: int | None = None
     team_id: str | None = None
     spend: float | None = None
     max_budget: float | None = None
@@ -149,16 +155,6 @@ class ChatBody(BaseModel):
     guardrails: list[str] | None = None
 
 
-class AnthropicMessagesBody(BaseModel):
-    model: str
-    messages: list[ChatMessage]
-    max_tokens: int
-
-
-class AnthropicMessagesResponse(BaseModel):
-    model: str | None = None
-
-
 class OutMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
@@ -187,6 +183,82 @@ class ChatResponse(BaseModel):
     choices: list[ChatChoice] = []
     usage: Usage | None = None
     service_tier: str | None = None
+
+
+# ---------- anthropic /v1/messages + count_tokens ----------
+
+
+class JsonSchemaProperty(BaseModel):
+    """One property in a tool's JSON-Schema `input_schema`. Only `type` is
+    modelled; the endpoints under test read no further into the schema."""
+
+    type: str
+
+
+class ToolInputSchema(BaseModel):
+    type: str = "object"
+    properties: dict[str, JsonSchemaProperty] = {}
+    required: list[str] = []
+
+
+class AnthropicToolSearchTool(BaseModel):
+    """The tool_search discovery tool. `type` carries the SDK-version-pinned
+    suffix (e.g. ``tool_search_tool_regex_20251119``) that LiteLLM keys its
+    per-provider beta-header translation on; `name` is the unsuffixed
+    canonical name the upstream accepts."""
+
+    type: str
+    name: str
+
+
+class AnthropicCustomTool(BaseModel):
+    name: str
+    description: str
+    input_schema: ToolInputSchema
+
+
+type AnthropicTool = AnthropicToolSearchTool | AnthropicCustomTool
+
+
+class AnthropicMessagesBody(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    max_tokens: int
+    stream: bool | None = None
+    tools: list[AnthropicTool] | None = None
+
+
+class CountTokensBody(BaseModel):
+    """POST /v1/messages/count_tokens body: the /v1/messages shape minus
+    max_tokens (the endpoint only counts the prompt)."""
+
+    model: str
+    messages: list[ChatMessage]
+
+
+class AnthropicContentBlock(BaseModel):
+    type: str | None = None
+
+
+class AnthropicMessagesResponse(BaseModel):
+    """A /v1/messages answer. `content` is the Anthropic-native passthrough
+    shape; `choices` is the OpenAI-normalized shape LiteLLM emits for some
+    providers (e.g. Bedrock Converse). Presence of either proves the proxy
+    accepted and round-tripped the request. `extra="allow"` keeps the other
+    top-level keys so a shape-check failure can report the actual response keys
+    for triage."""
+
+    model_config = ConfigDict(extra="allow")
+    model: str | None = None
+    content: list[AnthropicContentBlock] | None = None
+    choices: list[ChatChoice] | None = None
+
+
+class CountTokensResponse(BaseModel):
+    """`/v1/messages/count_tokens` answer. `input_tokens` is required so a 200
+    whose body lacks it fails validation instead of passing vacuously."""
+
+    input_tokens: int
 
 
 class EmbedBody(BaseModel):
@@ -254,6 +326,16 @@ class SpendLogs(RootModel[list[SpendLogRow]]):
 class SpendLogsParams(BaseModel):
     request_id: str | None = None
     api_key: str | None = None
+
+    @model_validator(mode="after")
+    def require_filter(self) -> SpendLogsParams:
+        if self.request_id is None and self.api_key is None:
+            raise ValueError(
+                "unfiltered /spend/logs returns the entire spend table and OOMs the "
+                "runner on long-lived environments; filter by request_id or api_key, "
+                "or use ProxyClient.spend_logs_window for a bounded /spend/logs/v2 read"
+            )
+        return self
 
 
 class SpendLogsPageParams(BaseModel):
@@ -428,6 +510,10 @@ class LiteLLMParamsBody(BaseModel):
     aws_batch_role_arn: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    extra_headers: dict[str, str] | None = None
+    use_in_pass_through: bool | None = None
+    complexity_router_config: dict[str, object] | None = None
+    mock_response: str | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]

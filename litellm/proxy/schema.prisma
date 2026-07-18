@@ -325,6 +325,7 @@ model LiteLLM_MCPServerTable {
   command      String?
   args         String[]       @default([])
   env          Json?          @default("{}")
+  issuer             String?
   authorization_url  String?
   token_url          String?
   registration_url   String?
@@ -395,6 +396,13 @@ model LiteLLM_MCPUserEnvVars {
   @@index([server_id])
 }
 
+model LiteLLM_MCPServerOAuthClient {
+  server_id   String   @id
+  credentials Json?
+  created_at  DateTime @default(now()) @map("created_at")
+  updated_at  DateTime @default(now()) @updatedAt @map("updated_at")
+}
+
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @id
@@ -422,6 +430,7 @@ model LiteLLM_VerificationToken {
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
     allowed_routes   String[] @default([])
+    key_type         String?
     policies         String[] @default([])
     access_group_ids String[] @default([])
     model_spend      Json @default("{}")
@@ -516,6 +525,7 @@ model LiteLLM_DeletedVerificationToken {
     budget_reset_at         DateTime?
     allowed_cache_controls  String[] @default([])
     allowed_routes          String[] @default([])
+    key_type                String?
     policies                String[] @default([])
     access_group_ids String[] @default([])
     model_spend             Json     @default("{}")

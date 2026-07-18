@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import pytest
@@ -36,6 +37,7 @@ from capabilities import (
     CAPABILITIES,
     FILE_ID_SHAPE,
     Capability,
+    coverage_cells_for_lifecycle,
     matches_id_shape,
     raw_id_matches_provider,
 )
@@ -49,7 +51,7 @@ from e2e_http import (
     unwrap,
 )
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, SpendLogRow, SpendLogsParams
+from models import KeyGenerateBody, SpendLogRow
 
 pytestmark = pytest.mark.e2e
 
@@ -167,7 +169,17 @@ def assert_batch_object(batch: BatchObject) -> None:
     ), "batch.created_at missing"
 
 
-@pytest.mark.parametrize("cap", CAPABILITIES, ids=[c.id for c in CAPABILITIES])
+@pytest.mark.parametrize(
+    "cap",
+    [
+        pytest.param(
+            cap,
+            id=cap.id,
+            marks=pytest.mark.covers(*coverage_cells_for_lifecycle(cap)),
+        )
+        for cap in CAPABILITIES
+    ],
+)
 def test_batch_lifecycle(
     cap: Capability,
     client: BatchClient,
@@ -265,6 +277,7 @@ def test_batch_lifecycle(
         assert match.object == "batch"
 
 
+@pytest.mark.covers("llm.batches.openai.key_model_access_denied.nonstream.works")
 def test_batch_key_model_access_denied(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:
@@ -300,6 +313,10 @@ def test_batch_key_model_access_denied(
     ), f"restricted key created a batch for a disallowed model (status {denied_create.status_code})"
 
 
+@pytest.mark.covers(
+    "llm.files.openai.upload.nonstream.works",
+    "llm.files.openai.delete.nonstream.works",
+)
 def test_file_upload_and_delete_outputs(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:
@@ -349,15 +366,24 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     the file-read path fires while the batch itself is not blocked.
     ``resources.key()`` cannot set limits, so the key is minted on the gateway
     directly and its delete deferred.
+
+    Snapshots read /spend/logs/v2 over a bounded window around the test instead
+    of the unpaginated /spend/logs whole-table read, which grows with the
+    environment and OOMed the e2e runner on stage.
     """
     user_id = f"e2e-batch-rl-{unique_marker()}"
-    key = client.gateway.generate_key(
+    key = client.proxy.generate_key(
         KeyGenerateBody(models=[], tpm_limit=1_000_000, rpm_limit=1_000, user_id=user_id)
     )
-    resources.defer(lambda: client.gateway.delete_key(key))
+    resources.defer(lambda: client.proxy.delete_key(key))
 
+    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+    window_end = window_start + timedelta(hours=2)
     before = frozenset(
-        row.request_id for row in unattributed_rows(client.gateway.spend_logs(SpendLogsParams()))
+        row.request_id
+        for row in unattributed_rows(
+            client.proxy.spend_logs_window(start=window_start, end=window_end)
+        )
     )
 
     file = unwrap(
@@ -375,11 +401,13 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
     batch = BatchObject.model_validate_json(created.body)
     resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
 
-    _ = client.gateway.poll_logs_for_key(key, min_rows=1)
+    _ = client.proxy.poll_logs_for_key(key, min_rows=1)
 
     new_orphans = [
         row
-        for row in unattributed_rows(client.gateway.spend_logs(SpendLogsParams()))
+        for row in unattributed_rows(
+            client.proxy.spend_logs_window(start=window_start, end=window_end)
+        )
         if row.request_id not in before
     ]
     assert not new_orphans, (

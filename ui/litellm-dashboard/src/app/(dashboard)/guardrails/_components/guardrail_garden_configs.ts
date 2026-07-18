@@ -306,4 +306,10 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  straiker: {
+    provider: "Straiker",
+    guardrailNameSuggestion: "Straiker Guardrail",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };
