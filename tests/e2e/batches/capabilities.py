@@ -132,8 +132,18 @@ PROVIDERS: tuple[Provider, ...] = (
     ),
 )
 
-OPENAI_BATCH_MODEL = next(p.model for p in PROVIDERS if p.name == "openai")
-AZURE_BATCH_MODEL = next(p.model for p in PROVIDERS if p.name == "azure")
+def _model_for(provider_name: str) -> str:
+    for provider in PROVIDERS:
+        if provider.name == provider_name:
+            return provider.model
+    raise ValueError(
+        f"no batch provider named {provider_name!r} in PROVIDERS; "
+        f"known={[p.name for p in PROVIDERS]}"
+    )
+
+
+OPENAI_BATCH_MODEL = _model_for("openai")
+AZURE_BATCH_MODEL = _model_for("azure")
 
 BEDROCK_SCENARIOS: tuple[Scenario, ...] = ("unified",)
 
