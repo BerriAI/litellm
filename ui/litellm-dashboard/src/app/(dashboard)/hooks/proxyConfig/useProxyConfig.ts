@@ -1,4 +1,4 @@
-import { useQuery, useMutation, UseMutationResult } from "@tanstack/react-query";
+import { useQuery, useMutation, UseMutationResult, useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import useAuthorized from "../useAuthorized";
 import { proxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
@@ -101,7 +101,7 @@ export const getProxyConfigCall = async (accessToken: string, configType: Config
   }
 };
 
-const proxyConfigKeys = createQueryKeys("proxyConfig");
+export const proxyConfigKeys = createQueryKeys("proxyConfig");
 
 /**
  * Network call function to delete a proxy config field
@@ -168,6 +168,7 @@ export const useDeleteProxyConfigField = (): UseMutationResult<
   DeleteProxyConfigFieldRequest
 > => {
   const { accessToken } = useAuthorized();
+  const queryClient = useQueryClient();
 
   return useMutation<DeleteProxyConfigFieldResponse, Error, DeleteProxyConfigFieldRequest>({
     mutationFn: async (request: DeleteProxyConfigFieldRequest) => {
@@ -175,6 +176,9 @@ export const useDeleteProxyConfigField = (): UseMutationResult<
         throw new Error("Access token is required");
       }
       return await deleteProxyConfigFieldCall(accessToken, request);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: proxyConfigKeys.all });
     },
   });
 };

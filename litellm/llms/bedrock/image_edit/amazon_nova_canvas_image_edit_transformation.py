@@ -315,13 +315,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         _size = op.pop("size", None)
         width = op.pop("width", None)
         height = op.pop("height", None)
-        if (
-            width is None
-            and height is None
-            and _size is not None
-            and isinstance(_size, str)
-            and "x" in _size
-        ):
+        if width is None and height is None and _size is not None and isinstance(_size, str) and "x" in _size:
             w, h = _size.split("x", 1)
             try:
                 width, height = int(w), int(h)
@@ -356,8 +350,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             "OUTPAINTING",
         ):
             raise ValueError(
-                f"Amazon Nova Canvas {task_type} requires a text prompt. "
-                "Pass a non-empty `prompt` in your request."
+                f"Amazon Nova Canvas {task_type} requires a text prompt. Pass a non-empty `prompt` in your request."
             )
         text = prompt if prompt is not None and prompt != "" else " "
         negative_text = op.pop("negativeText", None)
@@ -455,9 +448,9 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             model_info = get_model_info(model, custom_llm_provider="bedrock")
             cost_per_image = model_info.get("output_cost_per_image", 0)
             if cost_per_image is not None and model_response.data:
-                model_response._hidden_params["additional_headers"][
-                    "llm_provider-x-litellm-response-cost"
-                ] = float(cost_per_image) * len(model_response.data)
+                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                    cost_per_image
+                ) * len(model_response.data)
         except Exception:
             pass
 
@@ -483,6 +476,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if headers is None:
             headers = {}

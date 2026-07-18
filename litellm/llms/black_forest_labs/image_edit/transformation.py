@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -123,6 +125,8 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         """
         Validate environment and set up headers for Black Forest Labs.
@@ -130,9 +134,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         BFL uses x-key header for authentication.
         """
         final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("BFL_API_KEY")
-            or get_secret_str("BLACK_FOREST_LABS_API_KEY")
+            api_key or get_secret_str("BFL_API_KEY") or get_secret_str("BLACK_FOREST_LABS_API_KEY")
         )
 
         if not final_api_key:
@@ -167,8 +169,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             return IMAGE_EDIT_MODELS[model_name]
 
         raise ValueError(
-            f"Unknown BFL image edit model: {model_name}. "
-            f"Supported models: {list(IMAGE_EDIT_MODELS.keys())}"
+            f"Unknown BFL image edit model: {model_name}. Supported models: {list(IMAGE_EDIT_MODELS.keys())}"
         )
 
     def get_complete_url(
@@ -201,19 +202,17 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             return image
         elif isinstance(image, list):
             # If it's a list, take the first image
-            return self._read_image_bytes(
-                image[0], depth=depth + 1, max_depth=max_depth
-            )
+            return self._read_image_bytes(image[0], depth=depth + 1, max_depth=max_depth)
         elif isinstance(image, str):
             if image.startswith(("http://", "https://")):
-                # Download image from URL
-                response = httpx.get(image, timeout=60.0)
+                response = safe_get(litellm.module_level_client, image, timeout=60.0)
                 response.raise_for_status()
                 return response.content
             else:
-                # Assume it's a file path
-                with open(image, "rb") as f:
-                    return f.read()
+                raise ValueError(
+                    "Unsupported image input: plain string values that are not URLs are not accepted. "
+                    "Provide image bytes or a file-like object."
+                )
         elif hasattr(image, "read"):
             # File-like object
             pos = getattr(image, "tell", lambda: 0)()
@@ -225,8 +224,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             return data
         else:
             raise ValueError(
-                f"Unsupported image type: {type(image)}. "
-                "Expected bytes, str (URL or file path), or file-like object."
+                f"Unsupported image type: {type(image)}. Expected bytes, str (URL or file path), or file-like object."
             )
 
     def transform_image_edit_request(

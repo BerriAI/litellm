@@ -831,23 +831,29 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
             tool_choice="auto",
             stream=True,
         )
-        idx = 0
+        saw_function_call_chunk = False
         for chunk in response:
             print(f"chunk in response: {chunk}")
             assert chunk._hidden_params["custom_llm_provider"] == "mistral"
-            if idx == 0:
-                assert (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-                )
-                assert isinstance(
-                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
-                )
-                validate_first_streaming_function_calling_chunk(chunk=chunk)
-            elif idx == 1 and chunk.choices[0].finish_reason is None:
-                validate_second_streaming_function_calling_chunk(chunk=chunk)
-            elif chunk.choices[0].finish_reason is not None:  # last chunk
+            if len(chunk.choices) == 0:
+                continue
+            if chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
-            idx += 1
+                break
+            tool_calls = chunk.choices[0].delta.tool_calls
+            if tool_calls is None:
+                continue
+            assert tool_calls[0].function.arguments is not None
+            assert isinstance(tool_calls[0].function.arguments, str)
+            if not saw_function_call_chunk:
+                if chunk.choices[0].delta.role is not None:
+                    validate_first_streaming_function_calling_chunk(chunk=chunk)
+                else:
+                    validate_second_streaming_function_calling_chunk(chunk=chunk)
+                saw_function_call_chunk = True
+            else:
+                validate_second_streaming_function_calling_chunk(chunk=chunk)
+        assert saw_function_call_chunk
     except litellm.RateLimitError:
         pass
     except Exception as e:
@@ -987,6 +993,11 @@ def test_vertex_ai_stream(provider):
 
         except litellm.RateLimitError as e:
             pass
+        except litellm.exceptions.MidStreamFallbackError as e:
+            # Streaming 429s are wrapped in MidStreamFallbackError so the
+            # Router can fall back; treat as a transient rate-limit pass.
+            if not isinstance(e.original_exception, litellm.RateLimitError):
+                pytest.fail(f"Error occurred: {e}")
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -1264,7 +1275,7 @@ def test_bedrock_claude_3_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "claude-4-sonnet-20250514",
+        "claude-haiku-4-5-20251001",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
     ],
@@ -1727,7 +1738,7 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
         "o1",
     ],
 )
@@ -2247,7 +2258,7 @@ def streaming_and_function_calling_format_tests(idx, chunk):
     [
         # "gpt-3.5-turbo",
         # "anthropic.claude-3-sonnet-20240229-v1:0",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
     ],
 )
 def test_streaming_and_function_calling(model):
@@ -2690,7 +2701,7 @@ def test_completion_claude_3_function_call_with_streaming():
     try:
         # test without max tokens
         response = completion(
-            model="claude-4-sonnet-20250514",
+            model="claude-haiku-4-5-20251001",
             messages=messages,
             tools=tools,
             tool_choice="required",
@@ -3634,7 +3645,7 @@ def test_mock_response_iterator_tool_use():
     [
         # "deepseek/deepseek-reasoner",
         # "anthropic/claude-3-7-sonnet-20250219",
-        "openrouter/anthropic/claude-3.7-sonnet",
+        "openrouter/anthropic/claude-sonnet-4.5",
     ],
 )
 def test_reasoning_content_completion(model):

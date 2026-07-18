@@ -22,6 +22,7 @@ import React, { useEffect, useState } from "react";
 
 import { Button as Button2, Form, Input, Modal, Select, Typography } from "antd";
 import EmailSettings from "./email_settings";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const { Title, Paragraph } = Typography;
@@ -53,7 +54,7 @@ interface genericCallbackParams {
   litellm_callback_params: string[] | null; // known required params for this callback
 }
 
-const assetsLogoFolder = "../ui/assets/logos/";
+const assetsLogoFolder = "/ui/assets/logos/";
 
 interface DynamicParamsFieldsProps {
   params: string[];
@@ -96,14 +97,14 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Input.Password
                 size="large"
                 placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
               />
             ) : paramType === "number" ? (
               <Input
                 type="number"
                 size="large"
                 placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
                 min={0}
                 max={1}
                 step={0.1}
@@ -112,7 +113,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Input
                 size="large"
                 placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                className="w-full rounded-md border-gray-300 shadow-xs focus:border-blue-500 focus:ring-blue-500"
               />
             )}
           </FormItem>
@@ -156,10 +157,11 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
       >
         {callbackConfigs.map((callbackConfig) => {
           const logo = callbackConfig.logo;
-          const logoSrc =
+          const logoSrc = resolveLogoSrc(
             logo && (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http"))
               ? logo
-              : `${assetsLogoFolder}${logo}`;
+              : `${assetsLogoFolder}${logo}`,
+          );
 
           return (
             <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
@@ -169,7 +171,7 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
                   <img
                     src={logoSrc}
                     alt={`${callbackConfig.displayName} logo`}
-                    className="w-6 h-6 rounded object-contain"
+                    className="w-6 h-6 rounded-sm object-contain"
                     onError={(e) => {
                       e.currentTarget.style.display = "none";
                     }}
@@ -215,6 +217,7 @@ const buildCallbackPayload = (formValues: Record<string, any>, callbackName: str
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
+  const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [addForm] = Form.useForm();
@@ -291,29 +294,35 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   };
 
   useEffect(() => {
-    if (!accessToken || !userRole || !userID) {
-      return;
-    }
-    getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      setCallbacks(data.callbacks);
-      setAllCallbacks(data.available_callbacks);
-      // setCallbacks(callbacks_data);
-
-      let alerts_data = data.alerts;
-      if (alerts_data) {
-        if (alerts_data.length > 0) {
-          let _alert_info = alerts_data[0];
-          let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
-
-          let active_alerts = _alert_info.active_alerts;
-          setActiveAlerts(active_alerts);
-          setCatchAllWebhookURL(catch_all_webhook);
-          setAlertToWebhooks(_alert_info.alerts_to_webhook);
-        }
+    const fetchCallbacks = async () => {
+      if (!accessToken || !userRole || !userID) {
+        setIsLoadingCallbacks(false);
+        return;
       }
+      try {
+        const data = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(data.callbacks);
+        setAllCallbacks(data.available_callbacks);
 
-      setAlerts(alerts_data);
-    });
+        let alerts_data = data.alerts;
+        if (alerts_data) {
+          if (alerts_data.length > 0) {
+            let _alert_info = alerts_data[0];
+            let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
+
+            let active_alerts = _alert_info.active_alerts;
+            setActiveAlerts(active_alerts);
+            setCatchAllWebhookURL(catch_all_webhook);
+            setAlertToWebhooks(_alert_info.alerts_to_webhook);
+          }
+        }
+
+        setAlerts(alerts_data);
+      } finally {
+        setIsLoadingCallbacks(false);
+      }
+    };
+    fetchCallbacks();
   }, [accessToken, userRole, userID]);
 
   const isAlertOn = (alertName: string) => {
@@ -564,7 +573,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }
 
   return (
-    <div className="w-full mx-4">
+    <div className="mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <TabGroup>
           <TabList variant="line" defaultValue="1">
@@ -579,6 +588,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               <LoggingCallbacksTable
                 callbacks={callbacks}
                 availableCallbacks={allCallbacks}
+                isLoading={isLoadingCallbacks}
                 onAdd={() => setShowAddCallbacksModal(true)}
                 onEdit={(cb) => {
                   setSelectedEditCallback(cb);

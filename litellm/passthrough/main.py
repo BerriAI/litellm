@@ -20,7 +20,7 @@ from typing import (
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
-import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -171,7 +171,6 @@ def llm_passthrough_route(
     api_key: Optional[str] = None,
     request_query_params: Optional[dict] = None,
     request_headers: Optional[dict] = None,
-    allm_passthrough_route: bool = False,
     content: Optional[Any] = None,
     data: Optional[dict] = None,
     files: Optional[RequestFiles] = None,
@@ -198,13 +197,7 @@ def llm_passthrough_route(
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
-    _is_async = allm_passthrough_route
-
-    if client is None:
-        if _is_async:
-            client = litellm.module_level_aclient
-        else:
-            client = litellm.module_level_client
+    _is_async = bool(kwargs.get("allm_passthrough_route", False))
 
     litellm_logging_obj = cast("LiteLLMLoggingObj", kwargs.get("litellm_logging_obj"))
 
@@ -216,6 +209,26 @@ def llm_passthrough_route(
     )
 
     litellm_params_dict = get_litellm_params(**kwargs)
+
+    if client is None:
+        from litellm.llms.custom_httpx.http_handler import (
+            _get_httpx_client,
+            get_async_httpx_client,
+        )
+        from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        resolved_timeout = resolve_llm_passthrough_timeout(
+            kwargs=kwargs,
+            litellm_params=litellm_params_dict,
+        )
+        if _is_async:
+            client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+                params={"timeout": resolved_timeout},
+            )
+        else:
+            client = _get_httpx_client(params={"timeout": resolved_timeout})
 
     # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
     if "model_id" in kwargs:
@@ -250,9 +263,7 @@ def llm_passthrough_route(
 
     # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of application-inference-profile for bedrock
     if custom_llm_provider == "bedrock" and "application-inference-profile" in endpoint:
-        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(
-            str(updated_url)
-        )
+        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(str(updated_url))
         updated_url = httpx.URL(encoded_url_str)
 
     # Add or update query parameters
@@ -390,19 +401,28 @@ def _sync_streaming(
 ):
     from litellm.utils import executor
 
+    raw_bytes: List[bytes] = []
+    flush_scheduled = False
     try:
-        raw_bytes: List[bytes] = []
         for chunk in response.iter_bytes():  # type: ignore
             raw_bytes.append(chunk)
             yield chunk
-
-        executor.submit(
-            litellm_logging_obj.flush_passthrough_collected_chunks,
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
-    except Exception as e:
-        raise e
+    finally:
+        if not flush_scheduled and raw_bytes:
+            flush_scheduled = True
+            try:
+                executor.submit(
+                    litellm_logging_obj.flush_passthrough_collected_chunks,
+                    raw_bytes=raw_bytes,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to schedule passthrough spend-tracking flush "
+                    "in _sync_streaming; %d buffered chunks dropped: %s",
+                    len(raw_bytes),
+                    e,
+                )
 
 
 async def _async_streaming(
@@ -411,23 +431,45 @@ async def _async_streaming(
     provider_config: "BasePassthroughConfig",
 ):
     iter_response = await response
+
     try:
         iter_response.raise_for_status()
-        raw_bytes: List[bytes] = []
-
-        async for chunk in iter_response.aiter_bytes():  # type: ignore
-            raw_bytes.append(chunk)
-            yield chunk
-
-        asyncio.create_task(
-            litellm_logging_obj.async_flush_passthrough_collected_chunks(
-                raw_bytes=raw_bytes,
-                provider_config=provider_config,
-            )
-        )
     except Exception:
         try:
             await iter_response.aclose()
         except Exception:
             pass
         raise
+
+    raw_bytes: List[bytes] = []
+    flush_scheduled = False
+    try:
+        async for chunk in iter_response.aiter_bytes():  # type: ignore
+            raw_bytes.append(chunk)
+            yield chunk
+    except Exception:
+        try:
+            await iter_response.aclose()
+        except Exception:
+            pass
+        raise
+    finally:
+        # GeneratorExit (raised on client disconnect) is not caught by
+        # `except Exception`; the finally block ensures partial usage
+        # still gets flushed for spend tracking. See LIT-2642.
+        if not flush_scheduled and raw_bytes:
+            flush_scheduled = True
+            try:
+                asyncio.create_task(
+                    litellm_logging_obj.async_flush_passthrough_collected_chunks(
+                        raw_bytes=raw_bytes,
+                        provider_config=provider_config,
+                    )
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to schedule passthrough spend-tracking flush "
+                    "in _async_streaming; %d buffered chunks dropped: %s",
+                    len(raw_bytes),
+                    e,
+                )

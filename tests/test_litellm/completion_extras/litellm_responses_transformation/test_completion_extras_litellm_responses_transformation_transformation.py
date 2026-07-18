@@ -13,6 +13,9 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 import litellm
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
@@ -508,6 +511,308 @@ and I learn to carry this small calm home."""
     print("✓ transform_response correctly handled reasoning items and output messages")
 
 
+def _make_empty_responses_api_response(model: str = "gpt-5.4"):
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    return ResponsesAPIResponse(
+        id="resp_from_stream",
+        created_at=1760144904,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model=model,
+        object="response",
+        output=[],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": "low", "summary": "detailed"},
+        status="completed",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=ResponseAPIUsage(
+            input_tokens=1,
+            input_tokens_details=None,
+            output_tokens=1,
+            output_tokens_details=None,
+            total_tokens=2,
+            cost=None,
+        ),
+        user=None,
+        store=True,
+        background=False,
+        billing={"payer": "developer"},
+        max_tool_calls=None,
+        prompt_cache_key=None,
+        safety_identifier=None,
+        service_tier="default",
+        top_logprobs=0,
+    )
+
+
+def _make_empty_model_response():
+    from litellm.types.utils import ModelResponse, Usage
+
+    return ModelResponse(
+        id="chatcmpl-test-recovered",
+        created=1760144904,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+
+def test_transform_response_recovers_empty_output_from_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_from_stream","text":"Recovered from SSE"}',
+            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[]}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Recovered from SSE"
+
+
+def test_transform_response_recovers_output_item_done_from_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_from_item","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Recovered from output item","annotations":[]}]}}',
+            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[]}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Recovered from output item"
+
+
+def test_transform_response_recovers_output_item_done_from_whitespace_padded_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    output_item_event = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "message",
+            "id": "msg_from_item",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Recovered from padded output item",
+                    "annotations": [],
+                }
+            ],
+        },
+    }
+    completed_event = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_from_stream",
+            "object": "response",
+            "created_at": 1760144904,
+            "status": "completed",
+            "model": "gpt-5.4",
+            "output": [],
+        },
+    }
+    raw_sse = "\n".join(
+        [
+            f"   data:  {json.dumps(output_item_event)}   ",
+            f"\tdata: {json.dumps(completed_event)}",
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Recovered from padded output item"
+
+
+def test_transform_response_preserves_output_item_when_text_done_arrives_later():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_from_item","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Complete output item text","annotations":[]}]}}',
+            'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_from_stream","text":"Late text event"}',
+            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[]}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Complete output item text"
+
+
+def test_recover_output_items_merges_text_only_items_at_distinct_indices():
+    """When OUTPUT_ITEM_DONE covers some indices and OUTPUT_TEXT_DONE covers
+    others, both must be preserved instead of treating them as mutually
+    exclusive fallbacks."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_item_0","role":"assistant","status":"completed","content":[{"type":"output_text","text":"From OUTPUT_ITEM_DONE","annotations":[]}]}}',
+            'data: {"type":"response.output_text.done","output_index":1,"content_index":0,"item_id":"msg_text_1","text":"From OUTPUT_TEXT_DONE only"}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    recovered = (
+        LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(
+            raw_sse
+        )
+    )
+
+    assert len(recovered) == 2
+    assert recovered[0]["id"] == "msg_item_0"
+    assert recovered[0]["content"][0]["text"] == "From OUTPUT_ITEM_DONE"
+    assert recovered[1]["id"] == "msg_text_1"
+    assert recovered[1]["content"][0]["text"] == "From OUTPUT_TEXT_DONE only"
+
+
+def test_transform_response_prefers_completed_output_from_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_from_item","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Earlier stream text","annotations":[]}]}}',
+            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[{"type":"message","id":"msg_from_completed","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Authoritative completed text","annotations":[]}]}]}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Authoritative completed text"
+
+
 def test_convert_tools_to_responses_format():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -556,6 +861,39 @@ def test_extract_extra_body_params_reasoning_effort_override():
 
     # extra_body should no longer be in optional_params (it was popped)
     assert "extra_body" not in result
+
+
+def test_transform_request_system_only_message_maps_to_system_input_item():
+    """System-only requests must not send input=[] to the Responses API.
+
+    OpenAI rejects both input=[] and input="". When the only message is a
+    system message, carry it as a system-role input item (single copy, correct
+    role) rather than leaving input empty or duplicating it into instructions.
+    """
+    handler = LiteLLMResponsesTransformationHandler()
+    logging_obj = Mock()
+    messages = [{"role": "system", "content": "You are a helpful assistant."}]
+
+    result = handler.transform_request(
+        model="gpt-5.3-codex",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert result["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "You are a helpful assistant."}
+            ],
+        }
+    ]
+    # System content lives in input only; not duplicated into instructions.
+    assert not result.get("instructions")
 
 
 def test_transform_request_single_char_keys_not_matched():
@@ -2098,6 +2436,56 @@ def test_map_optional_params_preserves_reasoning_summary():
     assert responses_api_request["reasoning"]["summary"] == "detailed"
 
 
+def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
+    """Chat tool_choice must become Responses ToolChoiceFunction (top-level name)."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    handler = LiteLLMResponsesTransformationHandler()
+    responses_api_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        {
+            "stream": False,
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "Echo"},
+            },
+        },
+        responses_api_request,
+    )
+    assert responses_api_request["tool_choice"] == {
+        "type": "function",
+        "name": "Echo",
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        ("auto", "auto"),
+        ("none", "none"),
+        (
+            {"type": "function", "name": "Echo"},
+            {"type": "function", "name": "Echo"},
+        ),
+        (
+            {"type": "function", "name": "foo", "function": {"name": "bar"}},
+            {"type": "function", "name": "foo"},
+        ),
+        ({"type": "required"}, {"type": "required"}),
+    ],
+)
+def test_normalize_tool_choice_for_responses_api(tool_choice, expected):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    assert handler._normalize_tool_choice_for_responses_api(tool_choice) == expected
+
+
 def test_convert_chat_completion_file_type_to_input_file():
     """
     Test that Chat Completion content with type 'file' is correctly mapped
@@ -2431,3 +2819,37 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
         ri["encrypted_content"] == encrypted
     ), "encrypted_content must be preserved in streaming"
     assert ri["summary"][0]["text"] == summary_text
+
+
+def test_streaming_function_call_tool_id_for_degenerate_call_id():
+    """In streaming, Bedrock Mantle's function_call event carries a unique ``id``
+    (``fc_...``) and a non-unique, index-based ``call_id`` (``call_0``). For that
+    degenerate form the chat tool-call chunk must use the unique ``id`` so multi-turn
+    streaming agents don't collapse every tool call to the same id (which makes the
+    agent loop). A normal (unique) ``call_id`` must be preserved. Regression for the
+    bedrock-mantle gpt-5.5 streaming path."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    def stream_tool_id(item_id, call_id):
+        chunk = {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "call_id": call_id,
+                "name": "get_weather",
+                "arguments": "",
+            },
+        }
+        out = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            chunk
+        )
+        tool_calls = out.model_dump()["choices"][0]["delta"]["tool_calls"]
+        assert tool_calls, "expected a tool_call chunk in the streaming delta"
+        return tool_calls[0]["id"]
+
+    assert stream_tool_id("fc_unique_abc123", "call_0") == "fc_unique_abc123"
+    assert stream_tool_id("fc_2", "call_tokyo") == "call_tokyo"

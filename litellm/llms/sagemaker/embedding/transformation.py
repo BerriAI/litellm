@@ -1,7 +1,7 @@
 """
 Translate from OpenAI's `/v1/embeddings` to Sagemaker's `/invoke`
 
-In the Huggingface TGI format. 
+In the Huggingface TGI format.
 """
 
 from typing import TYPE_CHECKING, Any, List, Optional, Union
@@ -11,12 +11,13 @@ if TYPE_CHECKING:
 
 from httpx._models import Headers, Response
 
-from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.utils import Usage, EmbeddingResponse
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import SagemakerError
+from .cohere_transformation import SagemakerCohereEmbeddingConfig
 
 
 class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
@@ -38,17 +39,20 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Returns:
             Appropriate embedding config instance
         """
-        if "voyage" in model.lower():
+        model_lower = model.lower()
+        if "voyage" in model_lower:
             return VoyageEmbeddingConfig()
-        else:
-            return cls()
+        if "cohere" in model_lower:
+            return SagemakerCohereEmbeddingConfig()
+        return cls()
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        # Check if this is an embedding model
-        if "voyage" in model.lower():
+        model_lower = model.lower()
+        if "voyage" in model_lower:
             return VoyageEmbeddingConfig().get_supported_openai_params(model)
-        else:
-            return []
+        if "cohere" in model_lower:
+            return SagemakerCohereEmbeddingConfig().get_supported_openai_params(model)
+        return []
 
     def map_openai_params(
         self,
@@ -59,12 +63,8 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     ) -> dict:
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return SagemakerError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
     def transform_embedding_request(
         self,
@@ -122,9 +122,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
 
         output_data = []
         for idx, embedding in enumerate(embeddings):
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embedding}
-            )
+            output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
 
         model_response.object = "list"
         model_response.data = output_data

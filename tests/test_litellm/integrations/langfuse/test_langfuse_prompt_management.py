@@ -1,8 +1,8 @@
-import os
 from unittest.mock import MagicMock, patch
 
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
+    langfuse_client_init,
 )
 
 
@@ -23,11 +23,14 @@ class TestLangfusePromptManagement:
 
     def test_get_prompt_from_id(self):
         langfuse_prompt_management = LangfusePromptManagement()
-        with patch.object(
-            langfuse_prompt_management, "should_run_prompt_management"
-        ) as mock_should_run_prompt_management, patch.object(
-            langfuse_prompt_management, "_get_prompt_from_id"
-        ) as mock_get_prompt_from_id:
+        with (
+            patch.object(
+                langfuse_prompt_management, "should_run_prompt_management"
+            ) as mock_should_run_prompt_management,
+            patch.object(
+                langfuse_prompt_management, "_get_prompt_from_id"
+            ) as mock_get_prompt_from_id,
+        ):
             mock_should_run_prompt_management.return_value = True
             langfuse_prompt_management.get_chat_completion_prompt(
                 model="langfuse/langfuse-model",
@@ -62,3 +65,44 @@ class TestLangfusePromptManagement:
                 mock_run_async.call_args[0][0]
                 == langfuse_prompt_management.async_log_failure_event
             )
+
+    def test_langfuse_client_init_passes_dedicated_httpx_client(self):
+        import httpx
+
+        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+
+        shared_client = _get_httpx_client().client
+
+        mock_langfuse_class = MagicMock()
+        with (
+            patch(
+                "litellm.integrations.langfuse.langfuse_prompt_management.resolve_langfuse_credentials",
+                return_value=("pk-1234", "sk-1234", "https://localhost"),
+            ),
+            patch(
+                "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseLogger._get_langfuse_flush_interval",
+                return_value=1,
+            ),
+            patch.dict("sys.modules", {"langfuse": self._mock_langfuse}),
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_ssl_configuration",
+                return_value=False,
+            ) as mock_get_ssl,
+        ):
+            self._mock_langfuse.Langfuse = mock_langfuse_class
+
+            langfuse_client_init(
+                langfuse_public_key="pk-1234",
+                langfuse_secret="sk-1234",
+                langfuse_host="https://localhost",
+            )
+
+            mock_langfuse_class.assert_called_once()
+            call_kwargs = mock_langfuse_class.call_args[1]
+            assert "httpx_client" in call_kwargs
+            passed_client = call_kwargs["httpx_client"]
+            assert isinstance(passed_client, httpx.Client)
+            assert passed_client is not shared_client
+            mock_get_ssl.assert_called_once()
+
+        langfuse_client_init.cache_clear()

@@ -78,9 +78,7 @@ export function FallbackSelectionForm({
 
   // Generate tab items
   const items = groups.map((group, index) => {
-    const label = group.primaryModel
-      ? group.primaryModel
-      : `Group ${index + 1}`;
+    const label = group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
     return {
       key: group.id,
       label: label,
@@ -100,11 +98,7 @@ export function FallbackSelectionForm({
     return (
       <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
         <p className="text-gray-500 mb-4">No fallback groups configured</p>
-        <Button
-          variant="primary"
-          onClick={handleAddGroup}
-          icon={() => <Plus className="w-4 h-4" />}
-        >
+        <Button variant="primary" onClick={handleAddGroup} icon={() => <Plus className="w-4 h-4" />}>
           Create First Group
         </Button>
       </div>

@@ -120,6 +120,19 @@ def get_secret_str(
     return value
 
 
+def normalize_nonempty_secret_str(val: Optional[str]) -> Optional[str]:
+    """
+    Strip whitespace and treat None, '', and whitespace-only strings as unset.
+
+    Use when pairing secrets (mutual exclusion, optional auth) so whitespace-only
+    values do not count as present.
+    """
+    if val is None:
+        return None
+    stripped = val.strip()
+    return stripped if stripped else None
+
+
 def get_secret_bool(
     secret_name: str,
     default_value: Optional[bool] = None,
@@ -143,7 +156,7 @@ def get_secret_bool(
         return str_to_bool(_secret_value)
 
 
-def get_secret(  # noqa: PLR0915
+def get_secret(
     secret_name: str,
     default_value: Optional[Union[str, bool]] = None,
 ):
@@ -194,10 +207,7 @@ def get_secret(  # noqa: PLR0915
             # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
             actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
             actions_id_token_request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-            if (
-                actions_id_token_request_url is None
-                or actions_id_token_request_token is None
-            ):
+            if actions_id_token_request_url is None or actions_id_token_request_token is None:
                 raise ValueError(
                     "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment"
                 )
@@ -265,10 +275,7 @@ def get_secret(  # noqa: PLR0915
             raise ValueError("Unsupported OIDC provider")
 
     try:
-        if (
-            _should_read_secret_from_secret_manager()
-            and litellm.secret_manager_client is not None
-        ):
+        if _should_read_secret_from_secret_manager() and litellm.secret_manager_client is not None:
             try:
                 client = litellm.secret_manager_client
                 key_manager = "local"
@@ -306,9 +313,7 @@ def get_secret(  # noqa: PLR0915
         else:
             secret = os.environ.get(secret_name)
             secret_value_as_bool = str_to_bool(secret) if secret is not None else None
-            if secret_value_as_bool is not None and isinstance(
-                secret_value_as_bool, bool
-            ):
+            if secret_value_as_bool is not None and isinstance(secret_value_as_bool, bool):
                 return secret_value_as_bool
             else:
                 return secret

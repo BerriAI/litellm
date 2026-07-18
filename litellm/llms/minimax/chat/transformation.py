@@ -1,6 +1,7 @@
 """
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
+
 from typing import List, Optional, Tuple
 
 import litellm
@@ -38,11 +39,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         Defaults to international endpoint: https://api.minimax.io/v1
         For China, set to: https://api.minimaxi.com/v1
         """
-        return (
-            api_base
-            or get_secret_str("MINIMAX_API_BASE")
-            or "https://api.minimax.io/v1"
-        )
+        return api_base or get_secret_str("MINIMAX_API_BASE") or "https://api.minimax.io/v1"
 
     def get_complete_url(
         self,

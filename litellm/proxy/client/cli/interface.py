@@ -27,13 +27,13 @@ def styled_prompt():
         verbose_logger.debug(f"Error getting terminal size: {e}")
         click.echo("\n" * 3)
 
-    # Unicode box drawing characters
-    top_left = "┌"
-    top_right = "┐"
-    bottom_left = "└"
-    bottom_right = "┘"
-    horizontal = "─"
-    vertical = "│"
+    # ASCII box drawing characters
+    top_left = "+"
+    top_right = "+"
+    bottom_left = "+"
+    bottom_right = "+"
+    horizontal = "-"
+    vertical = "|"
 
     # Create the box with increased width
     width = 80
@@ -57,9 +57,7 @@ def styled_prompt():
 
     # Now move cursor up to the input line and get input
     click.echo("\033[2A", nl=False)  # Move cursor up 2 lines
-    click.echo(
-        f"\r{left_border} {prompt_text}", nl=False
-    )  # Position at start of input line
+    click.echo(f"\r{left_border} {prompt_text}", nl=False)  # Position at start of input line
 
     try:
         # Get user input
@@ -80,6 +78,8 @@ def styled_prompt():
 
 def show_commands():
     """Display available commands."""
+    from .commands.agents import agent_commands
+
     commands = [
         ("login", "Authenticate with the LiteLLM proxy server"),
         ("logout", "Clear stored authentication"),
@@ -91,6 +91,9 @@ def show_commands():
         ("keys", "Manage API keys"),
         ("teams", "Manage teams and team assignments"),
         ("users", "Manage users"),
+    ]
+    commands += [(c.name, c.get_short_help_str()) for c in agent_commands()]
+    commands += [
         ("version", "Show version information"),
         ("help", "Show this help message"),
         ("quit", "Exit the interactive session"),
@@ -156,7 +159,7 @@ def execute_command(user_input: str, ctx: click.Context):
     # Execute the command
     try:
         # Create a new argument list for click to parse
-        sys.argv = ["litellm-proxy"] + [command] + args
+        sys.argv = ["lite"] + [command] + args
 
         # Get the command object and invoke it
         cmd = cli.commands[command]

@@ -33,6 +33,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 import litellm
+from litellm.types.utils import CallTypes
 
 # ---------------------------------------------------------------------------
 # Problem definitions (HumanEval-style)
@@ -880,6 +881,7 @@ def eval_problem(
         result = litellm.compress(
             messages=messages,
             model=model,
+            call_type=CallTypes.completion,
             compression_trigger=compression_trigger,
             embedding_model=embedding_model,
         )

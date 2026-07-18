@@ -127,16 +127,40 @@ class TestResponsesAPIRequestUtils:
         """Ensure _update_responses_api_response_id_with_model_id works with dict input"""
         responses_api_response = {"id": "resp_abc123"}
         litellm_metadata = {"model_info": {"id": "gpt-4o"}}
-        updated = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-            responses_api_response=responses_api_response,
-            custom_llm_provider="openai",
-            litellm_metadata=litellm_metadata,
+        updated = (
+            ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=responses_api_response,
+                custom_llm_provider="openai",
+                litellm_metadata=litellm_metadata,
+            )
         )
         assert updated["id"] != "resp_abc123"
-        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(updated["id"])
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            updated["id"]
+        )
         assert decoded.get("response_id") == "resp_abc123"
         assert decoded.get("model_id") == "gpt-4o"
         assert decoded.get("custom_llm_provider") == "openai"
+
+
+    def test_update_responses_api_response_id_with_model_id_is_idempotent_for_litellm_ids(self):
+        raw = "resp_" + "a" * 48
+        litellm_metadata = {"model_info": {"id": "model-123"}}
+
+        once = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            {"id": raw},
+            custom_llm_provider="openai",
+            litellm_metadata=litellm_metadata,
+        )
+        twice = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            {"id": once["id"]},
+            custom_llm_provider="openai",
+            litellm_metadata=litellm_metadata,
+        )
+
+        assert twice == once
+        assert ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(twice["id"]) == raw
+        assert ResponsesAPIRequestUtils._decode_responses_api_response_id(once["id"]).get("response_id") == raw
 
     def test_build_decode_container_id_omits_none_model_id(self):
         """model_id=None must not round-trip as the truthy string 'None'."""
@@ -158,9 +182,8 @@ class TestResponsesAPIRequestUtils:
         legacy_inner = (
             "litellm:custom_llm_provider:azure;model_id:None;container_id:cntr_x"
         )
-        legacy_id = (
-            "cntr_"
-            + base64.b64encode(legacy_inner.encode("utf-8")).decode("utf-8")
+        legacy_id = "cntr_" + base64.b64encode(legacy_inner.encode("utf-8")).decode(
+            "utf-8"
         )
         decoded = ResponsesAPIRequestUtils._decode_container_id(legacy_id)
         assert decoded.get("model_id") is None
@@ -212,7 +235,10 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens == 10
         assert result.completion_tokens == 20
         assert result.total_tokens == 30
-        assert result.prompt_tokens_details and result.prompt_tokens_details.cached_tokens == 2
+        assert (
+            result.prompt_tokens_details
+            and result.prompt_tokens_details.cached_tokens == 2
+        )
 
     def test_transform_response_api_usage_with_none_values(self):
         """Test transformation handles None values properly"""
@@ -234,7 +260,9 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens == 20
         assert result.total_tokens == 20
 
-    def test_transform_response_api_usage_calculates_total_from_input_and_output_tokens_if_available(self):
+    def test_transform_response_api_usage_calculates_total_from_input_and_output_tokens_if_available(
+        self,
+    ):
         """Test transformation calculates total_tokens when it's None and input / output tokens are present"""
         # Setup
         usage = {
@@ -319,7 +347,8 @@ class TestResponseAPILoggingUtils:
             "output_tokens_details": {
                 "reasoning_tokens": 30,
                 "image_tokens": 100,
-                "text_tokens": 70,
+                "text_tokens": 50,
+                "audio_tokens": 20,
             },
         }
 
@@ -338,7 +367,61 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.reasoning_tokens == 30
         assert result.completion_tokens_details.image_tokens == 100
-        assert result.completion_tokens_details.text_tokens == 70
+        assert result.completion_tokens_details.text_tokens == 50
+        assert result.completion_tokens_details.audio_tokens == 20
+
+    def test_transform_response_api_usage_with_realtime_keys(self):
+        """Realtime input_token_details / output_token_details normalize for Usage."""
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_token_details": {
+                "text_tokens": 8,
+                "audio_tokens": 2,
+                "cached_tokens": 0,
+            },
+            "output_token_details": {
+                "text_tokens": 12,
+                "audio_tokens": 8,
+            },
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.text_tokens == 8
+        assert result.prompt_tokens_details.audio_tokens == 2
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.text_tokens == 12
+        assert result.completion_tokens_details.audio_tokens == 8
+
+    def test_transform_response_api_usage_tokens_details_keep_values(self):
+        """Keeps input_tokens_details / output_tokens_details when singular keys are also present."""
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_tokens_details": {"text_tokens": 10},
+            "output_tokens_details": {"text_tokens": 20},
+            "input_token_details": {"text_tokens": 1, "audio_tokens": 99},
+            "output_token_details": {"text_tokens": 2, "audio_tokens": 98},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.text_tokens == 10
+        assert result.prompt_tokens_details.audio_tokens is None
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.text_tokens == 20
+        assert result.completion_tokens_details.audio_tokens is None
 
 
 class TestResponsesAPIProviderSpecificParams:
@@ -356,7 +439,9 @@ class TestResponsesAPIProviderSpecificParams:
         }
 
         # Should not raise any exception
-        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            params
+        )
         assert "temperature" in result
 
     def test_provider_specific_params_no_crash_with_openai(self):
@@ -368,7 +453,9 @@ class TestResponsesAPIProviderSpecificParams:
         }
 
         # Should not raise any exception
-        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            params
+        )
         assert "temperature" in result
 
     def test_provider_specific_params_no_crash_with_vertex_ai(self):
@@ -380,7 +467,9 @@ class TestResponsesAPIProviderSpecificParams:
         }
 
         # Should not raise any exception
-        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(params)
+        result = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+            params
+        )
         assert "temperature" in result
 
 
@@ -393,12 +482,15 @@ def test_responses_extra_body_forwarded_to_completion_transformation_handler():
     not passed to litellm_completion_transformation_handler.response_api_handler(),
     so it was silently dropped.
     """
-    with patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
-        return_value=None,
-    ), patch(
-        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
-    ) as mock_handler:
+    with (
+        patch(
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+            return_value=None,
+        ),
+        patch(
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        ) as mock_handler,
+    ):
         mock_handler.return_value = MagicMock()
 
         litellm.responses(
@@ -410,9 +502,7 @@ def test_responses_extra_body_forwarded_to_completion_transformation_handler():
         mock_handler.assert_called_once()
         call_kwargs = mock_handler.call_args
         # extra_body can be a positional or keyword arg; check both
-        assert call_kwargs.kwargs.get("extra_body") == {
-            "custom_key": "custom_value"
-        }
+        assert call_kwargs.kwargs.get("extra_body") == {"custom_key": "custom_value"}
 
 
 def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
@@ -423,12 +513,15 @@ def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
     Supports per-model reasoning_effort/summary config in proxy for clients like Open WebUI
     that cannot set extra_body.
     """
-    with patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
-        return_value=None,
-    ), patch(
-        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
-    ) as mock_handler:
+    with (
+        patch(
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+            return_value=None,
+        ),
+        patch(
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        ) as mock_handler,
+    ):
         mock_handler.return_value = MagicMock()
 
         litellm.responses(

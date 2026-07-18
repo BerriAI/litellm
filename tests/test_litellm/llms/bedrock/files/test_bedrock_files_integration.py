@@ -19,7 +19,9 @@ class TestBedrockFilesIntegration:
     async def test_litellm_afile_content_bedrock_provider_with_s3_uri(self):
         """Test litellm.afile_content with bedrock provider using direct S3 URI"""
         file_id = "s3://test-bucket/test-file.jsonl"
-        expected_content = b'{"recordId": "request-1", "modelInput": {}, "modelOutput": {}}'
+        expected_content = (
+            b'{"recordId": "request-1", "modelInput": {}, "modelOutput": {}}'
+        )
 
         # Create a mock HttpxBinaryResponseContent response
         import httpx
@@ -28,9 +30,7 @@ class TestBedrockFilesIntegration:
             status_code=200,
             content=expected_content,
             headers={"content-type": "application/octet-stream"},
-            request=httpx.Request(
-                method="GET", url="s3://test-bucket/test-file.jsonl"
-            ),
+            request=httpx.Request(method="GET", url="s3://test-bucket/test-file.jsonl"),
         )
         mock_result = HttpxBinaryResponseContent(response=mock_response)
 
@@ -69,9 +69,13 @@ class TestBedrockFilesIntegration:
         model_id = "test-model-id-456"
 
         unified_file_id_str = f"litellm_proxy:application/json;unified_id,{unified_id};target_model_names,;llm_output_file_id,{s3_uri};llm_output_file_model_id,{model_id}"
-        encoded_file_id = base64.urlsafe_b64encode(unified_file_id_str.encode()).decode().rstrip("=")
+        encoded_file_id = (
+            base64.urlsafe_b64encode(unified_file_id_str.encode()).decode().rstrip("=")
+        )
 
-        expected_content = b'{"recordId": "request-1", "modelInput": {}, "modelOutput": {}}'
+        expected_content = (
+            b'{"recordId": "request-1", "modelInput": {}, "modelOutput": {}}'
+        )
 
         # Create a mock HttpxBinaryResponseContent response
         import httpx

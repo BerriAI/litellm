@@ -2,13 +2,17 @@
 GitHub Copilot Responses API Configuration.
 
 This module provides the configuration for GitHub Copilot's Responses API,
-which is required for models like gpt-5.1-codex that only support the /responses endpoint.
+which is required for models like gpt-5.3-codex that only support the /responses endpoint.
 
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
+
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
+import os
+
+import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.exceptions import AuthenticationError
@@ -19,10 +23,11 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.utils import _cached_get_model_info_helper
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    GITHUB_COPILOT_API_BASE,
+    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
 )
@@ -33,6 +38,42 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def github_copilot_supports_responses_api(model: str) -> bool:
+    """
+    Gate native /v1/responses dispatch per github_copilot model.
+
+    Resolution (first match wins): mode "responses" -> True; mode "chat" ->
+    False (opt-out wins for dual-endpoint models); "/v1/responses" in
+    supported_endpoints -> True; else False. Unknown model -> False (the bridge
+    always works since every Copilot model supports /chat/completions).
+
+    Reads merged model info (per-deployment model_info applied via the router's
+    register_model, which also clears the cache used here).
+    """
+    try:
+        info = _cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
+    except Exception as e:
+        verbose_logger.debug(
+            "github_copilot_supports_responses_api: get_model_info failed for %s: %s",
+            model,
+            e,
+        )
+        return False
+
+    mode = info.get("mode")
+    if mode == "responses":
+        return True
+    if mode == "chat":
+        return False
+
+    # supported_endpoints is dropped by ModelInfoBase; read it from the raw
+    # model_cost entry via the resolved key.
+    key = info.get("key")
+    raw_info = litellm.model_cost.get(key) if isinstance(key, str) else None
+    endpoints = raw_info.get("supported_endpoints") if isinstance(raw_info, dict) else None
+    return isinstance(endpoints, list) and "/v1/responses" in endpoints
 
 
 class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -55,6 +96,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def __init__(self) -> None:
         super().__init__()
         self.authenticator = Authenticator()
+        self._stream_item_ids_by_output_index: Dict[int, str] = {}
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -82,6 +124,61 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         so no transformation is needed.
         """
         return dict(response_api_optional_params)
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Any:
+        parsed_chunk = self._normalize_stream_item_id(parsed_chunk)
+        return super().transform_streaming_response(
+            model=model,
+            parsed_chunk=parsed_chunk,
+            logging_obj=logging_obj,
+        )
+
+    def _normalize_stream_item_id(self, parsed_chunk: dict) -> dict:
+        """Rewrite streamed item ids to one stable id per output_index.
+
+        GitHub Copilot tags each event of a single output item with a different
+        item id, so clients that key streaming state by item id (e.g. the Vercel
+        AI SDK) crash with "reasoning part <id> not found" / "text part <id> not
+        found". Every sub-event carries a top-level ``item_id`` (whatever the
+        item type), so its presence is the rewrite signal; output_item.added /
+        .done instead nest the id under ``item``. The anchor is keyed by
+        output_index and taken from output_item.added, which the protocol always
+        emits first, so it is written before any sub-event reads it. Copilot
+        accepts that id paired with the final encrypted_content next turn, so
+        multi-turn replay is unaffected.
+
+        State is keyed by output_index on this config, which
+        ProviderConfigManager builds fresh per request, so it is stream-scoped.
+        """
+        output_index = parsed_chunk.get("output_index")
+        if not isinstance(output_index, int):
+            return parsed_chunk
+
+        if parsed_chunk.get("type") == "response.output_item.added":
+            item = parsed_chunk.get("item")
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                self._stream_item_ids_by_output_index[output_index] = item["id"]
+            return parsed_chunk
+
+        stable_id = self._stream_item_ids_by_output_index.get(output_index)
+        if stable_id is None:
+            return parsed_chunk
+
+        if isinstance(parsed_chunk.get("item_id"), str):
+            parsed_chunk = dict(parsed_chunk)
+            parsed_chunk["item_id"] = stable_id
+        elif parsed_chunk.get("type") == "response.output_item.done":
+            item = parsed_chunk.get("item")
+            if isinstance(item, dict):
+                parsed_chunk = dict(parsed_chunk)
+                parsed_chunk["item"] = {**item, "id": stable_id}
+
+        return parsed_chunk
 
     def validate_environment(
         self,
@@ -126,20 +223,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if input_param is not None:
                 initiator = self._get_initiator(input_param)
                 merged_headers["X-Initiator"] = initiator
-                verbose_logger.debug(
-                    f"GitHub Copilot Responses API: Set X-Initiator={initiator}"
-                )
+                verbose_logger.debug(f"GitHub Copilot Responses API: Set X-Initiator={initiator}")
 
                 # Add vision header if input contains images
                 if self._has_vision_input(input_param):
                     merged_headers["copilot-vision-request"] = "true"
-                    verbose_logger.debug(
-                        "GitHub Copilot Responses API: Enabled vision request"
-                    )
+                    verbose_logger.debug("GitHub Copilot Responses API: Enabled vision request")
 
-            verbose_logger.debug(
-                f"GitHub Copilot Responses API: Successfully configured headers for model {model}"
-            )
+            verbose_logger.debug(f"GitHub Copilot Responses API: Successfully configured headers for model {model}")
 
             return merged_headers
 
@@ -157,23 +248,20 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> str:
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
-
-        Returns: https://api.githubcopilot.com/responses
-
-        Note: Currently only supports individual accounts.
-        Business/enterprise accounts (api.business.githubcopilot.com) can be
-        added in the future by detecting account type.
         """
         # Use provided api_base or fall back to authenticator's base or default
-        api_base = (
-            api_base or self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
+        effective_api_base = (
+            api_base
+            or self.authenticator.get_api_base()
+            or os.getenv("GITHUB_COPILOT_API_BASE")
+            or DEFAULT_GITHUB_COPILOT_API_BASE
         )
 
         # Remove trailing slashes
-        api_base = api_base.rstrip("/")
+        effective_api_base = effective_api_base.rstrip("/")
 
         # Return the responses endpoint
-        return f"{api_base}/responses"
+        return f"{effective_api_base}/responses"
 
     def _handle_reasoning_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -286,9 +374,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return self._contains_vision_content(input_param)
 
-    def _contains_vision_content(
-        self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
-    ) -> bool:
+    def _contains_vision_content(self, value: Any, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> bool:
         """
         Recursively check if a value contains vision content.
 
@@ -305,12 +391,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Check arrays
         if isinstance(value, list):
-            return any(
-                self._contains_vision_content(
-                    item, depth=depth + 1, max_depth=max_depth
-                )
-                for item in value
-            )
+            return any(self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value)
 
         # Only check dict/object types
         if not isinstance(value, dict):
@@ -324,10 +405,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Check content field recursively
         if "content" in value and isinstance(value["content"], list):
             return any(
-                self._contains_vision_content(
-                    item, depth=depth + 1, max_depth=max_depth
-                )
-                for item in value["content"]
+                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth) for item in value["content"]
             )
 
         return False

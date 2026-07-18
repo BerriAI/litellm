@@ -4,18 +4,22 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { menuLabelToPage } from "../../fixtures/menuMappings";
 import { navigateToPage } from "../../helpers/navigation";
+import { MIGRATED_E2E_PAGES } from "../../fixtures/migratedPages";
+import type { Page as PlaywrightPage } from "@playwright/test";
 
 const sidebarButtons = {
-  [Role.ProxyAdmin]: [
-    "Virtual Keys",
-    "Playground",
-    "Models",
-    "Usage",
-    "Teams",
-    "Internal Users",
-    "AI Hub",
-  ],
+  [Role.ProxyAdmin]: ["Virtual Keys", "Playground", "Models", "Usage", "Teams", "Internal Users", "AI Hub"],
 };
+
+/** Migrated pages live at a path route; legacy pages keep the ?page= query param. */
+async function expectPageUrl(page: PlaywrightPage, pageKey: string): Promise<void> {
+  const migratedSegment = MIGRATED_E2E_PAGES[pageKey];
+  if (migratedSegment) {
+    await expect(page).toHaveURL(new RegExp(`/ui/${migratedSegment}/?($|\\?)`));
+  } else {
+    await expect(page).toHaveURL(new RegExp(`[?&]page=${pageKey}(&|$)`));
+  }
+}
 
 const roles = [{ role: Role.ProxyAdmin, storage: ADMIN_STORAGE_PATH }];
 
@@ -38,13 +42,14 @@ for (const { role, storage } of roles) {
           throw new Error(`No page mapping found for menu label: ${buttonLabel}`);
         }
 
-        const tab = page.getByRole("menuitem", { name: buttonLabel });
+        // Sidebar items are links inside the `complementary` landmark; scoping
+        // there avoids the top-bar breadcrumb, which also links the page name.
+        const tab = page.getByRole("complementary").getByRole("link", { name: buttonLabel });
         await expect(tab).toBeVisible();
 
         await tab.click();
 
-        // Verify URL contains the correct page query parameter
-        await expect(page).toHaveURL(new RegExp(`[?&]page=${expectedPage}(&|$)`));
+        await expectPageUrl(page, expectedPage);
       }
     });
 
@@ -58,13 +63,14 @@ for (const { role, storage } of roles) {
 
       // Test direct navigation to verify the helper function works
       await navigateToPage(page, Page.ApiKeys);
-      await expect(page).toHaveURL(new RegExp(`[?&]page=${Page.ApiKeys}(&|$)`));
+      await expectPageUrl(page, Page.ApiKeys);
 
       await navigateToPage(page, Page.Models);
-      await expect(page).toHaveURL(new RegExp(`[?&]page=${Page.Models}(&|$)`));
+      await expectPageUrl(page, Page.Models);
 
+      // Migrated page: /ui?page=llm-playground redirects to the path route
       await navigateToPage(page, Page.LlmPlayground);
-      await expect(page).toHaveURL(new RegExp(`[?&]page=${Page.LlmPlayground}(&|$)`));
+      await expectPageUrl(page, Page.LlmPlayground);
     });
   });
 }

@@ -3,6 +3,7 @@ Calls DuckDuckGo's Instant Answer API to search the web.
 
 DuckDuckGo API Reference: https://duckduckgo.com/api
 """
+
 from typing import Dict, List, Literal, Optional, TypedDict, Union
 from urllib.parse import urlencode
 
@@ -79,11 +80,7 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         Get complete URL for Search endpoint.
         DuckDuckGo uses query parameters, so we construct the URL with the query.
         """
-        api_base = (
-            api_base
-            or get_secret_str("DUCKDUCKGO_API_BASE")
-            or self.DUCKDUCKGO_API_BASE
-        )
+        api_base = api_base or get_secret_str("DUCKDUCKGO_API_BASE") or self.DUCKDUCKGO_API_BASE
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_duckduckgo_params" in data:

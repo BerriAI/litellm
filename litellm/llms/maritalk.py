@@ -57,9 +57,5 @@ class MaritalkConfig(OpenAIGPTConfig):
             "tool_choice",
         ]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return MaritalkError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return MaritalkError(status_code=status_code, message=error_message, headers=headers)

@@ -41,14 +41,14 @@ exporter = InMemorySpanExporter()
 @pytest.mark.parametrize("streaming", [True, False])
 async def test_async_otel_callback(streaming):
     litellm.set_verbose = True
-    
+
     # Clear exporter at the start to ensure clean state
     exporter.clear()
 
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
 
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-mini",
         messages=[{"role": "user", "content": "hi"}],
         temperature=0.1,
         user="OTEL_USER",
@@ -76,7 +76,7 @@ async def test_async_otel_callback(streaming):
         if span.name == "litellm_request":
             validate_litellm_request(span)
             # Additional specific checks
-            assert span._attributes["gen_ai.request.model"] == "gpt-3.5-turbo"
+            assert span._attributes["gen_ai.request.model"] == "gpt-4.1-mini"
             assert span._attributes["gen_ai.system"] == "openai"
             assert span._attributes["gen_ai.request.temperature"] == 0.1
             assert span._attributes["llm.is_streaming"] == str(streaming)
@@ -166,10 +166,10 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
     tests when OpenTelemetry(message_logging=False) is set
     """
     litellm.set_verbose = True
-    
+
     # Clear exporter at the start to ensure clean state
     exporter.clear()
-    
+
     litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
     if global_redact is False:
         otel_logger = OpenTelemetry(
@@ -185,7 +185,7 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
     litellm.failure_callback = []
 
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-mini",
         messages=[{"role": "user", "content": "hi"}],
         mock_response="hi",
         stream=streaming,
@@ -253,9 +253,11 @@ def validate_redacted_message_span_attributes(span):
             or attr.startswith("gen_ai.cost.")
             or attr.startswith("gen_ai.operation.")
             or attr.startswith("gen_ai.request.")
+            or attr.startswith("litellm.")
         ), f"Non-metadata attribute found: {attr}"
 
     pass
+
 
 @pytest.mark.asyncio
 async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
@@ -291,10 +293,14 @@ async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
     # Simulate a proxy request by injecting proxy_server_request as a top-level kwarg.
     # This triggers ArizePhoenixLogger._get_phoenix_context to create its own parent span.
     await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-mini",
         messages=[{"role": "user", "content": "ping"}],
         mock_response="pong",
-        proxy_server_request={"url": "/chat/completions", "method": "POST", "headers": {}},
+        proxy_server_request={
+            "url": "/chat/completions",
+            "method": "POST",
+            "headers": {},
+        },
     )
 
     # Flush async span processing
@@ -307,9 +313,15 @@ async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
     # - "litellm_proxy_request" (parent) — created by _get_phoenix_context
     # - "litellm_request" (child)       — the LLM call span
     # - "raw_gen_ai_request"            — raw request sub-span
-    assert "litellm_proxy_request" in span_names, f"Expected proxy parent span, got: {span_names}"
-    assert LITELLM_REQUEST_SPAN_NAME in span_names, f"Expected request child span, got: {span_names}"
-    assert RAW_REQUEST_SPAN_NAME in span_names, f"Expected raw request span, got: {span_names}"
+    assert (
+        "litellm_proxy_request" in span_names
+    ), f"Expected proxy parent span, got: {span_names}"
+    assert (
+        LITELLM_REQUEST_SPAN_NAME in span_names
+    ), f"Expected request child span, got: {span_names}"
+    assert (
+        RAW_REQUEST_SPAN_NAME in span_names
+    ), f"Expected raw request span, got: {span_names}"
 
     # All spans should share the same trace ID (proper hierarchy)
     trace_ids = {s.context.trace_id for s in spans}

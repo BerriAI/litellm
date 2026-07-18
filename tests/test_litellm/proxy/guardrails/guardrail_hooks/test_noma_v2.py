@@ -160,6 +160,44 @@ class TestNomaV2Configuration:
         )
         assert request_data["messages"][0]["content"] == "hello"
 
+    def test_build_scan_payload_survives_unpicklable_request_data(
+        self, noma_v2_guardrail
+    ):
+        """Regression test for NOM-8044: post_call / during_call / during_mcp_call
+        used to 500 because request_data contained uvloop.Loop and similar
+        C-extension objects whose __reduce__ raises, which crashed deepcopy."""
+
+        class _FakeUvloopObject:
+            def __reduce__(self):
+                raise TypeError("no default __reduce__ due to non-trivial __cinit__")
+
+            def __repr__(self) -> str:
+                return "<fake-uvloop-loop>"
+
+        unpicklable = _FakeUvloopObject()
+        request_data = {
+            "metadata": {"headers": {"x-noma-application-id": "header-app"}},
+            "messages": [{"role": "user", "content": "hello"}],
+            "event_loop": unpicklable,
+        }
+
+        payload = noma_v2_guardrail._build_scan_payload(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="response",
+            logging_obj=None,
+            application_id="dynamic-app",
+        )
+
+        assert isinstance(payload["request_data"], dict)
+        assert payload["request_data"]["event_loop"] == "<fake-uvloop-loop>"
+        assert payload["request_data"]["messages"] == [
+            {"role": "user", "content": "hello"}
+        ]
+
+        # Original request_data must not have been mutated by the copy.
+        assert request_data["event_loop"] is unpicklable
+
     def test_build_scan_payload_passes_model_call_details_as_is(
         self, noma_v2_guardrail
     ):

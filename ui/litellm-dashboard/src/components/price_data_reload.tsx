@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card, Tooltip, Divider } from "antd";
-import { ReloadOutlined, ClockCircleOutlined, StopOutlined, CloudOutlined, DatabaseOutlined, InfoCircleOutlined, WarningOutlined } from "@ant-design/icons";
+import {
+  ReloadOutlined,
+  ClockCircleOutlined,
+  StopOutlined,
+  CloudOutlined,
+  DatabaseOutlined,
+  InfoCircleOutlined,
+  WarningOutlined,
+} from "@ant-design/icons";
 import {
   reloadModelCostMap,
   scheduleModelCostMapReload,
@@ -75,9 +83,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
     setLoadingStatus(true);
     try {
-      console.log("Fetching reload status...");
       const status = await getModelCostMapReloadStatus(accessToken);
-      console.log("Received status:", status);
       setReloadStatus(status);
     } catch (error) {
       console.error("Failed to fetch reload status:", error);

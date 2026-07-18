@@ -82,31 +82,26 @@ def test_opus_4_6_model_pricing_and_capabilities():
         "claude-opus-4-6": {
             "provider": "anthropic",
             "has_long_context_pricing": False,
-            "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
         },
         "claude-opus-4-6-20260205": {
             "provider": "anthropic",
             "has_long_context_pricing": False,
-            "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
         },
         "anthropic.claude-opus-4-6-v1": {
             "provider": "bedrock_converse",
             "has_long_context_pricing": False,
-            "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
         },
         "vertex_ai/claude-opus-4-6": {
             "provider": "vertex_ai-anthropic_models",
             "has_long_context_pricing": False,
-            "tool_use_system_prompt_tokens": 346,
             "max_input_tokens": 1000000,
         },
         "azure_ai/claude-opus-4-6": {
             "provider": "azure_ai",
             "has_long_context_pricing": False,
-            "tool_use_system_prompt_tokens": 159,
             "max_input_tokens": 200000,
         },
     }
@@ -143,10 +138,6 @@ def test_opus_4_6_model_pricing_and_capabilities():
         assert info["supports_reasoning"] is True
         assert info["supports_tool_choice"] is True
         assert info["supports_vision"] is True
-        assert (
-            info["tool_use_system_prompt_tokens"]
-            == config["tool_use_system_prompt_tokens"]
-        )
 
 
 def test_opus_4_6_bedrock_regional_model_pricing():
@@ -191,7 +182,6 @@ def test_opus_4_6_bedrock_regional_model_pricing():
         assert info["max_output_tokens"] == 128000
         assert info["max_tokens"] == 128000
         assert info["supports_assistant_prefill"] is False
-        assert info["tool_use_system_prompt_tokens"] == 346
         assert "input_cost_per_token_above_200k_tokens" not in info
         assert "output_cost_per_token_above_200k_tokens" not in info
         assert "cache_creation_input_token_cost_above_200k_tokens" not in info
@@ -220,7 +210,6 @@ def test_opus_4_6_alias_and_dated_metadata_match():
         "cache_creation_input_token_cost_above_1hr",
         "cache_read_input_token_cost",
         "supports_assistant_prefill",
-        "tool_use_system_prompt_tokens",
     ]
     for key in keys_to_match:
         assert alias[key] == dated[key], f"Mismatch for {key}"

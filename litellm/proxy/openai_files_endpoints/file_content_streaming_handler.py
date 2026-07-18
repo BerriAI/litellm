@@ -44,9 +44,7 @@ class FileContentStreamingHandler:
                 file_id=original_file_id,
             )
             resolved_streaming_data.pop("model", None)
-            resolved_streaming_provider = cast(
-                str, credentials["custom_llm_provider"]
-            )
+            resolved_streaming_provider = cast(str, credentials["custom_llm_provider"])
             resolved_custom_llm_provider = resolved_streaming_provider
             resolved_file_id = cast(str, resolved_streaming_data["file_id"])
         else:
@@ -65,9 +63,7 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
     ) -> bool:
-        return (
-            custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
-        )
+        return custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
 
     @staticmethod
     async def stream_file_content_with_logging(
@@ -106,13 +102,12 @@ class FileContentStreamingHandler:
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
         )
+
         stream_result = cast(
             FileContentStreamingResult,
             await litellm.afile_content(
                 **{
-                    "custom_llm_provider": cast(
-                        FileContentProvider, custom_llm_provider
-                    ),
+                    "custom_llm_provider": cast(FileContentProvider, custom_llm_provider),
                     "file_id": file_id,
                     "stream": True,
                     **data,

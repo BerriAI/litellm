@@ -3,6 +3,7 @@ Tests for cost tracking settings management endpoints.
 
 Tests the GET and PATCH endpoints for managing cost discount configuration.
 """
+
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,9 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)
+sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.proxy.management_endpoints.cost_tracking_settings import router
@@ -45,12 +44,15 @@ class TestCostTrackingSettings:
 
         mock_prisma_client = MagicMock()
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma_client,
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config",
-            mock_proxy_config,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ),
         ):
             # Make request
             response = client.get(
@@ -77,18 +79,19 @@ class TestCostTrackingSettings:
         """
         # Mock the proxy_config to return a config without cost_discount_config
         mock_proxy_config = AsyncMock()
-        mock_proxy_config.get_config = AsyncMock(
-            return_value={"litellm_settings": {}}
-        )
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
 
         mock_prisma_client = MagicMock()
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma_client,
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config",
-            mock_proxy_config,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ),
         ):
             # Make request
             response = client.get(
@@ -110,9 +113,7 @@ class TestCostTrackingSettings:
         """
         # Mock the proxy_config
         mock_proxy_config = AsyncMock()
-        mock_proxy_config.get_config = AsyncMock(
-            return_value={"litellm_settings": {}}
-        )
+        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
         mock_proxy_config.save_config = AsyncMock()
 
         mock_prisma_client = MagicMock()
@@ -125,16 +126,21 @@ class TestCostTrackingSettings:
             "openai": 0.01,
         }
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma_client,
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config",
-            mock_proxy_config,
-        ), patch(
-            "litellm.proxy.proxy_server.store_model_in_db",
-            mock_store_model_in_db,
-        ), patch.object(litellm, "cost_discount_config", {}):
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.store_model_in_db",
+                mock_store_model_in_db,
+            ),
+            patch.object(litellm, "cost_discount_config", {}),
+        ):
             # Make request
             response = client.patch(
                 "/config/cost_discount_config",
@@ -174,15 +180,19 @@ class TestCostTrackingSettings:
             "openai": 0.01,
         }
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma_client,
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config",
-            mock_proxy_config,
-        ), patch(
-            "litellm.proxy.proxy_server.store_model_in_db",
-            mock_store_model_in_db,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.store_model_in_db",
+                mock_store_model_in_db,
+            ),
         ):
             # Make request
             response = client.patch(
@@ -211,15 +221,19 @@ class TestCostTrackingSettings:
             "openai": 1.5,  # Invalid: greater than 1
         }
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma_client,
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config",
-            mock_proxy_config,
-        ), patch(
-            "litellm.proxy.proxy_server.store_model_in_db",
-            mock_store_model_in_db,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.store_model_in_db",
+                mock_store_model_in_db,
+            ),
         ):
             # Make request
             response = client.patch(
@@ -247,15 +261,19 @@ class TestCostTrackingSettings:
             "openai": 0.05,
         }
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma_client,
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config",
-            mock_proxy_config,
-        ), patch(
-            "litellm.proxy.proxy_server.store_model_in_db",
-            mock_store_model_in_db,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                mock_proxy_config,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.store_model_in_db",
+                mock_store_model_in_db,
+            ),
         ):
             # Make request
             response = client.patch(
@@ -269,7 +287,6 @@ class TestCostTrackingSettings:
             response_data = response.json()
             assert "error" in response_data["detail"]
             assert "STORE_MODEL_IN_DB" in response_data["detail"]["error"]
-
 
 
 class TestResolveModelForCostLookup:
@@ -366,9 +383,7 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             mock_router,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup(
-                "my-azure-model"
-            )
+            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
 
         assert resolved_model == "azure/gpt-4o-mini"
 
@@ -389,4 +404,99 @@ class TestResolveModelForCostLookup:
             )
 
         assert resolved_model == "azure/openai/gpt-5.3-codex"
+        assert provider is None
+
+    def test_returns_custom_llm_provider_on_base_model_path(self):
+        """base_model path: the custom_llm_provider from litellm_params is
+        returned as the second tuple element, unchanged."""
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "my-azure-model",
+                "litellm_params": {
+                    "model": "azure/my-deployment",
+                    "base_model": "azure/gpt-4o",
+                    "custom_llm_provider": "azure",
+                },
+                "model_info": {"id": "test-id"},
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
+
+        assert resolved_model == "azure/gpt-4o"
+        assert provider == "azure"
+
+    def test_returns_custom_llm_provider_on_resolved_model_path(self):
+        """resolved-model path (no base_model): the custom_llm_provider from
+        litellm_params is returned alongside litellm_params.model."""
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                    "custom_llm_provider": "openai",
+                },
+                "model_info": {"id": "test-id"},
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+
+        assert resolved_model == "openai/gpt-4"
+        assert provider == "openai"
+
+    def test_resolves_base_model_when_deployment_has_no_litellm_params(self):
+        """A deployment can omit litellm_params entirely; base_model from
+        model_info must still resolve (the .get default must be {} not None,
+        else the later litellm_params.get(...) raises and resolution is lost)."""
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "my-azure-model",
+                "model_info": {"base_model": "azure/gpt-4o"},
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
+
+        assert resolved_model == "azure/gpt-4o"
+        assert provider is None
+
+    def test_resolves_model_when_deployment_has_no_model_info(self):
+        """A deployment can omit model_info entirely; litellm_params.model must
+        still resolve (the .get default must be {} not None, else the earlier
+        model_info.get(...) raises and resolution is lost)."""
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4"},
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+
+        assert resolved_model == "openai/gpt-4"
         assert provider is None

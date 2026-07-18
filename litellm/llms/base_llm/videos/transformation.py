@@ -282,18 +282,14 @@ class BaseVideoConfig(ABC):
         Returns:
             Tuple[str, list]: (url, files_list) for the multipart POST request
         """
-        raise NotImplementedError(
-            "video create character is not supported for this provider"
-        )
+        raise NotImplementedError("video create character is not supported for this provider")
 
     def transform_video_create_character_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> CharacterObject:
-        raise NotImplementedError(
-            "video create character is not supported for this provider"
-        )
+        raise NotImplementedError("video create character is not supported for this provider")
 
     def transform_video_get_character_request(
         self,
@@ -308,18 +304,31 @@ class BaseVideoConfig(ABC):
         Returns:
             Tuple[str, Dict]: (url, params) for the GET request
         """
-        raise NotImplementedError(
-            "video get character is not supported for this provider"
-        )
+        raise NotImplementedError("video get character is not supported for this provider")
 
     def transform_video_get_character_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> CharacterObject:
-        raise NotImplementedError(
-            "video get character is not supported for this provider"
-        )
+        raise NotImplementedError("video get character is not supported for this provider")
+
+    def get_video_edit_prefetch_params(
+        self,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Optional[Tuple[str, Dict]]:
+        """
+        Return (url, body) for a pre-fetch HTTP call that must be made before
+        transform_video_edit_request, or None if no pre-fetch is required.
+
+        Providers that need to retrieve the source video before constructing the
+        edit request (e.g. Vertex AI) should override this method.  The handler
+        uses the existing shared httpx client so the call is properly async.
+        """
+        return None
 
     def transform_video_edit_request(
         self,
@@ -329,6 +338,7 @@ class BaseVideoConfig(ABC):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
         extra_body: Optional[Dict[str, Any]] = None,
+        prefetched_source_data: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video edit request into a URL and JSON data.
@@ -343,6 +353,7 @@ class BaseVideoConfig(ABC):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: Optional[str] = None,
+        request_data: Optional[Dict] = None,
     ) -> VideoObject:
         raise NotImplementedError("video edit is not supported for this provider")
 

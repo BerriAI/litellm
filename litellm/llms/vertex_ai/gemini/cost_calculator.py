@@ -1,7 +1,8 @@
 """
 Cost calculator for Vertex AI Gemini.
 
-Used because there are differences in how Google AI Studio and Vertex AI Gemini handle web search requests.
+Delegates to the shared Gemini cost calculator which reads pricing and
+billing unit from model_info.
 """
 
 from typing import TYPE_CHECKING
@@ -14,32 +15,14 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     """
     Calculate the cost of a web search request for Vertex AI Gemini.
 
-    Vertex AI charges $35/1000 prompts, independent of the number of web search requests.
+    Billing differs by ``web_search_billing_unit`` in ``model_info``:
+    - ``"per_query"``: charged per individual search query (Gemini 3.x).
+    - ``"per_prompt"`` (default): charged per grounded prompt (Gemini 2.x).
 
-    For a single call, this is $35e-3 USD.
-
-    Args:
-        usage: The usage object for the web search request.
-        model_info: The model info for the web search request.
-
-    Returns:
-        The cost of the web search request.
+    Delegates to the shared Gemini cost calculator.
     """
-    from litellm.types.utils import PromptTokensDetailsWrapper
+    from litellm.llms.gemini.cost_calculator import (
+        cost_per_web_search_request as _gemini_cost,
+    )
 
-    # check if usage object has web search requests
-    cost_per_llm_call_with_web_search = 35e-3
-
-    makes_web_search_request = False
-    if (
-        usage is not None
-        and usage.prompt_tokens_details is not None
-        and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
-    ):
-        makes_web_search_request = True
-
-    # Calculate total cost
-    if makes_web_search_request:
-        return cost_per_llm_call_with_web_search
-    else:
-        return 0.0
+    return _gemini_cost(usage=usage, model_info=model_info)

@@ -20,6 +20,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_tool_invoke,
     convert_url_to_base64,
     create_anthropic_image_param,
+    get_tool_calls_from_response,
+    has_tool_with_name,
     llama_2_chat_pt,
     prompt_factory,
 )
@@ -605,8 +607,33 @@ def test_no_messages_yields_user_text():
     assert contents == expected_output
 
 
-def test_convert_url():
-    convert_url_to_base64("https://picsum.photos/id/237/200/300")
+def test_convert_url(monkeypatch):
+    import base64
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    from litellm.litellm_core_utils.prompt_templates.image_handling import (
+        in_memory_cache,
+    )
+
+    url = "https://picsum.photos/id/237/200/300"
+    image_bytes = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+    mock_client = MagicMock()
+    mock_client.get.return_value = httpx.Response(
+        200, content=image_bytes, headers={"Content-Type": "image/png"}
+    )
+
+    monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+    monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
+    in_memory_cache.flush_cache()
+
+    result = convert_url_to_base64(url)
+
+    expected = "data:image/png;base64," + base64.b64encode(image_bytes).decode("utf-8")
+    assert result == expected
+    mock_client.get.assert_called_once()
 
 
 def test_azure_tool_call_invoke_helper():
@@ -776,7 +803,7 @@ def test_ensure_alternating_roles(
 
 
 def test_ensure_alternating_roles_with_tool_calls():
-    """Fixes Regression in #18685 """
+    """Fixes Regression in #18685"""
     messages = [
         {"role": "user", "content": "What's the weather?"},
         {
@@ -1675,7 +1702,7 @@ def test_anthropic_messages_pt_raw_bash_tool_result_passthrough():
                     "type": "server_tool_use",
                     "id": "srvtoolu_01BASH",
                     "name": "bash_code_execution",
-                    "input": {"command": "python3 -c \"print(1+1)\""},
+                    "input": {"command": 'python3 -c "print(1+1)"'},
                 },
                 {
                     "type": "bash_code_execution_tool_result",
@@ -1867,10 +1894,16 @@ def test_attempt_json_repair_missing_closing_brace():
         _attempt_json_repair,
     )
 
-    truncated = '{"command": ["bash","-lc","find /x/repos -name \'messages.py\' -type f"]'
+    truncated = (
+        '{"command": ["bash","-lc","find /x/repos -name \'messages.py\' -type f"]'
+    )
     result = _attempt_json_repair(truncated)
     assert result is not None
-    assert result["command"] == ["bash", "-lc", "find /x/repos -name 'messages.py' -type f"]
+    assert result["command"] == [
+        "bash",
+        "-lc",
+        "find /x/repos -name 'messages.py' -type f",
+    ]
 
 
 def test_attempt_json_repair_missing_bracket_and_brace():
@@ -1966,7 +1999,7 @@ def test_parse_tool_call_arguments_non_object_json():
         parse_tool_call_arguments,
     )
 
-    result = parse_tool_call_arguments('[1, 2, 3]')
+    result = parse_tool_call_arguments("[1, 2, 3]")
     assert result == [1, 2, 3]
 
 
@@ -1999,7 +2032,6 @@ def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     error_msg = str(exc_info.value)
     assert "test_tool" in error_msg
     assert "test context" in error_msg
-
 
 
 def test_anthropic_messages_pt_interleave_thinking_with_server_tool_calls():
@@ -2176,7 +2208,11 @@ def test_anthropic_messages_pt_thinking_blocks_no_server_tools_unchanged():
     types = [c.get("type") for c in content]
 
     # Original behavior: thinking first, then text, then tool_use
-    assert types == ["thinking", "text", "tool_use"], f"Expected sequential order but got: {types}"
+    assert types == [
+        "thinking",
+        "text",
+        "tool_use",
+    ], f"Expected sequential order but got: {types}"
 
 
 def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
@@ -2221,7 +2257,14 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
                     {
                         "type": "web_search_tool_result",
                         "tool_use_id": "srvtoolu_01ONLY",
-                        "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Test", "snippet": "result"}],
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com",
+                                "title": "Test",
+                                "snippet": "result",
+                            }
+                        ],
                     },
                 ]
             },
@@ -2238,11 +2281,11 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
 
     # thinking_1 paired with tool group, thinking_2 and thinking_3 before text
     assert types == [
-        "thinking",            # paired with tool group
+        "thinking",  # paired with tool group
         "server_tool_use",
         "web_search_tool_result",
-        "thinking",            # extra - before text
-        "thinking",            # extra - before text
+        "thinking",  # extra - before text
+        "thinking",  # extra - before text
         "text",
     ], f"Expected order but got: {types}"
 
@@ -2337,8 +2380,107 @@ def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
 
     # Verify no duplicate thinking blocks
     thinking_count = sum(1 for t in types if t == "thinking")
-    assert thinking_count == 2, f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
+    assert (
+        thinking_count == 2
+    ), f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
 
     # Verify signatures preserved in correct positions
     assert content[0]["signature"] == "sig_1"
     assert content[3]["signature"] == "sig_2"
+
+
+def test_get_tool_calls_from_response_chat_completions():
+    response = MagicMock()
+    response.output = None
+    response.content = None
+    tool_call = MagicMock()
+    tool_call.id = "call_abc"
+    tool_call.function.name = "my_tool"
+    tool_call.function.arguments = '{"x": 1}'
+    response.choices = [MagicMock(message=MagicMock(tool_calls=[tool_call]))]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "call_abc", "name": "my_tool", "arguments": {"x": 1}}]
+
+
+def test_get_tool_calls_from_response_responses_api():
+    response = MagicMock()
+    response.choices = None
+    response.content = None
+    response.output = [
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "my_tool",
+            "arguments": '{"x": 2}',
+        }
+    ]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "call_1", "name": "my_tool", "arguments": {"x": 2}}]
+
+
+def test_get_tool_calls_from_response_anthropic_messages():
+    response = MagicMock()
+    response.choices = None
+    response.output = None
+    response.content = [
+        {"type": "tool_use", "id": "toolu_1", "name": "my_tool", "input": {"x": 3}},
+    ]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "toolu_1", "name": "my_tool", "arguments": {"x": 3}}]
+
+
+def test_get_tool_calls_from_response_anthropic_messages_plain_dict():
+    # AnthropicMessagesResponse is a TypedDict -- real responses are plain
+    # dicts at runtime, not objects with attribute access. A MagicMock-only
+    # test would pass even if the extractor used bare getattr() and silently
+    # returned nothing for a real response.
+    response = {
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "my_tool", "input": {"x": 3}},
+        ]
+    }
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "toolu_1", "name": "my_tool", "arguments": {"x": 3}}]
+
+
+def test_get_tool_calls_from_response_no_tool_calls():
+    response = MagicMock()
+    response.choices = None
+    response.output = None
+    response.content = None
+
+    assert get_tool_calls_from_response(response) == []
+
+
+def test_has_tool_with_name_openai_function_shape():
+    tools = [{"type": "function", "function": {"name": "my_tool"}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_anthropic_custom_shape():
+    tools = [{"type": "custom", "name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_anthropic_shape_without_type_field():
+    # Anthropic's documented client tool format is just name + input_schema;
+    # "type" isn't required at all (type: "custom" is only one possible value).
+    tools = [{"name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_not_a_list():
+    assert not has_tool_with_name(None, "my_tool")
+    assert not has_tool_with_name("not a list", "my_tool")

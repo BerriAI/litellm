@@ -1,5 +1,5 @@
 """
-Transformation logic for context caching. 
+Transformation logic for context caching.
 
 Why separate file? Make it easy to see how transformation works
 """
@@ -19,7 +19,7 @@ from ..gemini.transformation import (
 
 
 def get_first_continuous_block_idx(
-    filtered_messages: List[Tuple[int, AllMessageValues]]  # (idx, message)
+    filtered_messages: List[Tuple[int, AllMessageValues]],  # (idx, message)
 ) -> int:
     """
     Find the array index that ends the first continuous sequence of message blocks.
@@ -145,9 +145,7 @@ def separate_cached_messages(
         last_cached_idx = filtered_messages[last_continuous_block_idx][0]
 
         cached_messages = messages[first_cached_idx : last_cached_idx + 1]
-        non_cached_messages = (
-            messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
-        )
+        non_cached_messages = messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
     else:
         non_cached_messages = messages
 
@@ -165,16 +163,16 @@ def transform_openai_messages_to_gemini_context_caching(
     # Extract TTL from cached messages BEFORE system message transformation
     ttl = extract_ttl_from_cached_messages(messages)
 
-    supports_system_message = get_supports_system_message(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    supports_system_message = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
     transformed_system_messages, new_messages = _transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
 
     transformed_messages = _gemini_convert_messages_with_history(
-        messages=new_messages, model=model
+        messages=new_messages,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
     )
 
     model_name = "models/{}".format(model)

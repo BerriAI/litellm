@@ -44,11 +44,7 @@ export default function MemberTable({
       dataIndex: "user_id",
       key: "user_id",
       render: (userId: string | null) =>
-        userId === "default_user_id" ? (
-          <Tag color="blue">Default Proxy Admin</Tag>
-        ) : (
-          <Text>{userId || "-"}</Text>
-        ),
+        userId === "default_user_id" ? <Tag color="blue">Default Proxy Admin</Tag> : <Text>{userId || "-"}</Text>,
     },
     {
       title: roleTooltip ? (

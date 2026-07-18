@@ -64,12 +64,8 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
     # request.form() may return either a FastAPI or Starlette UploadFile
     # depending on middleware; check both via isinstance (FastAPI's UploadFile
     # is a subclass of Starlette's) and fall back to duck-type check.
-    if uploaded_file is None or (
-        not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")
-    ):
-        raise ValueError(
-            "Multipart OCR request must include a 'file' field with the document to process"
-        )
+    if uploaded_file is None or (not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")):
+        raise ValueError("Multipart OCR request must include a 'file' field with the document to process")
 
     uploaded_file = cast(UploadFile, uploaded_file)
 
@@ -144,8 +140,7 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
         # Check if form data is available.
         if getattr(request, "_form", None) is not None:
             verbose_proxy_logger.debug(
-                "OCR request body is empty but form data is available from middleware — "
-                "processing as multipart form."
+                "OCR request body is empty but form data is available from middleware — processing as multipart form."
             )
             return await _parse_multipart_form(request)
 
@@ -177,6 +172,24 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
             "To upload a local file, use multipart/form-data with a 'file' field. "
             "For JSON requests, use 'document_url' or 'image_url' document types."
         )
+
+    # Security: reject provider-native file IDs (e.g. reducto://) received via
+    # JSON. These IDs are not scoped to the LiteLLM proxy user/key, so an
+    # authenticated user who obtains another user's file ID could submit it
+    # here and receive the OCR result using the proxy's shared provider
+    # credentials. Force callers to upload fresh content per request via
+    # multipart/form-data or an inline base64 data URI, both of which produce
+    # a server-mediated upload bound to the current request.
+    if isinstance(doc, dict):
+        for url_field in ("document_url", "image_url"):
+            url_value = doc.get(url_field)
+            if isinstance(url_value, str) and url_value.startswith("reducto://"):
+                raise ValueError(
+                    "reducto:// file IDs are not accepted through the proxy "
+                    "OCR API; upload the file in the same request via "
+                    "multipart/form-data with a 'file' field, or pass an "
+                    "inline base64 data URI as the document URL."
+                )
 
     return data
 

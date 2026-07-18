@@ -36,11 +36,12 @@ Example: block when response rejects the user (input_type response only):
 
 import asyncio
 import threading
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -120,18 +121,9 @@ class CustomCodeGuardrail(CustomGuardrail):
         self._compile_lock = threading.Lock()
         self._compile_error: Optional[str] = None
 
-        supported_event_hooks = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.pre_mcp_call,
-            GuardrailEventHooks.during_mcp_call,
-            GuardrailEventHooks.logging_only,
-        ]
-
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
 
@@ -142,6 +134,17 @@ class CustomCodeGuardrail(CustomGuardrail):
     def get_config_model() -> Optional[Type[GuardrailConfigModel]]:
         """Returns the config model for the UI."""
         return CustomCodeGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.logging_only,
+        ]
 
     def _do_compile(self) -> None:
         """Internal compilation method without lock. Expected to run inside _compile_lock."""
@@ -157,9 +160,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
         apply_fn = exec_globals["apply_guardrail"]
         if not callable(apply_fn):
-            raise CustomCodeCompilationError(
-                "'apply_guardrail' must be a callable function"
-            )
+            raise CustomCodeCompilationError("'apply_guardrail' must be a callable function")
 
         self._compiled_function = apply_fn
 
@@ -175,9 +176,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
             try:
                 self._do_compile()
-                verbose_proxy_logger.debug(
-                    f"Custom code guardrail '{self.guardrail_name}' compiled successfully"
-                )
+                verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}' compiled successfully")
 
             except SyntaxError as e:
                 self._compile_error = f"Syntax error in custom code: {e}"
@@ -224,9 +223,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         """
         if self._compiled_function is None:
             if self._compile_error:
-                raise CustomCodeExecutionError(
-                    f"Custom code guardrail not compiled: {self._compile_error}"
-                )
+                raise CustomCodeExecutionError(f"Custom code guardrail not compiled: {self._compile_error}")
             raise CustomCodeExecutionError("Custom code guardrail not compiled")
 
         try:
@@ -253,10 +250,11 @@ class CustomCodeGuardrail(CustomGuardrail):
         except HTTPException:
             # Re-raise HTTP exceptions (from block action)
             raise
+        except ModifyResponseException:
+            # Pre-call block uses passthrough; must not wrap as execution error (500)
+            raise
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Custom code guardrail '{self.guardrail_name}' execution error: {e}"
-            )
+            verbose_proxy_logger.error(f"Custom code guardrail '{self.guardrail_name}' execution error: {e}")
             raise CustomCodeExecutionError(
                 f"Custom code guardrail execution failed: {e}",
                 details={
@@ -318,9 +316,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         action = result.get("action", "allow")
 
         if action == "allow":
-            verbose_proxy_logger.debug(
-                f"Custom code guardrail '{self.guardrail_name}': Allowing {input_type}"
-            )
+            verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}': Allowing {input_type}")
             return inputs
 
         elif action == "block":
@@ -352,9 +348,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             )
 
         elif action == "modify":
-            verbose_proxy_logger.debug(
-                f"Custom code guardrail '{self.guardrail_name}': Modifying {input_type}"
-            )
+            verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}': Modifying {input_type}")
 
             # Apply modifications
             modified_inputs = dict(inputs)
@@ -372,8 +366,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
         else:
             verbose_proxy_logger.warning(
-                f"Custom code guardrail '{self.guardrail_name}': "
-                f"Unknown action '{action}'. Treating as allow."
+                f"Custom code guardrail '{self.guardrail_name}': Unknown action '{action}'. Treating as allow."
             )
             return inputs
 
@@ -400,9 +393,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             try:
                 self.custom_code = new_code
                 self._do_compile()
-                verbose_proxy_logger.info(
-                    f"Custom code guardrail '{self.guardrail_name}': Code updated successfully"
-                )
+                verbose_proxy_logger.info(f"Custom code guardrail '{self.guardrail_name}': Code updated successfully")
             except SyntaxError as e:
                 # Rollback on failure
                 self.custom_code = old_code

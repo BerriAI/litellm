@@ -2,7 +2,19 @@ import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
-import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Select as Select2,
+  Space,
+  Tooltip,
+  Typography,
+} from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -113,6 +125,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     user_role: string;
     organization_ids?: string[];
     organizations?: string[];
+    send_invite_email?: boolean;
   }) => {
     try {
       NotificationsManager.info("Making API Call");
@@ -181,7 +194,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
-        initialValues={{ user_role: "internal_user_viewer" }}
+        initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
       >
         <Alert
           message="Email invitations"
@@ -222,6 +235,10 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
         <Form.Item label="Metadata" name="metadata">
           <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+        </Form.Item>
+
+        <Form.Item label="Send invitation email" name="send_invite_email" valuePropName="checked">
+          <Checkbox />
         </Form.Item>
 
         <div style={{ textAlign: "right", marginTop: "10px" }}>
@@ -270,7 +287,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
-          initialValues={{ user_role: "internal_user_viewer" }}
+          initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
         >
           <Form.Item label="User Email" name="user_email">
             <Input />
@@ -326,6 +343,9 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
+          <Form.Item label="Send invitation email" name="send_invite_email" valuePropName="checked">
+            <Checkbox />
+          </Form.Item>
           <Accordion>
             <AccordionHeader>
               <Text strong>Personal Key Creation</Text>
@@ -360,6 +380,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
               </Form.Item>
             </AccordionBody>
           </Accordion>
+
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">
               Invite User

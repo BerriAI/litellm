@@ -13,9 +13,17 @@ from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
+from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "vertex_ai"
+
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
@@ -31,37 +39,29 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         Validate the environment for the request
         """
+        # Work on a local copy — router shallow-copies litellm_params so the caller's
+        # headers dict may be the shared deployment extra_headers object.
+        headers = dict(headers)
         vertex_ai_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
         vertex_ai_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
 
-        project_id: Optional[str] = None
-        if "Authorization" not in headers:
-            vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
-                litellm_params
-            )
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
+        access_token, project_id = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_ai_project,
+            custom_llm_provider="vertex_ai",
+        )
+        headers["Authorization"] = f"Bearer {access_token}"
 
-            access_token, project_id = self._ensure_access_token(
-                credentials=vertex_credentials,
-                project_id=vertex_ai_project,
-                custom_llm_provider="vertex_ai",
-            )
-
-            headers["Authorization"] = f"Bearer {access_token}"
-        else:
-            # Authorization already in headers, but we still need project_id
-            project_id = vertex_ai_project
-
-        # Always calculate api_base if not provided, regardless of Authorization header
-        if api_base is None:
-            api_base = self.get_complete_vertex_url(
-                custom_api_base=api_base,
-                vertex_location=vertex_ai_location,
-                vertex_project=vertex_ai_project,
-                project_id=project_id or "",
-                partner=VertexPartnerProvider.claude,
-                stream=optional_params.get("stream", False),
-                model=model,
-            )
+        api_base = self.get_complete_vertex_url(
+            custom_api_base=api_base,
+            vertex_location=vertex_ai_location,
+            vertex_project=vertex_ai_project,
+            project_id=project_id or "",
+            partner=VertexPartnerProvider.claude,
+            stream=optional_params.get("stream", False),
+            model=model,
+        )
 
         headers["content-type"] = "application/json"
 
@@ -95,18 +95,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
             # Add context management header if any other edits exist
             if has_other:
-                beta_values.add(
-                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
-                )
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
 
         # Check for web search tool
         for tool in tools:
-            if isinstance(tool, dict) and tool.get("type", "").startswith(
-                ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value
-            ):
-                beta_values.add(
-                    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
-                )
+            if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value)
                 break
 
         # Check for tool search tools - Vertex AI uses different beta header
@@ -129,9 +123,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         stream: Optional[bool] = None,
     ) -> str:
         if api_base is None:
-            raise ValueError(
-                "api_base is required. Unable to determine the correct api_base for the request."
-            )
+            raise ValueError("api_base is required. Unable to determine the correct api_base for the request.")
         return api_base  # no transformation is needed - handled in validate_environment
 
     def transform_anthropic_messages_request(
@@ -154,16 +146,8 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
 
-        anthropic_messages_request.pop(
-            "model", None
-        )  # do not pass model in request body to vertex ai
+        anthropic_messages_request.pop("model", None)  # do not pass model in request body to vertex ai
 
-        anthropic_messages_request.pop(
-            "output_format", None
-        )  # do not pass output_format in request body to vertex ai - vertex ai does not support output_format as yet
-
-        anthropic_messages_request.pop(
-            "output_config", None
-        )  # do not pass output_config in request body to vertex ai - vertex ai does not support output_config
+        sanitize_vertex_anthropic_output_params(anthropic_messages_request, model)
 
         return anthropic_messages_request

@@ -51,9 +51,7 @@ class ResponsesAPIRequestUtils:
             if k not in supported_params:
                 unsupported_params[k] = non_default_params[k]
         if unsupported_params:
-            if litellm.drop_params is True or (
-                drop_params is not None and drop_params is True
-            ):
+            if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 pass
             else:
                 raise litellm.UnsupportedParamsError(
@@ -83,9 +81,7 @@ class ResponsesAPIRequestUtils:
 
         # Remove None values and internal parameters
         # Get supported parameters for the model
-        supported_params = responses_api_provider_config.get_supported_openai_params(
-            model
-        )
+        supported_params = responses_api_provider_config.get_supported_openai_params(model)
 
         non_default_params = cast(Dict, response_api_optional_params)
         # Check for unsupported parameters
@@ -133,21 +129,21 @@ class ResponsesAPIRequestUtils:
         special_params = params.pop("kwargs", {})
 
         additional_drop_params = params.pop("additional_drop_params", None)
-        non_default_params = (
-            PreProcessNonDefaultParams.base_pre_process_non_default_params(
-                passed_params=params,
-                special_params=special_params,
-                custom_llm_provider=custom_llm_provider,
-                additional_drop_params=additional_drop_params,
-                default_param_values={k: None for k in valid_keys},
-                additional_endpoint_specific_params=["input"],
-            )
+        non_default_params = PreProcessNonDefaultParams.base_pre_process_non_default_params(
+            passed_params=params,
+            special_params=special_params,
+            custom_llm_provider=custom_llm_provider,
+            additional_drop_params=additional_drop_params,
+            default_param_values={k: None for k in valid_keys},
+            additional_endpoint_specific_params=["input"],
         )
 
         # decode previous_response_id if it's a litellm encoded id
         if "previous_response_id" in non_default_params:
-            decoded_previous_response_id = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                non_default_params["previous_response_id"]
+            decoded_previous_response_id = (
+                ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+                    non_default_params["previous_response_id"]
+                )
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
 
@@ -208,6 +204,9 @@ class ResponsesAPIRequestUtils:
         if response_id is None:
             return responses_api_response
 
+        if ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):
+            return responses_api_response
+
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,
@@ -220,20 +219,16 @@ class ResponsesAPIRequestUtils:
             responses_api_response.id = updated_id
 
         if litellm_metadata.get("encrypted_content_affinity_enabled"):
-            responses_api_response = (
-                ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
-                    response=responses_api_response,
-                    model_id=model_id,
-                )
+            responses_api_response = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+                response=responses_api_response,
+                model_id=model_id,
             )
 
         # Encode container IDs in the response output
-        responses_api_response = (
-            ResponsesAPIRequestUtils._update_container_ids_in_response(
-                responses_api_response=responses_api_response,
-                custom_llm_provider=custom_llm_provider,
-                litellm_metadata=litellm_metadata,
-            )
+        responses_api_response = ResponsesAPIRequestUtils._update_container_ids_in_response(
+            responses_api_response=responses_api_response,
+            custom_llm_provider=custom_llm_provider,
+            litellm_metadata=litellm_metadata,
         )
 
         return responses_api_response
@@ -275,9 +270,7 @@ class ResponsesAPIRequestUtils:
             return None
 
     @staticmethod
-    def _wrap_encrypted_content_with_model_id(
-        encrypted_content: str, model_id: str
-    ) -> str:
+    def _wrap_encrypted_content_with_model_id(encrypted_content: str, model_id: str) -> str:
         """Wrap encrypted_content with model_id metadata for affinity routing.
 
         When Codex or other clients send items with encrypted_content but no ID,
@@ -316,9 +309,7 @@ class ResponsesAPIRequestUtils:
             if missing:
                 metadata_b64 += "=" * (4 - missing)
 
-            decoded_metadata = base64.b64decode(metadata_b64.encode("utf-8")).decode(
-                "utf-8"
-            )
+            decoded_metadata = base64.b64decode(metadata_b64.encode("utf-8")).decode("utf-8")
             model_id = decoded_metadata.replace("model_id:", "")
             return model_id, original_content
         except Exception:
@@ -356,16 +347,12 @@ class ResponsesAPIRequestUtils:
 
                 if encrypted_content and isinstance(encrypted_content, str):
                     # Always wrap encrypted_content with model_id for redundancy
-                    item[
-                        "encrypted_content"
-                    ] = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                    item["encrypted_content"] = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
                         encrypted_content, model_id
                     )
                     # Also encode the ID if present
                     if item_id and isinstance(item_id, str):
-                        item["id"] = ResponsesAPIRequestUtils._build_encrypted_item_id(
-                            model_id, item_id
-                        )
+                        item["id"] = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
             else:
                 item_id = getattr(item, "id", None)
                 encrypted_content = getattr(item, "encrypted_content", None)
@@ -381,9 +368,7 @@ class ResponsesAPIRequestUtils:
                     # Also encode the ID if present
                     if item_id and isinstance(item_id, str):
                         try:
-                            item.id = ResponsesAPIRequestUtils._build_encrypted_item_id(
-                                model_id, item_id
-                            )
+                            item.id = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, item_id)
                         except AttributeError:
                             pass
 
@@ -407,9 +392,7 @@ class ResponsesAPIRequestUtils:
             if isinstance(item, dict):
                 item_id = item.get("id")
                 if item_id and isinstance(item_id, str):
-                    decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(
-                        item_id
-                    )
+                    decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
                     if decoded:
                         item["id"] = decoded["item_id"]
 
@@ -418,9 +401,7 @@ class ResponsesAPIRequestUtils:
                     (
                         _,
                         unwrapped,
-                    ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
-                        encrypted_content
-                    )
+                    ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
                     if unwrapped != encrypted_content:
                         item["encrypted_content"] = unwrapped
 
@@ -433,12 +414,10 @@ class ResponsesAPIRequestUtils:
         response_id: str,
     ) -> str:
         """Build the responses_api_response_id"""
-        assembled_id: str = str(
-            SpecialEnums.LITELLM_MANAGED_RESPONSE_COMPLETE_STR.value
-        ).format(custom_llm_provider, model_id, response_id)
-        base64_encoded_id: str = base64.b64encode(assembled_id.encode("utf-8")).decode(
-            "utf-8"
+        assembled_id: str = str(SpecialEnums.LITELLM_MANAGED_RESPONSE_COMPLETE_STR.value).format(
+            custom_llm_provider, model_id, response_id
         )
+        base64_encoded_id: str = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
         return f"resp_{base64_encoded_id}"
 
     @staticmethod
@@ -470,16 +449,12 @@ class ResponsesAPIRequestUtils:
             custom_llm_provider = None
             model_id = None
 
-            if (
-                len(parts) >= 3
-            ):  # Full format with custom_llm_provider, model_id, and response_id
+            if len(parts) >= 3:  # Full format with custom_llm_provider, model_id, and response_id
                 custom_llm_provider_part = parts[0]
                 model_id_part = parts[1]
                 response_part = parts[2]
 
-                custom_llm_provider = custom_llm_provider_part.replace(
-                    "litellm:custom_llm_provider:", ""
-                )
+                custom_llm_provider = custom_llm_provider_part.replace("litellm:custom_llm_provider:", "")
                 model_id = model_id_part.replace("model_id:", "")
                 decoded_response_id = response_part.replace("response_id:", "")
             else:
@@ -499,13 +474,19 @@ class ResponsesAPIRequestUtils:
             )
 
     @staticmethod
+    def _is_litellm_encoded_response_id(response_id: str) -> bool:
+        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        return (
+            decoded_response_id.get("model_id") is not None
+            or decoded_response_id.get("custom_llm_provider") is not None
+        )
+
+    @staticmethod
     def get_model_id_from_response_id(response_id: Optional[str]) -> Optional[str]:
         """Get the model_id from the response_id"""
         if response_id is None:
             return None
-        decoded_response_id = (
-            ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
-        )
+        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
         return decoded_response_id.get("model_id") or None
 
     @staticmethod
@@ -525,11 +506,7 @@ class ResponsesAPIRequestUtils:
         Returns:
             The original previous_response_id
         """
-        decoded_response_id = (
-            ResponsesAPIRequestUtils._decode_responses_api_response_id(
-                previous_response_id
-            )
-        )
+        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
         return decoded_response_id.get("response_id", previous_response_id)
 
     @staticmethod
@@ -539,7 +516,7 @@ class ResponsesAPIRequestUtils:
         container_id: str,
     ) -> str:
         """Build a managed container ID with provider and model info encoded.
-        
+
         Format: cntr_{base64("litellm:custom_llm_provider:{provider};model_id:{model};container_id:{original}")}
         """
         # Avoid serializing Python None as the literal string "None" (breaks router affinity).
@@ -552,7 +529,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _decode_container_id(container_id: str) -> DecodedResponseId:
         """Decode a managed container ID to extract provider, model, and original container ID.
-        
+
         Returns:
             DecodedResponseId with custom_llm_provider, model_id, and response_id (original container_id)
         """
@@ -564,11 +541,11 @@ class ResponsesAPIRequestUtils:
                     model_id=None,
                     response_id=container_id,
                 )
-            
+
             # Remove prefix and decode
             cleaned_id = container_id.replace("cntr_", "")
             decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
-            
+
             # Parse components using regex to handle semicolons in the container_id
             if not decoded_id.startswith("litellm:"):
                 return DecodedResponseId(
@@ -576,28 +553,26 @@ class ResponsesAPIRequestUtils:
                     model_id=None,
                     response_id=container_id,
                 )
-            
+
             # Use regex to extract the three parts, allowing semicolons in container_id
             # Format: litellm:custom_llm_provider:{provider};model_id:{model};container_id:{container}
             # * for provider/model allows empty segments (missing router model_id).
             pattern = r"^litellm:custom_llm_provider:([^;]*);model_id:([^;]*);container_id:(.+)$"
             match = re.match(pattern, decoded_id)
-            
+
             if not match:
                 return DecodedResponseId(
                     custom_llm_provider=None,
                     model_id=None,
                     response_id=container_id,
                 )
-            
+
             raw_provider = match.group(1)
             raw_model_id = match.group(2)
-            custom_llm_provider = (
-                None if raw_provider in ("", "None") else raw_provider
-            )
+            custom_llm_provider = None if raw_provider in ("", "None") else raw_provider
             model_id = None if raw_model_id in ("", "None") else raw_model_id
             original_container_id = match.group(3)
-            
+
             return DecodedResponseId(
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
@@ -614,7 +589,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def decode_container_id_to_original(container_id: str) -> str:
         """Decode a managed container ID to get the original provider-issued ID.
-        
+
         This is used when making upstream API calls - we need to send the original
         container ID that the provider issued, not our encoded version.
         """
@@ -739,36 +714,122 @@ class ResponsesAPIRequestUtils:
             )
 
     @staticmethod
+    def _collect_container_ids_from_annotations(
+        annotations: Any,
+        collected: set[str],
+    ) -> None:
+        if not annotations or not isinstance(annotations, list):
+            return
+        for ann in annotations:
+            ResponsesAPIRequestUtils._collect_container_ids_from_output_item(ann, collected)
+
+    @staticmethod
+    def _collect_container_ids_from_message_content(
+        content: Any,
+        collected: set[str],
+    ) -> None:
+        if not content:
+            return
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    ResponsesAPIRequestUtils._collect_container_ids_from_annotations(
+                        part.get("annotations"),
+                        collected,
+                    )
+                else:
+                    ResponsesAPIRequestUtils._collect_container_ids_from_annotations(
+                        getattr(part, "annotations", None),
+                        collected,
+                    )
+
+    @staticmethod
+    def _collect_container_ids_from_output_item(
+        item: Any,
+        collected: set[str],
+    ) -> None:
+        """Collect managed or raw ``container_id`` values from one output item."""
+        if item is None:
+            return
+
+        if isinstance(item, dict):
+            cid = item.get("container_id")
+            if isinstance(cid, str) and cid:
+                collected.add(cid)
+            nested = item.get("code_interpreter_call")
+            if isinstance(nested, dict):
+                nc = nested.get("container_id")
+                if isinstance(nc, str) and nc:
+                    collected.add(nc)
+            if item.get("type") == "message":
+                ResponsesAPIRequestUtils._collect_container_ids_from_message_content(
+                    item.get("content"),
+                    collected,
+                )
+            return
+
+        cid_attr = getattr(item, "container_id", None)
+        if isinstance(cid_attr, str) and cid_attr:
+            collected.add(cid_attr)
+
+        nested_obj = getattr(item, "code_interpreter_call", None)
+        if nested_obj is not None:
+            ResponsesAPIRequestUtils._collect_container_ids_from_output_item(nested_obj, collected)
+
+        if getattr(item, "type", None) == "message":
+            ResponsesAPIRequestUtils._collect_container_ids_from_message_content(
+                getattr(item, "content", None),
+                collected,
+            )
+
+    @staticmethod
+    def collect_container_ids_from_responses_response(response: Any) -> list[str]:
+        """Return unique container IDs referenced in a Responses API payload."""
+        if response is None:
+            return []
+
+        if isinstance(response, dict):
+            output = response.get("output", [])
+        else:
+            output = getattr(response, "output", []) or []
+
+        collected: set[str] = set()
+        if output:
+            for item in output:
+                ResponsesAPIRequestUtils._collect_container_ids_from_output_item(item, collected)
+        return list(collected)
+
+    @staticmethod
     def _update_container_ids_in_response(
         responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
         custom_llm_provider: Optional[str],
         litellm_metadata: Optional[Dict[str, Any]] = None,
     ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
         """Encode container IDs in the response output with provider/model info.
-        
+
         This walks through all output items and encodes any container_id fields
         so that follow-up container API calls can auto-route to the correct provider.
         """
         litellm_metadata = litellm_metadata or {}
         model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
-        
+
         # Get the output list
         if isinstance(responses_api_response, dict):
             output = responses_api_response.get("output", [])
         else:
             output = getattr(responses_api_response, "output", [])
-        
+
         if not output:
             return responses_api_response
-        
+
         for item in output:
             ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                 item=item,
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
             )
-        
+
         return responses_api_response
 
     @staticmethod
@@ -837,15 +898,9 @@ class ResponsesAPIRequestUtils:
 
         if raw_headers_from_request:
             headers_obj = Headers(raw_headers_from_request)
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
-                headers_obj
-            )
-            mcp_server_auth_headers = (
-                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            )
-            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(
-                headers_obj
-            )
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
+            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
 
         if tools:
             for tool in tools:
@@ -855,10 +910,8 @@ class ResponsesAPIRequestUtils:
                         # Merge tool headers into mcp_server_auth_headers
                         # Extract server-specific headers from tool.headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = (
-                            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
-                                headers_obj_from_tool
-                            )
+                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                            headers_obj_from_tool
                         )
                         if tool_mcp_server_auth_headers:
                             if mcp_server_auth_headers is None:
@@ -870,9 +923,7 @@ class ResponsesAPIRequestUtils:
                             ) in tool_mcp_server_auth_headers.items():
                                 if server_alias not in mcp_server_auth_headers:
                                     mcp_server_auth_headers[server_alias] = {}
-                                mcp_server_auth_headers[server_alias].update(
-                                    headers_dict
-                                )
+                                mcp_server_auth_headers[server_alias].update(headers_dict)
                         # Also merge raw headers (non-prefixed headers from tool.headers)
                         if raw_headers_from_request is None:
                             raw_headers_from_request = {}
@@ -914,6 +965,12 @@ class ResponseAPILoggingUtils:
             )
         response_api_usage: ResponseAPIUsage
         if isinstance(usage_input, dict):
+            usage_input = dict(usage_input)  # shallow copy; avoid mutating caller
+            # Realtime *_token_details → *_tokens_details when unset.
+            if usage_input.get("input_tokens_details") is None and "input_token_details" in usage_input:
+                usage_input["input_tokens_details"] = usage_input["input_token_details"]
+            if usage_input.get("output_tokens_details") is None and "output_token_details" in usage_input:
+                usage_input["output_tokens_details"] = usage_input["output_token_details"]
             total_tokens = usage_input.get("total_tokens")
             if total_tokens is None:
                 input_tokens = usage_input.get("input_tokens")
@@ -929,35 +986,22 @@ class ResponseAPILoggingUtils:
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if response_api_usage.input_tokens_details:
             if isinstance(response_api_usage.input_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    **response_api_usage.input_tokens_details
-                )
+                prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
             else:
                 prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=getattr(
-                        response_api_usage.input_tokens_details, "cached_tokens", None
-                    ),
-                    audio_tokens=getattr(
-                        response_api_usage.input_tokens_details, "audio_tokens", None
-                    ),
-                    text_tokens=getattr(
-                        response_api_usage.input_tokens_details, "text_tokens", None
-                    ),
-                    image_tokens=getattr(
-                        response_api_usage.input_tokens_details, "image_tokens", None
-                    ),
+                    cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
+                    audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
+                    text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
+                    image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
                 )
         completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        output_tokens_details = getattr(
-            response_api_usage, "output_tokens_details", None
-        )
+        output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
         if output_tokens_details:
             completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(
-                    output_tokens_details, "reasoning_tokens", None
-                ),
+                reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None),
                 image_tokens=getattr(output_tokens_details, "image_tokens", None),
                 text_tokens=getattr(output_tokens_details, "text_tokens", None),
+                audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
         chat_usage = Usage(

@@ -25,7 +25,10 @@ class DynamoDBWrapper(CustomDB):
                 and database_arguments.write_capacity_units is not None
                 and isinstance(database_arguments.write_capacity_units, int)
             ):
-                self.throughput_type = Throughput(read=database_arguments.read_capacity_units, write=database_arguments.write_capacity_units)  # type: ignore
+                self.throughput_type = Throughput(
+                    read=database_arguments.read_capacity_units,
+                    write=database_arguments.write_capacity_units,
+                )  # type: ignore
             else:
                 raise Exception(
                     f"Invalid args passed in. Need to set both read_capacity_units and write_capacity_units. Args passed in - {database_arguments}"
@@ -36,9 +39,7 @@ class DynamoDBWrapper(CustomDB):
     def set_env_vars_based_on_arn(self):
         if self.database_arguments.aws_role_name is None:
             return
-        verbose_proxy_logger.debug(
-            f"DynamoDB: setting env vars based on arn={self.database_arguments.aws_role_name}"
-        )
+        verbose_proxy_logger.debug(f"DynamoDB: setting env vars based on arn={self.database_arguments.aws_role_name}")
         import os
 
         import boto3
@@ -62,9 +63,7 @@ class DynamoDBWrapper(CustomDB):
         aws_secret_access_key = assumed_role["Credentials"]["SecretAccessKey"]
         aws_session_token = assumed_role["Credentials"]["SessionToken"]
 
-        verbose_proxy_logger.debug(
-            f"Got STS assumed Role, aws_access_key_id={aws_access_key_id}"
-        )
+        verbose_proxy_logger.debug(f"Got STS assumed Role, aws_access_key_id={aws_access_key_id}")
         # set these in the env so aiodynamo can use them
         os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
         os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key

@@ -45,9 +45,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         self.model_info = GeminiModelInfo()
         self._cached_api_key: Optional[str] = None
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         """Gemini uses x-goog-api-key header for authentication."""
         return {}
 
@@ -63,15 +61,11 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             "write": [("POST", "/fileSearchStores")],
         }
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> List[VECTOR_STORE_OPENAI_PARAMS]:
         """Supported parameters for Gemini File Search."""
         return ["max_num_results", "filters"]
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """Validate and set up headers for Gemini API."""
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
@@ -100,9 +94,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         api_version = "v1beta"
         return f"{api_base}/{api_version}"
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> GeminiError:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]) -> GeminiError:
         """Return Gemini-specific error class."""
         return GeminiError(
             status_code=status_code,
@@ -118,6 +110,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform search request to Gemini's generateContent format.
@@ -140,9 +133,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         url = f"{api_base}/models/{model}:generateContent"
 
         # Build file_search tool configuration (using snake_case as per Gemini docs)
-        file_search_config: Dict[str, Any] = {
-            "file_search_store_names": [vector_store_id]
-        }
+        file_search_config: Dict[str, Any] = {"file_search_store_names": [vector_store_id]}
 
         # Add metadata filter if provided
         metadata_filter = vector_store_search_optional_params.get("filters")
@@ -213,9 +204,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                         results.append(
                             VectorStoreSearchResult(
                                 score=None,  # Gemini doesn't provide explicit scores
-                                content=[
-                                    VectorStoreResultContent(text=text, type="text")
-                                ],
+                                content=[VectorStoreResultContent(text=text, type="text")],
                                 file_id=file_id,
                                 filename=title if title else None,
                                 attributes={
@@ -250,9 +239,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
                         results.append(
                             VectorStoreSearchResult(
                                 score=score,
-                                content=[
-                                    VectorStoreResultContent(text=text, type="text")
-                                ],
+                                content=[VectorStoreResultContent(text=text, type="text")],
                                 attributes={
                                     "grounding_chunk_indices": grounding_chunk_indices,
                                 },
@@ -295,9 +282,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         return url, request_body
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         """
         Transform Gemini's fileSearchStore response to standard format.
         """
@@ -315,9 +300,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             created_at = None
             if create_time:
                 try:
-                    dt = datetime.datetime.fromisoformat(
-                        create_time.replace("Z", "+00:00")
-                    )
+                    dt = datetime.datetime.fromisoformat(create_time.replace("Z", "+00:00"))
                     created_at = int(dt.timestamp())
                 except Exception:
                     created_at = None

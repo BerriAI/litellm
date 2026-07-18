@@ -1,6 +1,7 @@
 """
 Test for response_api_endpoints/endpoints.py
 """
+
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -81,7 +82,9 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                     type="message",
                     role="assistant",
                     content=[
-                        ResponseOutputText(type="output_text", text="Hello from Cursor!")
+                        ResponseOutputText(
+                            type="output_text", text="Hello from Cursor!"
+                        )
                     ],
                 )
             ],
@@ -123,7 +126,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         """
         Test that x-litellm-key-spend header includes the current request's response_cost
         for /v1/responses endpoint.
-        
+
         This ensures the spend header reflects updated spend including the current request,
         even though spend tracking updates happen asynchronously after the response.
         """
@@ -142,7 +145,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         mock_user_api_key_dict.allowed_model_region = None
         mock_user_api_key_dict.api_key = "sk-test-key"
         mock_user_api_key_dict.metadata = {}
-        
+
         mock_auth.return_value = mock_user_api_key_dict
 
         # Mock response with hidden_params containing response_cost
@@ -161,13 +164,13 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 )
             ],
         )
-        
+
         # Add hidden_params with response_cost to the mock response
         mock_response._hidden_params = {
             "response_cost": 0.0005,  # Current request cost: $0.0005
             "model_id": "test-model-id",
         }
-        
+
         mock_router.aresponses = AsyncMock(return_value=mock_response)
 
         client = TestClient(app)
@@ -194,3 +197,517 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         response_cost_value = float(response.headers["x-litellm-response-cost"])
         assert response_cost_value == pytest.approx(0.0005, abs=1e-10)
 
+
+import json
+
+
+class TestManagedResponsesWSFirstMessage:
+    @pytest.mark.asyncio
+    async def test_first_message_processed_before_loop(self):
+        """
+        ManagedResponsesWebSocketHandler must process first_message before
+        entering its receive loop. Regression for clients that connect without
+        ?model= (e.g. Codex) and send model inside the first response.create event.
+        """
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        first = json.dumps(
+            {
+                "type": "response.create",
+                "model": "gpt-4o-mini",
+                "store": False,
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hi"}],
+                    }
+                ],
+            }
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=Exception("disconnect"))
+        ws.send_text = AsyncMock()
+
+        processed: list = []
+
+        async def fake_process(msg: str) -> None:
+            processed.append(msg)
+
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=ws,
+            model="gpt-4o-mini",
+            logging_obj=MagicMock(),
+            first_message=first,
+        )
+        handler._process_response_create = fake_process  # type: ignore[method-assign]
+
+        await handler.run()
+
+        assert processed == [first]
+
+    @pytest.mark.asyncio
+    async def test_no_first_message_falls_through_to_loop(self):
+        """When first_message is None, run() goes straight to receive_text()."""
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        subsequent = json.dumps({"type": "response.create", "model": "gpt-4o-mini"})
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=[subsequent, Exception("disconnect")])
+        ws.send_text = AsyncMock()
+
+        processed: list = []
+
+        async def fake_process(msg: str) -> None:
+            processed.append(msg)
+
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=ws,
+            model="gpt-4o-mini",
+            logging_obj=MagicMock(),
+            first_message=None,
+        )
+        handler._process_response_create = fake_process  # type: ignore[method-assign]
+
+        await handler.run()
+
+        assert processed == [subsequent]
+
+
+class TestResponsesWSStreamingFirstMessage:
+    @pytest.mark.asyncio
+    async def test_client_to_backend_replays_first_message(self):
+        """
+        ResponsesWebSocketStreaming.client_to_backend must send first_message to
+        the backend before entering the receive loop.
+        """
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        first = json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=Exception("disconnect"))
+
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+
+        streaming = ResponsesWebSocketStreaming(
+            websocket=ws,
+            backend_ws=backend_ws,
+            logging_obj=MagicMock(),
+            first_message=first,
+        )
+
+        await streaming.client_to_backend()
+
+        backend_ws.send.assert_awaited_once_with(first)
+
+
+class TestWSSessionCostTracking:
+    @pytest.mark.asyncio
+    async def test_router_budget_limiter_skips_aresponses_websocket_call_type(self):
+        """
+        RouterBudgetLimiting.async_log_success_event must not raise when
+        call_type='_aresponses_websocket', even when standard_logging_object is None.
+        Per-turn costs are tracked by individual aresponses calls inside the session;
+        the outer session wrapper fires with result=None.
+        """
+        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+
+        limiter = RouterBudgetLimiting.__new__(RouterBudgetLimiting)
+        kwargs = {
+            "call_type": "_aresponses_websocket",
+            "standard_logging_object": None,
+            "litellm_params": {"custom_llm_provider": "vertex_ai"},
+        }
+        await limiter.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_router_budget_limiter_skips_arealtime_call_type(self):
+        """Same guard applies to _arealtime WS session wrappers."""
+        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+
+        limiter = RouterBudgetLimiting.__new__(RouterBudgetLimiting)
+        kwargs = {
+            "call_type": "_arealtime",
+            "standard_logging_object": None,
+            "litellm_params": {"custom_llm_provider": "openai"},
+        }
+        await limiter.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+
+class TestWSModelExtraction:
+    """Test _extract_model_from_first_ws_event for flat and nested frame formats."""
+
+    def test_flat_format_extracts_model(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
+        event = {"type": "response.create", "model": "gpt-4o", "input": "hello"}
+        assert _extract_model_from_first_ws_event(event) == "gpt-4o"
+
+    def test_nested_format_extracts_model(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
+        event = {"type": "response.create", "response": {"model": "gpt-4o", "input": "hello"}}
+        assert _extract_model_from_first_ws_event(event) == "gpt-4o"
+
+    def test_nested_format_takes_precedence_over_flat(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
+        event = {
+            "type": "response.create",
+            "model": "flat-model",
+            "response": {"model": "nested-model"},
+        }
+        assert _extract_model_from_first_ws_event(event) == "nested-model"
+
+    def test_no_model_returns_none(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
+        event = {"type": "response.create", "input": "hello"}
+        assert _extract_model_from_first_ws_event(event) is None
+
+    def test_non_object_returns_none(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
+
+        assert _extract_model_from_first_ws_event([]) is None
+
+
+class TestResponsesWSFirstFrameValidation:
+    @pytest.mark.asyncio
+    async def test_rejects_non_response_create_first_frame(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "session.update", "model": "gpt-4o"})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.send_text.assert_awaited_once()
+        ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
+        error_payload = json.loads(ws.send_text.await_args.args[0])
+        assert (
+            error_payload["error"]["message"]
+            == "First message must be a response.create JSON object."
+        )
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_object_json_first_frame(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value=json.dumps(["gpt-4o"]))
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.send_text.assert_awaited_once()
+        ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_first_frame_does_not_close(self):
+        from fastapi import WebSocketDisconnect
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=WebSocketDisconnect(code=1006))
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.close.assert_not_awaited()
+        ws.send_text.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_server_error_first_frame_closes_with_internal_error(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=RuntimeError("boom"))
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
+
+
+class TestResponsesWSFirstFrameModelAuth:
+    @pytest.mark.asyncio
+    async def test_endpoint_enforces_auth_after_model_from_first_frame(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps(
+                {"type": "response.create", "model": "gpt-4o-mini", "input": []}
+            )
+        )
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini"}, MagicMock())
+        )
+
+        async def fake_llm_call():
+            return None
+
+        with (
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ) as mock_model_auth,
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=fake_llm_call(),
+            ),
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=None,
+                user_api_key_dict=MagicMock(),
+            )
+
+        mock_model_auth.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reruns_model_auth_for_first_frame_model(self):
+        from starlette.requests import Request
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _enforce_responses_ws_first_frame_model_auth,
+        )
+
+        request = Request(
+            {"type": "http", "method": "POST", "path": "/v1/responses", "headers": []}
+        )
+        user_api_key_dict = MagicMock()
+        llm_router = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+                new_callable=AsyncMock,
+            ) as mock_key_check,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                new_callable=AsyncMock,
+            ) as mock_common_checks,
+            patch(
+                "litellm.proxy.proxy_server.llm_model_list",
+                [],
+            ),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+            patch("litellm.proxy.proxy_server.user_custom_auth", None),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            await _enforce_responses_ws_first_frame_model_auth(
+                request=request,
+                model="gpt-4o-mini",
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
+
+        mock_key_check.assert_awaited_once_with(
+            valid_token=user_api_key_dict,
+            request_data={"model": "gpt-4o-mini"},
+            route="/v1/responses",
+            request=request,
+            llm_model_list=[],
+            llm_router=llm_router,
+        )
+        mock_common_checks.assert_awaited_once_with(
+            user_api_key_auth_obj=user_api_key_dict,
+            request=request,
+            request_data={"model": "gpt-4o-mini"},
+            route="/v1/responses",
+        )
+
+
+class TestReadWSModelFromFirstFrameErrors:
+    @pytest.mark.asyncio
+    async def test_timeout_closes_without_error_frame(self):
+        import asyncio
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=asyncio.TimeoutError())
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.send_text.assert_not_awaited()
+        ws.close.assert_awaited_once_with(
+            code=1008, reason="Timed out waiting for first message"
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_sends_error_and_closes(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value="this is not json")
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        payload = json.loads(ws.send_text.await_args.args[0])
+        assert payload["error"]["message"] == "First message is not valid JSON."
+        ws.close.assert_awaited_once_with(
+            code=1008, reason="Invalid JSON in first message"
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_model_sends_error_and_closes(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "input": []})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        payload = json.loads(ws.send_text.await_args.args[0])
+        assert "No model provided" in payload["error"]["message"]
+        ws.close.assert_awaited_once_with(code=1008, reason="No model provided")
+
+    @pytest.mark.asyncio
+    async def test_valid_first_frame_returns_model_and_raw(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        raw = json.dumps({"type": "response.create", "model": "gpt-4o", "input": []})
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value=raw)
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result == ("gpt-4o", raw)
+        ws.send_text.assert_not_awaited()
+        ws.close.assert_not_awaited()
+
+
+class TestManagedResponsesSameProvider:
+    def _handler(self, model, custom_llm_provider=None):
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        return ManagedResponsesWebSocketHandler(
+            websocket=MagicMock(),
+            model=model,
+            logging_obj=MagicMock(),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    def test_none_model_treated_as_same_provider(self):
+        assert self._handler("openai/gpt-4o")._same_provider(None) is True
+
+    def test_identical_model_is_same_provider(self):
+        assert self._handler("openai/gpt-4o")._same_provider("openai/gpt-4o") is True
+
+    def test_same_provider_different_model(self):
+        assert self._handler("gpt-4o")._same_provider("gpt-4o-mini") is True
+
+    def test_different_provider_is_not_same(self):
+        assert (
+            self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash")
+            is False
+        )
+
+    def test_inject_credentials_keeps_provider_for_same_provider_model(self):
+        handler = self._handler("gpt-4o", custom_llm_provider="openai")
+        call_kwargs: dict = {}
+        handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
+        assert call_kwargs["custom_llm_provider"] == "openai"
+
+    def test_inject_credentials_drops_provider_for_cross_provider_model(self):
+        handler = self._handler("gpt-4o", custom_llm_provider="openai")
+        call_kwargs: dict = {}
+        handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
+        assert "custom_llm_provider" not in call_kwargs
+
+    def test_unresolvable_connection_model_falls_back_to_custom_provider(self):
+        handler = self._handler(
+            "my-custom-deployment", custom_llm_provider="openai"
+        )
+        assert handler._same_provider("gpt-4o-mini") is True
+        call_kwargs: dict = {}
+        handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
+        assert call_kwargs["custom_llm_provider"] == "openai"
+
+    def test_unresolvable_connection_model_still_drops_cross_provider(self):
+        handler = self._handler(
+            "my-custom-deployment", custom_llm_provider="openai"
+        )
+        call_kwargs: dict = {}
+        handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
+        assert "custom_llm_provider" not in call_kwargs

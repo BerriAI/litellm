@@ -3,7 +3,7 @@ from uuid import uuid4
 import httpx
 
 import os
-from typing import TYPE_CHECKING, Any, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 from urllib.parse import urlparse
 
 import requests
@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
     HiddenlayerAction,
     HiddenlayerMessages,
@@ -63,6 +64,13 @@ def _get_jwt(auth_url, api_id, api_key):
 class HiddenlayerGuardrail(CustomGuardrail):
     """Custom guardrail wrapper for HiddenLayer's safety checks."""
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         api_id: Optional[str] = None,
@@ -71,33 +79,20 @@ class HiddenlayerGuardrail(CustomGuardrail):
         auth_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
-        self.hiddenlayer_client_secret = api_key or os.getenv(
-            "HIDDENLAYER_CLIENT_SECRET"
-        )
-        self.api_base = (
-            api_base
-            or os.getenv("HIDDENLAYER_API_BASE")
-            or "https://api.hiddenlayer.ai"
-        )
+        self.hiddenlayer_client_secret = api_key or os.getenv("HIDDENLAYER_CLIENT_SECRET")
+        self.api_base = api_base or os.getenv("HIDDENLAYER_API_BASE") or "https://api.hiddenlayer.ai"
         self.jwt_token = None
 
-        auth_url = (
-            auth_url
-            or os.getenv("HIDDENLAYER_AUTH_URL")
-            or "https://auth.hiddenlayer.ai"
-        )
+        auth_url = auth_url or os.getenv("HIDDENLAYER_AUTH_URL") or "https://auth.hiddenlayer.ai"
 
         if is_saas(self.api_base):
             if not self.hiddenlayer_client_id:
-                raise RuntimeError(
-                    "`api_id` cannot be None when using the SaaS version of HiddenLayer."
-                )
+                raise RuntimeError("`api_id` cannot be None when using the SaaS version of HiddenLayer.")
 
             if not self.hiddenlayer_client_secret:
-                raise RuntimeError(
-                    "`api_key` cannot be None when using the SaaS version of HiddenLayer."
-                )
+                raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
             self.jwt_token = _get_jwt(
                 auth_url=auth_url,
@@ -110,9 +105,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 api_key=self.hiddenlayer_client_secret,
             )
 
-        self._http_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         super().__init__(**kwargs)
 
     @log_guardrail_information
@@ -129,9 +122,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         # I.e request can specify gpt-4o-mini but the response from the server will be
         # gpt-4o-mini-2025-11-01. We need the model to be consistent so that inferences
         # will be grouped correctly on the Hiddenlayer side
-        model_name = (
-            logging_obj.model if logging_obj and logging_obj.model else "unknown"
-        )
+        model_name = logging_obj.model if logging_obj and logging_obj.model else "unknown"
         hl_request_metadata = {"model": model_name}
 
         # We need the hiddenlayer project id and requester id on both the input and output
@@ -141,15 +132,9 @@ class HiddenlayerGuardrail(CustomGuardrail):
         # from the logger object on the response from the model.
         headers = request_data.get("proxy_server_request", {}).get("headers", {})
         if not headers and logging_obj and logging_obj.model_call_details:
-            headers = (
-                logging_obj.model_call_details.get("litellm_params", {})
-                .get("metadata", {})
-                .get("headers", {})
-            )
+            headers = logging_obj.model_call_details.get("litellm_params", {}).get("metadata", {}).get("headers", {})
 
-        hl_request_metadata["requester_id"] = (
-            headers.get("hl-requester-id") or "LiteLLM"
-        )
+        hl_request_metadata["requester_id"] = headers.get("hl-requester-id") or "LiteLLM"
         project_id = headers.get("hl-project-id")
 
         if scan_params := inputs.get("structured_messages"):
@@ -179,9 +164,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
 
         if result.get("evaluation", {}).get("action") == HiddenlayerAction.BLOCK:
             detected_reasons = [
-                entry.get("name", "unknown")
-                for entry in result.get("analysis", [])
-                if entry.get("detected")
+                entry.get("name", "unknown") for entry in result.get("analysis", []) if entry.get("detected")
             ]
             threat_level = result.get("evaluation", {}).get("threat_level")
             raise HTTPException(
@@ -200,9 +183,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 last_content = modified_data["input"]["messages"][-1]["content"]
                 if isinstance(last_content, list):
                     texts = [
-                        item["text"]
-                        for item in last_content
-                        if isinstance(item, dict) and item.get("type") == "text"
+                        item["text"] for item in last_content if isinstance(item, dict) and item.get("type") == "text"
                     ]
                     inputs["texts"] = texts if texts else [""]
                 else:
@@ -213,9 +194,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 last_content = modified_data["output"]["messages"][-1]["content"]
                 if isinstance(last_content, list):
                     texts = [
-                        item["text"]
-                        for item in last_content
-                        if isinstance(item, dict) and item.get("type") == "text"
+                        item["text"] for item in last_content if isinstance(item, dict) and item.get("type") == "text"
                     ]
                     inputs["texts"] = texts if texts else [""]
                 else:
@@ -306,32 +285,18 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         **kwargs: Any,
     ) -> None:
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
-        self.hiddenlayer_client_secret = api_key or os.getenv(
-            "HIDDENLAYER_CLIENT_SECRET"
-        )
-        self.api_base = (
-            api_base
-            or os.getenv("HIDDENLAYER_API_BASE")
-            or "https://api.hiddenlayer.ai"
-        )
+        self.hiddenlayer_client_secret = api_key or os.getenv("HIDDENLAYER_CLIENT_SECRET")
+        self.api_base = api_base or os.getenv("HIDDENLAYER_API_BASE") or "https://api.hiddenlayer.ai"
         self.jwt_token = None
 
-        auth_url = (
-            auth_url
-            or os.getenv("HIDDENLAYER_AUTH_URL")
-            or "https://auth.hiddenlayer.ai"
-        )
+        auth_url = auth_url or os.getenv("HIDDENLAYER_AUTH_URL") or "https://auth.hiddenlayer.ai"
 
         if is_saas(self.api_base):
             if not self.hiddenlayer_client_id:
-                raise RuntimeError(
-                    "`api_id` cannot be None when using the SaaS version of HiddenLayer."
-                )
+                raise RuntimeError("`api_id` cannot be None when using the SaaS version of HiddenLayer.")
 
             if not self.hiddenlayer_client_secret:
-                raise RuntimeError(
-                    "`api_key` cannot be None when using the SaaS version of HiddenLayer."
-                )
+                raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
             self.jwt_token = _get_jwt(
                 auth_url=auth_url,
@@ -344,9 +309,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 api_key=self.hiddenlayer_client_secret,
             )
 
-        self._http_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         super().__init__(**kwargs)
 
     @log_guardrail_information
@@ -366,11 +329,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         # from the logger object on the response from the model.
         headers = request_data.get("proxy_server_request", {}).get("headers", {})
         if not headers and logging_obj and logging_obj.model_call_details:
-            headers = (
-                logging_obj.model_call_details.get("litellm_params", {})
-                .get("metadata", {})
-                .get("headers", {})
-            )
+            headers = logging_obj.model_call_details.get("litellm_params", {}).get("metadata", {}).get("headers", {})
 
         # put our roundtrip id in the header to the model so we get it on the way back from the model
         if "hl-roundtrip-id" not in headers:
@@ -379,9 +338,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 proxy_req["headers"]["hl-roundtrip-id"] = str(uuid4())
                 headers["hl-roundtrip-id"] = proxy_req["headers"]["hl-roundtrip-id"]
 
-        hl_headers = {
-            h.lower(): v for h, v in headers.items() if h.lower().startswith("hl-")
-        }
+        hl_headers = {h.lower(): v for h, v in headers.items() if h.lower().startswith("hl-")}
 
         if "hl-requester-id" not in hl_headers:
             hl_headers["hl-requester-id"] = "LiteLLM"
@@ -401,9 +358,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                             "index": 0,
                             "message": {
                                 "role": "assistant",
-                                "content": inputs["texts"][0]
-                                if inputs.get("texts")
-                                else "",
+                                "content": (inputs["texts"][0] if inputs.get("texts") else ""),
                             },
                             "finish_reason": "stop",
                         }
@@ -414,9 +369,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             else:
                 payload = {}
 
-        response = await self._call_hiddenlayer(
-            payload, input_type, hl_headers
-        )
+        response = await self._call_hiddenlayer(payload, input_type, hl_headers)
         output = response.json()
 
         if response.headers.get("hl-runtime-action", "").lower() == "block":
@@ -436,9 +389,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 content = message.get("content", "")
                 if isinstance(content, list):
                     text_parts = [
-                        item["text"]
-                        for item in content
-                        if isinstance(item, dict) and item.get("type") == "text"
+                        item["text"] for item in content if isinstance(item, dict) and item.get("type") == "text"
                     ]
                     if text_parts:
                         new_texts.append(" ".join(text_parts))
@@ -448,9 +399,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             inputs["texts"] = new_texts
 
         elif input_type == "response" and inputs.get("texts"):
-            inputs["texts"] = [
-                output.get("choices", [{}])[-1].get("message", {}).get("content", "")
-            ]
+            inputs["texts"] = [output.get("choices", [{}])[-1].get("message", {}).get("content", "")]
         elif input_type == "response" and inputs.get("tool_calls"):
             inputs["tool_calls"] = output
 

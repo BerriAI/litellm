@@ -68,9 +68,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = (
-            api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        complete_url: str = api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
 
         complete_url = complete_url.rstrip("/")
         complete_url = f"{complete_url}/{self.IMAGE_EDIT_ENDPOINT}"
@@ -81,6 +79,8 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         final_api_key: Optional[str] = api_key or get_secret_str("RECRAFT_API_KEY")
         if not final_api_key:
@@ -107,9 +107,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
 
         request_params = {
             "model": model,
-            "strength": image_edit_optional_request_params.pop(
-                "strength", self.DEFAULT_STRENGTH
-            ),
+            "strength": image_edit_optional_request_params.pop("strength", self.DEFAULT_STRENGTH),
             **image_edit_optional_request_params,
         }
         if prompt is not None:
@@ -120,9 +118,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         #########################################################
         # Reuse OpenAI logic: Separate images as `files` and send other parameters as `data`
         #########################################################
-        files_list = (
-            self._get_image_files_for_request(image=image) if image is not None else []
-        )
+        files_list = self._get_image_files_for_request(image=image) if image is not None else []
         data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
 
         return data_without_images, files_list
@@ -142,17 +138,11 @@ class RecraftImageEditConfig(BaseImageEditConfig):
                 _image = image
 
             if _image is not None:
-                image_content_type: str = ImageEditRequestUtils.get_image_content_type(
-                    _image
-                )
+                image_content_type: str = ImageEditRequestUtils.get_image_content_type(_image)
                 if isinstance(_image, BufferedReader):
-                    files_list.append(
-                        ("image", (_image.name, _image, image_content_type))
-                    )
+                    files_list.append(("image", (_image.name, _image, image_content_type)))
                 else:
-                    files_list.append(
-                        ("image", ("image.png", _image, image_content_type))
-                    )
+                    files_list.append(("image", ("image.png", _image, image_content_type)))
 
         return files_list
 

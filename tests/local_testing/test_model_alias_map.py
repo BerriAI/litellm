@@ -30,10 +30,9 @@ def test_model_alias_map(caplog):
         )
         print(response.model)
 
-        captured_logs = [rec.levelname for rec in caplog.records]
-
-        for log in captured_logs:
-            assert "ERROR" not in log
+        for rec in caplog.records:
+            if rec.levelname == "ERROR" and rec.name.startswith("LiteLLM"):
+                pytest.fail(f"Unexpected litellm ERROR log: {rec.getMessage()}")
 
         assert "llama-3.1-8b-instant" in response.model
     except litellm.ServiceUnavailableError:

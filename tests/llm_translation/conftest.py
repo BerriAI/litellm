@@ -5,6 +5,7 @@
 #   - Function-scoped fixture resets litellm globals to true defaults
 #   - Module-scoped reload only in single-process mode
 
+import asyncio
 import importlib
 import os
 import sys
@@ -14,9 +15,83 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
 
-import asyncio
+import litellm  # noqa: E402
+
+from tests._vcr_conftest_common import (  # noqa: E402,F401
+    VerboseReporterState,
+    _pin_multipart_boundary,
+    apply_vcr_auto_marker_to_items,
+    emit_cassette_cache_session_banner,
+    emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
+    install_live_call_probe,
+    record_vcr_outcome,
+    register_persister_if_enabled,
+    reset_vcr_diag_dir,
+    vcr_config_dict,
+)
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
+
+# Per-item respx detection (``apply_vcr_auto_marker_to_items``) handles
+# the vast majority of respx-vs-vcrpy conflicts automatically. The entries
+# below are the persister's and the WebSocket VCR's own unit-test files, which
+# exercise ``save_cassette`` / ``load_cassette`` against fakeredis and must not
+# themselves run under a live cassette context.
+_VCR_AUTO_MARKER_SKIP_FILES = frozenset(
+    {"test_vcr_redis_persister.py", "test_ws_vcr.py"}
+)
+
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+
+
+_verbose_state = VerboseReporterState()
+
+
+@pytest.fixture(scope="module")
+def vcr_config():
+    return vcr_config_dict()
+
+
+def pytest_recording_configure(config, vcr):
+    register_persister_if_enabled(vcr)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+
+
+@pytest.fixture(autouse=True)
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+def pytest_configure(config):
+    _verbose_state.remember_pluginmanager(config)
+    reset_vcr_diag_dir()
+
+
+def pytest_runtest_logreport(report):
+    _verbose_state.maybe_emit_verdict(report)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    emit_cassette_cache_session_banner(terminalreporter)
+    emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)
+
 
 # ---------------------------------------------------------------------------
 # Capture TRUE defaults at conftest import time (before test modules pollute).
@@ -48,7 +123,6 @@ def event_loop():
 
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown(event_loop):  # Add event_loop as a dependency
-    curr_dir = os.getcwd()
     sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
@@ -72,6 +146,7 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
 
     # ---- Reset to true defaults before the test ----
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
     importlib.reload(litellm)
 
@@ -96,15 +171,18 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
 
 
 def pytest_collection_modifyitems(config, items):
-    # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
+    apply_vcr_auto_marker_to_items(
+        items,
+        skip_files=_VCR_AUTO_MARKER_SKIP_FILES,
+        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
+    )
+
     custom_logger_tests = [
         item for item in items if "custom_logger" in item.parent.name
     ]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
-    # Sort tests based on their names
     custom_logger_tests.sort(key=lambda x: x.name)
     other_tests.sort(key=lambda x: x.name)
 
-    # Reorder the items list
     items[:] = custom_logger_tests + other_tests

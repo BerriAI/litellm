@@ -8,6 +8,7 @@ import {
   useModelHub,
   useModelsInfo,
   useSelectedTeamModels,
+  useUserModels,
   type AllProxyModelsResponse,
   type PaginatedModelInfoResponse,
   type ProxyModel,
@@ -475,6 +476,70 @@ describe("useAllProxyModels", () => {
 
     expect(result.current.isLoading).toBe(false);
     expect(result.current.data).toBeUndefined();
+    expect(result.current.isFetched).toBe(false);
+    expect(modelAvailableCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("useUserModels", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    vi.clearAllMocks();
+
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("maps the available-models response to a list of model ids", async () => {
+    (modelAvailableCall as any).mockResolvedValue({
+      data: [{ id: "gpt-4" }, { id: "claude-3-opus" }],
+    });
+
+    const { result } = renderHook(() => useUserModels(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data).toEqual(["gpt-4", "claude-3-opus"]);
+    expect(modelAvailableCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin");
+    expect(modelAvailableCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("should not execute query when accessToken is missing", () => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: null,
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: null,
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+    const { result } = renderHook(() => useUserModels(), { wrapper });
+
     expect(result.current.isFetched).toBe(false);
     expect(modelAvailableCall).not.toHaveBeenCalled();
   });

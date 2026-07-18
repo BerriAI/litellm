@@ -1,95 +1,54 @@
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
-import { ColumnDef } from "@tanstack/react-table";
-import { Button, Card, Text, Title } from "@tremor/react";
+import { SortingState } from "@tanstack/react-table";
+import { Card, Text, Title } from "@tremor/react";
 import { Modal, Select, Tabs, Tag, Tooltip } from "antd";
-import { Copy, Info } from "lucide-react";
-import React, { useEffect, useMemo, useState } from "react";
-import { ModelDataTable } from "./model_dashboard/table";
+import { Copy, Inbox, Info } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { DataTable } from "./shared/DataTable";
 import NotificationsManager from "./molecules/notifications_manager";
 import Navbar from "./navbar";
 import {
   agentHubPublicModelsCall,
+  skillHubPublicCall,
+  getProxyBaseUrl,
   getPublicModelHubInfo,
   getUiConfig,
   mcpHubPublicServersCall,
   modelHubPublicModelsCall,
 } from "./networking";
-import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
-import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
-import { MessageType } from "./playground/chat_ui/types";
+import { Plugin } from "./claude_code_plugins/types";
+import SkillHubDashboard from "./AIHub/SkillHubDashboard";
+import {
+  AgentCard,
+  MCPServerData,
+  ModelGroupInfo,
+  getPublicAgentHubColumns,
+  getPublicMCPHubColumns,
+  getPublicModelHubColumns,
+} from "./PublicModelHubTableColumns";
+import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
+import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
+import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 
 const { TabPane } = Tabs;
 
-interface ModelGroupInfo {
-  model_group: string;
-  providers: string[];
-  max_input_tokens?: number;
-  max_output_tokens?: number;
-  input_cost_per_token?: number;
-  output_cost_per_token?: number;
-  mode?: string;
-  tpm?: number;
-  rpm?: number;
-  supports_parallel_function_calling: boolean;
-  supports_vision: boolean;
-  supports_function_calling: boolean;
-  supported_openai_params?: string[];
-  health_status?: string;
-  health_response_time?: number;
-  health_checked_at?: string;
-  [key: string]: any;
-}
-
-interface AgentCard {
-  protocolVersion: string;
-  name: string;
-  description: string;
-  url: string;
-  version: string;
-  capabilities?: {
-    streaming?: boolean;
-    pushNotifications?: boolean;
-    stateTransitionHistory?: boolean;
-  };
-  defaultInputModes: string[];
-  defaultOutputModes: string[];
-  skills: Array<{
-    id: string;
-    name: string;
-    description: string;
-    tags: string[];
-  }>;
-  iconUrl?: string;
-  provider?: {
-    organization: string;
-    url: string;
-  };
-  documentationUrl?: string;
-  [key: string]: any;
-}
-
-interface MCPServerData {
-  server_id: string;
-  name: string;
-  alias?: string | null;
-  server_name: string;
-  url: string;
-  transport: string;
-  spec_path?: string | null;
-  auth_type: string;
-  mcp_info: {
-    server_name: string;
-    description?: string;
-    mcp_server_cost_info?: any;
-  };
-  [key: string]: any;
-}
-
 interface PublicModelHubProps {
   accessToken?: string | null;
   isEmbedded?: boolean; // When true, hides navbar and adjusts layout for embedding in dashboard
+}
+
+function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="flex flex-col items-center gap-1 py-6">
+      <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
+        <Inbox className="size-5 text-muted-foreground" />
+      </div>
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      <div className="text-sm text-muted-foreground">{body}</div>
+    </div>
+  );
 }
 
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
@@ -118,8 +77,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
   const [selectedAgent, setSelectedAgent] = useState<null | AgentCard>(null);
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
-  const [proxySettings, setProxySettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<string>("models");
+  const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
+  const [skillLoading, setSkillLoading] = useState<boolean>(false);
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -135,7 +95,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         try {
           setLoading(true);
           const _modelHubData = await modelHubPublicModelsCall();
-          console.log("ModelHubData:", _modelHubData);
           setModelHubData(Array.isArray(_modelHubData) ? _modelHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public model data", error);
@@ -149,7 +108,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         try {
           setAgentLoading(true);
           const _agentHubData = await agentHubPublicModelsCall();
-          console.log("AgentHubData:", _agentHubData);
           setAgentHubData(Array.isArray(_agentHubData) ? _agentHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public agent data", error);
@@ -162,7 +120,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         try {
           setMcpLoading(true);
           const _mcpHubData = await mcpHubPublicServersCall();
-          console.log("MCPHubData:", _mcpHubData);
           setMcpHubData(Array.isArray(_mcpHubData) ? _mcpHubData : []);
         } catch (error) {
           console.error("There was an error fetching the public MCP server data", error);
@@ -173,11 +130,22 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
       const fetchPublicModelHubInfo = async () => {
         const publicModelHubInfo = await getPublicModelHubInfo();
-        console.log("Public Model Hub Info:", publicModelHubInfo);
         setPageTitle(publicModelHubInfo.docs_title);
         setCustomDocsDescription(publicModelHubInfo.custom_docs_description);
         setLitellmVersion(publicModelHubInfo.litellm_version);
         setUsefulLinks(publicModelHubInfo.useful_links || {});
+      };
+
+      const fetchSkillData = async () => {
+        try {
+          setSkillLoading(true);
+          const response = await skillHubPublicCall();
+          setSkillHubData(response.plugins ?? []);
+        } catch (error) {
+          console.error("There was an error fetching the public skill data", error);
+        } finally {
+          setSkillLoading(false);
+        }
       };
 
       fetchPublicModelHubInfo();
@@ -185,6 +153,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
       fetchPublicData();
       fetchAgentData();
       fetchMcpData();
+      fetchSkillData();
     };
 
     initializeAndFetch();
@@ -423,10 +392,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     });
   }, [mcpHubData, mcpSearchTerm, selectedMcpTransports]);
 
-  const showModal = (model: ModelGroupInfo) => {
+  const showModal = useCallback((model: ModelGroupInfo) => {
     setSelectedModel(model);
     setIsModalVisible(true);
-  };
+  }, []);
 
   const handleModalOk = () => {
     setIsModalVisible(false);
@@ -438,10 +407,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     setSelectedModel(null);
   };
 
-  const showAgentModal = (agent: AgentCard) => {
+  const showAgentModal = useCallback((agent: AgentCard) => {
     setSelectedAgent(agent);
     setIsAgentModalVisible(true);
-  };
+  }, []);
 
   const handleAgentModalOk = () => {
     setIsAgentModalVisible(false);
@@ -453,10 +422,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     setSelectedAgent(null);
   };
 
-  const showMcpModal = (server: MCPServerData) => {
+  const showMcpModal = useCallback((server: MCPServerData) => {
     setSelectedMcpServer(server);
     setIsMcpModalVisible(true);
-  };
+  }, []);
 
   const handleMcpModalOk = () => {
     setIsMcpModalVisible(false);
@@ -491,492 +460,19 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     return `$${(cost * 1_000_000).toFixed(4)}`;
   };
 
-  const formatTokens = (tokens: number | undefined) => {
-    if (!tokens) return "N/A";
-    if (tokens >= 1000) {
-      return `${(tokens / 1000).toFixed(0)}K`;
-    }
-    return tokens.toString();
-  };
+  const [modelSorting, setModelSorting] = useState<SortingState>([{ id: "model_group", desc: false }]);
+  const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
+  const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
 
-  const formatLimits = (rpm?: number, tpm?: number) => {
-    const limits = [];
-    if (rpm) limits.push(`RPM: ${rpm.toLocaleString()}`);
-    if (tpm) limits.push(`TPM: ${tpm.toLocaleString()}`);
-    return limits.length > 0 ? limits.join(", ") : "N/A";
-  };
-
-  const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
-    {
-      header: "Model Name",
-      accessorKey: "model_group",
-      enableSorting: true,
-      cell: ({ row }) => (
-        <div className="overflow-hidden">
-          <Tooltip title={row.original.model_group}>
-            <Button
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
-              onClick={() => showModal(row.original)}
-            >
-              {row.original.model_group}
-            </Button>
-          </Tooltip>
-        </div>
-      ),
-      size: 150,
-    },
-    {
-      header: "Providers",
-      accessorKey: "providers",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const providers = row.original.providers ?? [];
-
-        return (
-          <div className="flex flex-wrap gap-1">
-            {providers.map((provider) => {
-              const { logo } = getProviderLogoAndName(provider);
-              return (
-                <div key={provider} className="flex items-center space-x-1 px-2 py-1 bg-gray-100 rounded text-xs">
-                  {logo && (
-                    <img
-                      src={logo}
-                      alt={provider}
-                      className="w-3 h-3 flex-shrink-0 object-contain"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = "none";
-                      }}
-                    />
-                  )}
-                  <span className="capitalize">{provider}</span>
-                </div>
-              );
-            })}
-          </div>
-        );
-      },
-      size: 120,
-    },
-    {
-      header: "Mode",
-      accessorKey: "mode",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const mode = row.original.mode;
-        const getModeIcon = (mode: string) => {
-          switch (mode?.toLowerCase()) {
-            case "chat":
-              return "💬";
-            case "rerank":
-              return "🔄";
-            case "embedding":
-              return "📄";
-            default:
-              return "🤖";
-          }
-        };
-
-        return (
-          <div className="flex items-center space-x-2">
-            <span>{getModeIcon(mode || "")}</span>
-            <Text>{mode || "Chat"}</Text>
-          </div>
-        );
-      },
-      size: 100,
-    },
-    {
-      header: "Max Input",
-      accessorKey: "max_input_tokens",
-      enableSorting: true,
-      cell: ({ row }) => <Text className="text-center">{formatTokens(row.original.max_input_tokens)}</Text>,
-      size: 100,
-      meta: {
-        className: "text-center",
-      },
-    },
-    {
-      header: "Max Output",
-      accessorKey: "max_output_tokens",
-      enableSorting: true,
-      cell: ({ row }) => <Text className="text-center">{formatTokens(row.original.max_output_tokens)}</Text>,
-      size: 100,
-      meta: {
-        className: "text-center",
-      },
-    },
-    {
-      header: "Input $/1M",
-      accessorKey: "input_cost_per_token",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const cost = row.original.input_cost_per_token;
-        return <Text className="text-center">{cost ? formatCost(cost) : "Free"}</Text>;
-      },
-      size: 100,
-      meta: {
-        className: "text-center",
-      },
-    },
-    {
-      header: "Output $/1M",
-      accessorKey: "output_cost_per_token",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const cost = row.original.output_cost_per_token;
-        return <Text className="text-center">{cost ? formatCost(cost) : "Free"}</Text>;
-      },
-      size: 100,
-      meta: {
-        className: "text-center",
-      },
-    },
-    {
-      header: "Features",
-      accessorKey: "supports_vision",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const model = row.original;
-
-        // Dynamically get all features that start with 'supports_' and are true
-        const features = Object.entries(model)
-          .filter(([key, value]) => key.startsWith("supports_") && value === true)
-          .map(([key]) => formatCapabilityName(key));
-
-        if (features.length === 0) {
-          return <Text className="text-gray-400">-</Text>;
-        }
-
-        if (features.length === 1) {
-          return (
-            <div className="h-6 flex items-center">
-              <Tag color="blue" className="text-xs">
-                {features[0]}
-              </Tag>
-            </div>
-          );
-        }
-
-        return (
-          <div className="h-6 flex items-center space-x-1">
-            <Tag color="blue" className="text-xs">
-              {features[0]}
-            </Tag>
-            <Tooltip
-              title={
-                <div className="space-y-1">
-                  <div className="font-medium">All Features:</div>
-                  {features.map((feature, index) => (
-                    <div key={index} className="text-xs">
-                      • {feature}
-                    </div>
-                  ))}
-                </div>
-              }
-              trigger="click"
-              placement="topLeft"
-            >
-              <span
-                className="text-xs text-blue-600 cursor-pointer hover:text-blue-800 hover:underline"
-                onClick={(e) => e.stopPropagation()}
-              >
-                +{features.length - 1}
-              </span>
-            </Tooltip>
-          </div>
-        );
-      },
-      size: 120,
-    },
-    {
-      header: "Health Status",
-      accessorKey: "health_status",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const original = row.original;
-        const tagColor =
-          original.health_status === "healthy" ? "green" : original.health_status === "unhealthy" ? "red" : "default";
-        const responseTimeLabel = original.health_response_time
-          ? `Response Time: ${Number(original.health_response_time).toFixed(2)}ms`
-          : "N/A";
-        const lastCheckedLabel = original.health_checked_at
-          ? `Last Checked: ${new Date(original.health_checked_at).toLocaleString()}`
-          : "N/A";
-
-        return (
-          <Tooltip
-            title={
-              <>
-                <div>{responseTimeLabel}</div>
-                <div>{lastCheckedLabel}</div>
-              </>
-            }
-          >
-            <Tag key={original.model_group} color={tagColor}>
-              <span className="capitalize">{original.health_status ?? "Unknown"}</span>
-            </Tag>
-          </Tooltip>
-        );
-      },
-      size: 100,
-    },
-    {
-      header: "Limits",
-      accessorKey: "rpm",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const model = row.original;
-        return <Text className="text-xs text-gray-600">{formatLimits(model.rpm, model.tpm)}</Text>;
-      },
-      size: 150,
-    },
-  ];
-
-  const publicAgentHubColumns = (): ColumnDef<AgentCard>[] => [
-    {
-      header: "Agent Name",
-      accessorKey: "name",
-      enableSorting: true,
-      cell: ({ row }) => (
-        <div className="overflow-hidden">
-          <Tooltip title={row.original.name}>
-            <Button
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
-              onClick={() => showAgentModal(row.original)}
-            >
-              {row.original.name}
-            </Button>
-          </Tooltip>
-        </div>
-      ),
-      size: 150,
-    },
-    {
-      header: "Description",
-      accessorKey: "description",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const description = row.original.description ?? "";
-        const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
-        return (
-          <Tooltip title={description}>
-            <Text className="text-sm text-gray-700">{truncated}</Text>
-          </Tooltip>
-        );
-      },
-      size: 250,
-    },
-    {
-      header: "Version",
-      accessorKey: "version",
-      enableSorting: true,
-      cell: ({ row }) => <Text className="text-sm">{row.original.version}</Text>,
-      size: 80,
-    },
-    {
-      header: "Provider",
-      accessorKey: "provider",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const provider = row.original.provider;
-        if (!provider) return <Text className="text-gray-400">-</Text>;
-        return (
-          <div className="text-sm">
-            <Text className="font-medium">{provider.organization}</Text>
-          </div>
-        );
-      },
-      size: 120,
-    },
-    {
-      header: "Skills",
-      accessorKey: "skills",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const skills = row.original.skills || [];
-        if (skills.length === 0) {
-          return <Text className="text-gray-400">-</Text>;
-        }
-
-        if (skills.length === 1) {
-          return (
-            <div className="h-6 flex items-center">
-              <Tag color="purple" className="text-xs">
-                {skills[0].name}
-              </Tag>
-            </div>
-          );
-        }
-
-        return (
-          <div className="h-6 flex items-center space-x-1">
-            <Tag color="purple" className="text-xs">
-              {skills[0].name}
-            </Tag>
-            <Tooltip
-              title={
-                <div className="space-y-1">
-                  <div className="font-medium">All Skills:</div>
-                  {skills.map((skill, index) => (
-                    <div key={index} className="text-xs">
-                      • {skill.name}
-                    </div>
-                  ))}
-                </div>
-              }
-              trigger="click"
-              placement="topLeft"
-            >
-              <span
-                className="text-xs text-purple-600 cursor-pointer hover:text-purple-800 hover:underline"
-                onClick={(e) => e.stopPropagation()}
-              >
-                +{skills.length - 1}
-              </span>
-            </Tooltip>
-          </div>
-        );
-      },
-      size: 150,
-    },
-    {
-      header: "Capabilities",
-      accessorKey: "capabilities",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const capabilities = row.original.capabilities || {};
-        const capList = Object.entries(capabilities)
-          .filter(([_, value]) => value === true)
-          .map(([key]) => key);
-
-        if (capList.length === 0) {
-          return <Text className="text-gray-400">-</Text>;
-        }
-
-        return (
-          <div className="flex flex-wrap gap-1">
-            {capList.map((cap) => (
-              <Tag key={cap} color="green" className="text-xs capitalize">
-                {cap}
-              </Tag>
-            ))}
-          </div>
-        );
-      },
-      size: 150,
-    },
-  ];
-
-  const publicMCPHubColumns = (): ColumnDef<MCPServerData>[] => [
-    {
-      header: "Server Name",
-      accessorKey: "server_name",
-      enableSorting: true,
-      cell: ({ row }) => (
-        <div className="overflow-hidden">
-          <Tooltip title={row.original.server_name}>
-            <Button
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
-              onClick={() => showMcpModal(row.original)}
-            >
-              {row.original.server_name}
-            </Button>
-          </Tooltip>
-        </div>
-      ),
-      size: 150,
-    },
-    {
-      header: "Description",
-      accessorKey: "mcp_info.description",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const description = String(row.original.mcp_info?.description ?? "-");
-        const truncated = description.length > 80 ? description.substring(0, 80) + "..." : description;
-        return (
-          <Tooltip title={description}>
-            <Text className="text-sm text-gray-700">{truncated}</Text>
-          </Tooltip>
-        );
-      },
-      size: 250,
-    },
-    {
-      header: "URL",
-      accessorKey: "url",
-      enableSorting: false,
-      cell: ({ row }) => {
-        const url = row.original.url ?? "";
-        const truncated = url.length > 40 ? url.substring(0, 40) + "..." : url;
-        return (
-          <Tooltip title={url}>
-            <div className="flex items-center space-x-2">
-              <Text className="text-xs font-mono">{truncated}</Text>
-              <Copy
-                onClick={() => copyToClipboard(url)}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 w-3 h-3"
-              />
-            </div>
-          </Tooltip>
-        );
-      },
-      size: 200,
-    },
-    {
-      header: "Transport",
-      accessorKey: "transport",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const transport = row.original.transport;
-        return (
-          <Tag color="blue" className="text-xs uppercase">
-            {transport}
-          </Tag>
-        );
-      },
-      size: 100,
-    },
-    {
-      header: "Auth Type",
-      accessorKey: "auth_type",
-      enableSorting: true,
-      cell: ({ row }) => {
-        const authType = row.original.auth_type;
-        const color = authType === "none" ? "gray" : "green";
-        return (
-          <Tag color={color} className="text-xs capitalize">
-            {authType}
-          </Tag>
-        );
-      },
-      size: 100,
-    },
-  ];
+  const modelColumns = useMemo(() => getPublicModelHubColumns({ onModelClick: showModal }), [showModal]);
+  const agentColumns = useMemo(() => getPublicAgentHubColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
+  const mcpColumns = useMemo(() => getPublicMCPHubColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
   return (
     <ThemeProvider accessToken={accessToken}>
       <div className={isEmbedded ? "w-full" : "min-h-screen bg-white"}>
         {/* Navigation - only show when not embedded */}
-        {!isEmbedded && (
-          <Navbar
-            userID={null}
-            userEmail={null}
-            userRole={null}
-            premiumUser={false}
-            setProxySettings={setProxySettings}
-            proxySettings={proxySettings}
-            accessToken={accessToken || null}
-            isPublicPage={true}
-            isDarkMode={false}
-            toggleDarkMode={() => {}}
-          />
-        )}
+        {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
         <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
           {/* Embedded Explainer - only shown when embedded in dashboard */}
@@ -990,7 +486,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
           {/* About Section - only shown when not embedded */}
           {!isEmbedded && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">About</Title>
               <p className="text-gray-700 mb-6 text-base leading-relaxed">
                 {customDocsDescription ? customDocsDescription : "Proxy Server to call 100+ LLMs in the OpenAI format."}
@@ -1006,7 +502,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
           {/* Useful Links - only shown when not embedded */}
           {usefulLinks && Object.keys(usefulLinks).length > 0 && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">Useful Links</Title>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {Object.entries(usefulLinks || {})
@@ -1033,7 +529,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
           {/* Health and Endpoint Status - only shown when not embedded */}
           {!isEmbedded && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">Health and Endpoint Status</Title>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <Text className="text-green-600 font-medium text-sm">Service status: {serviceStatus}</Text>
@@ -1042,7 +538,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           )}
 
           {/* Tabs for Models and Agents */}
-          <Card className="p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+          <Card className="p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
             <Tabs activeKey={activeTab} onChange={setActiveTab} size="large" className="public-hub-tabs">
               {/* Models Tab */}
               <TabPane tab="Model Hub" key="models">
@@ -1069,7 +565,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         placeholder="Search model names... (smart search enabled)"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                        className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                       />
                     </div>
                   </div>
@@ -1091,7 +587,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                               <img
                                 src={logo}
                                 alt={option.label as string}
-                                className="w-5 h-5 flex-shrink-0 object-contain"
+                                className="w-5 h-5 shrink-0 object-contain"
                                 onError={(e) => {
                                   (e.target as HTMLImageElement).style.display = "none";
                                 }}
@@ -1153,11 +649,26 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
                 </div>
 
-                <ModelDataTable
-                  columns={publicModelHubColumns()}
+                <DataTable
                   data={filteredData}
+                  columns={modelColumns}
+                  getRowId={(model, index) => model.model_group || String(index)}
+                  sortingMode="client"
+                  sorting={modelSorting}
+                  onSortingChange={setModelSorting}
                   isLoading={loading}
-                  defaultSorting={[{ id: "model_group", desc: false }]}
+                  loadingMessage="Loading models…"
+                  noDataMessage={
+                    <PublicHubEmptyState
+                      title={modelHubData?.length ? "No matching models" : "No models available"}
+                      body={
+                        modelHubData?.length
+                          ? "Adjust the search or filters to see more models."
+                          : "Models made public by the proxy admin will appear here."
+                      }
+                    />
+                  }
+                  size="compact"
                 />
 
                 <div className="mt-8 text-center">
@@ -1190,7 +701,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           placeholder="Search agent names or descriptions..."
                           value={agentSearchTerm}
                           onChange={(e) => setAgentSearchTerm(e.target.value)}
-                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                         />
                       </div>
                     </div>
@@ -1216,11 +727,22 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     </div>
                   </div>
 
-                  <ModelDataTable
-                    columns={publicAgentHubColumns()}
+                  <DataTable
                     data={filteredAgentData}
+                    columns={agentColumns}
+                    getRowId={(agent, index) => agent.name || String(index)}
+                    sortingMode="client"
+                    sorting={agentSorting}
+                    onSortingChange={setAgentSorting}
                     isLoading={agentLoading}
-                    defaultSorting={[{ id: "name", desc: false }]}
+                    loadingMessage="Loading agents…"
+                    noDataMessage={
+                      <PublicHubEmptyState
+                        title="No matching agents"
+                        body="Adjust the search or skill filter to see more agents."
+                      />
+                    }
+                    size="compact"
                   />
 
                   <div className="mt-8 text-center">
@@ -1254,7 +776,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           placeholder="Search MCP server names or descriptions..."
                           value={mcpSearchTerm}
                           onChange={(e) => setMcpSearchTerm(e.target.value)}
-                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                         />
                       </div>
                     </div>
@@ -1280,11 +802,22 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     </div>
                   </div>
 
-                  <ModelDataTable
-                    columns={publicMCPHubColumns()}
+                  <DataTable
                     data={filteredMcpData}
+                    columns={mcpColumns}
+                    getRowId={(server, index) => server.server_id || String(index)}
+                    sortingMode="client"
+                    sorting={mcpSorting}
+                    onSortingChange={setMcpSorting}
                     isLoading={mcpLoading}
-                    defaultSorting={[{ id: "server_name", desc: false }]}
+                    loadingMessage="Loading MCP servers…"
+                    noDataMessage={
+                      <PublicHubEmptyState
+                        title="No matching MCP servers"
+                        body="Adjust the search or transport filter to see more servers."
+                      />
+                    }
+                    size="compact"
                   />
 
                   <div className="mt-8 text-center">
@@ -1294,6 +827,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
                 </TabPane>
               )}
+
+              {/* Skill Hub Tab */}
+              <TabPane tab="Skill Hub" key="skills">
+                <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+              </TabPane>
             </Tabs>
           </Card>
         </div>
@@ -1345,7 +883,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                                 <img
                                   src={logo}
                                   alt={provider}
-                                  className="w-3 h-3 flex-shrink-0 object-contain"
+                                  className="w-3 h-3 shrink-0 object-contain"
                                   onError={(e) => {
                                     (e.target as HTMLImageElement).style.display = "none";
                                   }}
@@ -1364,18 +902,20 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 {selectedModel.model_group.includes("*") && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
                     <div className="flex items-start space-x-2">
-                      <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                      <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
                       <div>
                         <Text className="font-medium text-blue-900 mb-2">Wildcard Routing</Text>
                         <Text className="text-sm text-blue-800 mb-2">
                           This model uses wildcard routing. You can pass any value where you see the{" "}
-                          <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">*</code> symbol.
+                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">*</code> symbol.
                         </Text>
                         <Text className="text-sm text-blue-800">
                           For example, with{" "}
-                          <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">{selectedModel.model_group}</code>,
-                          you can use any string (
-                          <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">
+                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
+                            {selectedModel.model_group}
+                          </code>
+                          , you can use any string (
+                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
                             {selectedModel.model_group.replaceAll("*", "my-custom-value")}
                           </code>
                           ) that matches this pattern.
@@ -1881,18 +1421,6 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                     <Text className="font-medium">Description:</Text>
                     <Text>{selectedMcpServer.mcp_info?.description || "-"}</Text>
                   </div>
-                  <div className="col-span-2">
-                    <Text className="font-medium">URL:</Text>
-                    <a
-                      href={selectedMcpServer.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 text-sm break-all flex items-center space-x-2"
-                    >
-                      <span>{selectedMcpServer.url}</span>
-                      <ExternalLinkIcon className="w-4 h-4" />
-                    </a>
-                  </div>
                 </div>
               </div>
 
@@ -1920,7 +1448,7 @@ import asyncio
 config = {
     "mcpServers": {
         "${selectedMcpServer.server_name}": {
-            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
                 "x-litellm-api-key": "Bearer sk-1234"
             }
@@ -1960,7 +1488,7 @@ import asyncio
 config = {
     "mcpServers": {
         "${selectedMcpServer.server_name}": {
-            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
                 "x-litellm-api-key": "Bearer sk-1234"
             }

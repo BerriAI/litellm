@@ -2178,9 +2178,10 @@ async def test_logging_turn_off_message_logging_streaming(sync_mode):
     mock_obj = Cache(type="local")
     litellm.cache = mock_obj
 
-    with patch.object(mock_obj, "add_cache") as mock_client, patch.object(
-        mock_obj, "async_add_cache"
-    ) as mock_async_client:
+    with (
+        patch.object(mock_obj, "add_cache") as mock_client,
+        patch.object(mock_obj, "async_add_cache") as mock_async_client,
+    ):
         print(f"mock_obj.add_cache: {mock_obj.add_cache}")
 
         if sync_mode is True:
@@ -2596,9 +2597,12 @@ def test_redis_caching_multiple_namespaces():
     messages = [{"role": "user", "content": f"what is litellm? {test_uuid}"}]
 
     # Mock the Redis client creation from the _redis module
-    with patch("litellm._redis.get_redis_client") as mock_get_redis_client, patch(
-        "litellm._redis.get_redis_connection_pool"
-    ) as mock_get_redis_connection_pool:
+    with (
+        patch("litellm._redis.get_redis_client") as mock_get_redis_client,
+        patch(
+            "litellm._redis.get_redis_connection_pool"
+        ) as mock_get_redis_connection_pool,
+    ):
         # Create a mock Redis client that simulates real Redis behavior
         mock_redis_client = MagicMock()
         mock_get_redis_client.return_value = mock_redis_client

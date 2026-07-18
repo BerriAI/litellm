@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Title, Text, Button, Badge } from "@tremor/react";
+import { Title, Text, Button } from "@tremor/react";
 import { Modal } from "antd";
 import { Button as AntdButton } from "antd";
 import { ModelDataTable } from "./table";
@@ -26,6 +26,16 @@ interface HealthCheckComponentProps {
   getDisplayModelName: (model: any) => string;
   setSelectedModelId?: (modelId: string) => void;
   teams?: Team[] | null;
+  isLoading?: boolean;
+  paginationMeta?: {
+    total_count: number;
+    current_page: number;
+    total_pages: number;
+    size: number;
+  };
+  currentPage?: number;
+  pageSize?: number;
+  onPageChange?: (page: number) => void;
 }
 
 const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
@@ -35,6 +45,11 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   getDisplayModelName,
   setSelectedModelId,
   teams,
+  isLoading = false,
+  paginationMeta,
+  currentPage = 1,
+  pageSize = 50,
+  onPageChange,
 }) => {
   const [modelHealthStatuses, setModelHealthStatuses] = useState<{ [key: string]: HealthStatus }>({});
   const [selectedModelsForHealth, setSelectedModelsForHealth] = useState<string[]>([]);
@@ -95,19 +110,19 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
             const fullError = checkData.error_message || undefined;
 
             healthStatusMap[modelId] = {
-                status: checkData.status || "unknown",
-                lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : "None",
-                lastSuccess:
-                  checkData.status === "healthy"
-                    ? checkData.checked_at
-                      ? new Date(checkData.checked_at).toLocaleString()
-                      : "None"
-                    : "None",
-                loading: false,
-                error: fullError ? extractMeaningfulError(fullError) : undefined,
-                fullError: fullError,
-                successResponse: checkData.status === "healthy" ? checkData : undefined,
-              };
+              status: checkData.status || "unknown",
+              lastCheck: checkData.checked_at ? new Date(checkData.checked_at).toLocaleString() : "None",
+              lastSuccess:
+                checkData.status === "healthy"
+                  ? checkData.checked_at
+                    ? new Date(checkData.checked_at).toLocaleString()
+                    : "None"
+                  : "None",
+              loading: false,
+              error: fullError ? extractMeaningfulError(fullError) : undefined,
+              fullError: fullError,
+              successResponse: checkData.status === "healthy" ? checkData : undefined,
+            };
           });
         }
       } catch (healthError) {
@@ -297,9 +312,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
             },
           }));
         }
-      } catch (dbError) {
-        console.debug("Could not fetch updated status from database (non-critical):", dbError);
-      }
+      } catch (dbError) {}
     } catch (error) {
       const currentTime = new Date().toLocaleString();
       const rawError = error instanceof Error ? error.message : String(error);
@@ -448,19 +461,11 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "healthy":
-        return <Badge color="emerald">healthy</Badge>;
-      case "unhealthy":
-        return <Badge color="red">unhealthy</Badge>;
-      case "checking":
-        return <Badge color="blue">checking</Badge>;
-      case "none":
-        return <Badge color="gray">none</Badge>;
-      default:
-        return <Badge color="gray">unknown</Badge>;
-    }
+  const handlePageChange = (page: number) => {
+    setSelectedModelsForHealth([]);
+    setAllModelsSelected(false);
+    setModelHealthStatuses({});
+    onPageChange?.(page);
   };
 
   const showErrorModal = (modelName: string, cleanedError: string, fullError: string) => {
@@ -489,6 +494,36 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
     setSuccessModalVisible(false);
     setSelectedSuccessDetails(null);
   };
+
+  const healthTableData = (modelData?.data ?? []).map((model: any) => {
+    const modelId = model.model_info?.id;
+    const healthStatus = modelId ? modelHealthStatuses[modelId] : null;
+    const status = healthStatus || {
+      status: "none",
+      lastCheck: "None",
+      loading: false,
+    };
+    return {
+      model_name: model.model_name,
+      model_info: model.model_info,
+      provider: model.provider,
+      litellm_model_name: model.litellm_model_name,
+      health_status: status.status,
+      last_check: status.lastCheck,
+      last_success: status.lastSuccess || "None",
+      health_loading: status.loading,
+      health_error: status.error,
+      health_full_error: status.fullError,
+    };
+  });
+
+  const shouldShowPagination = Boolean(paginationMeta && onPageChange);
+  const totalCount = paginationMeta?.total_count ?? 0;
+  const totalPages = paginationMeta?.total_pages ?? 1;
+  const pageForDisplay = paginationMeta?.current_page ?? currentPage;
+  const pageSizeForDisplay = paginationMeta?.size ?? pageSize;
+  const resultsStart = shouldShowPagination && totalCount > 0 ? (pageForDisplay - 1) * pageSizeForDisplay + 1 : 0;
+  const resultsEnd = shouldShowPagination ? Math.min(pageForDisplay * pageSizeForDisplay, totalCount) : 0;
 
   return (
     <div>
@@ -522,6 +557,38 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
       </div>
 
       <div>
+        {shouldShowPagination && (
+          <div className="flex justify-between items-center mb-3">
+            <span data-testid="health-results-count" className="text-sm text-gray-700">
+              {totalCount > 0
+                ? `Showing ${resultsStart} - ${resultsEnd} of ${totalCount} results`
+                : "Showing 0 results"}
+            </span>
+
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={isLoading || currentPage === 1}
+                className={`px-3 py-1 text-sm border rounded-md ${
+                  isLoading || currentPage === 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
+                }`}
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={isLoading || currentPage >= totalPages}
+                className={`px-3 py-1 text-sm border rounded-md ${
+                  isLoading || currentPage >= totalPages
+                    ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                    : "hover:bg-gray-50"
+                }`}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
         <ModelDataTable
           columns={healthCheckColumns(
             modelHealthStatuses,
@@ -530,35 +597,14 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
             handleModelSelection,
             handleSelectAll,
             runIndividualHealthCheck,
-            getStatusBadge,
             getDisplayModelName,
             showErrorModal,
             showSuccessModal,
             setSelectedModelId,
             teams,
           )}
-          data={modelData.data.map((model: any) => {
-            const modelId = model.model_info?.id;
-            const healthStatus = modelId ? modelHealthStatuses[modelId] : null;
-            const status = healthStatus || {
-              status: "none",
-              lastCheck: "None",
-              loading: false,
-            };
-            return {
-              model_name: model.model_name,
-              model_info: model.model_info,
-              provider: model.provider,
-              litellm_model_name: model.litellm_model_name,
-              health_status: status.status,
-              last_check: status.lastCheck,
-              last_success: status.lastSuccess || "None",
-              health_loading: status.loading,
-              health_error: status.error,
-              health_full_error: status.fullError,
-            };
-          })}
-          isLoading={false}
+          data={healthTableData}
+          isLoading={isLoading}
         />
       </div>
 

@@ -1,14 +1,15 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
-import Sidebar from "./leftnav";
+import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
 vi.mock("../utils/roles", () => {
   return {
-    all_admin_roles: ["admin"],
+    all_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
-    isAdminRole: (role: string) => role === "admin",
+    rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
+    isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
     isUserTeamAdminForAnyTeam: () => false,
   };
 });
@@ -55,6 +56,23 @@ vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
   };
 });
 
+// The redesigned sidebar reads the custom logo from ThemeContext; the test tree
+// has no ThemeProvider, so stub the hook.
+vi.mock("@/contexts/ThemeContext", () => ({
+  useTheme: () => ({ logoUrl: null, faviconUrl: null, setLogoUrl: vi.fn(), setFaviconUrl: vi.fn() }),
+}));
+
+// Version tag + logout target come from network hooks; keep them inert in unit tests.
+vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
+  useHealthReadinessDetails: () => ({ data: undefined }),
+}));
+vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
+  useLogout: () => vi.fn(),
+}));
+
+const collectNavKeys = (): string[] =>
+  menuGroups.flatMap((group) => group.items.flatMap((item) => [item.key, ...(item.children ?? []).map((c) => c.key)]));
+
 describe("Sidebar (leftnav)", () => {
   const defaultProps = {
     setPage: vi.fn(),
@@ -69,7 +87,7 @@ describe("Sidebar (leftnav)", () => {
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
-      "Agents",
+      "Agentic",
       "MCP Servers",
       "Guardrails",
       "Policies",
@@ -106,33 +124,58 @@ describe("Sidebar (leftnav)", () => {
     });
   });
   it("has no duplicate keys among all menu items and their children", () => {
-    // Helper to recursively extract all keys from Ant Design Menu items
-    function getAllKeysFromMenu(wrapper: HTMLElement): string[] {
-      const allKeys: string[] = [];
-      // Ant Design renders key as data-menu-id or inside attributes, but for this case, we look for text as fallback.
-      // For a generic check, here we fetch ids from rendered list items, and also descend into submenus
-      const items = wrapper.querySelectorAll("[data-menu-id]");
-      items.forEach((item) => {
-        const dataMenuId = item.getAttribute("data-menu-id");
-        if (dataMenuId) {
-          allKeys.push(dataMenuId);
-        }
+    // React keys must be unique across the whole nav config, otherwise the
+    // active-item highlight and group expansion collide.
+    const keys = collectNavKeys();
+    const duplicates = keys.filter((key, i) => keys.indexOf(key) !== i);
+    expect(duplicates).toEqual([]);
+  });
+
+  describe("Admin Viewer parity", () => {
+    // Admin Viewer follows a "read parity with Proxy Admin, no writes, no
+    // cost-incurring actions" rule. Playground stays hidden (incurs LLM
+    // cost); Models + Endpoints and Agents must be visible read-only.
+    const adminViewerAuth = {
+      userId: "admin-viewer-user-id",
+      accessToken: "test-access-token",
+      userRole: "admin_viewer",
+      token: "test-token",
+      userEmail: "viewer@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    it("hides Playground from Admin Viewer (cost-incurring action)", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.queryByText("Playground")).not.toBeInTheDocument();
+    });
+
+    it("shows Models + Endpoints to Admin Viewer (read-only)", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
+    });
+
+    it("shows Agents (under Agentic) to Admin Viewer (read-only)", async () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      // Agents is now nested under the "Agentic" submenu — expand parent
+      // first to render the children, then assert Agents is visible.
+      act(() => {
+        fireEvent.click(screen.getByText("Agentic"));
       });
-      return allKeys;
-    }
+      await waitFor(() => {
+        expect(screen.getByText("Agents")).toBeInTheDocument();
+      });
+    });
 
-    const { container } = renderWithProviders(<Sidebar {...defaultProps} />);
-    const allRenderedKeys = getAllKeysFromMenu(container);
-
-    const keySet = new Set<string>();
-    const duplicates: string[] = [];
-    for (const key of allRenderedKeys) {
-      if (keySet.has(key)) {
-        duplicates.push(key);
-      }
-      keySet.add(key);
-    }
-    expect(duplicates).toHaveLength(0);
+    it("shows Logs to Admin Viewer", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Logs")).toBeInTheDocument();
+    });
   });
 
   it("should show Organizations tab for organization admins", () => {
@@ -172,5 +215,41 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByText("Organizations")).toBeInTheDocument();
+  });
+
+  it("marks the selected page's nav item active", () => {
+    renderWithProviders(<Sidebar {...defaultProps} defaultSelectedKey="logs" />);
+    const logs = screen.getByText("Logs").closest("a");
+    expect(logs).toHaveAttribute("data-active", "true");
+    // A different item must not be active.
+    expect(screen.getByText("Virtual Keys").closest("a")).not.toHaveAttribute("data-active");
+  });
+
+  it("hides labels but keeps items reachable (icon + link) when collapsed to the rail", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} collapsed />);
+    expect(container.querySelector('[data-slot="sidebar"]')).toHaveAttribute("data-collapsed", "true");
+    // The item stays navigable in the icon-only rail: its link still renders with
+    // an icon (asserting the <a> + svg, not the text, so a removed icon would
+    // fail here), while the label is present but CSS-hidden.
+    const label = screen.getByText("Virtual Keys");
+    const link = label.closest("a");
+    expect(link).not.toBeNull();
+    expect(link!.querySelector("svg")).not.toBeNull();
+    expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
+  });
+});
+
+describe("getBreadcrumb", () => {
+  it("resolves a top-level page to its section + title", () => {
+    expect(getBreadcrumb("api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
+    expect(getBreadcrumb("logs")).toEqual({ section: "Observability", title: "Logs" });
+  });
+
+  it("resolves a nested child page to its parent section", () => {
+    expect(getBreadcrumb("search-tools")).toEqual({ section: "AI Gateway", title: "Search Tools" });
+  });
+
+  it("falls back to a prettified title with no section for unknown pages", () => {
+    expect(getBreadcrumb("some-unknown-page")).toEqual({ section: null, title: "Some Unknown Page" });
   });
 });

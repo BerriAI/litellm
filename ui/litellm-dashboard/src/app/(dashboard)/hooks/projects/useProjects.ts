@@ -1,13 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
-import { all_admin_roles } from "@/utils/roles";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,11 +42,11 @@ export interface ProjectResponse {
 
 export const projectKeys = createQueryKeys("projects");
 
+const projectReaderRoles = [...all_admin_roles, ...internalUserRoles];
+
 // ── Fetch function ───────────────────────────────────────────────────────────
 
-const fetchProjects = async (
-  accessToken: string,
-): Promise<ProjectResponse[]> => {
+const fetchProjects = async (accessToken: string): Promise<ProjectResponse[]> => {
   const baseUrl = getProxyBaseUrl();
   const url = `${baseUrl}/project/list`;
 
@@ -81,7 +76,6 @@ export const useProjects = () => {
   return useQuery<ProjectResponse[]>({
     queryKey: projectKeys.list({}),
     queryFn: async () => fetchProjects(accessToken!),
-    enabled:
-      Boolean(accessToken) && all_admin_roles.includes(userRole || ""),
+    enabled: Boolean(accessToken) && projectReaderRoles.includes(userRole!),
   });
 };

@@ -16,15 +16,15 @@ const isPageAccessibleToInternalUsers = (pageRoles?: string[]): boolean => {
   if (!pageRoles || pageRoles.length === 0) {
     return true; // No role restrictions
   }
-  
+
   // Check if any of the page's roles match internal user roles
-  return pageRoles.some(role => internalUserRoles.includes(role));
+  return pageRoles.some((role) => internalUserRoles.includes(role));
 };
 
 /**
  * Get all available pages from the navigation menu configuration
  * Used by UI Settings to display available pages for visibility control
- * 
+ *
  * IMPORTANT: Only returns pages that internal users can access.
  * Pages restricted to admin-only roles are excluded because internal users
  * cannot see them regardless of the UI visibility setting.

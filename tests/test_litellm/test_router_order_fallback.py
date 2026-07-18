@@ -329,3 +329,73 @@ async def test_router_order_fallback_with_non_standard_fallbacks():
         fallbacks=["fallback-model"],  # non-standard format, passed per-request
     )
     assert response._hidden_params["model_id"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_router_order_fallback_with_wildcard_model_group():
+    """Wildcard model groups should also advance across order levels."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "bad",
+                    "mock_response": Exception("fail order 1"),
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "good",
+                    "mock_response": "success from wildcard order 2",
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    response = await router.acompletion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert response._hidden_params["model_id"] == "2"
+
+
+def test_check_non_standard_fallback_format():
+    from litellm.router_utils.fallback_event_handlers import (
+        _check_non_standard_fallback_format,
+    )
+
+    # Standard formats
+    assert (
+        _check_non_standard_fallback_format([{"gpt-3.5-turbo": ["claude-3-haiku"]}])
+        == False
+    )
+    assert _check_non_standard_fallback_format([{"model": ["qwen-backup"]}]) == False
+    assert (
+        _check_non_standard_fallback_format(
+            [{"model": ["qwen-backup"], "region": ["us-east-1"]}]
+        )
+        == False
+    )
+
+    # Non-standard formats
+    assert _check_non_standard_fallback_format([{"model": "qwen-backup"}]) == True
+    assert (
+        _check_non_standard_fallback_format(
+            [{"model": "qwen-backup", "messages": [{"role": "user", "content": "hi"}]}]
+        )
+        == True
+    )
+    assert (
+        _check_non_standard_fallback_format(
+            [{"model": ["qwen-backup"], "api_key": "some-key"}]
+        )
+        == True
+    )

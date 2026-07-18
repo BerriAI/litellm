@@ -8,7 +8,6 @@ import {
   TableHeaderCell,
   TableBody,
   TableCell,
-  BarChart,
   Text,
   Button,
   Tab,
@@ -17,6 +16,7 @@ import {
   TabPanel,
   TabPanels,
 } from "@tremor/react";
+import { BarChart } from "@/components/shared/charts";
 import { perUserAnalyticsCall } from "./networking";
 
 interface PerUserMetrics {

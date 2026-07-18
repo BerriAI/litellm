@@ -47,8 +47,9 @@ class TestChatGPTAuthenticator:
             "id_token": "id-123",
         }
 
-        with patch("builtins.open", mock_open(read_data=auth_data)), patch.object(
-            authenticator, "_refresh_tokens", return_value=refreshed
+        with (
+            patch("builtins.open", mock_open(read_data=auth_data)),
+            patch.object(authenticator, "_refresh_tokens", return_value=refreshed),
         ):
             token = authenticator.get_access_token()
             assert token == "token-new"
@@ -59,9 +60,10 @@ class TestChatGPTAuthenticator:
         )
         auth_data = json.dumps({"id_token": id_token})
 
-        with patch("builtins.open", mock_open(read_data=auth_data)), patch.object(
-            authenticator, "_write_auth_file"
-        ) as mock_write:
+        with (
+            patch("builtins.open", mock_open(read_data=auth_data)),
+            patch.object(authenticator, "_write_auth_file") as mock_write,
+        ):
             account_id = authenticator.get_account_id()
             assert account_id == "acct-123"
             mock_write.assert_called_once()

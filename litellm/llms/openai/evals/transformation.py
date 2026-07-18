@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.evals.transformation import (
     BaseEvalsAPIConfig,
     LiteLLMLoggingObj,
@@ -37,9 +38,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """Add OpenAI-specific headers"""
         import litellm
         from litellm.secret_managers.main import get_secret_str
@@ -49,12 +48,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         if litellm_params:
             api_key = litellm_params.api_key
 
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("OPENAI_API_KEY")
-        )
+        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for Evals API")
@@ -76,7 +70,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
             api_base = "https://api.openai.com"
 
         if eval_id:
-            return f"{api_base}/v1/evals/{eval_id}"
+            encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
+            return f"{api_base}/v1/evals/{encoded_eval_id}"
         return f"{api_base}/v1/{endpoint}"
 
     def transform_create_eval_request(
@@ -156,9 +151,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform get eval request for OpenAI"""
-        url = self.get_complete_url(
-            api_base=api_base, endpoint="evals", eval_id=eval_id
-        )
+        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         verbose_logger.debug("Get eval request - URL: %s", url)
 
@@ -184,16 +177,12 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict, Dict]:
         """Transform update eval request for OpenAI"""
-        url = self.get_complete_url(
-            api_base=api_base, endpoint="evals", eval_id=eval_id
-        )
+        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         # Build request body
         request_body = {k: v for k, v in update_request.items() if v is not None}
 
-        verbose_logger.debug(
-            "Update eval request - URL: %s, body: %s", url, request_body
-        )
+        verbose_logger.debug("Update eval request - URL: %s, body: %s", url, request_body)
 
         return url, headers, request_body
 
@@ -216,9 +205,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform delete eval request for OpenAI"""
-        url = self.get_complete_url(
-            api_base=api_base, endpoint="evals", eval_id=eval_id
-        )
+        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         verbose_logger.debug("Delete eval request - URL: %s", url)
 
@@ -276,14 +263,13 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         if litellm_params and litellm_params.api_base:
             api_base = litellm_params.api_base
 
-        url = f"{api_base}/v1/evals/{eval_id}/runs"
+        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
+        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs"
 
         # Build request body
         request_body = {k: v for k, v in create_request.items() if v is not None}
 
-        verbose_logger.debug(
-            "Create run request - URL: %s, body: %s", url, request_body
-        )
+        verbose_logger.debug("Create run request - URL: %s, body: %s", url, request_body)
 
         return url, request_body
 
@@ -310,7 +296,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         if litellm_params and litellm_params.api_base:
             api_base = litellm_params.api_base
 
-        url = f"{api_base}/v1/evals/{eval_id}/runs"
+        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
+        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs"
 
         # Build query parameters
         query_params: Dict[str, Any] = {}
@@ -350,7 +337,9 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         """Transform get run request for OpenAI"""
-        url = f"{api_base}/v1/evals/{eval_id}/runs/{run_id}"
+        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
+        encoded_run_id = encode_url_path_segment(run_id, field_name="run_id")
+        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}"
 
         verbose_logger.debug("Get run request - URL: %s", url)
 
@@ -376,7 +365,9 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict, Dict]:
         """Transform cancel run request for OpenAI"""
-        url = f"{api_base}/v1/evals/{eval_id}/runs/{run_id}/cancel"
+        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
+        encoded_run_id = encode_url_path_segment(run_id, field_name="run_id")
+        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}/cancel"
 
         # Empty body for cancel request
         request_body: Dict[str, Any] = {}
@@ -405,7 +396,9 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> Tuple[str, Dict, Dict]:
         """Transform delete run request for OpenAI"""
-        url = f"{api_base}/v1/evals/{eval_id}/runs/{run_id}"
+        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
+        encoded_run_id = encode_url_path_segment(run_id, field_name="run_id")
+        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}"
 
         # Empty body for delete request
         request_body: Dict[str, Any] = {}

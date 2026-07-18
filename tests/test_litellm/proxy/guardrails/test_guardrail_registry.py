@@ -44,9 +44,7 @@ def test_update_in_memory_guardrail():
         "123",
         Guardrail(
             guardrail_name="test-guardrail",
-            litellm_params=LitellmParams(
-                guardrail="test-guardrail", mode="pre_call", default_on=True
-            ),
+            litellm_params=LitellmParams(guardrail="test-guardrail", mode="pre_call", default_on=True),
         ),
     )
 
@@ -56,7 +54,316 @@ def test_update_in_memory_guardrail():
         )
         is True
     )
-    assert (
-        handler.guardrail_id_to_custom_guardrail["123"].event_hook
-        is GuardrailEventHooks.pre_call
+    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
+
+
+def _make_guardrail(guardrail_id: str, name: str = "g") -> Guardrail:
+    return Guardrail(
+        guardrail_id=guardrail_id,
+        guardrail_name=name,
+        litellm_params=LitellmParams(guardrail=name, mode="pre_call", default_on=False),
     )
+
+
+def test_reconcile_db_guardrails_drops_stale_db_entries_only():
+    """
+    The reconcile pass must drop in-memory entries marked source='db' that are
+    missing from the DB result, and never touch source='config' entries.
+    Models the multi-pod case where another pod deleted a DB-backed guardrail.
+    """
+    handler = InMemoryGuardrailHandler()
+
+    # Two DB-backed entries on this pod (synced from earlier polling cycles)
+    handler.IN_MEMORY_GUARDRAILS["db-keep"] = _make_guardrail("db-keep")
+    handler.IN_MEMORY_GUARDRAILS["db-stale"] = _make_guardrail("db-stale")
+    handler._sources["db-keep"] = "db"
+    handler._sources["db-stale"] = "db"
+
+    # One config-loaded entry that must survive reconciliation
+    handler.IN_MEMORY_GUARDRAILS["cfg"] = _make_guardrail("cfg")
+    handler._sources["cfg"] = "config"
+
+    # The DB now only contains db-keep — db-stale was deleted on another pod.
+    removed = handler.reconcile_db_guardrails(db_guardrail_ids={"db-keep"})
+
+    assert removed == ["db-stale"]
+    assert "db-stale" not in handler.IN_MEMORY_GUARDRAILS
+    assert "db-stale" not in handler._sources
+    assert "db-keep" in handler.IN_MEMORY_GUARDRAILS
+    assert "cfg" in handler.IN_MEMORY_GUARDRAILS
+    assert handler._sources["cfg"] == "config"
+
+
+def test_reconcile_does_not_drop_config_entries_missing_from_db():
+    """A config-only guardrail (no DB row) must never be reconciled away."""
+    handler = InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS["cfg-only"] = _make_guardrail("cfg-only")
+    handler._sources["cfg-only"] = "config"
+
+    removed = handler.reconcile_db_guardrails(db_guardrail_ids=set())
+
+    assert removed == []
+    assert "cfg-only" in handler.IN_MEMORY_GUARDRAILS
+
+
+def test_get_source_returns_marker_set_at_insert():
+    handler = InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS["a"] = _make_guardrail("a")
+    handler._sources["a"] = "db"
+    handler.IN_MEMORY_GUARDRAILS["b"] = _make_guardrail("b")
+    handler._sources["b"] = "config"
+
+    assert handler.get_source("a") == "db"
+    assert handler.get_source("b") == "config"
+    assert handler.get_source("missing") is None
+
+
+def test_delete_in_memory_guardrail_clears_source_marker():
+    handler = InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS["a"] = _make_guardrail("a")
+    handler._sources["a"] = "db"
+
+    handler.delete_in_memory_guardrail("a")
+
+    assert "a" not in handler.IN_MEMORY_GUARDRAILS
+    assert "a" not in handler._sources
+    assert handler.get_source("a") is None
+
+
+def test_list_config_guardrails_excludes_db_sourced():
+    """LIT-2529: read surfaces union DB rows with config guardrails; db-sourced
+    in-memory entries would double-count (or resurrect stale ones), so exclude them."""
+    handler = InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS["cfg"] = _make_guardrail("cfg", name="config-one")
+    handler._sources["cfg"] = "config"
+    handler.IN_MEMORY_GUARDRAILS["db"] = _make_guardrail("db", name="db-one")
+    handler._sources["db"] = "db"
+
+    config_guardrails = handler.list_config_guardrails()
+
+    assert [g["guardrail_id"] for g in config_guardrails] == ["cfg"]
+
+
+def test_get_config_guardrail_by_id_returns_config_only():
+    """LIT-2529: the detail/logs fallback must return config-owned guardrails and
+    treat a db-sourced (stale) or missing id as a miss."""
+    handler = InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS["cfg"] = _make_guardrail("cfg", name="config-one")
+    handler._sources["cfg"] = "config"
+    handler.IN_MEMORY_GUARDRAILS["db"] = _make_guardrail("db", name="db-one")
+    handler._sources["db"] = "db"
+
+    assert handler.get_config_guardrail_by_id("cfg")["guardrail_name"] == "config-one"
+    assert handler.get_config_guardrail_by_id("db") is None
+    assert handler.get_config_guardrail_by_id("missing") is None
+
+
+def test_initialize_guardrail_early_return_updates_source_marker():
+    """
+    When initialize_guardrail is called for a guardrail that already exists
+    in memory, the early-return path must still honor the caller's source.
+    Otherwise a racing polling tick that placed a DB entry in memory first
+    would leave a later config-init call wrongly marked as 'db' (or vice
+    versa), and the entry would be reconciled with the wrong classification.
+    """
+    handler = InMemoryGuardrailHandler()
+    # Simulate a polling tick already placing the entry as DB-backed.
+    handler.IN_MEMORY_GUARDRAILS["collide"] = _make_guardrail("collide", name="bedrock")
+    handler._sources["collide"] = "db"
+
+    # Config init re-visits the same id (e.g., hot-reload, or UUID collision).
+    g = Guardrail(
+        guardrail_id="collide",
+        guardrail_name="bedrock",
+        litellm_params=LitellmParams(guardrail="bedrock", mode="pre_call", default_on=False),
+    )
+    handler.initialize_guardrail(guardrail=g, source="config")
+
+    assert handler.get_source("collide") == "config"
+
+    # And the symmetric direction: db sync should override an entry left
+    # marked as 'config' from a stale init path.
+    handler.initialize_guardrail(guardrail=g, source="db")
+    assert handler.get_source("collide") == "db"
+
+
+def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
+    """
+    sync_guardrail_from_db must enforce source='db' even when params are
+    unchanged, so a config entry whose UUID happens to collide with a later
+    DB row gets re-tagged correctly.
+    """
+    handler = InMemoryGuardrailHandler()
+    g = _make_guardrail("collide")
+    handler.IN_MEMORY_GUARDRAILS["collide"] = g
+    handler._sources["collide"] = "config"
+
+    handler.sync_guardrail_from_db(g)
+
+    assert handler.get_source("collide") == "db"
+
+
+def _db_litellm_params() -> dict:
+    """
+    Shape produced by GuardrailRegistry.get_all_guardrails_from_db: litellm_params
+    is a raw dict (not a LitellmParams), holding only the keys originally stored,
+    a non-schema extra key, and plain-string enum values.
+    """
+    return {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "default_on": True,
+        "version": 2,
+        "blocked_words": [{"keyword": "secret", "action": "BLOCK"}],
+    }
+
+
+def test_unchanged_db_params_do_not_register_as_changed():
+    """
+    A DB poll returns litellm_params as a raw dict while the in-memory copy is a
+    LitellmParams whose model_dump() fills every field default and coerces enums.
+    The two shapes must compare equal when the config is identical; otherwise
+    every poll cycle re-initializes the guardrail indefinitely.
+    """
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "11111111-1111-1111-1111-111111111111"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**raw),
+    )
+
+    new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=dict(raw))
+    assert handler._has_guardrail_params_changed(gid, new) is False
+
+
+def test_changed_db_params_register_as_changed():
+    """Normalizing both sides must still surface a genuine config change."""
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "22222222-2222-2222-2222-222222222222"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**raw),
+    )
+
+    changed = {**raw, "blocked_words": [{"keyword": "different", "action": "BLOCK"}]}
+    new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=changed)
+    assert handler._has_guardrail_params_changed(gid, new) is True
+
+
+def test_unnormalizable_db_params_register_as_changed_without_raising():
+    """
+    A DB row whose litellm_params fail LitellmParams validation must not crash the
+    poll loop. The comparison falls back to treating the guardrail as changed so it
+    re-initializes (and surfaces the bad row in logs) rather than propagating the
+    validation error up through the polling cycle.
+    """
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "55555555-5555-5555-5555-555555555555"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**raw),
+    )
+
+    malformed = {**raw, "default_on": "not-a-bool-xyz"}
+    new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=malformed)
+    assert handler._has_guardrail_params_changed(gid, new) is True
+
+
+def _all_callback_lists():
+    import litellm
+
+    return [
+        litellm.callbacks,
+        litellm.success_callback,
+        litellm.failure_callback,
+        litellm._async_success_callback,
+        litellm._async_failure_callback,
+    ]
+
+
+def test_delete_in_memory_guardrail_removes_callback_from_all_lists():
+    """
+    Request handling promotes guardrail callbacks from litellm.callbacks into the
+    success/failure/async lists. delete_in_memory_guardrail must purge the callback
+    from every list, otherwise a re-initialized guardrail leaves its old instance
+    stranded in those lists and instances accumulate.
+    """
+    handler = InMemoryGuardrailHandler()
+    callback = CustomGuardrail(
+        guardrail_name="cf-delete",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    gid = "33333333-3333-3333-3333-333333333333"
+    handler.IN_MEMORY_GUARDRAILS[gid] = _make_guardrail(gid, "cf-delete")
+    handler._sources[gid] = "db"
+    handler.guardrail_id_to_custom_guardrail[gid] = callback
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        for cb_list in lists:
+            cb_list.append(callback)
+
+        handler.delete_in_memory_guardrail(gid)
+
+        for cb_list in lists:
+            assert callback not in cb_list
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_repeated_db_sync_does_not_accumulate_runner_instances():
+    """
+    End-to-end regression for the OOM: across repeated DB polls (with the config
+    genuinely changing each cycle to force re-initialization), exactly one live
+    guardrail instance must exist across all callback lists. On the unfixed code
+    the stale instance lingers in the success/failure lists and the distinct count
+    climbs above one.
+    """
+    import litellm
+
+    handler = InMemoryGuardrailHandler()
+    gid = "44444444-4444-4444-4444-444444444444"
+    name = "cf-accum"
+
+    def db_guardrail(word: str) -> Guardrail:
+        params = {
+            **_db_litellm_params(),
+            "blocked_words": [{"keyword": word, "action": "BLOCK"}],
+        }
+        return Guardrail(guardrail_id=gid, guardrail_name=name, litellm_params=params)
+
+    def promote_into_request_lists() -> None:
+        manager = litellm.logging_callback_manager
+        for callback in list(litellm.callbacks):
+            manager.add_litellm_success_callback(callback)
+            manager.add_litellm_failure_callback(callback)
+            manager.add_litellm_async_success_callback(callback)
+            manager.add_litellm_async_failure_callback(callback)
+
+    def distinct_runner_instances() -> int:
+        seen = set()
+        for callback in litellm.logging_callback_manager._get_all_callbacks():
+            if isinstance(callback, CustomGuardrail) and getattr(callback, "guardrail_name", None) == name:
+                seen.add(id(callback))
+        return len(seen)
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        for cycle in range(5):
+            handler.sync_guardrail_from_db(db_guardrail(f"word-{cycle}"))
+            promote_into_request_lists()
+
+        assert distinct_runner_instances() == 1
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot

@@ -36,6 +36,7 @@ IGNORE_FUNCTIONS = [
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
     "_mask_sequence",  # max depth set.
+    "_walk_payload",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER).
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
@@ -45,6 +46,15 @@ IGNORE_FUNCTIONS = [
     "_convert_to_json_serializable_dict",  # max depth set (default 20) and circular reference protection to prevent infinite recursion.
     "dict",  # max depth set. _LiteLLMParamsDictView.dict() calls builtin dict(), not itself.
     "_read_image_bytes",  # max depth set.
+    "_get_masked_values",  # max depth set (default 20) to prevent infinite recursion while masking nested sensitive config dicts.
+    "_redact_sensitive_litellm_params",  # max depth set (default 10).
+    "_redact_secret_values_in_obj",  # max depth set (default 10, _REDACT_SECRET_MAX_DEPTH); fails closed by returning "REDACTED" at the cap.
+    "_resolve",  # OCI: $ref resolver bounded by `resolving_stack` cycle guard.
+    "resolve_oci_schema_anyof",  # OCI: bounded by JSON-schema tree depth (no cycles possible in well-formed input).
+    "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
+    "_freeze_for_dedupe",  # OTEL: max depth set (default 16, _FREEZE_MAX_DEPTH); fails closed by returning repr(value) at the cap.
+    "apply_json_merge_patch",  # max depth set (_MAX_MERGE_DEPTH=64); fails closed by raising ValueError at the cap.
+    "_filter_mcp_argument_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by blocking the MCP call at the cap.
 ]
 
 

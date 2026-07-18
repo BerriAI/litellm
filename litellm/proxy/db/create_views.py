@@ -11,7 +11,7 @@ _db = Any
 _VIEW_NOT_FOUND_MARKERS = ("does not exist", "no such table", "undefined table")
 
 
-async def create_missing_views(db: _db):  # noqa: PLR0915
+async def create_missing_views(db: _db):
     """
     --------------------------------------------------
     NOTE: Copy of `litellm/db_scripts/create_views.py`.
@@ -154,9 +154,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
 
         verbose_logger.debug("MonthlyGlobalSpendPerKey Created!")
     try:
-        await db.query_raw(
-            """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
-        )
+        await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1""")
         verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Exists!")
     except Exception as e:
         error_msg = str(e).lower()
@@ -249,7 +247,7 @@ async def should_create_missing_views(db: _db) -> bool:
         and len(result) > 0
         and isinstance(result[0], dict)
         and "reltuples" in result[0]
-        and result[0]["reltuples"]
+        and result[0]["reltuples"] is not None
         and (result[0]["reltuples"] == 0 or result[0]["reltuples"] == -1)
     ):
         verbose_logger.debug("Should create views")

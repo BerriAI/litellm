@@ -94,9 +94,9 @@ def test_modelresponse_model_dump_json_no_pydantic_warnings() -> None:
         if "PydanticSerializationUnexpectedValue" in str(w.message)
         or "Pydantic serializer warnings" in str(w.message)
     ]
-    assert pydantic_warnings == [], (
-        f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
-    )
+    assert (
+        pydantic_warnings == []
+    ), f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
 
 
 def test_streaming_modelresponsestream_no_pydantic_warnings() -> None:
@@ -123,6 +123,6 @@ def test_streaming_modelresponsestream_no_pydantic_warnings() -> None:
         if "PydanticSerializationUnexpectedValue" in str(w.message)
         or "Pydantic serializer warnings" in str(w.message)
     ]
-    assert pydantic_warnings == [], (
-        f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
-    )
+    assert (
+        pydantic_warnings == []
+    ), f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"

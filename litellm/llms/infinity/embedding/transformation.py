@@ -117,9 +117,7 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise InfinityError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise InfinityError(message=raw_response.text, status_code=raw_response.status_code)
 
         # model_response.usage
         model_response.model = raw_response_json.get("model")
@@ -136,6 +134,4 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return InfinityError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+        return InfinityError(message=error_message, status_code=status_code, headers=headers)

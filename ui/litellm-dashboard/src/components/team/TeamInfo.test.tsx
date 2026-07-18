@@ -59,7 +59,7 @@ vi.mock("@/components/common_components/user_search_modal", () => ({
           Submit
         </button>
       </div>
-    ) : null
+    ) : null,
   ),
 }));
 
@@ -72,7 +72,7 @@ vi.mock("@/components/team/EditMembership", () => ({
           Submit
         </button>
       </div>
-    ) : null
+    ) : null,
   ),
 }));
 
@@ -83,12 +83,22 @@ vi.mock("@/components/common_components/DeleteResourceModal", () => ({
         <button onClick={onCancel}>Cancel</button>
         <button onClick={onOk}>Confirm Delete</button>
       </div>
-    ) : null
+    ) : null,
   ),
 }));
 
 vi.mock("@/components/team/member_permissions", () => ({
   default: vi.fn(() => <div>Member Permissions</div>),
+}));
+
+vi.mock("@/components/common_components/ModelAliasManager", () => ({
+  default: vi.fn(({ initialModelAliases, onAliasUpdate }) => (
+    <div>
+      <div data-testid="alias-editor-initial">{JSON.stringify(initialModelAliases)}</div>
+      <button onClick={() => onAliasUpdate({ "gpt-4o": "gpt-4" })}>Set Alias</button>
+      <button onClick={() => onAliasUpdate({})}>Clear Aliases</button>
+    </div>
+  )),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
@@ -264,7 +274,7 @@ describe("TeamInfoView", () => {
           max_budget: 1000,
           spend: 250.5,
           budget_duration: "30d",
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -278,7 +288,7 @@ describe("TeamInfoView", () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           metadata: { guardrails: ["guardrail1", "guardrail2"] },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -294,7 +304,7 @@ describe("TeamInfoView", () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           policies: ["policy1"],
-        })
+        }),
       );
       vi.mocked(networking.getPolicyInfoWithGuardrails).mockResolvedValue({
         resolved_guardrails: ["guardrail1"],
@@ -316,7 +326,7 @@ describe("TeamInfoView", () => {
             tpm_limit: 5000,
             rpm_limit: 50,
           },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -329,10 +339,7 @@ describe("TeamInfoView", () => {
     it("should display virtual keys information", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue({
         ...createMockTeamData(),
-        keys: [
-          { user_id: "user1", token: "key1" },
-          { token: "key2" },
-        ],
+        keys: [{ user_id: "user1", token: "key1" }, { token: "key2" }],
       });
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -350,7 +357,7 @@ describe("TeamInfoView", () => {
             mcp_servers: ["server1"],
             vector_stores: ["store1"],
           },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -391,7 +398,7 @@ describe("TeamInfoView", () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
       renderWithProviders(
-        <TeamInfoView {...defaultProps} editTeam={true} is_team_admin={false} is_proxy_admin={false} />
+        <TeamInfoView {...defaultProps} editTeam={true} is_team_admin={false} is_proxy_admin={false} />,
       );
 
       await waitFor(() => {
@@ -539,7 +546,7 @@ describe("TeamInfoView", () => {
       await user.click(virtualKeysTab);
 
       await waitFor(() => {
-        expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+        expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-5 of 5");
       });
     });
 
@@ -586,10 +593,10 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: "Filters" })).toBeInTheDocument();
       });
-      expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
-      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Previous" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Columns" })).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-1 of 1");
+      expect(screen.getByTestId("pagination-prev")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-next")).toBeInTheDocument();
     });
   });
 
@@ -660,7 +667,7 @@ describe("TeamInfoView", () => {
           metadata: {
             secret_manager_settings: { provider: "aws", secret_id: "abc" },
           },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={false} />);
@@ -681,7 +688,7 @@ describe("TeamInfoView", () => {
       await user.click(editButton);
 
       const secretField = await screen.findByPlaceholderText(
-        '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+        '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
       );
       expect(secretField).toBeDisabled();
     });
@@ -693,7 +700,7 @@ describe("TeamInfoView", () => {
           metadata: {
             secret_manager_settings: { provider: "aws", secret_id: "abc" },
           },
-        })
+        }),
       );
       vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
@@ -715,7 +722,7 @@ describe("TeamInfoView", () => {
       await user.click(editButton);
 
       const secretField = await screen.findByPlaceholderText(
-        '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+        '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
       );
       expect(secretField).not.toBeDisabled();
     });
@@ -762,7 +769,7 @@ describe("TeamInfoView", () => {
         createMockTeamData({
           soft_budget: 500.75,
           max_budget: 1000,
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -792,7 +799,7 @@ describe("TeamInfoView", () => {
           metadata: {
             soft_budget_alerting_emails: ["alert1@test.com", "alert2@test.com"],
           },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -822,7 +829,7 @@ describe("TeamInfoView", () => {
         createMockTeamData({
           access_group_ids: accessGroupIds,
           models: ["gpt-4"],
-        })
+        }),
       );
       vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
@@ -856,9 +863,165 @@ describe("TeamInfoView", () => {
           expect.objectContaining({
             access_group_ids: accessGroupIds,
             team_id: "123",
-          })
+          }),
         );
       });
+    });
+  });
+
+  describe("model aliases", () => {
+    const openSettingsEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+    };
+
+    it("should render existing model aliases in the read-only settings view", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          litellm_model_table: { model_aliases: { "my-smart-model": "gpt-4", "my-fast-model": "gpt-3.5-turbo" } },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByText("Team Settings")).toBeInTheDocument();
+      });
+
+      expect(screen.getByText("Model Aliases")).toBeInTheDocument();
+      expect(screen.getByText("my-smart-model")).toBeInTheDocument();
+      expect(screen.getByText("gpt-4")).toBeInTheDocument();
+      expect(screen.getByText("my-fast-model")).toBeInTheDocument();
+      expect(screen.getByText("gpt-3.5-turbo")).toBeInTheDocument();
+    });
+
+    it("should show an empty state when the team has no model aliases", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ litellm_model_table: null }));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByText("Team Settings")).toBeInTheDocument();
+      });
+
+      expect(screen.getByText("No model aliases configured")).toBeInTheDocument();
+    });
+
+    it("should seed the alias editor from existing team aliases", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          models: ["gpt-4"],
+          litellm_model_table: { model_aliases: { "my-smart-model": "gpt-4" } },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await openSettingsEditor(user);
+
+      expect(screen.getByTestId("alias-editor-initial")).toHaveTextContent(
+        JSON.stringify({ "my-smart-model": "gpt-4" }),
+      );
+    });
+
+    it("should pass model_aliases to teamUpdateCall when aliases are added", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await openSettingsEditor(user);
+
+      await user.click(screen.getByRole("button", { name: "Set Alias" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.objectContaining({
+            team_id: "123",
+            model_aliases: { "gpt-4o": "gpt-4" },
+          }),
+        );
+      });
+    });
+
+    it("should send an empty model_aliases map to clear existing aliases", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          models: ["gpt-4"],
+          litellm_model_table: { model_aliases: { "my-smart-model": "gpt-4" } },
+        }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await openSettingsEditor(user);
+
+      await user.click(screen.getByRole("button", { name: "Clear Aliases" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload.model_aliases).toEqual({});
+    });
+
+    it("should not include model_aliases when the team has none and the editor is untouched", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ models: ["gpt-4"], litellm_model_table: null }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await openSettingsEditor(user);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty("model_aliases");
     });
   });
 });

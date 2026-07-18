@@ -5,9 +5,7 @@ import sys
 
 import httpx
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.utils import supports_httpx_timeout
@@ -65,8 +63,9 @@ def test_global_timeout_from_litellm_settings():
     )
 
 
-def test_global_timeout_package_default_coerced_to_600_for_completion():
-    """Package default 6000s → 600s for completion-only path."""
+def test_explicit_global_timeout_6000_is_preserved():
+    """The caller passes the explicitly-configured value (or None); an explicit
+    6000 must be honored, not silently coerced to 600."""
     assert (
         CompletionTimeout.resolve(
             None,
@@ -75,7 +74,7 @@ def test_global_timeout_package_default_coerced_to_600_for_completion():
             global_timeout=6000.0,
             supports_httpx_timeout=supports_httpx_timeout,
         )
-        == 600.0
+        == 6000.0
     )
 
 

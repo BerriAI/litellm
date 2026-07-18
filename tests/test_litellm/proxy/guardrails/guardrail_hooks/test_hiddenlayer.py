@@ -543,9 +543,7 @@ class TestHiddenlayerGuardrail:
         mock_response.json.return_value = {
             "evaluation": {"action": "Redact"},
             "modified_data": {
-                "input": {
-                    "messages": [{"role": "user", "content": redacted_content}]
-                }
+                "input": {"messages": [{"role": "user", "content": redacted_content}]}
             },
         }
         mock_response.raise_for_status = MagicMock()
@@ -948,9 +946,7 @@ class TestHiddenlayerGuardrailV2:
                 "request",
                 {},
             )
-            assert (
-                "detection/v2/request-evaluations" in mock_post.call_args.args[0]
-            )
+            assert "detection/v2/request-evaluations" in mock_post.call_args.args[0]
 
         with patch.object(
             guardrail._http_client, "post", return_value=mock_response
@@ -960,9 +956,7 @@ class TestHiddenlayerGuardrailV2:
                 "response",
                 {},
             )
-            assert (
-                "detection/v2/response-evaluations" in mock_post.call_args.args[0]
-            )
+            assert "detection/v2/response-evaluations" in mock_post.call_args.args[0]
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_request_with_image(self):
@@ -1094,9 +1088,9 @@ class TestHiddenlayerGuardrailV2:
 
         # texts must be List[str], not List[List]
         texts = result.get("texts", [])
-        assert all(isinstance(t, str) for t in texts), (
-            f"inputs['texts'] must be List[str], got: {texts}"
-        )
+        assert all(
+            isinstance(t, str) for t in texts
+        ), f"inputs['texts'] must be List[str], got: {texts}"
         assert texts == ["how much is on this receipt?"]
 
     def test_get_config_model(self):

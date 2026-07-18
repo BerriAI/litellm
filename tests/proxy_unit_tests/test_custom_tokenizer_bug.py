@@ -1,215 +1,108 @@
 """
-Test for custom_tokenizer bug fix.
-Issue: custom_tokenizer from model_info was not being extracted from deployment,
-causing token_counter to always use OpenAI tokenizer instead of the configured custom tokenizer.
+Regression tests for the proxy token_counter custom_tokenizer bug.
+
+Bug: model_info was never populated from the matched deployment, so
+custom_tokenizer was always None and token counting silently fell back to the
+OpenAI tokenizer instead of the configured HuggingFace tokenizer.
+
+The HuggingFace download boundary (Tokenizer.from_pretrained) is mocked so these
+stay hermetic unit tests; the proxy's extraction-and-selection path runs for real.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
-
-# These tests load HuggingFace tokenizers which can cause OOM when run in parallel with -n 8.
-# Use lighter tokenizer (Xenova/llama-3-tokenizer) to reduce memory; isolate to prevent crashes.
-pytestmark = pytest.mark.xdist_group("heavy_tokenizer")
 import litellm.proxy.proxy_server
-from litellm.proxy.proxy_server import token_counter
-from litellm.proxy._types import TokenCountRequest
+import litellm.utils
 from litellm import Router
+from litellm.proxy._types import TokenCountRequest
+from litellm.proxy.proxy_server import token_counter
+
+
+def _fake_hf_tokenizer(num_tokens: int) -> MagicMock:
+    encoding = MagicMock()
+    encoding.ids = list(range(num_tokens))
+    tokenizer = MagicMock()
+    tokenizer.encode.return_value = encoding
+    return tokenizer
 
 
 @pytest.mark.asyncio
-async def test_custom_tokenizer_from_model_info():
+async def test_custom_tokenizer_from_model_info_is_used(monkeypatch):
     """
-    Test that custom_tokenizer from model_info is correctly used for token counting.
-
-    Real-world scenario: Using intfloat/multilingual-e5-large-instruct tokenizer
-    for a custom embedding model (like Groq-hosted llama model used for embeddings).
-
-    This test reproduces the bug where:
-    - model_info was declared but never populated from deployment
-    - custom_tokenizer was therefore never extracted
-    - token_counter always fell back to OpenAI tokenizer
-
-    Expected behavior:
-    - When a model has custom_tokenizer in model_info
-    - The token_counter should use that custom tokenizer (intfloat/multilingual-e5-large-instruct)
-    - tokenizer_type should reflect "huggingface_tokenizer" not "openai_tokenizer"
+    A deployment carrying model_info.custom_tokenizer must load and use that
+    tokenizer. The model name deliberately matches no built-in HuggingFace
+    tokenizer, so without the fix the response would fall back to
+    "openai_tokenizer" and from_pretrained would never see the configured id.
     """
-
-    # Create a router with a model that has custom_tokenizer for multilingual embeddings
-    # This matches the user's real config with intfloat/multilingual-e5-large-instruct
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": "nikro-llama",
-                "litellm_params": {
-                    "model": "openai/llama-3.1-8b-instant",
-                    "api_base": "https://api.groq.com/openai/v1",
-                },
-                "model_info": {
-                    "mode": "embedding",
-                    "custom_tokenizer": {
-                        "identifier": "Xenova/llama-3-tokenizer",  # Lighter for CI
-                        "revision": "main",
-                        "auth_token": None,
-                    },
-                },
-            }
-        ]
-    )
-
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-
-    # Make a token counting request with a multilingual text sample
-    # This is realistic for the multilingual-e5 model
-    response = await token_counter(
-        request=TokenCountRequest(
-            model="nikro-llama",
-            messages=[
-                {"role": "user", "content": "Hello world! Bonjour le monde! 你好世界!"}
-            ],
-        )
-    )
-
-    print("Response:", response)
-    print("Tokenizer type:", response.tokenizer_type)
-    print("Model used:", response.model_used)
-    print("Total tokens:", response.total_tokens)
-
-    # Verify that custom tokenizer (Xenova/llama-3-tokenizer) was used
-    assert response.tokenizer_type == "huggingface_tokenizer", (
-        f"Expected 'huggingface_tokenizer' (custom_tokenizer from model_info) "
-        f"but got '{response.tokenizer_type}'. "
-        "This indicates the custom_tokenizer from model_info was not used."
-    )
-    assert response.request_model == "nikro-llama"
-    assert response.model_used == "llama-3.1-8b-instant"
-    assert response.total_tokens > 0
-
-
-@pytest.mark.asyncio
-async def test_custom_tokenizer_with_llamacpp():
-    """
-    Test custom_tokenizer with llamacpp model (similar to user's setup).
-
-    This simulates the user's Docker environment where:
-    - They have a llamacpp model
-    - With custom_tokenizer configured
-    - In Docker, it was using OpenAI tokenizer (bug)
-    - Locally, it was using HuggingFace tokenizer (correct)
-    """
-
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": "my-local-model",
-                "litellm_params": {
-                    "model": "openai/my-local-llama",
-                    "api_base": "http://localhost:8080/v1",
-                },
-                "model_info": {
-                    "custom_tokenizer": {
-                        "identifier": "Xenova/llama-3-tokenizer",
-                        "revision": "main",
-                        "auth_token": None,
-                    },
-                },
-            }
-        ]
-    )
-
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-
-    response = await token_counter(
-        request=TokenCountRequest(
-            model="my-local-model",
-            messages=[{"role": "user", "content": "test message"}],
-        )
-    )
-
-    # The bug would cause this to be "openai_tokenizer"
-    assert (
-        response.tokenizer_type == "huggingface_tokenizer"
-    ), f"Custom tokenizer not used! Got: {response.tokenizer_type}"
-
-
-@pytest.mark.asyncio
-async def test_custom_tokenizer_embedding_model():
-    """
-    Test custom tokenizer with embedding model (simulates intfloat/multilingual-e5
-    or similar). Uses Xenova/llama-3-tokenizer for CI stability (lighter than e5).
-    """
-
     llm_router = Router(
         model_list=[
             {
                 "model_name": "my-embedding-model",
                 "litellm_params": {
-                    "model": "openai/custom-embedding-model",
+                    "model": "openai/self-hosted-embedder",
                     "api_base": "http://localhost:8080/v1",
                 },
                 "model_info": {
                     "mode": "embedding",
                     "custom_tokenizer": {
-                        "identifier": "Xenova/llama-3-tokenizer",
-                        "revision": "main",
+                        "identifier": "my-org/custom-tokenizer",
+                        "revision": "v2",
                         "auth_token": None,
                     },
                 },
             }
         ]
     )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    with patch.object(litellm.utils, "Tokenizer") as mock_tokenizer_cls:
+        mock_tokenizer_cls.from_pretrained.return_value = _fake_hf_tokenizer(7)
 
-    response = await token_counter(
-        request=TokenCountRequest(
-            model="my-embedding-model",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "This is a multilingual test. C'est un test multilingue.",
-                }
-            ],
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="my-embedding-model",
+                messages=[{"role": "user", "content": "Bonjour le monde"}],
+            )
         )
-    )
 
-    print(
-        f"Embedding model test - Tokenizer: {response.tokenizer_type}, Tokens: {response.total_tokens}"
+    mock_tokenizer_cls.from_pretrained.assert_called_once_with(
+        "my-org/custom-tokenizer", revision="v2", auth_token=None
     )
-
-    assert response.tokenizer_type == "huggingface_tokenizer", (
-        f"Custom tokenizer from model_info was not used! Got: {response.tokenizer_type}"
-    )
+    assert response.tokenizer_type == "huggingface_tokenizer"
+    assert response.request_model == "my-embedding-model"
+    assert response.model_used == "self-hosted-embedder"
     assert response.total_tokens > 0
 
 
 @pytest.mark.asyncio
-async def test_model_without_custom_tokenizer_uses_default():
+async def test_model_without_custom_tokenizer_uses_default(monkeypatch):
     """
-    Test that models without custom_tokenizer still work correctly.
+    Control: a deployment with no custom_tokenizer must not touch HuggingFace and
+    must report the default OpenAI tokenizer.
     """
-
     llm_router = Router(
         model_list=[
             {
                 "model_name": "gpt-4",
-                "litellm_params": {
-                    "model": "gpt-4",
-                },
-                "model_info": {},  # No custom_tokenizer
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {},
             }
         ]
     )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
-
-    response = await token_counter(
-        request=TokenCountRequest(
-            model="gpt-4",
-            messages=[{"role": "user", "content": "hello"}],
+    with patch.object(litellm.utils, "Tokenizer") as mock_tokenizer_cls:
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hello"}],
+            )
         )
-    )
 
-    # Should use OpenAI tokenizer for GPT-4
+    mock_tokenizer_cls.from_pretrained.assert_not_called()
     assert response.tokenizer_type == "openai_tokenizer"
     assert response.model_used == "gpt-4"
+    assert response.total_tokens > 0

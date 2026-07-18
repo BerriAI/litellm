@@ -5,6 +5,7 @@ This handler provides token counting for partner models hosted on Vertex AI.
 Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
+
 from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -129,9 +130,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         vertex_project = self.get_vertex_ai_project(litellm_params)
 
         # Check for count_tokens specific location override
-        vertex_count_tokens_location = litellm_params.get(
-            "vertex_count_tokens_location"
-        )
+        vertex_count_tokens_location = litellm_params.get("vertex_count_tokens_location")
         vertex_location_raw = self.get_vertex_ai_location(litellm_params)
 
         # Determine final location with precedence:
@@ -184,9 +183,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Check for errors
         if response.status_code != 200:
             error_text = response.text
-            raise ValueError(
-                f"Token counting request failed with status {response.status_code}: {error_text}"
-            )
+            raise ValueError(f"Token counting request failed with status {response.status_code}: {error_text}")
 
         # Parse response
         result = response.json()

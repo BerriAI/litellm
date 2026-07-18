@@ -14,6 +14,7 @@ from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
+from litellm.integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.braintrust_logging import BraintrustLogger
@@ -24,6 +25,7 @@ from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.focus.focus_logger import FocusLogger
+from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import MavvrikFocusLogger
 from litellm.integrations.vantage.vantage_logger import VantageLogger
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
@@ -38,6 +40,7 @@ from litellm.integrations.langsmith import LangsmithLogger
 from litellm.integrations.litellm_agent import LiteLLMAgentModelResolver
 from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.newrelic import NewRelicLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
@@ -73,6 +76,7 @@ class CustomLoggerRegistry:
         "opik": OpikLogger,
         "argilla": ArgillaLogger,
         "opentelemetry": OpenTelemetry,
+        "azure_sentinel": AzureSentinelLogger,
         "azure_storage": AzureBlobStorageLogger,
         "humanloop": HumanloopLogger,
         # OTEL compatible loggers
@@ -100,8 +104,10 @@ class CustomLoggerRegistry:
         "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
         "focus": FocusLogger,
+        "mavvrik": MavvrikFocusLogger,
         "vantage": VantageLogger,
         "posthog": PostHogLogger,
+        "newrelic": NewRelicLogger,
     }
 
     try:

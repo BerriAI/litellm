@@ -193,19 +193,12 @@ def _azure_ai_image_mock_response(*args, **kwargs):
     return new_response
 
 
-@pytest.mark.parametrize(
-    "model, api_base, api_key",
-    [
-        (
-            "azure_ai/Cohere-embed-v3-multilingual-2",
-            os.getenv("AZURE_AI_API_BASE"),
-            os.getenv("AZURE_AI_API_KEY"),
-        )
-    ],
-)
 @pytest.mark.parametrize("sync_mode", [True])  # , False
 @pytest.mark.asyncio
-async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
+async def test_azure_ai_embedding_image(sync_mode):
+    model = "azure_ai/Cohere-embed-v3-multilingual-2"
+    api_base = os.getenv("AZURE_AI_API_BASE")
+    api_key = os.getenv("AZURE_AI_API_KEY")
     try:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -772,6 +765,10 @@ def test_fireworks_embeddings():
         pass
     except litellm.InternalServerError as e:
         pass
+    except litellm.APIError as e:
+        if "suspended" in str(e):
+            pytest.skip(f"Fireworks account suspended: {e}")
+        pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1257,22 +1254,13 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
         assert sent_data["input"] == expected_payload_input
 
 
-def test_encoding_format_none_not_omitted_from_openai_sdk():
+def test_encoding_format_defaults_to_float_for_openai_sdk(monkeypatch):
     """
-    Test that encoding_format=None is explicitly sent to OpenAI SDK.
+    When encoding_format is not provided, LiteLLM sends `float` for OpenAI-path embeddings.
 
-    This test verifies that when encoding_format is not provided by the user,
-    liteLLM explicitly sets it to None rather than omitting it. This prevents
-    the OpenAI SDK from adding its default value of 'base64'.
-
-    Without this fix:
-    - OpenAI SDK adds encoding_format='base64' as default when parameter is missing
-    - This causes issues with providers that don't support encoding_format (like Gemini)
-
-    With this fix:
-    - encoding_format=None is explicitly passed
-    - OpenAI SDK respects the explicit None and doesn't add defaults
+    Optional global override: `LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT`.
     """
+    monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
     with patch(
         "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
     ) as mock_get_client:
@@ -1310,17 +1298,12 @@ def test_encoding_format_none_not_omitted_from_openai_sdk():
 
         call_kwargs = call_args[1]  # Get kwargs
 
-        # The key assertion: encoding_format should be in the request with value None
-        # This prevents OpenAI SDK from adding its default 'base64' value
-        assert "encoding_format" in call_kwargs, (
-            "encoding_format should be explicitly passed to OpenAI SDK "
-            "(even if None) to prevent SDK from adding default value"
-        )
+        assert "encoding_format" in call_kwargs
         assert (
-            call_kwargs["encoding_format"] is None
-        ), "encoding_format should be None when not provided by user"
+            call_kwargs["encoding_format"] == "float"
+        ), "encoding_format should default to float when not provided by user"
 
-        print("✅ PASS: encoding_format=None is correctly passed to OpenAI SDK")
+        print("✅ PASS: encoding_format='float' is correctly passed to OpenAI SDK")
 
 
 def test_encoding_format_explicit_value_preserved():

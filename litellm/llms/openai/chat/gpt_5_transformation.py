@@ -3,7 +3,10 @@
 from typing import Optional, Union
 
 import litellm
-from litellm.utils import _is_explicitly_disabled_factory, _supports_factory
+from litellm.utils import (
+    _is_explicitly_disabled_factory,
+    _supports_factory,
+)
 
 from .gpt_transformation import OpenAIGPTConfig
 
@@ -53,9 +56,21 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        # gpt-5-chat* behaves like a regular chat model (supports temperature, etc.)
-        # Don't route it through GPT-5 reasoning-specific parameter restrictions.
-        return "gpt-5" in model and "gpt-5-chat" not in model
+        # The gpt-5-chat* family (gpt-5-chat, gpt-5-chat-latest, gpt-5-chat-2025-08-07,
+        # …) are regular chat models: they support temperature and tool_choice but NOT
+        # reasoning_effort.  They must NOT be routed through the GPT-5 reasoning path.
+        #
+        # Versioned chat models such as gpt-5.3-chat and gpt-5.1-chat ARE reasoning
+        # models and must stay on the GPT-5 path.  The distinguishing feature is that
+        # the gpt-5-chat family has a literal "-chat" immediately after "gpt-5"
+        # (i.e. "gpt-5-chat…"), while versioned chat models interpose a minor version
+        # number (i.e. "gpt-5.<digit>-chat").
+        #
+        # Using a startswith("gpt-5-chat") prefix check on the normalized name (rather
+        # than a substring check) makes this boundary explicit and avoids any ambiguity
+        # if future model names coincidentally contain "gpt-5-chat" as an interior run.
+        _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "openai/"
+        return "gpt-5" in model and not _normalized.startswith("gpt-5-chat")
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
@@ -114,9 +129,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         )
 
     @classmethod
-    def _is_reasoning_effort_level_explicitly_disabled(
-        cls, model: str, level: str
-    ) -> bool:
+    def _is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
         """Return True only when the model map explicitly sets the capability to False.
 
         Unlike ``_supports_reasoning_effort_level`` (which requires an explicit True),
@@ -173,11 +186,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if not self._supports_reasoning_effort_level(model, "none"):
             non_supported_params.extend(["logprobs", "top_p", "top_logprobs"])
 
-        return [
-            param
-            for param in base_gpt_series_params
-            if param not in non_supported_params
-        ]
+        return [param for param in base_gpt_series_params if param not in non_supported_params]
 
     def map_openai_params(
         self,
@@ -188,9 +197,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     ) -> dict:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
-                optional_params["max_completion_tokens"] = non_default_params.pop(
-                    "max_tokens"
-                )
+                optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
             return super()._map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -202,17 +209,13 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # Use effective_effort (extracted string) for xhigh validation, "none" checks, and
         # tool/sampling guards — dict inputs like {"effort": "none", "summary": "detailed"}
         # must be treated as effort="none" to avoid incorrect tool-drop or sampling errors.
-        raw_reasoning_effort = non_default_params.get(
-            "reasoning_effort"
-        ) or optional_params.get("reasoning_effort")
+        raw_reasoning_effort = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(raw_reasoning_effort)
 
         # Normalize dict reasoning_effort to string for Chat Completions API.
         # Example: {"effort": "high", "summary": "detailed"} -> "high"
         if isinstance(raw_reasoning_effort, dict) and "effort" in raw_reasoning_effort:
-            normalized = _normalize_reasoning_effort_for_chat_completion(
-                raw_reasoning_effort
-            )
+            normalized = _normalize_reasoning_effort_for_chat_completion(raw_reasoning_effort)
             if normalized is not None:
                 if "reasoning_effort" in non_default_params:
                     non_default_params["reasoning_effort"] = normalized
@@ -227,25 +230,21 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                     optional_params.pop("reasoning_effort", None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
-                        message=(
-                            f"reasoning_effort={effective_effort} is not supported for this model."
-                        ),
+                        message=(f"reasoning_effort={effective_effort} is not supported for this model."),
                         status_code=400,
                     )
-        elif effective_effort == "minimal":
-            # minimal is opt-out: unknown models pass through; only block when
-            # the model map explicitly sets supports_minimal_reasoning_effort=false.
-            if self._is_reasoning_effort_level_explicitly_disabled(
-                model, effective_effort
-            ):
+        elif effective_effort in ("minimal", "low"):
+            # minimal/low are opt-out: unknown models pass through; only block when
+            # the model map explicitly sets supports_{level}_reasoning_effort=false.
+            # Example: gpt-5.5-pro only accepts {medium, high, xhigh}, so it sets
+            # supports_low_reasoning_effort=false (and supports_minimal=false).
+            if self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                     optional_params.pop("reasoning_effort", None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
-                        message=(
-                            f"reasoning_effort={effective_effort} is not supported for this model."
-                        ),
+                        message=(f"reasoning_effort={effective_effort} is not supported for this model."),
                         status_code=400,
                     )
 
@@ -254,9 +253,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # Relevant issue: https://github.com/BerriAI/litellm/issues/13381
         ################################################################
         if "max_tokens" in non_default_params:
-            optional_params["max_completion_tokens"] = non_default_params.pop(
-                "max_tokens"
-            )
+            optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none = self._supports_reasoning_effort_level(model, "none")
@@ -281,9 +278,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
                 # models supporting reasoning_effort="none" also support flexible temperature
-                if supports_none and (
-                    effective_effort == "none" or effective_effort is None
-                ):
+                if supports_none and (effective_effort == "none" or effective_effort is None):
                     optional_params["temperature"] = temperature_value
                 elif temperature_value == 1:
                     optional_params["temperature"] = temperature_value

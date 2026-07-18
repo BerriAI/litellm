@@ -172,17 +172,9 @@ class OllamaChatConfig(BaseConfig):
                 optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if (
-                param == "response_format"
-                and isinstance(value, dict)
-                and value.get("type") == "json_object"
-            ):
+            if param == "response_format" and isinstance(value, dict) and value.get("type") == "json_object":
                 optional_params["format"] = "json"
-            if (
-                param == "response_format"
-                and isinstance(value, dict)
-                and value.get("type") == "json_schema"
-            ):
+            if param == "response_format" and isinstance(value, dict) and value.get("type") == "json_schema":
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
             if param == "reasoning_effort" and value is not None:
@@ -265,8 +257,9 @@ class OllamaChatConfig(BaseConfig):
             ):  # avoid message serialization issues - https://github.com/BerriAI/litellm/issues/5319
                 m = m.model_dump(exclude_none=True)
             tool_calls = m.get("tool_calls")
+            new_tools: Optional[List[OllamaToolCall]] = None
             if tool_calls is not None and isinstance(tool_calls, list):
-                new_tools: List[OllamaToolCall] = []
+                new_tools = []
                 for tool in tool_calls:
                     typed_tool = ChatCompletionAssistantToolCall(**tool)  # type: ignore
                     if typed_tool["type"] == "function":
@@ -280,10 +273,7 @@ class OllamaChatConfig(BaseConfig):
                             )
                         )
                         new_tools.append(ollama_tool_call)
-                cast(dict, m)["tool_calls"] = new_tools
-            reasoning_content, parsed_content = _extract_reasoning_content(
-                cast(dict, m)
-            )
+            reasoning_content, parsed_content = _extract_reasoning_content(cast(dict, m))
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))
 
@@ -296,6 +286,11 @@ class OllamaChatConfig(BaseConfig):
                 ollama_message["content"] = content_str
             if images is not None:
                 ollama_message["images"] = images
+            if new_tools is not None:
+                ollama_message["tool_calls"] = new_tools
+            tool_call_id = m.get("tool_call_id")
+            if tool_call_id is not None:
+                ollama_message["tool_call_id"] = cast(str, tool_call_id)
 
             new_messages.append(ollama_message)
 
@@ -356,9 +351,7 @@ class OllamaChatConfig(BaseConfig):
         if response_json_message is not None:
             if "thinking" in response_json_message:
                 # remap 'thinking' to 'reasoning_content'
-                response_json_message["reasoning_content"] = response_json_message[
-                    "thinking"
-                ]
+                response_json_message["reasoning_content"] = response_json_message["thinking"]
                 del response_json_message["thinking"]
             elif response_json_message.get("content") is not None:
                 # parse reasoning content from content
@@ -366,15 +359,14 @@ class OllamaChatConfig(BaseConfig):
                     _parse_content_for_reasoning,
                 )
 
-                reasoning_content, content = _parse_content_for_reasoning(
-                    response_json_message["content"]
-                )
+                reasoning_content, content = _parse_content_for_reasoning(response_json_message["content"])
                 response_json_message["reasoning_content"] = reasoning_content
                 response_json_message["content"] = content
 
         if (
             request_data.get("format", "") == "json"
             and litellm_params.get("function_name") is not None
+            and response_json_message is not None
         ):
             function_call = json.loads(response_json_message["content"])
             message = litellm.Message(
@@ -383,12 +375,8 @@ class OllamaChatConfig(BaseConfig):
                     {
                         "id": f"call_{str(uuid.uuid4())}",
                         "function": {
-                            "name": function_call.get(
-                                "name", litellm_params.get("function_name")
-                            ),
-                            "arguments": json.dumps(
-                                function_call.get("arguments", function_call)
-                            ),
+                            "name": function_call.get("name", litellm_params.get("function_name")),
+                            "arguments": json.dumps(function_call.get("arguments", function_call)),
                         },
                         "type": "function",
                     }
@@ -422,12 +410,8 @@ class OllamaChatConfig(BaseConfig):
         )
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return OllamaError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return OllamaError(status_code=status_code, message=error_message, headers=headers)
 
     def get_model_response_iterator(
         self,
@@ -493,23 +477,18 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                 for tool_call in tool_calls:
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
-                        is_function_call_complete = self._is_function_call_complete(
-                            function_args
-                        )
+                        is_function_call_complete = self._is_function_call_complete(function_args)
                         if is_function_call_complete:
                             tool_call["id"] = str(uuid.uuid4())
 
             # PROCESS REASONING CONTENT
             reasoning_content: Optional[str] = None
             content: Optional[str] = None
-            if chunk["message"].get("thinking") is not None:
+            if chunk["message"].get("thinking"):
                 reasoning_content = chunk["message"].get("thinking")
                 self.started_reasoning_content = True
-            elif chunk["message"].get("content") is not None:
-                if (
-                    self.started_reasoning_content
-                    and not self.finished_reasoning_content
-                ):
+            if chunk["message"].get("content"):
+                if self.started_reasoning_content and not self.finished_reasoning_content:
                     self.finished_reasoning_content = True
 
                 message_content = chunk["message"].get("content")
@@ -522,10 +501,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                     message_content = message_content.replace("</think>", "")
                     self.finished_reasoning_content = True
 
-                if (
-                    self.started_reasoning_content
-                    and not self.finished_reasoning_content
-                ):
+                if self.started_reasoning_content and not self.finished_reasoning_content:
                     reasoning_content = message_content
                 else:
                     content = message_content
@@ -558,8 +534,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             usage = ChatCompletionUsageBlock(
                 prompt_tokens=chunk.get("prompt_eval_count", 0),
                 completion_tokens=chunk.get("eval_count", 0),
-                total_tokens=chunk.get("prompt_eval_count", 0)
-                + chunk.get("eval_count", 0),
+                total_tokens=chunk.get("prompt_eval_count", 0) + chunk.get("eval_count", 0),
             )
 
             return ModelResponseStream(

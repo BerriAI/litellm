@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Union, cast
 import httpx
 from openai.types.file_deleted import FileDeleted
 
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -38,6 +39,7 @@ from ..common_utils import AnthropicError, AnthropicModelInfo
 
 ANTHROPIC_FILES_API_BASE = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER = "files-api-2025-04-14"
+ANTHROPIC_MESSAGE_BATCH_ID_PREFIX = "msgbatch_"
 
 
 class AnthropicFilesConfig(BaseFilesConfig):
@@ -79,9 +81,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         return AnthropicError(
             status_code=status_code,
             message=error_message,
-            headers=cast(httpx.Headers, headers)
-            if isinstance(headers, dict)
-            else headers,
+            headers=(cast(httpx.Headers, headers) if isinstance(headers, dict) else headers),
         )
 
     def validate_environment(
@@ -94,7 +94,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        if api_base is None and isinstance(litellm_params, dict):
+            api_base = litellm_params.get("api_base")
+        auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if auth_header is None:
             raise ValueError(
                 "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable or pass api_key parameter."
@@ -108,9 +110,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         )
         return headers
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
         return ["purpose"]
 
     def map_openai_params(
@@ -181,11 +181,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        api_base = (
-            AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
-            or ANTHROPIC_FILES_API_BASE
-        )
-        return f"{api_base.rstrip('/')}/v1/files/{file_id}", {}
+        api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}", {}
 
     def transform_retrieve_file_response(
         self,
@@ -202,11 +200,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        api_base = (
-            AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
-            or ANTHROPIC_FILES_API_BASE
-        )
-        return f"{api_base.rstrip('/')}/v1/files/{file_id}", {}
+        api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}", {}
 
     def transform_delete_file_response(
         self,
@@ -228,10 +224,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        api_base = (
-            AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
-            or ANTHROPIC_FILES_API_BASE
-        )
+        api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         url = f"{api_base.rstrip('/')}/v1/files"
         params: Dict[str, Any] = {}
         if purpose:
@@ -264,11 +257,11 @@ class AnthropicFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         file_id = file_content_request.get("file_id")
-        api_base = (
-            AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
-            or ANTHROPIC_FILES_API_BASE
-        )
-        return f"{api_base.rstrip('/')}/v1/files/{file_id}/content", {}
+        api_base = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        if file_id.startswith(ANTHROPIC_MESSAGE_BATCH_ID_PREFIX):
+            return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_file_id}/results", {}
+        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}/content", {}
 
     def transform_file_content_response(
         self,

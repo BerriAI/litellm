@@ -14,7 +14,7 @@ jwt_display_template = """
             padding: 20px;
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start;
             min-height: 100vh;
             color: #333;
         }
@@ -27,18 +27,18 @@ jwt_display_template = """
             width: 800px;
             max-width: 100%;
         }
-        
+
         .logo-container {
             text-align: center;
             margin-bottom: 30px;
         }
-        
+
         .logo {
             font-size: 24px;
             font-weight: 600;
             color: #1e293b;
         }
-        
+
         h2 {
             margin: 0 0 10px;
             color: #1e293b;
@@ -46,7 +46,14 @@ jwt_display_template = """
             font-weight: 600;
             text-align: center;
         }
-        
+
+        h3 {
+            margin: 0 0 12px;
+            color: #1e293b;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
         .subtitle {
             color: #64748b;
             margin: 0 0 20px;
@@ -58,15 +65,15 @@ jwt_display_template = """
             background-color: #f1f5f9;
             border-radius: 6px;
             padding: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             border-left: 4px solid #2563eb;
         }
-        
+
         .success-box {
             background-color: #f0fdf4;
             border-radius: 6px;
             padding: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             border-left: 4px solid #16a34a;
         }
 
@@ -78,7 +85,7 @@ jwt_display_template = """
             font-weight: 600;
             font-size: 16px;
         }
-        
+
         .success-header {
             display: flex;
             align-items: center;
@@ -87,46 +94,53 @@ jwt_display_template = """
             font-weight: 600;
             font-size: 16px;
         }
-        
+
         .info-header svg, .success-header svg {
             margin-right: 8px;
         }
-        
+
         .data-container {
             margin-top: 20px;
         }
-        
+
         .data-row {
             display: flex;
             border-bottom: 1px solid #e2e8f0;
             padding: 12px 0;
         }
-        
+
         .data-row:last-child {
             border-bottom: none;
         }
-        
+
         .data-label {
             font-weight: 500;
             color: #334155;
-            width: 180px;
+            width: 220px;
             flex-shrink: 0;
         }
-        
+
         .data-value {
             color: #475569;
             word-break: break-all;
         }
-        
+
+        .empty-note {
+            color: #64748b;
+            font-style: italic;
+            margin: 0;
+            font-size: 14px;
+        }
+
         .jwt-container {
             background-color: #f8fafc;
             border-radius: 6px;
             padding: 15px;
-            margin-top: 20px;
+            margin-top: 12px;
             overflow-x: auto;
             border: 1px solid #e2e8f0;
         }
-        
+
         .jwt-text {
             font-family: monospace;
             white-space: pre-wrap;
@@ -134,7 +148,7 @@ jwt_display_template = """
             margin: 0;
             color: #334155;
         }
-        
+
         .back-button {
             display: inline-block;
             background-color: #6466E9;
@@ -146,18 +160,18 @@ jwt_display_template = """
             margin-top: 20px;
             text-align: center;
         }
-        
+
         .back-button:hover {
             background-color: #4138C2;
             text-decoration: none;
         }
-        
+
         .buttons {
             display: flex;
             gap: 10px;
-            margin-top: 20px;
+            margin-top: 12px;
         }
-        
+
         .copy-button {
             background-color: #e2e8f0;
             color: #334155;
@@ -169,11 +183,11 @@ jwt_display_template = """
             display: flex;
             align-items: center;
         }
-        
+
         .copy-button:hover {
             background-color: #cbd5e1;
         }
-        
+
         .copy-button svg {
             margin-right: 6px;
         }
@@ -188,7 +202,7 @@ jwt_display_template = """
         </div>
         <h2>SSO Debug Information</h2>
         <p class="subtitle">Results from the SSO authentication process.</p>
-        
+
         <div class="success-box">
             <div class="success-header">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -199,11 +213,7 @@ jwt_display_template = """
             </div>
             <p>The SSO authentication completed successfully. Below is the information returned by the provider.</p>
         </div>
-        
-        <div class="data-container" id="userData">
-            <!-- Data will be inserted here by JavaScript -->
-        </div>
-        
+
         <div class="info-box">
             <div class="info-header">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -211,22 +221,62 @@ jwt_display_template = """
                     <line x1="12" y1="16" x2="12" y2="12"></line>
                     <line x1="12" y1="8" x2="12.01" y2="8"></line>
                 </svg>
-                JSON Representation
+                Parsed by Proxy
             </div>
+            <p class="empty-note">Fields the proxy extracted into its internal user model.</p>
+            <div class="data-container" id="parsedByProxy">
+                <!-- Populated by JavaScript -->
+            </div>
+        </div>
+
+        <div class="info-box">
+            <div class="info-header">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                Raw Claims (userinfo)
+            </div>
+            <p class="empty-note">Complete set of claims returned by the IdP's userinfo endpoint.</p>
             <div class="jwt-container">
-                <pre class="jwt-text" id="jsonData">Loading...</pre>
+                <pre class="jwt-text" id="rawClaims">Loading...</pre>
             </div>
             <div class="buttons">
-                <button class="copy-button" onclick="copyToClipboard('jsonData')">
+                <button class="copy-button" onclick="copyToClipboard('rawClaims')">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                         <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                     </svg>
-                    Copy to Clipboard
+                    Copy
                 </button>
             </div>
         </div>
-        
+
+        <div class="info-box">
+            <div class="info-header">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                Access Token Claims
+            </div>
+            <p class="empty-note">Decoded payload of the access token JWT (when the IdP issues one).</p>
+            <div class="jwt-container">
+                <pre class="jwt-text" id="accessTokenClaims">Loading...</pre>
+            </div>
+            <div class="buttons">
+                <button class="copy-button" onclick="copyToClipboard('accessTokenClaims')">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    Copy
+                </button>
+            </div>
+        </div>
+
         <a href="/sso/debug/login" class="back-button">
             Try Another SSO Login
         </a>
@@ -234,39 +284,58 @@ jwt_display_template = """
 
     <script>
         // This will be populated with the actual data from the server
-        const userData = SSO_DATA;
-        
-        function renderUserData() {
-            const container = document.getElementById('userData');
-            const jsonDisplay = document.getElementById('jsonData');
-            
-            // Format JSON with indentation for display
-            jsonDisplay.textContent = JSON.stringify(userData, null, 2);
-            
-            // Clear container
+        const ssoData = SSO_DATA;
+
+        function renderParsed(container, parsed) {
             container.innerHTML = '';
-            
-            // Add each key-value pair to the UI
-            for (const [key, value] of Object.entries(userData)) {
-                if (typeof value !== 'object' || value === null) {
-                    const row = document.createElement('div');
-                    row.className = 'data-row';
-                    
-                    const label = document.createElement('div');
-                    label.className = 'data-label';
-                    label.textContent = key;
-                    
-                    const dataValue = document.createElement('div');
-                    dataValue.className = 'data-value';
-                    dataValue.textContent = value !== null ? value : 'null';
-                    
-                    row.appendChild(label);
-                    row.appendChild(dataValue);
-                    container.appendChild(row);
+            const entries = Object.entries(parsed || {});
+            if (entries.length === 0) {
+                const note = document.createElement('p');
+                note.className = 'empty-note';
+                note.textContent = 'No fields available.';
+                container.appendChild(note);
+                return;
+            }
+            for (const [key, value] of entries) {
+                const row = document.createElement('div');
+                row.className = 'data-row';
+
+                const label = document.createElement('div');
+                label.className = 'data-label';
+                label.textContent = key;
+
+                const dataValue = document.createElement('div');
+                dataValue.className = 'data-value';
+                if (value === null || value === undefined) {
+                    dataValue.textContent = 'null';
+                } else if (typeof value === 'object') {
+                    dataValue.textContent = JSON.stringify(value);
+                } else {
+                    dataValue.textContent = String(value);
                 }
+
+                row.appendChild(label);
+                row.appendChild(dataValue);
+                container.appendChild(row);
             }
         }
-        
+
+        function renderJson(elementId, value) {
+            const el = document.getElementById(elementId);
+            const obj = value || {};
+            if (Object.keys(obj).length === 0) {
+                el.textContent = '(empty — provider returned no claims for this section)';
+            } else {
+                el.textContent = JSON.stringify(obj, null, 2);
+            }
+        }
+
+        function renderUserData() {
+            renderParsed(document.getElementById('parsedByProxy'), ssoData.parsed_by_proxy);
+            renderJson('rawClaims', ssoData.raw_claims);
+            renderJson('accessTokenClaims', ssoData.access_token_claims);
+        }
+
         function copyToClipboard(elementId) {
             const text = document.getElementById(elementId).textContent;
             navigator.clipboard.writeText(text).then(() => {
@@ -275,7 +344,7 @@ jwt_display_template = """
                 console.error('Could not copy text: ', err);
             });
         }
-        
+
         // Render the data when the page loads
         document.addEventListener('DOMContentLoaded', renderUserData);
     </script>

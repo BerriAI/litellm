@@ -4,6 +4,7 @@ Integration tests for router embedding method with various configurations.
 These tests simulate real-world scenarios where headers and configuration
 need to be properly propagated through the router to the LLM API.
 """
+
 import os
 import sys
 from unittest.mock import MagicMock, patch, AsyncMock
@@ -29,7 +30,7 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "embedding-deployment-1",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "key-1",
                     "headers": {"X-Deployment": "deployment-1"},
                 },
@@ -37,7 +38,7 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "embedding-deployment-2",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "key-2",
                     "headers": {"X-Deployment": "deployment-2"},
                 },
@@ -74,7 +75,7 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "test-embedding",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "test-key",
                 },
             }
@@ -116,7 +117,7 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "test-embedding",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "test-key",
                 },
             }
@@ -169,7 +170,7 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "test-embedding",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "test-key",
                 },
             }
@@ -193,7 +194,7 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "test-embedding",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "test-key",
                 },
             }
@@ -221,14 +222,14 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "shared-embedding-model",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "key-1",
                 },
             },
             {
                 "model_name": "shared-embedding-model",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "key-2",
                 },
             },
@@ -263,14 +264,14 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "primary-embedding",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "primary-key",
                 },
             },
             {
                 "model_name": "fallback-embedding",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fallback-key",
                 },
             },
@@ -319,7 +320,7 @@ class TestRouterEmbeddingIntegration:
             {
                 "model_name": "azure-embedding",
                 "litellm_params": {
-                    "model": "azure/text-embedding-ada-002",
+                    "model": "azure/text-embedding-3-small",
                     "api_key": "azure-key",
                     "api_base": "https://example.openai.azure.com",
                     "api_version": "2024-02-01",

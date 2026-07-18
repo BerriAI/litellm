@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import httpx
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -15,13 +16,17 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    convert_bedrock_invoke_output_format_to_inline_schema,
     get_anthropic_beta_from_headers,
+    normalize_bedrock_opus_output_config_effort,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    pop_bedrock_invoke_output_config_format,
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -55,6 +60,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "bedrock"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
@@ -73,6 +81,15 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             # Use a model name that forces tool-based approach
             model = "claude-3-sonnet-20240229"
 
+        # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
+        # parent mapping converts it to ``output_config.effort`` and the
+        # downstream effort gate runs. Mirrors the converse path's
+        # ``_handle_reasoning_effort_parameter`` and the messages path's
+        # ``_clamp_adaptive_reasoning_effort_for_bedrock`` so adaptive Claude
+        # requests degrade ``xhigh`` -> ``max`` rather than 400-ing on
+        # models like Opus 4.6 that don't natively advertise xhigh.
+        self._clamp_adaptive_reasoning_effort_for_bedrock(model=original_model, params=non_default_params)
+
         optional_params = AnthropicConfig.map_openai_params(
             self,
             non_default_params,
@@ -85,6 +102,27 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model = original_model
 
         return optional_params
+
+    @staticmethod
+    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, params: dict) -> None:
+        """Lower ``reasoning_effort`` to the Bedrock effort ceiling before mapping.
+
+        Bedrock's adaptive Claude models accept the OpenAI-style
+        ``reasoning_effort`` tier, but the request validator can reject tiers
+        the model does not natively advertise (e.g. ``xhigh`` on Opus 4.6).
+        Clamp the raw tier to the model's
+        ``bedrock_output_config_effort_ceiling`` so Claude Code "goal mode"
+        keeps working. Non-adaptive models and models without a ceiling are
+        left untouched.
+        """
+        if not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
+            return
+        effort = params.get("reasoning_effort")
+        if not isinstance(effort, str):
+            return
+        clamped = {"effort": effort}
+        normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
+        params["reasoning_effort"] = clamped["effort"]
 
     def transform_request(
         self,
@@ -150,11 +188,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        filtered_params = {
-            k: v
-            for k, v in optional_params.items()
-            if k not in self.aws_authentication_params
-        }
+        filtered_params = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
+        output_config = filtered_params.get("output_config")
+        if isinstance(output_config, dict):
+            filtered_params["output_config"] = dict(output_config)
+            normalize_bedrock_opus_output_config_effort(
+                model=model,
+                output_config=filtered_params["output_config"],
+            )
         filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
 
         anthropic_request = AnthropicConfig.transform_request(
@@ -168,8 +209,37 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
-        anthropic_request.pop("output_format", None)
-        anthropic_request.pop("output_config", None)
+        anthropic_request.pop("stream_chunk_size", None)
+        output_format = anthropic_request.pop("output_format", None)
+        output_config_format = pop_bedrock_invoke_output_config_format(anthropic_request)
+        if output_format:
+            convert_bedrock_invoke_output_format_to_inline_schema(
+                output_format=output_format,
+                request_body=anthropic_request,
+            )
+        elif output_config_format:
+            convert_bedrock_invoke_output_format_to_inline_schema(
+                output_format=output_config_format,
+                request_body=anthropic_request,
+            )
+        if not (
+            _supports_factory(
+                model=model,
+                custom_llm_provider="bedrock",
+                key="supports_output_config",
+            )
+            or AnthropicConfig._model_supports_effort_param(model, "bedrock")
+        ):
+            if anthropic_request.pop("output_config", None) is not None:
+                verbose_logger.warning(
+                    "Bedrock Invoke: stripping unsupported `output_config` for "
+                    "model=%s — neither `supports_output_config` nor any "
+                    "`supports_*_reasoning_effort` flag is set in "
+                    "model_prices_and_context_window.json. Add the capability "
+                    "flag to the model JSON entry if this model accepts "
+                    "`output_config`.",
+                    model,
+                )
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
 
@@ -199,12 +269,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             prompt_caching_set=False,
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
+            custom_llm_provider="bedrock",
         )
         beta_set.update(auto_betas)
 
-        if tool_search_used and not (
-            programmatic_tool_calling_used or input_examples_used
-        ):
+        if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
@@ -254,9 +323,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     "data": image_chunk["data"],
                 }
 
-    async def _async_convert_document_url_sources_to_base64(
-        self, anthropic_request: dict
-    ) -> None:
+    async def _async_convert_document_url_sources_to_base64(self, anthropic_request: dict) -> None:
         """
         Async version of document URL conversion for async completion paths.
         """
@@ -312,9 +379,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if tool_type == "tool_search_tool_regex_20251119":
                 normalized_tool = tool.copy()
                 normalized_tool["type"] = "tool_search_tool_regex"
-                normalized_tool["name"] = normalized_tool.get(
-                    "name", "tool_search_tool_regex"
-                )
+                normalized_tool["name"] = normalized_tool.get("name", "tool_search_tool_regex")
                 normalized_tools.append(normalized_tool)
                 continue
             normalized_tools.append(tool)

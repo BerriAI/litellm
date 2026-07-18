@@ -69,9 +69,7 @@ class SSEErrorEvent(TypedDict):
     message: str
 
 
-SSEEvent = (
-    SSEStatusEvent | SSEToolCallEvent | SSEChunkEvent | SSEDoneEvent | SSEErrorEvent
-)
+SSEEvent = SSEStatusEvent | SSEToolCallEvent | SSEChunkEvent | SSEDoneEvent | SSEErrorEvent
 
 
 class ToolHandler(TypedDict):
@@ -188,18 +186,14 @@ _TOOL_DESCRIPTIONS_ADMIN = (
 )
 
 _TOOL_DESCRIPTIONS_BASE = (
-    "You have access to this tool:\n"
-    "- `get_usage_data`: Your usage data (spend, models, providers, API keys)\n\n"
+    "You have access to this tool:\n- `get_usage_data`: Your usage data (spend, models, providers, API keys)\n\n"
 )
 
 
 def _build_system_prompt(is_admin: bool) -> str:
     """Build role-appropriate system prompt with today's date."""
     tool_desc = _TOOL_DESCRIPTIONS_ADMIN if is_admin else _TOOL_DESCRIPTIONS_BASE
-    return (
-        f"{_SYSTEM_PROMPT_BASE}\n\n{tool_desc}"
-        f"Today's date: {date.today().isoformat()}"
-    )
+    return f"{_SYSTEM_PROMPT_BASE}\n\n{tool_desc}Today's date: {date.today().isoformat()}"
 
 
 # keep a public reference for test assertions
@@ -259,9 +253,7 @@ async def _query_activity(
     )
 
 
-async def _fetch_usage_data(
-    start_date: str, end_date: str, user_id: Optional[str] = None
-) -> Dict[str, Any]:
+async def _fetch_usage_data(start_date: str, end_date: str, user_id: Optional[str] = None) -> Dict[str, Any]:
     resp = await _query_activity(
         TABLE_DAILY_USER_SPEND,
         ENTITY_FIELD_USER,
@@ -273,9 +265,7 @@ async def _fetch_usage_data(
     return resp.model_dump(mode="json")
 
 
-async def _fetch_team_usage_data(
-    start_date: str, end_date: str, team_ids: Optional[str] = None
-) -> Dict[str, Any]:
+async def _fetch_team_usage_data(start_date: str, end_date: str, team_ids: Optional[str] = None) -> Dict[str, Any]:
     resp = await _query_activity(
         TABLE_DAILY_TEAM_SPEND,
         ENTITY_FIELD_TEAM,
@@ -286,9 +276,7 @@ async def _fetch_team_usage_data(
     return resp.model_dump(mode="json")
 
 
-async def _fetch_tag_usage_data(
-    start_date: str, end_date: str, tags: Optional[str] = None
-) -> Dict[str, Any]:
+async def _fetch_tag_usage_data(start_date: str, end_date: str, tags: Optional[str] = None) -> Dict[str, Any]:
     resp = await _query_activity(
         TABLE_DAILY_TAG_SPEND,
         ENTITY_FIELD_TAG,
@@ -325,12 +313,7 @@ def _ranked_lines(
     limit: int,
 ) -> List[str]:
     """Sort by spend descending, format each entry, and truncate."""
-    return [
-        fmt(name, vals)
-        for name, vals in sorted(totals.items(), key=lambda x: -x[1].get("spend", 0))[
-            :limit
-        ]
-    ]
+    return [fmt(name, vals) for name, vals in sorted(totals.items(), key=lambda x: -x[1].get("spend", 0))[:limit]]
 
 
 def _summarise_usage_data(data: Dict[str, Any]) -> str:
@@ -345,9 +328,7 @@ def _summarise_usage_data(data: Dict[str, Any]) -> str:
         f"Total Tokens: {meta.get('total_tokens', 0)}"
     )
 
-    models = _accumulate_breakdown(
-        results, "models", ["spend", "api_requests", "total_tokens"]
-    )
+    models = _accumulate_breakdown(results, "models", ["spend", "api_requests", "total_tokens"])
     providers = _accumulate_breakdown(results, "providers", ["spend", "api_requests"])
 
     model_lines = _ranked_lines(
@@ -388,8 +369,7 @@ def _summarise_entity_data(data: Dict[str, Any], entity_label: str) -> str:
     for eid, d in sorted(totals.items(), key=lambda x: -x[1]["spend"]):
         label = d["alias"] if d["alias"] != eid else eid
         lines.append(
-            f"- {label} (ID: {eid}): ${d['spend']:.4f} | "
-            f"{int(d['requests'])} reqs | {int(d['tokens'])} tokens"
+            f"- {label} (ID: {eid}): ${d['spend']:.4f} | {int(d['requests'])} reqs | {int(d['tokens'])} tokens"
         )
     return "\n".join(lines)
 
@@ -440,6 +420,15 @@ def _resolve_fetch_kwargs(
     kwargs: Dict[str, Any] = {"start_date": start_date, "end_date": end_date}
     if fn_name == "get_usage_data":
         if not is_admin:
+            if user_id is None:
+                # Defense-in-depth: the endpoint guard in usage_endpoints/endpoints.py
+                # should have already rejected this. If we ever reach here it means
+                # a future caller invoked the helper without scoping — fail loudly
+                # rather than issuing an unfiltered global query.
+                raise ValueError(
+                    "Non-admin caller has user_id=None; refusing to issue an "
+                    "unscoped query. Endpoint-level guard missing."
+                )
             kwargs["user_id"] = user_id
         elif fn_args.get("user_id"):
             kwargs["user_id"] = fn_args["user_id"]
@@ -495,23 +484,17 @@ async def _process_tool_call(
     yield _sse(cast(SSEToolCallEvent, {**tool_event_base, "status": "running"}))
 
     try:
-        tool_result = await _execute_tool_call(
-            handler, fn_name, fn_args, user_id, is_admin
-        )
+        tool_result = await _execute_tool_call(handler, fn_name, fn_args, user_id, is_admin)
         yield _sse(cast(SSEToolCallEvent, {**tool_event_base, "status": "complete"}))
     except Exception as e:
         verbose_proxy_logger.error("Tool %s failed: %s", fn_name, e)
         tool_result = f"Error fetching {handler['label']}. Please try again."
         yield _sse(cast(SSEToolCallEvent, {**tool_event_base, "status": "error"}))
 
-    chat_messages.append(
-        {"role": "tool", "tool_call_id": tc.id, "content": tool_result}
-    )
+    chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-async def _stream_final_response(
-    model: str, chat_messages: List[Dict[str, Any]]
-) -> AsyncIterator[str]:
+async def _stream_final_response(model: str, chat_messages: List[Dict[str, Any]]) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
@@ -535,9 +518,7 @@ async def stream_usage_ai_chat(
 ) -> AsyncIterator[str]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
-    truncated = (
-        messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
-    )
+    truncated = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
     chat_messages: List[Dict[str, Any]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},
         *truncated,

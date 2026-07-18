@@ -5,9 +5,7 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 from litellm.llms.databricks.chat.transformation import (
@@ -258,3 +256,170 @@ def test_transform_messages_sanitizes_empty_content():
     result = config._transform_messages(messages=messages, model="databricks-claude", is_async=False)
     assert "content" not in result[0]
     assert result[1]["content"] == "Hi"
+
+
+def _parallel_tool_calls():
+    return [
+        {
+            "id": "call_A",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+        },
+        {
+            "id": "call_B",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "NYC"}'},
+        },
+    ]
+
+
+def _assert_every_tool_message_follows_tool_calls(messages):
+    for index, message in enumerate(messages):
+        if message.get("role") == "tool":
+            previous = messages[index - 1] if index > 0 else {}
+            assert previous.get("role") == "assistant" and previous.get("tool_calls"), (
+                f"tool message at index {index} is not preceded by an assistant message with tool_calls: {messages}"
+            )
+
+
+def _declared_tool_call_ids(messages):
+    return sorted(
+        call["id"]
+        for message in messages
+        if message.get("role") == "assistant" and message.get("tool_calls")
+        for call in message["tool_calls"]
+    )
+
+
+def test_transform_request_splits_parallel_tool_calls_for_gpt():
+    """Regression for LIT-3984: Databricks 400s with 'messages with role tool must
+    be a response to a preceeding message with tool_calls' because parallel tool
+    calls send consecutive tool messages. Each result must be re-paired with an
+    assistant tool_calls message holding only its matching call."""
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather in SF and NYC?"},
+        {"role": "assistant", "content": "checking", "tool_calls": _parallel_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+        {"role": "tool", "tool_call_id": "call_B", "content": "rainy"},
+    ]
+
+    result = config.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    _assert_every_tool_message_follows_tool_calls(result)
+    assert _declared_tool_call_ids(result) == ["call_A", "call_B"]
+    assistant_tool_call_messages = [m for m in result if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert all(len(m["tool_calls"]) == 1 for m in assistant_tool_call_messages), (
+        "each split assistant message must declare exactly one tool call"
+    )
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_messages] == ["call_A", "call_B"]
+    for tool_message, assistant_message in zip(tool_messages, assistant_tool_call_messages):
+        assert assistant_message["tool_calls"][0]["id"] == tool_message["tool_call_id"]
+
+
+def test_transform_request_pairs_out_of_order_parallel_results():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "checking", "tool_calls": _parallel_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_B", "content": "rainy"},
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+    ]
+
+    result = config.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    _assert_every_tool_message_follows_tool_calls(result)
+    for index, message in enumerate(result):
+        if message.get("role") == "tool":
+            assert result[index - 1]["tool_calls"][0]["id"] == message["tool_call_id"]
+
+
+def test_transform_request_leaves_single_tool_call_untouched():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_A",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+    ]
+
+    result = config.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert len(result) == 3
+    _assert_every_tool_message_follows_tool_calls(result)
+    assert _declared_tool_call_ids(result) == ["call_A"]
+
+
+def test_transform_request_does_not_drop_tool_calls_on_incomplete_results():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "checking", "tool_calls": _parallel_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+        {"role": "user", "content": "thanks"},
+    ]
+
+    result = config.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert _declared_tool_call_ids(result) == ["call_A", "call_B"]
+
+
+def test_transform_request_keeps_parallel_tool_calls_for_claude():
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "checking", "tool_calls": _parallel_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_A", "content": "sunny"},
+        {"role": "tool", "tool_call_id": "call_B", "content": "rainy"},
+    ]
+
+    result = config.transform_request(
+        model="databricks-claude-3-7-sonnet",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert len([m for m in result if m.get("role") == "assistant"]) == 1
+
+
+def test_databricks_config_probes_capabilities_under_databricks_namespace():
+    """Inherited AnthropicConfig capability probes read ``self.custom_llm_provider``;
+    without this override they probed the ``anthropic`` cost-map namespace and
+    ignored the exact ``databricks/databricks-claude-*`` entries."""
+    assert DatabricksConfig().custom_llm_provider == "databricks"
