@@ -27,33 +27,15 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         guardrail_name=guardrail_name,
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
-        inspection_type=_get_optional_value(
-            litellm_params, optional_params, "inspection_type"
-        ),
-        inspect_path=_get_optional_value(
-            litellm_params, optional_params, "inspect_path"
-        ),
-        enabled_rules=_get_optional_value(
-            litellm_params, optional_params, "enabled_rules"
-        ),
-        integration_profile_id=_get_optional_value(
-            litellm_params, optional_params, "integration_profile_id"
-        ),
-        integration_profile_version=_get_optional_value(
-            litellm_params, optional_params, "integration_profile_version"
-        ),
-        integration_tenant_id=_get_optional_value(
-            litellm_params, optional_params, "integration_tenant_id"
-        ),
-        integration_type=_get_optional_value(
-            litellm_params, optional_params, "integration_type"
-        ),
-        on_flagged_action=_get_optional_value(
-            litellm_params, optional_params, "on_flagged_action"
-        ),
-        fallback_on_error=_get_optional_value(
-            litellm_params, optional_params, "fallback_on_error"
-        ),
+        inspection_type=_get_optional_value(litellm_params, optional_params, "inspection_type"),
+        inspect_path=_get_optional_value(litellm_params, optional_params, "inspect_path"),
+        enabled_rules=_get_optional_value(litellm_params, optional_params, "enabled_rules"),
+        integration_profile_id=_get_optional_value(litellm_params, optional_params, "integration_profile_id"),
+        integration_profile_version=_get_optional_value(litellm_params, optional_params, "integration_profile_version"),
+        integration_tenant_id=_get_optional_value(litellm_params, optional_params, "integration_tenant_id"),
+        integration_type=_get_optional_value(litellm_params, optional_params, "integration_type"),
+        on_flagged_action=_get_optional_value(litellm_params, optional_params, "on_flagged_action"),
+        fallback_on_error=_get_optional_value(litellm_params, optional_params, "fallback_on_error"),
         timeout=_get_optional_value(litellm_params, optional_params, "timeout"),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on or False,

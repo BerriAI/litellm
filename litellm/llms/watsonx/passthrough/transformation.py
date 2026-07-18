@@ -54,16 +54,14 @@ class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):
     ) -> Optional[str]:
         return (
             api_key
-            or IBMWatsonXMixin.get_watsonx_credentials(
-                optional_params=dict(), api_base=None, api_key=api_key
-            )["api_key"]
+            or IBMWatsonXMixin.get_watsonx_credentials(optional_params=dict(), api_base=None, api_key=api_key)[
+                "api_key"
+            ]
         )
 
     @staticmethod
     def get_base_model(model: str) -> Optional[str]:
         return model
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         return super().get_models(api_key, api_base)

@@ -7,6 +7,10 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+)
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 
 
@@ -135,9 +139,14 @@ def test_hosted_vllm_supports_thinking():
     )
     assert "thinking" in supported_params
 
-    # Test thinking with low budget_tokens -> "minimal" (for < 2000)
+    # Test thinking below the low threshold -> "minimal"
     optional_params = config.map_openai_params(
-        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        non_default_params={
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET - 1,
+            }
+        },
         optional_params={},
         model="hosted_vllm/GLM-4.6-FP8",
         drop_params=False,
@@ -147,7 +156,12 @@ def test_hosted_vllm_supports_thinking():
 
     # Test thinking with high budget_tokens -> "high"
     optional_params = config.map_openai_params(
-        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 15000}},
+        non_default_params={
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            }
+        },
         optional_params={},
         model="hosted_vllm/GLM-4.6-FP8",
         drop_params=False,
@@ -157,7 +171,10 @@ def test_hosted_vllm_supports_thinking():
     # Test that existing reasoning_effort is not overwritten
     optional_params = config.map_openai_params(
         non_default_params={
-            "thinking": {"type": "enabled", "budget_tokens": 15000},
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+            },
             "reasoning_effort": "low",
         },
         optional_params={},

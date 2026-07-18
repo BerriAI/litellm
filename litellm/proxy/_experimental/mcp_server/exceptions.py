@@ -63,15 +63,9 @@ class MCPUpstreamAuthError(Exception):
         if challenge is None and self.status_code == 401 and base_url:
             prefix = base_url.rstrip("/")
             if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
-                resource_metadata_url = (
-                    f"{prefix}/.well-known/oauth-protected-resource/"
-                    f"{self.server_name}/mcp"
-                )
+                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
-                resource_metadata_url = (
-                    f"{prefix}/.well-known/oauth-protected-resource/"
-                    f"mcp/{self.server_name}"
-                )
+                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
         detail = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(
@@ -79,3 +73,34 @@ class MCPUpstreamAuthError(Exception):
             detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
+
+
+class MCPToolResultError(Exception):
+    """An MCP tool call completed with ``isError=True`` in its result.
+
+    Never raised on the wire path: streamable HTTP MCP correctly returns tool
+    failures as HTTP 200 with ``result.isError: true`` per the MCP spec. This
+    exception only drives the standard failure logging (``status="failure"``
+    payload, OTel ERROR span) for such results.
+
+    Lives here rather than ``utils.py`` deliberately: tests reload ``utils``
+    to re-read its env-derived constants, and a reload would fork this class
+    into two identities, breaking ``isinstance`` checks against instances
+    created before the reload.
+    """
+
+
+class MCPServerListError(Exception):
+    """Carrier for a classified per-server listing fault (``faults.list_outcomes.ServerListFault``).
+
+    Raised where a server fetch used to silently return an empty tool list, so each boundary can
+    apply its own policy: the aggregate listing absorbs it into that server's outcome, while
+    single-server routes relay a truthful HTTP status instead of empty-success. The fault value is
+    typed as ``object`` here only to avoid a circular import with the faults package; construction
+    sites always pass a ``ServerListFault``.
+    """
+
+    def __init__(self, fault: object, server_name: str) -> None:
+        self.fault = fault
+        self.server_name = server_name
+        super().__init__(f"Listing tools from MCP server {server_name!r} failed")

@@ -60,7 +60,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.files import ResumableChunkedUploadConfig
+from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.vertex_ai import GcsBucketResponse
 from litellm.types.utils import LlmProviders, ModelResponse
 
@@ -93,9 +93,7 @@ def _sanitize_gcp_label_value(value: str) -> str:
 def _encode_gcp_label_value_chunks(value: str) -> List[str]:
     """Encode arbitrary text across one or more GCP-label-safe values."""
     max_encoded_len = _GCP_LABEL_VALUE_MAX_LEN - len(_CUSTOM_ID_RAW_LABEL_PREFIX)
-    encoded = (
-        base64.b32encode(value.encode("utf-8")).decode("ascii").rstrip("=").lower()
-    )
+    encoded = base64.b32encode(value.encode("utf-8")).decode("ascii").rstrip("=").lower()
     return [
         f"{_CUSTOM_ID_RAW_LABEL_PREFIX}{encoded[i : i + max_encoded_len]}"
         for i in range(0, len(encoded), max_encoded_len)
@@ -143,10 +141,7 @@ def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
         for key, value in labels.items():
             if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit():
                 indexed_chunks.append((int(key[len(chunk_prefix) :]), str(value)))
-        raw_chunks.extend(
-            raw_label_chunk
-            for _, raw_label_chunk in sorted(indexed_chunks, key=lambda item: item[0])
-        )
+        raw_chunks.extend(raw_label_chunk for _, raw_label_chunk in sorted(indexed_chunks, key=lambda item: item[0]))
         decoded = _decode_gcp_label_value_chunks(raw_chunks)
         if decoded is not None:
             return decoded
@@ -279,9 +274,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
     def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
         first = True
         for entry in _iter_openai_jsonl_entries(self._openai_file_content):
-            wrapped = _openai_batch_jsonl_entry_to_vertex_wrapped_request(
-                entry, self._map_openai_to_vertex_params
-            )
+            wrapped = _openai_batch_jsonl_entry_to_vertex_wrapped_request(entry, self._map_openai_to_vertex_params)
             prefix = b"" if first else b"\n"
             first = False
             yield prefix + json.dumps(wrapped).encode("utf-8")
@@ -361,9 +354,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _get_configured_bucket_name(self, litellm_params: Dict) -> str:
         bucket_name = (
-            litellm_params.get("gcs_bucket_name")
-            or litellm_params.get("bucket_name")
-            or os.getenv("GCS_BUCKET_NAME")
+            litellm_params.get("gcs_bucket_name") or litellm_params.get("bucket_name") or os.getenv("GCS_BUCKET_NAME")
         )
         if not bucket_name:
             raise ValueError("GCS bucket_name is required")
@@ -389,30 +380,18 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         if purpose is None:
             raise ValueError("purpose is required")
-        _, content_type = extract_file_metadata(file_data)
         object_name = self.get_object_name(file_data, purpose)
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name = encode_gcs_object_name_for_url(object_name)
-        # Batch jsonl is streamed via a resumable session (bounded memory on
-        # large uploads); everything else is a single simple-media upload.
-        upload_type = (
-            "resumable"
-            if FilesAPIUtils.is_batch_jsonl_request(
-                create_file_data=data, content_type=content_type
-            )
-            else "media"
-        )
-        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType={upload_type}&name={encoded_object_name}"
+        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
         api_base = api_base or "https://storage.googleapis.com"
         if not api_base:
             raise ValueError("api_base is required")
 
         return f"{api_base}/{endpoint}"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
         return []
 
     def map_openai_params(
@@ -455,8 +434,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         2 Cases:
         1. Handle basic file upload
-        2. Handle batch file upload (.jsonl), streamed to a GCS resumable
-           session so large uploads stay memory-bounded.
+        2. Handle batch file upload (.jsonl), staged to a temp file and uploaded
+           in a single media request so large uploads stay memory-bounded without
+           the per-chunk round-trips of a resumable session.
         """
         file_data = create_file_data.get("file")
         if file_data is None:
@@ -468,14 +448,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             content_type=content_type,
         ):
             return {
-                "resumable_chunked_upload": ResumableChunkedUploadConfig(
+                "streaming_media_upload": StreamingMediaUploadConfig(
                     body_stream=_OpenAIToVertexBatchUploadStream(
                         file_data,
                         self._map_openai_to_vertex_params,
                     ),
-                    initiate_headers={
-                        "X-Upload-Content-Type": "application/json",
-                    },
+                    content_type="application/json",
                 )
             }
 
@@ -521,16 +499,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             object="file",
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, Headers]
-    ) -> BaseLLMException:
-        return VertexAIError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[Dict, Headers]) -> BaseLLMException:
+        return VertexAIError(status_code=status_code, message=error_message, headers=headers)
 
-    def _parse_gcs_uri(
-        self, file_id: str, litellm_params: Optional[Dict] = None
-    ) -> Tuple[str, str]:
+    def _parse_gcs_uri(self, file_id: str, litellm_params: Optional[Dict] = None) -> Tuple[str, str]:
         """
         Validate a managed GCS file_id and return (bucket, url-encoded-object-path).
         """
@@ -540,9 +512,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             scheme="gs://",
             configured_bucket_name=configured_bucket_name,
             allowed_object_prefixes=(VERTEX_AI_MANAGED_GCS_PREFIX,),
-            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
-                litellm_params
-            ),
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
         )
         return bucket_name, encode_gcs_object_name_for_url(object_path)
 
@@ -761,13 +731,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             output = bytearray()
             for line in itertools.chain([first_line], lines):
                 try:
-                    openai_output = (
-                        self._transform_single_vertex_batch_output_to_openai(
-                            vertex_output=json.loads(line),
-                            vertex_gemini_config=vertex_gemini_config,
-                            logging_obj=batch_transform_logging_obj,
-                            mock_httpx_response=mock_httpx_response,
-                        )
+                    openai_output = self._transform_single_vertex_batch_output_to_openai(
+                        vertex_output=json.loads(line),
+                        vertex_gemini_config=vertex_gemini_config,
+                        logging_obj=batch_transform_logging_obj,
+                        mock_httpx_response=mock_httpx_response,
                     )
                 except Exception:
                     return content

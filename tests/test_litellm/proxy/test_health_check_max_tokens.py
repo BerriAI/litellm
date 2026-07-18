@@ -5,6 +5,7 @@ import pytest
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
+    _is_semantic_auto_router_deployment,
     _resolve_health_check_max_tokens,
     _resolve_health_check_mode,
     _update_litellm_params_for_health_check,
@@ -300,9 +301,7 @@ def test_no_mode_still_injects_max_tokens():
 
 @pytest.mark.parametrize("mode", ["chat", "completion", "responses"])
 def test_chat_style_modes_inject_max_tokens(mode):
-    updated = _update_litellm_params_for_health_check(
-        {"mode": mode}, {"model": f"openai/dummy-{mode}"}
-    )
+    updated = _update_litellm_params_for_health_check({"mode": mode}, {"model": f"openai/dummy-{mode}"})
 
     assert updated["max_tokens"] == 16
 
@@ -323,9 +322,7 @@ def test_chat_style_modes_inject_max_tokens(mode):
     ],
 )
 def test_non_chat_modes_skip_max_tokens(mode):
-    updated = _update_litellm_params_for_health_check(
-        {"mode": mode}, {"model": f"openai/dummy-{mode}"}
-    )
+    updated = _update_litellm_params_for_health_check({"mode": mode}, {"model": f"openai/dummy-{mode}"})
 
     assert "max_tokens" not in updated
 
@@ -361,35 +358,25 @@ def test_update_litellm_params_health_check_reasoning_effort():
     assert out.get("reasoning_effort") == "low"
 
     model_info = {"mode": "chat", "health_check_reasoning_effort": "none"}
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "openai/gpt-5", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5", "api_key": "x"})
     assert out.get("reasoning_effort") == "none"
 
     model_info = {"mode": "completion", "health_check_reasoning_effort": "low"}
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "openai/gpt-5", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5", "api_key": "x"})
     assert out.get("reasoning_effort") == "low"
 
     model_info = {
         "health_check_reasoning_effort": {"effort": "none", "summary": "auto"},
     }
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "openai/gpt-5.1", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5.1", "api_key": "x"})
     assert out.get("reasoning_effort") == {"effort": "none", "summary": "auto"}
 
     model_info = {"mode": "embedding", "health_check_reasoning_effort": "low"}
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "text-embedding-3-small", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "text-embedding-3-small", "api_key": "x"})
     assert "reasoning_effort" not in out
 
     model_info = {}
-    out = _update_litellm_params_for_health_check(
-        model_info, {"model": "openai/gpt-4o", "api_key": "x"}
-    )
+    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-4o", "api_key": "x"})
     assert "reasoning_effort" not in out
 
 
@@ -413,9 +400,7 @@ def test_update_litellm_params_health_check_reasoning_effort():
         ("bedrock/us.cohere.embed-v4:0", "us.cohere.embed-v4:0"),
     ],
 )
-def test_bedrock_embedding_without_explicit_mode_skips_max_tokens(
-    deployment_model, expected_request_model
-):
+def test_bedrock_embedding_without_explicit_mode_skips_max_tokens(deployment_model, expected_request_model):
     """Embedding mode auto-detected from model cost map -> no max_tokens, provider pinned."""
     assert _resolve_health_check_mode({}, {"model": deployment_model}) == "embedding"
 
@@ -428,19 +413,11 @@ def test_bedrock_embedding_without_explicit_mode_skips_max_tokens(
 
 def test_resolve_health_check_mode_prefers_explicit_model_info_mode():
     """An operator-set mode wins over model-cost lookup."""
-    assert (
-        _resolve_health_check_mode(
-            {"mode": "chat"}, {"model": "bedrock/amazon.titan-embed-text-v2:0"}
-        )
-        == "chat"
-    )
+    assert _resolve_health_check_mode({"mode": "chat"}, {"model": "bedrock/amazon.titan-embed-text-v2:0"}) == "chat"
 
 
 def test_resolve_health_check_mode_unknown_model_returns_none():
-    assert (
-        _resolve_health_check_mode({}, {"model": "bedrock/not-a-real-model-xyz"})
-        is None
-    )
+    assert _resolve_health_check_mode({}, {"model": "bedrock/not-a-real-model-xyz"}) is None
     assert _resolve_health_check_mode({}, {}) is None
 
 
@@ -516,3 +493,53 @@ def test_autodetected_embedding_skips_reasoning_effort():
 
     assert "reasoning_effort" not in updated
     assert "max_tokens" not in updated
+
+
+# ---------------------------------------------------------------------------
+# auto_router (semantic router) deployments must be skipped by health checks.
+#
+# These are meta-routers that select among real LLM deployments at request
+# time. They have no LLM endpoint to probe. Before this fix, the health check
+# passed model="auto_router/router_1" to get_llm_provider(), which raised
+# BadRequestError: "Unmapped LLM provider for this endpoint" because
+# auto_router is not a real LLM provider.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("auto_router/router_1", True),
+        ("auto_router/my_router", True),
+        ("auto_router/complexity_router", False),
+        ("auto_router/adaptive_router", False),
+        ("auto_router/quality_router", False),
+        ("auto_router/adaptive_router/subpath", False),
+        ("gpt-4", False),
+        ("openai/gpt-4", False),
+        ("bedrock/claude", False),
+    ],
+)
+def test_is_semantic_auto_router_deployment(model, expected):
+    assert _is_semantic_auto_router_deployment({"model": model}) == expected
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_skips_auto_router_deployment():
+    """auto_router deployments return {} (healthy) without calling ahealth_check."""
+    fake_ahealth_check = AsyncMock(return_value={})
+    model = {
+        "litellm_params": {
+            "model": "auto_router/router_1",
+            "auto_router_config": '{"routes": []}',
+            "auto_router_default_model": "gpt-4o-mini",
+            "auto_router_embedding_model": "text-embedding-3-small",
+        },
+        "model_info": {},
+    }
+
+    with patch.object(hc_module.litellm, "ahealth_check", fake_ahealth_check):
+        result = await hc_module._run_model_health_check(model)
+
+    fake_ahealth_check.assert_not_called()
+    assert result == {}

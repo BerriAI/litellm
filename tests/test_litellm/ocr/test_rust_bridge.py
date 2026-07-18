@@ -1,20 +1,23 @@
-"""Tests for the Rust-backed OCR path (``litellm/ocr/rust_bridge.py``)."""
+"""Tests for the Rust-backed OCR path."""
 
 import importlib
 import builtins
 import types
+from dataclasses import dataclass
 
 import httpx
+import pydantic
 import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge.ocr import RustOcrError
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
 # explicitly via importlib rather than attribute traversal.
 ocr_main = importlib.import_module("litellm.ocr.main")
-rust_bridge = importlib.import_module("litellm.ocr.rust_bridge")
+rust_bridge = importlib.import_module("litellm.rust_bridge.ocr")
 rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
 
 MODEL = "mistral/mistral-ocr-latest"
@@ -34,6 +37,40 @@ FAKE_OCR_RESPONSE: dict[str, object] = {
 
 class CapturedException(Exception):
     pass
+
+
+@dataclass(slots=True)
+class ExceptionTypeCall:
+    model: str
+    custom_llm_provider: str | None
+    original_exception: Exception
+    completion_kwargs: dict[str, object]
+    extra_kwargs: dict[str, object]
+
+
+class ExceptionTypeSpy:
+    def __init__(self) -> None:
+        self.calls: list[ExceptionTypeCall] = []
+
+    def __call__(
+        self,
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        original_exception: Exception,
+        completion_kwargs: dict[str, object],
+        extra_kwargs: dict[str, object],
+    ) -> CapturedException:
+        self.calls.append(
+            ExceptionTypeCall(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                original_exception=original_exception,
+                completion_kwargs=completion_kwargs,
+                extra_kwargs=extra_kwargs,
+            )
+        )
+        return CapturedException("wrapped")
 
 
 class RecordingBridge:
@@ -128,6 +165,44 @@ class RaisingAsyncBridge:
         timeout_seconds: float | None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
+
+
+class RustErrorBridge:
+    def __init__(self, message: str, status_code: int | None) -> None:
+        self.message = message
+        self.status_code = status_code
+
+    def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise RustOcrError(self.message, self.status_code)
+
+
+class RustErrorAsyncBridge:
+    def __init__(self, message: str, status_code: int | None) -> None:
+        self.message = message
+        self.status_code = status_code
+
+    async def __call__(
+        self,
+        model: str,
+        document: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str,
+        extra_headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+        timeout_seconds: float | None,
+    ) -> dict[str, object]:
+        raise RustOcrError(self.message, self.status_code)
 
 
 class RecordingLogging:
@@ -226,6 +301,25 @@ def test_load_rust_aocr_returns_injected_impl():
     assert rust_bridge.load_rust_aocr() is bridge
 
 
+def test_use_litellm_rust_controls_injected_bridges(monkeypatch):
+    bridge = RecordingBridge()
+    async_bridge = RecordingAsyncBridge()
+
+    rust_bridge.use_litellm_rust(ocr=bridge, aocr=async_bridge)
+    assert rust_bridge.rust_ocr_enabled() is True
+    assert rust_bridge.load_rust_ocr() is bridge
+    assert rust_bridge.load_rust_aocr() is async_bridge
+
+    monkeypatch.setattr(
+        importlib.import_module("litellm.rust_bridge"),
+        "get_native_bridge",
+        lambda: None,
+    )
+    rust_bridge.use_litellm_rust(False)
+    assert rust_bridge.load_rust_ocr() is None
+    assert rust_bridge.load_rust_aocr() is None
+
+
 def test_bridge_injection_preserves_unspecified_impl():
     bridge = RecordingBridge()
     async_bridge = RecordingAsyncBridge()
@@ -317,6 +411,7 @@ def test_run_rust_ocr_forwards_args_and_wraps_response():
         "timeout_seconds": 12.5,
     }
 
+
 def test_run_rust_ocr_runs_pre_call_logging():
     """The Rust shortcut must run pre_call so callbacks and spend tracking fire."""
     logging_obj = RecordingLogging()
@@ -342,6 +437,27 @@ def test_run_rust_ocr_runs_pre_call_logging():
     assert complete_input["include_image_base64"] is True
     assert additional_args["api_base"] == "https://api.mistral.ai/v1"
     assert additional_args["headers"] == {"x-trace-id": "trace-1"}
+
+
+def test_run_rust_ocr_logs_empty_api_base_when_rust_resolves_it():
+    logging_obj = RecordingLogging()
+
+    ocr_main._run_rust_ocr(
+        rust_ocr=RecordingBridge(),
+        model="mistral-ocr-latest",
+        document=DOCUMENT,
+        api_key=None,
+        api_base=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        optional_params={},
+        timeout=12.5,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.pre_call_kwargs is not None
+    additional_args = logging_obj.pre_call_kwargs["additional_args"]
+    assert additional_args["api_base"] == ""
 
 
 def test_ocr_routes_to_rust_by_default(fake_bridge):
@@ -373,11 +489,69 @@ def test_ocr_filters_internal_litellm_params_before_rust(fake_bridge):
         document=DOCUMENT,
         api_key="sk-test",
         include_image_base64=True,
-        original_generic_function=lambda: None,
+        original_generic_function="litellm-internal-should-be-filtered",
         litellm_metadata={"trace": "internal"},
     )
 
     assert fake_bridge.calls[0]["optional_params"] == {"include_image_base64": True}
+
+
+def test_ocr_forwards_public_id_but_drops_internal_litellm_params(fake_bridge):
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        id="ocr-req-9",
+        pages=[0, 1],
+        include_image_base64=True,
+        table_format="html",
+        metadata={"trace": "internal"},
+        litellm_metadata={"trace": "internal"},
+        litellm_session_id="sess-internal",
+        tags=["internal"],
+        num_retries=3,
+        original_generic_function="litellm-internal-should-be-filtered",
+    )
+
+    optional_params = fake_bridge.calls[0]["optional_params"]
+    assert optional_params["id"] == "ocr-req-9"
+    assert optional_params["pages"] == [0, 1]
+    assert optional_params["include_image_base64"] is True
+    assert optional_params["table_format"] == "html"
+    for internal in (
+        "metadata",
+        "litellm_metadata",
+        "litellm_session_id",
+        "tags",
+        "num_retries",
+        "original_generic_function",
+    ):
+        assert internal not in optional_params
+
+
+def test_ocr_omits_reserved_id_when_none(fake_bridge):
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        id=None,
+        include_image_base64=True,
+    )
+
+    optional_params = fake_bridge.calls[0]["optional_params"]
+    assert "id" not in optional_params
+    assert optional_params["include_image_base64"] is True
+
+
+def test_ocr_omits_reserved_id_when_absent(fake_bridge):
+    litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        include_image_base64=True,
+    )
+
+    assert "id" not in fake_bridge.calls[0]["optional_params"]
 
 
 def test_ocr_routes_azure_ai_to_rust_by_default(fake_bridge):
@@ -396,21 +570,16 @@ def test_ocr_routes_azure_ai_to_rust_by_default(fake_bridge):
 
 def test_ocr_exception_type_uses_resolved_provider_context(
     monkeypatch: pytest.MonkeyPatch,
-):
-    captured: dict[str, object] = {}
-
-    def fake_exception_type(**kwargs: object) -> CapturedException:
-        captured.update(kwargs)
-        return CapturedException("wrapped")
-
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+) -> None:
+    spy = ExceptionTypeSpy()
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", spy)
     rust_bridge._set_rust_ocr_bridge(ocr=RaisingBridge())
 
     with pytest.raises(CapturedException):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
-    assert captured["model"] == "mistral-ocr-latest"
-    assert captured["custom_llm_provider"] == "mistral"
+    assert spy.calls[0].model == "mistral-ocr-latest"
+    assert spy.calls[0].custom_llm_provider == "mistral"
 
 
 @pytest.mark.asyncio
@@ -438,21 +607,16 @@ async def test_aocr_routes_to_async_rust_by_default(fake_async_bridge):
 @pytest.mark.asyncio
 async def test_aocr_exception_type_uses_resolved_provider_context(
     monkeypatch: pytest.MonkeyPatch,
-):
-    captured: dict[str, object] = {}
-
-    def fake_exception_type(**kwargs: object) -> CapturedException:
-        captured.update(kwargs)
-        return CapturedException("wrapped")
-
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+) -> None:
+    spy = ExceptionTypeSpy()
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", spy)
     rust_bridge._set_rust_ocr_bridge(aocr=RaisingAsyncBridge())
 
     with pytest.raises(CapturedException):
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
-    assert captured["model"] == "mistral-ocr-latest"
-    assert captured["custom_llm_provider"] == "mistral"
+    assert spy.calls[0].model == "mistral-ocr-latest"
+    assert spy.calls[0].custom_llm_provider == "mistral"
 
 
 def test_ocr_forwards_timeout_to_rust(fake_bridge):
@@ -480,3 +644,301 @@ def test_ocr_requires_rust_bridge_when_unavailable(monkeypatch):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
     assert "Rust OCR bridge is required" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_aocr_requires_rust_bridge_when_unavailable(monkeypatch):
+    monkeypatch.setattr(ocr_main, "load_rust_aocr", lambda: None)
+
+    with pytest.raises(Exception) as exc_info:
+        await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert "Rust OCR bridge is required" in str(exc_info.value)
+
+
+RUST_OCR_ERROR_CASES = [
+    pytest.param(400, litellm.BadRequestError, 400, id="400_bad_request"),
+    pytest.param(401, litellm.AuthenticationError, 401, id="401_authentication"),
+    pytest.param(403, litellm.PermissionDeniedError, 403, id="403_permission_denied"),
+    pytest.param(404, litellm.NotFoundError, 404, id="404_not_found"),
+    pytest.param(408, litellm.Timeout, 408, id="408_timeout"),
+    pytest.param(422, litellm.UnprocessableEntityError, 422, id="422_unprocessable_entity"),
+    pytest.param(429, litellm.RateLimitError, 429, id="429_rate_limit"),
+    pytest.param(500, litellm.InternalServerError, 500, id="500_internal"),
+    pytest.param(502, litellm.BadGatewayError, 502, id="502_bad_gateway"),
+    pytest.param(503, litellm.ServiceUnavailableError, 503, id="503_unavailable"),
+    pytest.param(None, litellm.APIConnectionError, 500, id="none_connection"),
+]
+
+
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
+def test_rust_ocr_error_maps_to_public_exception(
+    status_code: int | None,
+    expected_exception: type[Exception],
+    expected_status: int,
+) -> None:
+    with pytest.raises(expected_exception) as exc_info:
+        ocr_main._raise_rust_ocr_exception(
+            RustOcrError("upstream boom", status_code),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+        )
+
+    exc = exc_info.value
+    assert exc.status_code == expected_status
+    assert exc.llm_provider == "mistral"
+    assert exc.model == "mistral-ocr-latest"
+    assert "upstream boom" in str(exc)
+
+
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
+def test_ocr_raises_typed_exception_from_rust_error(
+    status_code: int | None,
+    expected_exception: type[Exception],
+    expected_status: int,
+) -> None:
+    rust_bridge._set_rust_ocr_bridge(ocr=RustErrorBridge("upstream boom", status_code))
+
+    with pytest.raises(expected_exception) as exc_info:
+        litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert exc_info.value.status_code == expected_status
+    assert exc_info.value.llm_provider == "mistral"
+
+
+@pytest.mark.parametrize(("status_code", "expected_exception", "expected_status"), RUST_OCR_ERROR_CASES)
+@pytest.mark.asyncio
+async def test_aocr_raises_typed_exception_from_rust_error(
+    status_code: int | None,
+    expected_exception: type[Exception],
+    expected_status: int,
+) -> None:
+    rust_bridge._set_rust_ocr_bridge(aocr=RustErrorAsyncBridge("upstream boom", status_code))
+
+    with pytest.raises(expected_exception) as exc_info:
+        await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert exc_info.value.status_code == expected_status
+    assert exc_info.value.llm_provider == "mistral"
+
+
+UNKNOWN_STATUS_CASES = [
+    pytest.param(409, id="409_conflict"),
+    pytest.param(451, id="451_legal_reasons"),
+    pytest.param(504, id="504_gateway_timeout"),
+    pytest.param(418, id="418_teapot"),
+]
+
+
+@pytest.mark.parametrize("status_code", UNKNOWN_STATUS_CASES)
+def test_rust_ocr_error_unknown_status_preserves_exact_status(
+    status_code: int,
+) -> None:
+    with pytest.raises(litellm.APIError) as exc_info:
+        ocr_main._raise_rust_ocr_exception(
+            RustOcrError("upstream boom", status_code),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+        )
+
+    exc = exc_info.value
+    assert type(exc) is litellm.APIError
+    assert exc.status_code == status_code
+    assert exc.llm_provider == "mistral"
+    assert exc.model == "mistral-ocr-latest"
+
+
+def test_rust_ocr_error_message_is_preserved_bounded() -> None:
+    bounded = "x" * 256 + "... (truncated)"
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        ocr_main._raise_rust_ocr_exception(
+            RustOcrError(bounded, 500),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+        )
+
+    assert bounded in str(exc_info.value)
+
+
+INVALID_OCR_INPUTS = [
+    pytest.param({"type": "bogus", "document_url": "https://x/y.pdf"}, id="bad_type"),
+    pytest.param("not-a-dict", id="non_dict_document"),
+]
+
+
+@pytest.mark.parametrize("document", INVALID_OCR_INPUTS)
+def test_ocr_invalid_input_raises_bad_request(document: object) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.ocr(model=MODEL, document=document, api_key="sk-test")
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("document", INVALID_OCR_INPUTS)
+@pytest.mark.asyncio
+async def test_aocr_invalid_input_raises_bad_request(document: object) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aocr(model=MODEL, document=document, api_key="sk-test")
+
+    assert exc_info.value.status_code == 400
+
+
+def test_raise_ocr_exception_maps_input_error_to_bad_request() -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        ocr_main._raise_ocr_exception(
+            ocr_main._OCRInputError("Invalid document type: bogus"),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
+
+    exc = exc_info.value
+    assert exc.status_code == 400
+    assert "Invalid OCR request" in str(exc)
+    assert "bogus" not in str(exc)
+
+
+OCR_INPUT_CANARIES = [
+    "https://signed.example/doc.pdf",
+    "token=SECRET123",
+    "QUJDREVGYmFzZTY0",
+    "page=42",
+    "application/x-canary-mime",
+    "/var/secrets/service_account.json",
+    "sk-canary-secret",
+    "canary_document_type",
+]
+
+
+def test_raise_ocr_exception_input_error_publishes_generic_message() -> None:
+    canary = " ".join(OCR_INPUT_CANARIES)
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        ocr_main._raise_ocr_exception(
+            ocr_main._OCRInputError(canary),
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
+
+    message = str(exc_info.value)
+    assert "Invalid OCR request" in message
+    for marker in OCR_INPUT_CANARIES:
+        assert marker not in message
+
+
+def test_ocr_input_error_public_message_drops_canaries() -> None:
+    document = {
+        "type": " ".join(OCR_INPUT_CANARIES),
+        "document_url": "https://signed.example/doc.pdf?token=SECRET123&page=42",
+    }
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.ocr(model=MODEL, document=document, api_key="sk-test")
+
+    message = str(exc_info.value)
+    assert "Invalid OCR request" in message
+    for marker in OCR_INPUT_CANARIES:
+        assert marker not in message
+
+
+@pytest.mark.asyncio
+async def test_aocr_input_error_public_message_drops_canaries() -> None:
+    document = {
+        "type": " ".join(OCR_INPUT_CANARIES),
+        "document_url": "https://signed.example/doc.pdf?token=SECRET123&page=42",
+    }
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aocr(model=MODEL, document=document, api_key="sk-test")
+
+    message = str(exc_info.value)
+    assert "Invalid OCR request" in message
+    for marker in OCR_INPUT_CANARIES:
+        assert marker not in message
+
+
+def test_raise_ocr_exception_keeps_plain_value_error_off_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spy = ExceptionTypeSpy()
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", spy)
+
+    internal = ValueError("internal invariant broke")
+    with pytest.raises(CapturedException):
+        ocr_main._raise_ocr_exception(
+            internal,
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
+
+    assert spy.calls[0].original_exception is internal
+
+
+def test_raise_ocr_exception_keeps_validation_error_off_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Model(pydantic.BaseModel):
+        value: int
+
+    adapter = pydantic.TypeAdapter(_Model)
+    with pytest.raises(pydantic.ValidationError) as validation_info:
+        adapter.validate_python({"value": "not-an-int"})
+
+    spy = ExceptionTypeSpy()
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", spy)
+
+    with pytest.raises(CapturedException):
+        ocr_main._raise_ocr_exception(
+            validation_info.value,
+            model="mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            completion_kwargs={},
+            kwargs={},
+        )
+
+    assert spy.calls[0].original_exception is validation_info.value
+
+
+def test_ocr_forwards_os_environ_api_key_reference_to_rust(
+    fake_bridge: RecordingBridge,
+) -> None:
+    litellm.ocr(model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY")
+
+    assert fake_bridge.calls[0]["api_key"] == "os.environ/MISTRAL_OCR_TEST_KEY"
+
+
+def test_ocr_forwards_provider_derived_os_environ_references_to_rust(
+    fake_bridge: RecordingBridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_get_llm_provider(
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str, str, str]:
+        return (
+            "mistral-ocr-latest",
+            "mistral",
+            "os.environ/MISTRAL_PROVIDER_KEY",
+            "os.environ/MISTRAL_PROVIDER_BASE",
+        )
+
+    monkeypatch.setattr(ocr_main.litellm, "get_llm_provider", fake_get_llm_provider)
+
+    litellm.ocr(model=MODEL, document=DOCUMENT)
+
+    call = fake_bridge.calls[0]
+    assert call["api_key"] == "os.environ/MISTRAL_PROVIDER_KEY"
+    assert call["api_base"] == "os.environ/MISTRAL_PROVIDER_BASE"
+
+
+@pytest.mark.asyncio
+async def test_aocr_forwards_os_environ_api_key_reference_to_rust(
+    fake_async_bridge: RecordingAsyncBridge,
+) -> None:
+    await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="os.environ/MISTRAL_OCR_TEST_KEY")
+
+    assert fake_async_bridge.calls[0]["api_key"] == "os.environ/MISTRAL_OCR_TEST_KEY"

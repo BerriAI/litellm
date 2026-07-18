@@ -1,12 +1,25 @@
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
 
+from litellm.exceptions import BadRequestError
 from litellm.types.router import CredentialLiteLLMParams
 from litellm._logging import verbose_logger
+
+
+def _is_proxy_admin_request(request_kwargs: Optional[Mapping[str, object]]) -> bool:
+    if request_kwargs is None:
+        return False
+    metadata_value = request_kwargs.get("metadata")
+    litellm_metadata_value = request_kwargs.get("litellm_metadata")
+    metadata = metadata_value if isinstance(metadata_value, Mapping) else {}
+    litellm_metadata = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
+    user_api_key_auth = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
+    return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
@@ -14,9 +27,7 @@ def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     Hash of the credential params, used for mapping the file id to the right model
     """
     sensitive_params = CredentialLiteLLMParams(**litellm_params)
-    return hashlib.sha256(
-        json.dumps(sensitive_params.model_dump()).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(sensitive_params.model_dump()).encode()).hexdigest()
 
 
 def add_model_file_id_mappings(
@@ -37,9 +48,7 @@ def add_model_file_id_mappings(
     """
     model_file_id_mapping: Dict[str, str] = {}
     deployments_list: List[Dict] = (
-        healthy_deployments
-        if isinstance(healthy_deployments, list)
-        else [healthy_deployments]
+        healthy_deployments if isinstance(healthy_deployments, list) else [healthy_deployments]
     )
     for deployment, response in zip(deployments_list, responses):
         model_id = deployment.get("model_info", {}).get("id")
@@ -62,9 +71,41 @@ def filter_team_based_models(
 
     metadata = request_kwargs.get("metadata") or {}
     litellm_metadata = request_kwargs.get("litellm_metadata") or {}
-    request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get(
-        "user_api_key_team_id"
-    )
+    request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
+    if request_team_id is None and _is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
+        requested_model = (
+            request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
+        )
+        candidate_deployments = tuple(
+            (deployment.get("model_name"), deployment.get("model_info") or {}) for deployment in healthy_deployments
+        )
+        team_ids = frozenset(
+            team_id
+            for _, model_info in candidate_deployments
+            for team_id in [model_info.get("team_id")]
+            if team_id is not None
+        )
+        matches_requested_model = (
+            isinstance(requested_model, str)
+            and bool(candidate_deployments)
+            and all(
+                model_info.get("team_id") is not None
+                and (model_name == requested_model or model_info.get("team_public_model_name") == requested_model)
+                for model_name, model_info in candidate_deployments
+            )
+        )
+        if matches_requested_model and len(team_ids) > 1:
+            raise BadRequestError(
+                message=(
+                    f"Model name '{requested_model}' matches deployments from multiple teams. "
+                    "Specify the deployment ID directly to disambiguate."
+                ),
+                model=requested_model,
+                llm_provider="",
+            )
+        if matches_requested_model:
+            return healthy_deployments
+
     ids_to_remove = set()
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
@@ -129,9 +170,7 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     # Filter out deployments that don't support web search
-    final_deployments = [
-        d for d in healthy_deployments if _deployment_supports_web_search(d)
-    ]
+    final_deployments = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments

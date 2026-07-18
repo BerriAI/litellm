@@ -87,15 +87,11 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
         api_base = self.vector_store_config.get("api_base")
 
         if existing_file_id and not vector_store_id:
-            raise ValueError(
-                "vector_store_id is required when ingesting an existing file_id"
-            )
+            raise ValueError("vector_store_id is required when ingesting an existing file_id")
 
         # Create vector store if not provided
         if not vector_store_id:
-            expires_after = (
-                {"anchor": "last_active_at", "days": ttl_days} if ttl_days else None
-            )
+            expires_after = {"anchor": "last_active_at", "days": ttl_days} if ttl_days else None
             create_response = await vector_store_acreate(
                 name=self.ingest_name or "litellm-rag-ingest",
                 custom_llm_provider="openai",

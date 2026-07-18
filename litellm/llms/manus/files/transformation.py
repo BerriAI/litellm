@@ -92,9 +92,7 @@ class ManusFilesConfig(BaseFilesConfig):
         )
         return headers
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
         """
         Return supported OpenAI file creation parameters for Manus.
         Manus supports the standard 'purpose' parameter.
@@ -129,12 +127,7 @@ class ManusFilesConfig(BaseFilesConfig):
         Returns:
             str: The full URL for the Manus /v1/files endpoint
         """
-        api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret_str("MANUS_API_BASE")
-            or MANUS_API_BASE
-        )
+        api_base = api_base or litellm.api_base or get_secret_str("MANUS_API_BASE") or MANUS_API_BASE
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
@@ -193,11 +186,7 @@ class ManusFilesConfig(BaseFilesConfig):
         )
 
         # Get API key
-        api_key = (
-            litellm_params.get("api_key")
-            or litellm.api_key
-            or get_secret_str("MANUS_API_KEY")
-        )
+        api_key = litellm_params.get("api_key") or litellm.api_key or get_secret_str("MANUS_API_KEY")
 
         if not api_key:
             raise ValueError(

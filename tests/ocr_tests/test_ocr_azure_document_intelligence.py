@@ -42,4 +42,3 @@ class TestAzureDocumentIntelligenceOCR(BaseOCRTest):
             "api_key": api_key,
             "api_base": endpoint,
         }
-

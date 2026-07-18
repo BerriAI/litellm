@@ -41,10 +41,7 @@ class ResponsesToCompletionBridgeHandler:
     def _is_preformatted_cached_chat_stream(result: Any) -> bool:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
-        return (
-            isinstance(result, CustomStreamWrapper)
-            and result.custom_llm_provider == "cached_response"
-        )
+        return isinstance(result, CustomStreamWrapper) and result.custom_llm_provider == "cached_response"
 
     @staticmethod
     def _coerce_response_object(
@@ -85,9 +82,7 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream completed response is invalid")
         return response
 
-    async def _collect_response_from_stream_async(
-        self, stream_iter: Any
-    ) -> "ResponsesAPIResponse":
+    async def _collect_response_from_stream_async(self, stream_iter: Any) -> "ResponsesAPIResponse":
         async for _ in stream_iter:
             pass
 
@@ -102,9 +97,7 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream completed response is invalid")
         return response
 
-    def validate_input_kwargs(
-        self, kwargs: dict
-    ) -> ResponsesToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(self, kwargs: dict) -> ResponsesToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
         from litellm.types.utils import ModelResponse
 
@@ -234,9 +227,7 @@ class ResponsesToCompletionBridgeHandler:
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
-                return self._apply_post_stream_processing(
-                    result, model, custom_llm_provider
-                )
+                return self._apply_post_stream_processing(result, model, custom_llm_provider)
             completion_stream = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,  # type: ignore
                 sync_stream=True,
@@ -248,13 +239,9 @@ class ResponsesToCompletionBridgeHandler:
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
             )
-            return self._apply_post_stream_processing(
-                streamwrapper, model, custom_llm_provider
-            )
+            return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
-    async def acompletion(
-        self, *args, **kwargs
-    ) -> Union["ModelResponse", "CustomStreamWrapper"]:
+    async def acompletion(self, *args, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
@@ -314,9 +301,7 @@ class ResponsesToCompletionBridgeHandler:
         elif isinstance(result, ModelResponse):
             return result
         elif not stream:
-            responses_api_response = await self._collect_response_from_stream_async(
-                result
-            )
+            responses_api_response = await self._collect_response_from_stream_async(result)
             return self.transformation_handler.transform_response(
                 model=model,
                 raw_response=responses_api_response,
@@ -332,9 +317,7 @@ class ResponsesToCompletionBridgeHandler:
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
-                return self._apply_post_stream_processing(
-                    result, model, custom_llm_provider
-                )
+                return self._apply_post_stream_processing(result, model, custom_llm_provider)
             completion_stream = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,  # type: ignore
                 sync_stream=False,
@@ -346,9 +329,7 @@ class ResponsesToCompletionBridgeHandler:
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
             )
-            return self._apply_post_stream_processing(
-                streamwrapper, model, custom_llm_provider
-            )
+            return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
     @staticmethod
     def _apply_post_stream_processing(

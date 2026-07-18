@@ -130,11 +130,7 @@ class LunaryLogger:
                         pass
 
             if response_obj:
-                usage = (
-                    parse_usage(response_obj["usage"])
-                    if "usage" in response_obj
-                    else None
-                )
+                usage = parse_usage(response_obj["usage"]) if "usage" in response_obj else None
 
                 output = response_obj["choices"] if "choices" in response_obj else None
 

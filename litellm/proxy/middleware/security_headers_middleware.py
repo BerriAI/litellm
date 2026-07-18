@@ -41,11 +41,7 @@ class SecurityHeadersMiddleware:
         async def send_with_security_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                applied = (
-                    (*STATIC_SECURITY_HEADERS, HSTS_HEADER)
-                    if _hsts_enabled()
-                    else STATIC_SECURITY_HEADERS
-                )
+                applied = (*STATIC_SECURITY_HEADERS, HSTS_HEADER) if _hsts_enabled() else STATIC_SECURITY_HEADERS
                 for name, value in applied:
                     headers.setdefault(name, value)
             await send(message)

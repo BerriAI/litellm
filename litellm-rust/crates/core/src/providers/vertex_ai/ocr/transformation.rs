@@ -1,12 +1,15 @@
+use crate::constants::{
+    BEARER_SCHEME, GOOGLE_API_KEY_PREFIX, VERTEX_GLOBAL_API_BASE, VERTEX_GLOBAL_LOCATION,
+};
 use crate::error::{json_type_name, CoreError, CoreResult};
-use crate::ocr::transformation::OcrProviderConfig;
+use crate::ocr::transformation::{OcrAuth, OcrProviderConfig};
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{json, Map, Value};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
 const VERTEX_DEFAULT_LOCATION: &str = "us-central1";
-const VERTEX_DEFAULT_DEEPSEEK_API_BASE: &str = "https://aiplatform.googleapis.com";
+const VERTEX_DEFAULT_DEEPSEEK_API_BASE: &str = VERTEX_GLOBAL_API_BASE;
 const VERTEX_AI_API_KEY_ENV: &str = "VERTEX_AI_API_KEY";
 const VERTEXAI_API_KEY_ENV: &str = "VERTEXAI_API_KEY";
 const VERTEXAI_PROJECT_ENV: &str = "VERTEXAI_PROJECT";
@@ -40,22 +43,76 @@ pub fn is_deepseek_model(model: &str) -> bool {
     model.to_ascii_lowercase().contains("deepseek")
 }
 
-pub fn resolve_vertex_api_key(
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VertexTokenSource {
+    Explicit(String),
+    Mint,
+}
+
+fn is_google_api_key(token: &str) -> bool {
+    token.starts_with(GOOGLE_API_KEY_PREFIX)
+}
+
+fn google_api_key_not_oauth_error() -> CoreError {
+    CoreError::Auth(
+        "Received a Google API key (AIza...) for Vertex AI, which is not an OAuth access token. \
+         Provide service-account credentials/ADC or an OAuth access token instead"
+            .to_string(),
+    )
+}
+
+pub fn classify_vertex_bearer(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
-    api_key
+) -> CoreResult<VertexTokenSource> {
+    let token = api_key
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| env_lookup(VERTEX_AI_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .or_else(|| env_lookup(VERTEXAI_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or_else(|| {
-            CoreError::Auth(
-                "Missing Vertex AI access token - pass api_key or provide Authorization via extra_headers"
-                    .to_string(),
-            )
-        })
+        .or_else(|| env_lookup(VERTEXAI_API_KEY_ENV).filter(|key| !key.trim().is_empty()));
+
+    match token {
+        Some(token) if is_google_api_key(token.trim()) => Err(google_api_key_not_oauth_error()),
+        Some(token) => Ok(VertexTokenSource::Explicit(token.trim().to_string())),
+        None => Ok(VertexTokenSource::Mint),
+    }
+}
+
+fn malformed_vertex_authorization_error() -> CoreError {
+    CoreError::Auth(
+        "Vertex AI requires exactly one `Authorization: Bearer <OAuth access token>` header. \
+         Provide a valid OAuth Bearer token, or omit the header to mint one from credentials/ADC"
+            .to_string(),
+    )
+}
+
+pub fn validate_vertex_authorization_headers(values: &[&str]) -> CoreResult<()> {
+    match values {
+        [] => Ok(()),
+        [single] => validate_vertex_authorization_value(single),
+        _ => Err(malformed_vertex_authorization_error()),
+    }
+}
+
+fn validate_vertex_authorization_value(header_value: &str) -> CoreResult<()> {
+    let mut parts = header_value.split_whitespace();
+    let scheme = parts
+        .next()
+        .ok_or_else(malformed_vertex_authorization_error)?;
+    let token = parts
+        .next()
+        .ok_or_else(malformed_vertex_authorization_error)?;
+    if parts.next().is_some() {
+        return Err(malformed_vertex_authorization_error());
+    }
+    if !scheme.eq_ignore_ascii_case(BEARER_SCHEME) {
+        return Err(malformed_vertex_authorization_error());
+    }
+    if is_google_api_key(token) {
+        return Err(google_api_key_not_oauth_error());
+    }
+    Ok(())
 }
 
 fn vertex_project(
@@ -84,12 +141,22 @@ fn vertex_location(
         .unwrap_or_else(|| VERTEX_DEFAULT_LOCATION.to_string())
 }
 
+fn vertex_base_url(location: &str) -> String {
+    match location {
+        VERTEX_GLOBAL_LOCATION => VERTEX_GLOBAL_API_BASE.to_string(),
+        location if !location.contains('-') => {
+            format!("https://aiplatform.{location}.rep.googleapis.com")
+        }
+        location => format!("https://{location}-aiplatform.googleapis.com"),
+    }
+}
+
 fn vertex_mistral_api_base(api_base: Option<&str>, location: &str) -> String {
     api_base
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| format!("https://{location}-aiplatform.googleapis.com"))
+        .unwrap_or_else(|| vertex_base_url(location))
         .trim_end_matches('/')
         .to_string()
 }
@@ -241,12 +308,8 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         complete_vertex_mistral_url(api_base, model, optional_params, env_lookup)
     }
 
-    fn resolve_api_key(
-        &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
-        resolve_vertex_api_key(api_key, env_lookup)
+    fn ocr_auth(&self) -> OcrAuth {
+        OcrAuth::VertexOauth
     }
 
     fn requires_data_uri_document(&self) -> bool {
@@ -292,10 +355,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
     ) -> CoreResult<OcrResponseData> {
         let response = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+            .ok_or_else(|| CoreError::unexpected_response_type(&response_json))?;
         let usage = response.get("usage").cloned();
         let content = first_choice_content(&response_json)?;
         let mut ocr_data = ocr_data_from_content(content.clone(), usage.clone(), model);
@@ -314,10 +374,9 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             });
         }
 
-        let object = ocr_data.as_object().ok_or_else(|| CoreError::InvalidType {
-            expected: "object",
-            actual: json_type_name(&ocr_data),
-        })?;
+        let object = ocr_data
+            .as_object()
+            .ok_or_else(|| CoreError::unexpected_response_type(&ocr_data))?;
         let pages = object
             .get("pages")
             .and_then(Value::as_array)
@@ -350,12 +409,8 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         complete_vertex_deepseek_url(api_base, optional_params, env_lookup)
     }
 
-    fn resolve_api_key(
-        &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
-        resolve_vertex_api_key(api_key, env_lookup)
+    fn ocr_auth(&self) -> OcrAuth {
+        OcrAuth::VertexOauth
     }
 }
 
@@ -376,6 +431,171 @@ mod tests {
         assert_eq!(
             url,
             "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
+        );
+    }
+
+    #[test]
+    fn vertex_mistral_url_uses_global_host_without_region_prefix() {
+        let params = Map::from_iter([
+            ("vertex_project".to_string(), json!("proj-1")),
+            ("vertex_location".to_string(), json!("global")),
+        ]);
+
+        let url = complete_vertex_mistral_url(None, "mistral-ocr-maas", &params, &|_| None)
+            .expect("url builds");
+
+        assert_eq!(
+            url,
+            "https://aiplatform.googleapis.com/v1/projects/proj-1/locations/global/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
+        );
+    }
+
+    #[test]
+    fn vertex_mistral_url_uses_residency_host_for_single_token_location() {
+        let params = Map::from_iter([
+            ("vertex_project".to_string(), json!("proj-1")),
+            ("vertex_location".to_string(), json!("eu")),
+        ]);
+
+        let url = complete_vertex_mistral_url(None, "mistral-ocr-maas", &params, &|_| None)
+            .expect("url builds");
+
+        assert_eq!(
+            url,
+            "https://aiplatform.eu.rep.googleapis.com/v1/projects/proj-1/locations/eu/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
+        );
+    }
+
+    #[test]
+    fn vertex_mistral_url_prefers_explicit_api_base() {
+        let params = Map::from_iter([
+            ("vertex_project".to_string(), json!("proj-1")),
+            ("vertex_location".to_string(), json!("global")),
+        ]);
+
+        let url = complete_vertex_mistral_url(
+            Some("https://custom.example.com/"),
+            "mistral-ocr-maas",
+            &params,
+            &|_| None,
+        )
+        .expect("url builds");
+
+        assert_eq!(
+            url,
+            "https://custom.example.com/v1/projects/proj-1/locations/global/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
+        );
+    }
+
+    #[test]
+    fn classify_vertex_bearer_uses_explicit_oauth_token() {
+        let source = classify_vertex_bearer(Some("  ya29.oauth-token  "), &|_| None)
+            .expect("token classifies");
+        assert_eq!(
+            source,
+            VertexTokenSource::Explicit("ya29.oauth-token".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_vertex_bearer_reads_oauth_token_from_env() {
+        let source = classify_vertex_bearer(None, &|key| {
+            (key == VERTEX_AI_API_KEY_ENV).then(|| "ya29.from-env".to_string())
+        })
+        .expect("token classifies");
+        assert_eq!(
+            source,
+            VertexTokenSource::Explicit("ya29.from-env".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_vertex_bearer_mints_when_no_token_supplied() {
+        let source = classify_vertex_bearer(None, &|_| None).expect("token classifies");
+        assert_eq!(source, VertexTokenSource::Mint);
+    }
+
+    #[test]
+    fn classify_vertex_bearer_rejects_google_api_key() {
+        let err = classify_vertex_bearer(Some("AIzaSyExampleApiKeyValue"), &|_| None)
+            .expect_err("google api key is rejected");
+        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+    }
+
+    #[test]
+    fn classify_vertex_bearer_rejects_google_api_key_from_env() {
+        let err = classify_vertex_bearer(None, &|key| {
+            (key == VERTEXAI_API_KEY_ENV).then(|| "AIzaSyExampleApiKeyValue".to_string())
+        })
+        .expect_err("google api key from env is rejected");
+        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+    }
+
+    #[test]
+    fn validate_vertex_authorization_headers_rejects_api_key_bearer() {
+        for header in [
+            "Bearer AIzaSyExampleApiKeyValue",
+            "  bearer   AIzaSyExampleApiKeyValue  ",
+            "BEARER AIzaSyExampleApiKeyValue",
+        ] {
+            let err = validate_vertex_authorization_headers(&[header])
+                .expect_err(&format!("api key bearer rejected: {header:?}"));
+            assert!(matches!(err, CoreError::Auth(_)), "{header:?} -> {err:?}");
+        }
+    }
+
+    #[test]
+    fn validate_vertex_authorization_headers_rejects_malformed_values() {
+        for header in [
+            "",
+            "   ",
+            "AIzaSyExampleApiKeyValue",
+            "ya29.raw-token-without-scheme",
+            "Basic dXNlcjpwYXNz",
+            "Token ya29.some-token",
+            "Bearer2 ya29.token",
+            "Bearer",
+            "Bearer    ",
+            "Bearer ya29.token extra-part",
+            "Bearer ya29.token AIzaExtra",
+        ] {
+            let err = validate_vertex_authorization_headers(&[header])
+                .expect_err(&format!("expected rejection for {header:?}"));
+            assert!(matches!(err, CoreError::Auth(_)), "{header:?} -> {err:?}");
+        }
+    }
+
+    #[test]
+    fn validate_vertex_authorization_headers_rejects_duplicate_headers() {
+        let err = validate_vertex_authorization_headers(&[
+            "Bearer ya29.first-token",
+            "Bearer ya29.second-token",
+        ])
+        .expect_err("duplicate authorization headers rejected");
+        assert!(matches!(err, CoreError::Auth(_)), "{err:?}");
+    }
+
+    #[test]
+    fn validate_vertex_authorization_headers_allows_single_oauth_bearer() {
+        for header in [
+            "Bearer ya29.real-oauth-token",
+            "bearer ya29.real-oauth-token",
+            "BEARER ya29.real-oauth-token",
+            "  Bearer   ya29.real-oauth-token  ",
+        ] {
+            validate_vertex_authorization_headers(&[header])
+                .unwrap_or_else(|err| panic!("oauth bearer allowed: {header:?} -> {err:?}"));
+        }
+        validate_vertex_authorization_headers(&[])
+            .expect("no authorization header defers to minting");
+    }
+
+    #[test]
+    fn vertex_configs_use_google_oauth() {
+        assert_eq!(VERTEX_AI_OCR_CONFIG.ocr_auth(), OcrAuth::VertexOauth);
+        assert_eq!(
+            VERTEX_AI_DEEPSEEK_OCR_CONFIG.ocr_auth(),
+            OcrAuth::VertexOauth
         );
     }
 

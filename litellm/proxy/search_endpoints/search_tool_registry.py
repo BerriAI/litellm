@@ -44,9 +44,7 @@ class SearchToolRegistry:
     ########### DB management helpers for search tools ########
     ###########################################################
 
-    async def add_search_tool_to_db(
-        self, search_tool: SearchTool, prisma_client: PrismaClient
-    ):
+    async def add_search_tool_to_db(self, search_tool: SearchTool, prisma_client: PrismaClient):
         """
         Add a search tool to the database.
 
@@ -59,15 +57,11 @@ class SearchToolRegistry:
         """
         try:
             search_tool_name = search_tool.get("search_tool_name")
-            litellm_params: str = safe_dumps(
-                dict(search_tool.get("litellm_params", {}))
-            )
+            litellm_params: str = safe_dumps(dict(search_tool.get("litellm_params", {})))
             search_tool_info: str = safe_dumps(search_tool.get("search_tool_info", {}))
 
             # Create search tool in DB
-            created_search_tool = await SearchToolsRepository(
-                prisma_client
-            ).table.create(
+            created_search_tool = await SearchToolsRepository(prisma_client).table.create(
                 data={
                     "search_tool_name": search_tool_name,
                     "litellm_params": litellm_params,
@@ -88,9 +82,7 @@ class SearchToolRegistry:
             verbose_proxy_logger.exception(f"Error adding search tool to DB: {str(e)}")
             raise Exception(f"Error adding search tool to DB: {str(e)}")
 
-    async def delete_search_tool_from_db(
-        self, search_tool_id: str, prisma_client: PrismaClient
-    ):
+    async def delete_search_tool_from_db(self, search_tool_id: str, prisma_client: PrismaClient):
         """
         Delete a search tool from the database.
 
@@ -103,31 +95,25 @@ class SearchToolRegistry:
         """
         try:
             # Get search tool before deletion for response
-            existing_tool = await SearchToolsRepository(
-                prisma_client
-            ).table.find_unique(where={"search_tool_id": search_tool_id})
+            existing_tool = await SearchToolsRepository(prisma_client).table.find_unique(
+                where={"search_tool_id": search_tool_id}
+            )
 
             if not existing_tool:
                 raise Exception(f"Search tool with ID {search_tool_id} not found")
 
             # Delete from DB
-            await SearchToolsRepository(prisma_client).table.delete(
-                where={"search_tool_id": search_tool_id}
-            )
+            await SearchToolsRepository(prisma_client).table.delete(where={"search_tool_id": search_tool_id})
 
             return {
                 "message": f"Search tool {search_tool_id} deleted successfully",
                 "search_tool_name": existing_tool.search_tool_name,
             }
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error deleting search tool from DB: {str(e)}"
-            )
+            verbose_proxy_logger.exception(f"Error deleting search tool from DB: {str(e)}")
             raise Exception(f"Error deleting search tool from DB: {str(e)}")
 
-    async def update_search_tool_in_db(
-        self, search_tool_id: str, search_tool: SearchTool, prisma_client: PrismaClient
-    ):
+    async def update_search_tool_in_db(self, search_tool_id: str, search_tool: SearchTool, prisma_client: PrismaClient):
         """
         Update a search tool in the database.
 
@@ -141,15 +127,11 @@ class SearchToolRegistry:
         """
         try:
             search_tool_name = search_tool.get("search_tool_name")
-            litellm_params: str = safe_dumps(
-                dict(search_tool.get("litellm_params", {}))
-            )
+            litellm_params: str = safe_dumps(dict(search_tool.get("litellm_params", {})))
             search_tool_info: str = safe_dumps(search_tool.get("search_tool_info", {}))
 
             # Update in DB
-            updated_search_tool = await SearchToolsRepository(
-                prisma_client
-            ).table.update(
+            updated_search_tool = await SearchToolsRepository(prisma_client).table.update(
                 where={"search_tool_id": search_tool_id},
                 data={
                     "search_tool_name": search_tool_name,
@@ -162,9 +144,7 @@ class SearchToolRegistry:
             # Convert to dict with ISO formatted datetimes
             return self._convert_prisma_to_dict(updated_search_tool)
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error updating search tool in DB: {str(e)}"
-            )
+            verbose_proxy_logger.exception(f"Error updating search tool in DB: {str(e)}")
             raise Exception(f"Error updating search tool in DB: {str(e)}")
 
     @staticmethod
@@ -192,16 +172,12 @@ class SearchToolRegistry:
             search_tools: List[SearchTool] = []
             for search_tool in search_tools_from_db:
                 # Convert Prisma result to dict with ISO formatted datetimes
-                search_tool_dict = SearchToolRegistry._convert_prisma_to_dict(
-                    search_tool
-                )
+                search_tool_dict = SearchToolRegistry._convert_prisma_to_dict(search_tool)
                 search_tools.append(SearchTool(**search_tool_dict))  # type: ignore
 
             return search_tools
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error getting search tools from DB: {str(e)}"
-            )
+            verbose_proxy_logger.exception(f"Error getting search tools from DB: {str(e)}")
             raise Exception(f"Error getting search tools from DB: {str(e)}")
 
     async def get_search_tool_by_id_from_db(
@@ -229,9 +205,7 @@ class SearchToolRegistry:
             search_tool_dict = self._convert_prisma_to_dict(search_tool)
             return SearchTool(**search_tool_dict)  # type: ignore
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error getting search tool from DB: {str(e)}"
-            )
+            verbose_proxy_logger.exception(f"Error getting search tool from DB: {str(e)}")
             raise Exception(f"Error getting search tool from DB: {str(e)}")
 
     async def get_search_tool_by_name_from_db(
@@ -259,7 +233,5 @@ class SearchToolRegistry:
             search_tool_dict = self._convert_prisma_to_dict(search_tool)
             return SearchTool(**search_tool_dict)  # type: ignore
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error getting search tool from DB: {str(e)}"
-            )
+            verbose_proxy_logger.exception(f"Error getting search tool from DB: {str(e)}")
             raise Exception(f"Error getting search tool from DB: {str(e)}")

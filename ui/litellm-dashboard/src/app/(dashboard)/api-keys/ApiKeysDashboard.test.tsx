@@ -42,10 +42,6 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   teamListCall: vi.fn(() => new Promise(() => {})),
 }));
 
-vi.mock("@/components/organizations", () => ({
-  fetchOrganizations: vi.fn(),
-}));
-
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(""),
 }));

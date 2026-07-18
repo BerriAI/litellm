@@ -4,6 +4,8 @@ use crate::CoreResult;
 
 use super::types::{OcrRequestData, OcrResponseData};
 
+pub const OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM: &[&str] = &["id"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrAuthStrategy {
     Bearer,
@@ -26,6 +28,12 @@ pub enum OcrResponseHandling {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OcrAuth {
+    ProviderKey,
+    VertexOauth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrDocumentPreparation {
     None,
     DataUri,
@@ -36,13 +44,15 @@ pub trait OcrProviderConfig: Sync {
     fn supported_ocr_params(&self) -> &'static [&'static str];
 
     fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
-        let mut mapped_params = Map::new();
-        for (param, value) in non_default_params {
-            if self.supported_ocr_params().contains(&param.as_str()) {
-                mapped_params.insert(param.clone(), value.clone());
-            }
-        }
-        mapped_params
+        non_default_params
+            .iter()
+            .filter(|(param, value)| {
+                self.supported_ocr_params().contains(&param.as_str())
+                    && !(value.is_null()
+                        && OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM.contains(&param.as_str()))
+            })
+            .map(|(param, value)| (param.clone(), value.clone()))
+            .collect()
     }
 
     fn transform_ocr_request(
@@ -68,9 +78,17 @@ pub trait OcrProviderConfig: Sync {
 
     fn resolve_api_key(
         &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+        _api_key: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> CoreResult<String> {
+        Err(crate::error::CoreError::Auth(
+            "provider does not use direct api-key auth".to_string(),
+        ))
+    }
+
+    fn ocr_auth(&self) -> OcrAuth {
+        OcrAuth::ProviderKey
+    }
 
     fn auth_strategy(&self) -> OcrAuthStrategy {
         OcrAuthStrategy::Bearer

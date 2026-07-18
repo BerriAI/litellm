@@ -10,19 +10,102 @@ from io import IOBase
 from typing import Any, Coroutine, Union, cast
 
 import httpx
+from typing_extensions import Never
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.ocr.rust_bridge import (
+from litellm.rust_bridge.ocr import (
     RustAocr,
     RustOcr,
+    RustOcrError,
     load_rust_aocr,
     load_rust_ocr,
 )
 from litellm.utils import client, filter_out_litellm_params
+
+
+class _OCRInputError(ValueError):
+    pass
+
+
+def _ocr_error_response(status_code: int) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        request=httpx.Request(method="POST", url="https://litellm.ai"),
+    )
+
+
+def _raise_rust_ocr_exception(err: RustOcrError, model: str, custom_llm_provider: str | None) -> Never:
+    provider = custom_llm_provider or "mistral"
+    status_code = err.status_code
+    message = err.message
+    match status_code:
+        case None:
+            raise litellm.APIConnectionError(message=message, llm_provider=provider, model=model)
+        case 400:
+            raise litellm.BadRequestError(message=message, model=model, llm_provider=provider)
+        case 401:
+            raise litellm.AuthenticationError(message=message, llm_provider=provider, model=model)
+        case 403:
+            raise litellm.PermissionDeniedError(
+                message=message,
+                llm_provider=provider,
+                model=model,
+                response=_ocr_error_response(403),
+            )
+        case 404:
+            raise litellm.NotFoundError(message=message, model=model, llm_provider=provider)
+        case 408:
+            raise litellm.Timeout(message=message, model=model, llm_provider=provider)
+        case 422:
+            raise litellm.UnprocessableEntityError(
+                message=message,
+                model=model,
+                llm_provider=provider,
+                response=_ocr_error_response(422),
+            )
+        case 429:
+            raise litellm.RateLimitError(message=message, llm_provider=provider, model=model)
+        case 500:
+            raise litellm.InternalServerError(message=message, llm_provider=provider, model=model)
+        case 502:
+            raise litellm.BadGatewayError(message=message, llm_provider=provider, model=model)
+        case 503:
+            raise litellm.ServiceUnavailableError(message=message, llm_provider=provider, model=model)
+        case _:
+            raise litellm.APIError(
+                status_code=status_code,
+                message=message,
+                llm_provider=provider,
+                model=model,
+            )
+
+
+def _raise_ocr_exception(
+    e: Exception,
+    model: str,
+    custom_llm_provider: str | None,
+    completion_kwargs: dict[str, object],
+    kwargs: dict[str, object],
+) -> Never:
+    if isinstance(e, RustOcrError):
+        _raise_rust_ocr_exception(e, model, custom_llm_provider)
+    if isinstance(e, _OCRInputError):
+        raise litellm.BadRequestError(
+            message="Invalid OCR request",
+            model=model,
+            llm_provider=custom_llm_provider or "mistral",
+        ) from e
+    raise litellm.exception_type(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        original_exception=e,
+        completion_kwargs=completion_kwargs,
+        extra_kwargs=kwargs,
+    )
 
 
 def _timeout_to_seconds(
@@ -65,9 +148,7 @@ def _resolve_ocr_call_context(
     litellm_call_id = cast(str | None, kwargs.get("litellm_call_id", None))
 
     if not isinstance(document, dict):
-        raise ValueError(
-            f"document must be a dict with 'type' and URL/file field, got {type(document)}"
-        )
+        raise _OCRInputError(f"document must be a dict with 'type' and URL/file field, got {type(document)}")
 
     doc_type = document.get("type")
 
@@ -76,10 +157,9 @@ def _resolve_ocr_call_context(
         doc_type = document.get("type")
 
     if doc_type not in ["document_url", "image_url"]:
-        raise ValueError(
-            f"Invalid document type: {doc_type}. "
-            "Must be 'document_url', 'image_url', or 'file'"
-        )
+        raise _OCRInputError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
+
+    caller_supplied_api_base = api_base is not None
 
     (
         model,
@@ -95,16 +175,21 @@ def _resolve_ocr_call_context(
 
     if dynamic_api_key:
         api_key = dynamic_api_key
-    if dynamic_api_base:
+    suppress_dynamic_api_base = (
+        not caller_supplied_api_base
+        and custom_llm_provider == "azure_ai"
+        and ("doc-intelligence" in model.lower() or "documentintelligence" in model.lower())
+    )
+    if dynamic_api_base and not suppress_dynamic_api_base:
         api_base = dynamic_api_base
 
     verbose_logger.debug(f"OCR call - model: {model}, provider: {custom_llm_provider}")
 
-    optional_params = {
-        key: value
-        for key, value in filter_out_litellm_params(kwargs=kwargs).items()
-        if key not in _RUST_BRIDGE_INTERNAL_PARAMS
+    forwarded_kwargs = {
+        **filter_out_litellm_params(kwargs=kwargs),
+        **{key: kwargs[key] for key in _OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM if kwargs.get(key) is not None},
     }
+    optional_params = {key: value for key, value in forwarded_kwargs.items() if key not in _RUST_BRIDGE_INTERNAL_PARAMS}
 
     verbose_logger.debug(f"OCR optional_params forwarded to Rust: {optional_params}")
 
@@ -116,7 +201,7 @@ def _resolve_ocr_call_context(
         optional_params=optional_params,
         litellm_params={
             "litellm_call_id": litellm_call_id,
-            "api_base": api_base,
+            "api_base": api_base or "",
         },
         custom_llm_provider=custom_llm_provider,
     )
@@ -137,7 +222,7 @@ def _resolve_ocr_call_context(
 def _run_pre_call_logging(
     litellm_logging_obj: LiteLLMLoggingObj,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     extra_headers: dict[str, object] | None,
@@ -152,7 +237,7 @@ def _run_pre_call_logging(
                 "document": document,
                 **optional_params,
             },
-            "api_base": api_base,
+            "api_base": api_base or "",
             "headers": extra_headers or {},
         },
     )
@@ -161,7 +246,7 @@ def _run_pre_call_logging(
 def _run_rust_ocr(
     rust_ocr: RustOcr,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str,
@@ -182,7 +267,7 @@ def _run_rust_ocr(
     return OCRResponse.model_validate(
         rust_ocr(
             model=model,
-            document=cast(dict[str, object], document),
+            document=document,
             api_key=api_key,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
@@ -202,7 +287,7 @@ def _missing_rust_bridge_error() -> RuntimeError:
 async def _run_rust_aocr(
     rust_aocr: RustAocr,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str,
@@ -223,7 +308,7 @@ async def _run_rust_aocr(
     return OCRResponse.model_validate(
         await rust_aocr(
             model=model,
-            document=cast(dict[str, object], document),
+            document=document,
             api_key=api_key,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
@@ -336,9 +421,7 @@ async def aocr(
             extra_headers=extra_headers,
             kwargs=kwargs,
         )
-        completion_kwargs.update(
-            {"model": model, "custom_llm_provider": custom_llm_provider}
-        )
+        completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
         rust_aocr = load_rust_aocr()
         if rust_aocr is None:
@@ -357,12 +440,12 @@ async def aocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
-        raise litellm.exception_type(
+        _raise_ocr_exception(
+            e,
             model=model,
             custom_llm_provider=custom_llm_provider,
-            original_exception=e,
             completion_kwargs=completion_kwargs,
-            extra_kwargs=kwargs,
+            kwargs=kwargs,
         )
 
 
@@ -372,9 +455,9 @@ async def aocr(
 
 _MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
 
-_GENERIC_MIME_TYPES = frozenset({"application/octet-stream", "binary/octet-stream"})
-
 _RUST_BRIDGE_INTERNAL_PARAMS = {"original_generic_function"}
+
+_OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM: frozenset[str] = frozenset({"id"})
 
 _MIME_TYPE_MAP = {
     ".pdf": "application/pdf",
@@ -419,24 +502,6 @@ def _sniff_mime_type_from_bytes(data: bytes) -> str | None:
     return None
 
 
-def _normalize_mime_type(value: str) -> str | None:
-    normalized = value.split(";", 1)[0].strip().lower()
-    if not _MIME_PATTERN.match(normalized):
-        return None
-    return normalized
-
-
-def _resolve_declared_mime_type(raw: object) -> str | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, str):
-        raise ValueError("OCR document 'mime_type' must be a string when provided")
-    normalized = _normalize_mime_type(raw)
-    if normalized is None:
-        raise ValueError("OCR document 'mime_type' is not a valid MIME type")
-    return normalized
-
-
 def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str, str]:
     """
     Convert a file-type document dict to a document_url-type document dict
@@ -456,7 +521,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
     """
     file_input = document.get("file")
     if file_input is None:
-        raise ValueError(
+        raise _OCRInputError(
             "document with type='file' must include a 'file' field containing "
             "a pathlib.Path, file-like object, or bytes"
         )
@@ -472,7 +537,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         # Opening it as a path is an arbitrary local file read on the proxy
         # host, which is then base64-encoded and forwarded to the OCR
         # provider — an exfiltration primitive.
-        raise ValueError(
+        raise _OCRInputError(
             "OCR file input does not accept bare str values. Pass bytes, "
             "a pathlib.Path, or a file-like object. To OCR a local file "
             "from a path, call open(path, 'rb') yourself."
@@ -482,7 +547,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         # Python-level type that HTTP form values can't fabricate.
         file_path = str(file_input)
         if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+            raise _OCRInputError("OCR file input path does not exist")
         mime_type = get_mime_type(file_path)
         file_name = os.path.basename(file_path)
         with open(file_path, "rb") as f:
@@ -498,33 +563,21 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         if isinstance(file_bytes, str):
             file_bytes = file_bytes.encode("utf-8")
     else:
-        raise ValueError(
-            f"Unsupported file input type: {type(file_input)}. "
-            "Expected pathlib.Path, bytes, or a file-like object."
+        raise _OCRInputError(
+            f"Unsupported file input type: {type(file_input)}. Expected pathlib.Path, bytes, or a file-like object."
         )
 
     if not file_bytes:
-        raise ValueError("File is empty or could not be read")
+        raise _OCRInputError("File is empty or could not be read")
 
-    declared_mime = (
-        _resolve_declared_mime_type(cast(object, document["mime_type"]))
-        if "mime_type" in document
-        else None
-    )
-    filename_mime = _normalize_mime_type(mime_type)
-    specific_mime = next(
-        (
-            candidate
-            for candidate in (declared_mime, filename_mime)
-            if candidate is not None and candidate not in _GENERIC_MIME_TYPES
-        ),
-        None,
-    )
-    mime_type = (
-        specific_mime
-        or _sniff_mime_type_from_bytes(file_bytes)
-        or "application/octet-stream"
-    )
+    if "mime_type" in document:
+        mime_type = document["mime_type"]
+
+    if mime_type.lower() in ("application/octet-stream", "binary/octet-stream"):
+        mime_type = _sniff_mime_type_from_bytes(file_bytes) or mime_type
+
+    if not _MIME_PATTERN.match(mime_type):
+        raise _OCRInputError(f"Invalid MIME type: {mime_type}")
 
     base64_data = base64.b64encode(file_bytes).decode("utf-8")
     data_uri = f"data:{mime_type};base64,{base64_data}"
@@ -650,9 +703,7 @@ def ocr(
             extra_headers=extra_headers,
             timeout=timeout,
         )
-        completion_kwargs.update(
-            {"model": model, "custom_llm_provider": custom_llm_provider}
-        )
+        completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
         rust_ocr = load_rust_ocr()
         if rust_ocr is None:
@@ -671,10 +722,10 @@ def ocr(
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
-        raise litellm.exception_type(
+        _raise_ocr_exception(
+            e,
             model=model,
             custom_llm_provider=custom_llm_provider,
-            original_exception=e,
             completion_kwargs=completion_kwargs,
-            extra_kwargs=kwargs,
+            kwargs=kwargs,
         )

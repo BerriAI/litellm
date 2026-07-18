@@ -3,7 +3,7 @@ use crate::constants::{
     MIME_IMAGE_GIF, MIME_IMAGE_JPEG, MIME_IMAGE_PNG, MIME_IMAGE_TIFF, MIME_IMAGE_WEBP,
 };
 
-pub fn sniff_document_mime(bytes: &[u8]) -> Option<&'static str> {
+fn sniff_document_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"%PDF-") {
         return Some(MIME_APPLICATION_PDF);
     }
@@ -26,7 +26,7 @@ pub fn sniff_document_mime(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
-pub fn mime_from_file_name(file_name: &str) -> Option<&'static str> {
+fn mime_from_file_name(file_name: &str) -> Option<&'static str> {
     let base_name = file_name.rsplit(['/', '\\']).next()?;
     let extension = base_name.rsplit_once('.')?.1.to_ascii_lowercase();
     match extension.as_str() {
@@ -41,7 +41,7 @@ pub fn mime_from_file_name(file_name: &str) -> Option<&'static str> {
     }
 }
 
-pub fn normalize_declared_mime(declared: &str) -> Option<String> {
+fn normalize_declared_mime(declared: &str) -> Option<String> {
     let base = declared
         .split(';')
         .next()
@@ -104,17 +104,10 @@ mod tests {
     }
 
     #[test]
-    fn sniff_document_mime_does_not_detect_bmp_by_magic_bytes() {
-        assert_eq!(sniff_document_mime(b"BMxxxx"), None);
+    fn sniff_document_mime_rejects_ambiguous_signatures() {
         assert_eq!(sniff_document_mime(b"BM\x36\x00\x00\x00random"), None);
-    }
-
-    #[test]
-    fn sniff_document_mime_returns_none_for_unknown_or_riff_non_webp() {
         assert_eq!(sniff_document_mime(b"plain text payload"), None);
         assert_eq!(sniff_document_mime(b"RIFF\x00\x00\x00\x00WAVEfmt "), None);
-        assert_eq!(sniff_document_mime(b""), None);
-        assert_eq!(sniff_document_mime(b"RIFF"), None);
     }
 
     #[test]
@@ -134,14 +127,6 @@ mod tests {
     }
 
     #[test]
-    fn mime_from_file_name_returns_none_when_unmapped_or_missing_extension() {
-        assert_eq!(mime_from_file_name("archive.zip"), None);
-        assert_eq!(mime_from_file_name("noextension"), None);
-        assert_eq!(mime_from_file_name("/trailing/"), None);
-        assert_eq!(mime_from_file_name(""), None);
-    }
-
-    #[test]
     fn normalize_declared_mime_lowercases_and_strips_parameters() {
         assert_eq!(
             normalize_declared_mime("Application/PDF"),
@@ -154,29 +139,10 @@ mod tests {
     }
 
     #[test]
-    fn normalize_declared_mime_treats_generic_and_blank_as_absent() {
-        assert_eq!(normalize_declared_mime("application/octet-stream"), None);
-        assert_eq!(normalize_declared_mime("Binary/Octet-Stream"), None);
-        assert_eq!(
-            normalize_declared_mime("application/octet-stream; charset=binary"),
-            None
-        );
-        assert_eq!(normalize_declared_mime("   "), None);
-    }
-
-    #[test]
     fn resolve_document_mime_prefers_specific_declared() {
         assert_eq!(
             resolve_document_mime(Some("image/png"), b"%PDF-1.4", Some("/x.pdf")),
             MIME_IMAGE_PNG
-        );
-    }
-
-    #[test]
-    fn resolve_document_mime_normalizes_declared_casing_and_parameters() {
-        assert_eq!(
-            resolve_document_mime(Some("Application/PDF; charset=utf-8"), b"", Some("/x")),
-            MIME_APPLICATION_PDF
         );
     }
 

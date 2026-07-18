@@ -1,40 +1,38 @@
 import configparser
 import os
 import time
+import uuid
 from typing import Any, Dict, Final, List, Optional, Tuple
 
 CONFIG_FILE_PATH_DEFAULT: Final[str] = "~/.opik.config"
 
 
-def create_uuid7():
-    ns = time.time_ns()
-    last = [0, 0, 0, 0]
+def create_uuid7() -> str:
+    """Generate an RFC 9562 conformant UUIDv7 string.
 
-    # Simple uuid7 implementation
-    sixteen_secs = 16_000_000_000
-    t1, rest1 = divmod(ns, sixteen_secs)
-    t2, rest2 = divmod(rest1 << 16, sixteen_secs)
-    t3, _ = divmod(rest2 << 12, sixteen_secs)
-    t3 |= 7 << 12  # Put uuid version in top 4 bits, which are 0 in t3
+    The top 48 bits encode the Unix timestamp in milliseconds. Opik's backend
+    validates this embedded timestamp on ingestion (it must fall within a window
+    around "now"), so the encoding has to be correct or trace/span batches are
+    rejected with HTTP 400. Implemented with the standard library only, so no
+    extra dependency is added to litellm. See ``opik.id_helpers`` for the
+    reference implementation.
+    """
+    unix_ts_ms = int(time.time() * 1000)
 
-    # The next two bytes are an int (t4) with two bits for
-    # the variant 2 and a 14 bit sequence counter which increments
-    # if the time is unchanged.
-    if t1 == last[0] and t2 == last[1] and t3 == last[2]:
-        # Stop the seq counter wrapping past 0x3FFF.
-        # This won't happen in practice, but if it does,
-        # uuids after the 16383rd with that same timestamp
-        # will not longer be correctly ordered but
-        # are still unique due to the 6 random bytes.
-        if last[3] < 0x3FFF:
-            last[3] += 1
-    else:
-        last[:] = (t1, t2, t3, 0)
-    t4 = (2 << 14) | last[3]  # Put variant 0b10 in top two bits
+    # Fill the 16-byte buffer with random data, then overwrite the structured
+    # parts (timestamp, version, variant) defined by the UUIDv7 layout.
+    uuid_bytes = bytearray(os.urandom(16))
 
-    # Six random bytes for the lower part of the uuid
-    rand = os.urandom(6)
-    return f"{t1:>08x}-{t2:>04x}-{t3:>04x}-{t4:>04x}-{rand.hex()}"
+    # First 48 bits (6 bytes): Unix timestamp in milliseconds.
+    uuid_bytes[0:6] = unix_ts_ms.to_bytes(6, byteorder="big")
+
+    # Version 7 in the top 4 bits of byte 6.
+    uuid_bytes[6] = 0x70 | (uuid_bytes[6] & 0x0F)
+
+    # Variant 0b10 in the top 2 bits of byte 8.
+    uuid_bytes[8] = 0x80 | (uuid_bytes[8] & 0x3F)
+
+    return str(uuid.UUID(bytes=bytes(uuid_bytes)))
 
 
 def _read_opik_config_file() -> Dict[str, str]:
@@ -43,9 +41,7 @@ def _read_opik_config_file() -> Dict[str, str]:
     config = configparser.ConfigParser()
     config.read(config_path)
 
-    config_values = {
-        section: dict(config.items(section)) for section in config.sections()
-    }
+    config_values = {section: dict(config.items(section)) for section in config.sections()}
 
     if "opik" in config_values:
         return config_values["opik"]

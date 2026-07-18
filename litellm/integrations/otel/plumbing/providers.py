@@ -2,9 +2,20 @@
 
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
-from opentelemetry import baggage, metrics
+from opentelemetry import _logs, baggage, metrics
+from opentelemetry._events import EventLogger
+from opentelemetry._logs import LoggerProvider, NoOpLoggerProvider
 from opentelemetry.context import Context
 from opentelemetry.metrics import MeterProvider, NoOpMeterProvider
+from opentelemetry.sdk._events import EventLoggerProvider
+from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
+from opentelemetry.sdk._logs.export import (
+    BatchLogRecordProcessor,
+    ConsoleLogExporter,
+    InMemoryLogExporter,
+    LogExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
@@ -53,9 +64,7 @@ def to_otel_span_kind(kind: LiteLLMSpanKind) -> SpanKind:
 _EXPORTER_FACTORIES: dict[str, Callable[[ExporterSpec], SpanExporter]] = {}
 
 
-def register_exporter_factory(
-    kind: str, factory: Callable[[ExporterSpec], SpanExporter]
-) -> None:
+def register_exporter_factory(kind: str, factory: Callable[[ExporterSpec], SpanExporter]) -> None:
     """Register a custom exporter ``factory`` for the exporter ``kind``."""
     _EXPORTER_FACTORIES[kind.lower()] = factory
 
@@ -72,9 +81,7 @@ class LiteLLMBaggageSpanProcessor(SpanProcessor):
         self._allowed_prefixes = tuple(allowed_prefixes)
 
     def _is_allowed(self, key: str) -> bool:
-        return key in self._allowed_keys or any(
-            key.startswith(prefix) for prefix in self._allowed_prefixes
-        )
+        return key in self._allowed_keys or any(key.startswith(prefix) for prefix in self._allowed_prefixes)
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         for key, value in baggage.get_all(parent_context).items():
@@ -156,11 +163,7 @@ def build_span_exporter(config: OpenTelemetryV2Config) -> SpanExporter:
     ``exporter`` / ``endpoint`` / ``headers`` fields. To configure multiple
     exporters, populate ``config.exporters`` directly.
     """
-    return _exporter_from_spec(
-        ExporterSpec(
-            kind=config.exporter, endpoint=config.endpoint, headers=config.headers
-        )
-    )
+    return _exporter_from_spec(ExporterSpec(kind=config.exporter, endpoint=config.endpoint, headers=config.headers))
 
 
 def _otlp_metrics_endpoint(endpoint: str | None) -> str | None:
@@ -232,6 +235,112 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
     return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 
 
+def _otlp_logs_endpoint(endpoint: str | None) -> str | None:
+    """Point an OTLP/HTTP base endpoint at the ``/v1/logs`` signal path.
+
+    The OTLP/HTTP exporter only appends ``/v1/logs`` when it reads
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` itself; an explicitly passed endpoint is used
+    verbatim, so a base URL would POST to the root. Mirror ``_otlp_traces_endpoint``
+    for the logs signal (rewriting a sibling signal path when present).
+    """
+    if not endpoint:
+        return endpoint
+    endpoint = endpoint.rstrip("/")
+    if endpoint.endswith("/v1/logs"):
+        return endpoint
+    for other_signal in ("/v1/traces", "/v1/metrics"):
+        if endpoint.endswith(other_signal):
+            return endpoint[: -len(other_signal)] + "/v1/logs"
+    return endpoint + "/v1/logs"
+
+
+def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
+    """Build a log exporter mirroring the exporter selection of the other signals.
+
+    ``console`` (and any unrecognized kind) exports to the console; ``otlp_http``
+    and ``otlp_grpc`` export over OTLP with the configured endpoint/headers;
+    ``in_memory`` buffers for tests. Like GenAI metrics, events ride the
+    single-destination shorthand fields, not the multi-exporter ``exporters`` list.
+    """
+    kind = (config.exporter or "console").lower()
+    if kind in ("in_memory", "inmemory", "memory"):
+        return InMemoryLogExporter()
+    if kind in ("otlp_http", "http", "http/protobuf", "http/json"):
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+            OTLPLogExporter as HTTPLogExporter,
+        )
+
+        return HTTPLogExporter(
+            endpoint=_otlp_logs_endpoint(config.endpoint),
+            headers=parse_headers(config.headers),
+        )
+    if kind in ("otlp_grpc", "grpc"):
+        try:
+            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+                OTLPLogExporter as GRPCLogExporter,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "OpenTelemetry OTLP gRPC log exporter is not available. Install "
+                "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+            ) from exc
+
+        return GRPCLogExporter(endpoint=config.endpoint, headers=parse_headers(config.headers))
+    return ConsoleLogExporter()
+
+
+def build_logger_provider(
+    config: OpenTelemetryV2Config,
+    log_exporter: LogExporter | None = None,
+) -> SDKLoggerProvider:
+    """Build the :class:`LoggerProvider` GenAI events export through.
+
+    ``log_exporter`` is an explicit override (tests inject an
+    ``InMemoryLogExporter``); otherwise the exporter is selected from the config's
+    exporter kind via :func:`build_log_exporter`. Console and in-memory exporters
+    get a Simple processor (synchronous export, which tests rely on), everything
+    else a Batch processor — the same split as span processing.
+    """
+    exporter = log_exporter if log_exporter is not None else build_log_exporter(config)
+    provider = SDKLoggerProvider(resource=build_resource(config))
+    use_simple = isinstance(exporter, (ConsoleLogExporter, InMemoryLogExporter))
+    provider.add_log_record_processor(
+        SimpleLogRecordProcessor(exporter) if use_simple else BatchLogRecordProcessor(exporter)
+    )
+    return provider
+
+
+def resolve_logger_provider(
+    config: OpenTelemetryV2Config,
+    logger_provider: SDKLoggerProvider | None = None,
+) -> SDKLoggerProvider | None:
+    """Resolve the :class:`LoggerProvider` GenAI events record through, or ``None``
+    when the operator has opted out of the logs signal.
+
+    Same resolution order as :func:`resolve_meter_provider`: an injected provider
+    wins (DI/tests); an operator-configured SDK global is reused so events ride
+    their pipeline; an explicit ``NoOpLoggerProvider`` global is an opt-out and
+    yields ``None``, so no event is ever built. Only the default placeholder
+    global makes V2 build a provider from the config and publish it as the global.
+    """
+    if logger_provider is not None:
+        return logger_provider
+
+    existing: LoggerProvider = _logs.get_logger_provider()
+    if isinstance(existing, SDKLoggerProvider):
+        return existing
+    if isinstance(existing, NoOpLoggerProvider):
+        return None
+
+    provider = build_logger_provider(config)
+    _logs.set_logger_provider(provider)
+    return provider
+
+
+def get_event_logger(provider: SDKLoggerProvider, name: str = "litellm") -> EventLogger:
+    return EventLoggerProvider(logger_provider=provider).get_event_logger(name, litellm_version)
+
+
 def build_meter_provider(
     config: OpenTelemetryV2Config,
     metric_reader: "MetricReader | None" = None,
@@ -301,9 +410,7 @@ def build_tracer_provider(
     """
     provider = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
-        baggage_processor = LiteLLMBaggageSpanProcessor(
-            allowed_keys=config.baggage_promoted_keys
-        )
+        baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
 
     if exporter is not None:
@@ -317,11 +424,7 @@ def build_tracer_provider(
         provider.add_span_processor(
             _processor_for(
                 exp,
-                (
-                    spec.use_simple_processor
-                    if spec.use_simple_processor is not None
-                    else use_simple_processor
-                ),
+                (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
             )
         )
     return provider

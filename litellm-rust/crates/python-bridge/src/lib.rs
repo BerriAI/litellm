@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
 use litellm_core::error::CoreError;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
@@ -29,15 +29,22 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
     Ok(json.call_method1("loads", (encoded,))?.unbind())
 }
 
-fn core_error_to_pyerr(err: CoreError) -> PyErr {
-    match err {
-        CoreError::Auth(message) => PyValueError::new_err(message),
-        CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
-        other => PyRuntimeError::new_err(other.to_string()),
-    }
+fn core_error_to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
+    let status_code = err.public_status_code();
+    let message = err.public_message();
+    build_rust_ocr_error(py, &message, status_code).unwrap_or_else(|import_err| import_err)
+}
+
+fn build_rust_ocr_error(
+    py: Python<'_>,
+    message: &str,
+    status_code: Option<u16>,
+) -> PyResult<PyErr> {
+    let exc_type = py
+        .import("litellm.rust_bridge.ocr")?
+        .getattr("RustOcrError")?;
+    let instance = exc_type.call1((message, status_code))?;
+    Ok(PyErr::from_value(instance))
 }
 
 fn optional_object_to_map(
@@ -96,7 +103,6 @@ fn ocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
-    let custom_llm_provider = custom_llm_provider.unwrap_or_else(|| "mistral".to_string());
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
         document,
@@ -111,16 +117,20 @@ fn ocr(
             document,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
-            custom_llm_provider: &custom_llm_provider,
+            custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             optional_params,
             timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
         }))
     });
 
     match result {
         Ok(value) => json_to_py(py, value),
-        Err(err) => Err(core_error_to_pyerr(err)),
+        Err(err) => Err(core_error_to_pyerr(py, err)),
     }
 }
 
@@ -138,7 +148,6 @@ fn aocr(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    let custom_llm_provider = custom_llm_provider.unwrap_or_else(|| "mistral".to_string());
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
         document,
@@ -153,15 +162,19 @@ fn aocr(
             document,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
-            custom_llm_provider: &custom_llm_provider,
+            custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             optional_params,
             timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
         })
         .await
-        .map_err(core_error_to_pyerr)?;
+        .map_err(|err| Python::attach(|py| core_error_to_pyerr(py, err)))?;
 
-        Python::with_gil(|py| json_to_py(py, value))
+        Python::attach(|py| json_to_py(py, value))
     })
 }
 

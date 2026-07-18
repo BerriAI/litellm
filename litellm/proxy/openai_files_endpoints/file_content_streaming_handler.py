@@ -107,9 +107,7 @@ class FileContentStreamingHandler:
             FileContentStreamingResult,
             await litellm.afile_content(
                 **{
-                    "custom_llm_provider": cast(
-                        FileContentProvider, custom_llm_provider
-                    ),
+                    "custom_llm_provider": cast(FileContentProvider, custom_llm_provider),
                     "file_id": file_id,
                     "stream": True,
                     **data,

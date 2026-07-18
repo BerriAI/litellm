@@ -31,9 +31,7 @@ class FalAIImagen4Config(FalAIBaseConfig):
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/imagen4/preview"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Imagen4.
         """

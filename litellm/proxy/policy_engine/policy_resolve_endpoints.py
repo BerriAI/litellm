@@ -97,9 +97,7 @@ def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
     unnamed_count = 0
     for key in keys:
         key_alias = key.key_alias or ""
-        key_tags = _get_tags_from_metadata(
-            key.metadata, getattr(key, "metadata_json", None)
-        )
+        key_tags = _get_tags_from_metadata(key.metadata, getattr(key, "metadata_json", None))
         if key_tags and any(
             RouteChecks._route_matches_wildcard_pattern(route=tag, pattern=pat)
             for tag in key_tags
@@ -153,8 +151,7 @@ async def _find_affected_by_team_patterns(
     for team in all_teams:
         team_alias = team.team_alias or ""
         if team_alias and any(
-            RouteChecks._route_matches_wildcard_pattern(route=team_alias, pattern=pat)
-            for pat in team_patterns
+            RouteChecks._route_matches_wildcard_pattern(route=team_alias, pattern=pat) for pat in team_patterns
         ):
             if team_alias not in existing_teams:
                 new_teams.append(team_alias)
@@ -179,9 +176,7 @@ async def _find_affected_by_team_patterns(
     return new_teams, new_keys, unnamed_keys_count
 
 
-async def _find_affected_keys_by_alias(
-    prisma_client: object, key_patterns: list, existing_keys: list
-) -> list:
+async def _find_affected_keys_by_alias(prisma_client: object, key_patterns: list, existing_keys: list) -> list:
     """Find keys whose alias matches the given patterns."""
 
     affected: list = []
@@ -194,8 +189,7 @@ async def _find_affected_keys_by_alias(
     for key in keys:
         key_alias = key.key_alias or ""
         if key_alias and any(
-            RouteChecks._route_matches_wildcard_pattern(route=key_alias, pattern=pat)
-            for pat in key_patterns
+            RouteChecks._route_matches_wildcard_pattern(route=key_alias, pattern=pat) for pat in key_patterns
         ):
             if key_alias not in existing_keys:
                 affected.append(key_alias)
@@ -260,9 +254,7 @@ async def resolve_policies_for_context(
         )
 
         # Get matching policies with reasons
-        match_results = get_attachment_registry().get_attached_policies_with_reasons(
-            context=context
-        )
+        match_results = get_attachment_registry().get_attached_policies_with_reasons(context=context)
 
         if not match_results:
             return PolicyResolveResponse(

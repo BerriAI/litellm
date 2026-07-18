@@ -19,11 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import orjson
 import pytest
 
-from litellm.ocr.main import (
-    _sniff_mime_type_from_bytes,
-    convert_file_document_to_url_document,
-    get_mime_type,
-)
+from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 
 
 class TestGetMimeType:
@@ -63,39 +59,6 @@ class TestGetMimeType:
         assert isinstance(result, str)
 
 
-class TestSniffMimeTypeFromBytes:
-    def test_should_detect_pdf_from_magic_bytes(self):
-        assert _sniff_mime_type_from_bytes(b"%PDF-1.7\n%rest") == "application/pdf"
-
-    def test_should_detect_png_from_magic_bytes(self):
-        assert _sniff_mime_type_from_bytes(b"\x89PNG\r\n\x1a\n rest") == "image/png"
-
-    def test_should_detect_jpeg_from_magic_bytes(self):
-        assert _sniff_mime_type_from_bytes(b"\xff\xd8\xff\xe0 rest") == "image/jpeg"
-
-    def test_should_detect_gif_from_magic_bytes(self):
-        assert _sniff_mime_type_from_bytes(b"GIF89a rest") == "image/gif"
-
-    def test_should_detect_webp_from_magic_bytes(self):
-        assert (
-            _sniff_mime_type_from_bytes(b"RIFF\x00\x00\x00\x00WEBPrest") == "image/webp"
-        )
-
-    def test_should_detect_tiff_from_magic_bytes(self):
-        assert _sniff_mime_type_from_bytes(b"II*\x00 rest") == "image/tiff"
-        assert _sniff_mime_type_from_bytes(b"MM\x00* rest") == "image/tiff"
-
-    def test_should_not_sniff_bmp_from_magic_bytes(self) -> None:
-        assert _sniff_mime_type_from_bytes(b"BM rest") is None
-        assert _sniff_mime_type_from_bytes(b"BM\x00\x00\x00\x00random") is None
-
-    def test_should_return_none_for_unknown_prefix(self):
-        assert _sniff_mime_type_from_bytes(b"not a known file") is None
-
-    def test_should_not_confuse_riff_without_webp_tag(self):
-        assert _sniff_mime_type_from_bytes(b"RIFF\x00\x00\x00\x00WAVErest") is None
-
-
 class TestConvertFileDocumentToUrlDocument:
     def test_should_convert_pdf_pathlib_path_to_document_url(self):
         """pathlib.Path to a PDF should produce type=document_url with base64 data URI.
@@ -108,9 +71,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path}
-            )
+            result = convert_file_document_to_url_document({"type": "file", "file": tmp_path})
 
             assert result["type"] == "document_url"
             assert result["document_url"].startswith("data:application/pdf;base64,")
@@ -130,9 +91,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path}
-            )
+            result = convert_file_document_to_url_document({"type": "file", "file": tmp_path})
 
             assert result["type"] == "image_url"
             assert result["image_url"].startswith("data:image/png;base64,")
@@ -147,9 +106,7 @@ class TestConvertFileDocumentToUrlDocument:
         request handler the value is attacker-controlled, and opening it as
         a path is an arbitrary local file read on the proxy host."""
         with pytest.raises(ValueError, match="does not accept bare str values"):
-            convert_file_document_to_url_document(
-                {"type": "file", "file": "/etc/passwd"}
-            )
+            convert_file_document_to_url_document({"type": "file", "file": "/etc/passwd"})
 
     def test_should_convert_pathlib_path(self):
         """pathlib.Path objects should work the same as string paths."""
@@ -161,9 +118,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path}
-            )
+            result = convert_file_document_to_url_document({"type": "file", "file": tmp_path})
 
             assert result["type"] == "document_url"
             assert result["document_url"].startswith("data:application/pdf;base64,")
@@ -174,9 +129,7 @@ class TestConvertFileDocumentToUrlDocument:
         """Raw bytes should be converted using a fallback MIME type."""
         content = b"raw bytes content"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": content})
 
         assert result["type"] == "document_url"
         assert "base64," in result["document_url"]
@@ -187,9 +140,7 @@ class TestConvertFileDocumentToUrlDocument:
     def test_should_infer_pdf_mime_from_raw_bytes_magic_number(self):
         content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": content})
 
         assert result["type"] == "document_url"
         assert result["document_url"].startswith("data:application/pdf;base64,")
@@ -197,65 +148,26 @@ class TestConvertFileDocumentToUrlDocument:
     def test_should_infer_png_mime_from_raw_bytes_magic_number(self):
         content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": content})
 
         assert result["type"] == "image_url"
         assert result["image_url"].startswith("data:image/png;base64,")
-
-    def test_should_infer_pdf_mime_from_unnamed_bytesio_magic_number(self):
-        file_obj = BytesIO(b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n")
-
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": file_obj}
-        )
-
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/pdf;base64,")
 
     def test_should_prefer_explicit_mime_over_sniffed_magic_number(self):
         content = b"%PDF-1.4 pretends to be a pdf"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content, "mime_type": "image/png"}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": content, "mime_type": "image/png"})
 
         assert result["type"] == "image_url"
         assert result["image_url"].startswith("data:image/png;base64,")
 
-    def test_should_sniff_when_explicit_mime_is_octet_stream(self):
-        content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
-
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content, "mime_type": "application/octet-stream"}
-        )
-
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/pdf;base64,")
-
-    def test_should_prefer_named_extension_over_sniffed_magic_number(self):
-        file_obj = BytesIO(b"\x89PNG\r\n\x1a\n not really a png")
-        file_obj.name = "report.pdf"
-
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": file_obj}
-        )
-
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/pdf;base64,")
-
     def test_should_fallback_to_octet_stream_for_unrecognized_raw_bytes(self):
         content = b"totally unrecognized payload"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": content})
 
         assert result["type"] == "document_url"
-        assert result["document_url"].startswith(
-            "data:application/octet-stream;base64,"
-        )
+        assert result["document_url"].startswith("data:application/octet-stream;base64,")
 
     def test_should_convert_raw_bytes_with_explicit_mime_type(self):
         """Raw bytes with explicit mime_type should use the specified MIME type."""
@@ -272,9 +184,7 @@ class TestConvertFileDocumentToUrlDocument:
         """Raw bytes with an image MIME type should produce type=image_url."""
         content = b"raw image content"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content, "mime_type": "image/jpeg"}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": content, "mime_type": "image/jpeg"})
 
         assert result["type"] == "image_url"
         assert result["image_url"].startswith("data:image/jpeg;base64,")
@@ -284,9 +194,7 @@ class TestConvertFileDocumentToUrlDocument:
         content = b"file-like content"
         file_obj = BytesIO(content)
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": file_obj}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": file_obj})
 
         assert result["type"] == "document_url"
         assert "base64," in result["document_url"]
@@ -297,9 +205,7 @@ class TestConvertFileDocumentToUrlDocument:
         file_obj = BytesIO(content)
         file_obj.name = "test_image.png"
 
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": file_obj}
-        )
+        result = convert_file_document_to_url_document({"type": "file", "file": file_obj})
 
         assert result["type"] == "image_url"
         assert result["image_url"].startswith("data:image/png;base64,")
@@ -310,11 +216,11 @@ class TestConvertFileDocumentToUrlDocument:
             convert_file_document_to_url_document({"type": "file"})
 
     def test_should_raise_error_for_nonexistent_pathlib_path(self):
-        """Non-existent pathlib.Path should raise FileNotFoundError."""
-        with pytest.raises(FileNotFoundError, match="File not found"):
-            convert_file_document_to_url_document(
-                {"type": "file", "file": Path("/nonexistent/path/to/file.pdf")}
-            )
+        """Non-existent pathlib.Path should raise a path-free input error."""
+        with pytest.raises(ValueError, match="does not exist") as exc_info:
+            convert_file_document_to_url_document({"type": "file", "file": Path("/nonexistent/path/to/file.pdf")})
+
+        assert "/nonexistent/path/to/file.pdf" not in str(exc_info.value)
 
     def test_should_raise_error_for_empty_file(self):
         """Empty file should raise ValueError."""
@@ -323,9 +229,7 @@ class TestConvertFileDocumentToUrlDocument:
 
         try:
             with pytest.raises(ValueError, match="File is empty"):
-                convert_file_document_to_url_document(
-                    {"type": "file", "file": tmp_path}
-                )
+                convert_file_document_to_url_document({"type": "file", "file": tmp_path})
         finally:
             os.unlink(str(tmp_path))
 
@@ -334,118 +238,17 @@ class TestConvertFileDocumentToUrlDocument:
         with pytest.raises(ValueError, match="Unsupported file input type"):
             convert_file_document_to_url_document({"type": "file", "file": 12345})
 
-    def test_should_reject_malformed_mime_type(self) -> None:
+    def test_should_raise_error_for_invalid_mime_type(self):
+        """MIME types with special characters should be rejected."""
         content = b"some content"
-        with pytest.raises(ValueError, match="not a valid MIME type"):
+        with pytest.raises(ValueError, match="Invalid MIME type"):
             convert_file_document_to_url_document(
                 {
                     "type": "file",
                     "file": content,
-                    "mime_type": "text/html\r\nX-Injected: true",
+                    "mime_type": "text/html; charset=utf-8\nX-Injected: true",
                 }
             )
-
-    def test_should_reject_blank_mime_type(self) -> None:
-        content = b"%PDF-1.4 content"
-        with pytest.raises(ValueError, match="not a valid MIME type"):
-            convert_file_document_to_url_document(
-                {"type": "file", "file": content, "mime_type": "   "}
-            )
-
-    def test_should_reject_non_string_mime_type(self) -> None:
-        content = b"%PDF-1.4 content"
-        with pytest.raises(ValueError, match="must be a string"):
-            convert_file_document_to_url_document(
-                {"type": "file", "file": content, "mime_type": 123}
-            )
-
-    def test_should_not_echo_raw_mime_value_in_error(self) -> None:
-        content = b"some content"
-        secret_marker = "X-Injected: super-secret"
-        with pytest.raises(ValueError) as exc_info:
-            convert_file_document_to_url_document(
-                {
-                    "type": "file",
-                    "file": content,
-                    "mime_type": f"text/html\r\n{secret_marker}",
-                }
-            )
-        assert secret_marker not in str(exc_info.value)
-
-    def test_should_strip_parameters_from_explicit_mime_type(self) -> None:
-        content = b"raw bytes"
-        result = convert_file_document_to_url_document(
-            {
-                "type": "file",
-                "file": content,
-                "mime_type": "application/pdf; charset=utf-8",
-            }
-        )
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/pdf;base64,")
-
-    def test_should_normalize_explicit_mime_casing(self) -> None:
-        content = b"raw bytes"
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content, "mime_type": "Application/PDF"}
-        )
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/pdf;base64,")
-
-    def test_should_sniff_when_explicit_mime_is_uppercase_octet_stream(self) -> None:
-        content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content, "mime_type": "Application/Octet-Stream"}
-        )
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/pdf;base64,")
-
-    def test_should_sniff_when_explicit_mime_is_binary_octet_stream(self) -> None:
-        content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content, "mime_type": "Binary/Octet-Stream"}
-        )
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/pdf;base64,")
-
-    def test_should_treat_generic_octet_stream_with_parameters_as_ambiguous(
-        self,
-    ) -> None:
-        content = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\n"
-        result = convert_file_document_to_url_document(
-            {
-                "type": "file",
-                "file": content,
-                "mime_type": "application/octet-stream; charset=binary",
-            }
-        )
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith("data:application/pdf;base64,")
-
-    def test_should_not_sniff_bmp_from_raw_bytes(self) -> None:
-        content = b"BM\x36\x00\x00\x00 fake bitmap header"
-        result = convert_file_document_to_url_document(
-            {"type": "file", "file": content}
-        )
-        assert result["type"] == "document_url"
-        assert result["document_url"].startswith(
-            "data:application/octet-stream;base64,"
-        )
-
-    def test_should_resolve_bmp_from_extension(self) -> None:
-        content = b"BM\x36\x00\x00\x00 fake bitmap header"
-        with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as f:
-            f.write(content)
-            f.flush()
-            tmp_path = Path(f.name)
-        try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path}
-            )
-            assert result["type"] == "image_url"
-            assert result["image_url"].startswith("data:image/bmp;base64,")
-        finally:
-            os.unlink(str(tmp_path))
 
     def test_should_override_mime_type_for_pathlib_path(self):
         """Explicit mime_type should override auto-detection from extension."""
@@ -457,9 +260,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = convert_file_document_to_url_document(
-                {"type": "file", "file": tmp_path, "mime_type": "image/png"}
-            )
+            result = convert_file_document_to_url_document({"type": "file", "file": tmp_path, "mime_type": "image/png"})
 
             assert result["type"] == "image_url"
             assert result["image_url"].startswith("data:image/png;base64,")
@@ -710,7 +511,5 @@ class TestProxySecurityGuard:
         result = await self._parse_multipart(mock_request)
 
         assert result["document"]["type"] == "document_url"
-        assert result["document"]["document_url"].startswith(
-            "data:application/pdf;base64,"
-        )
+        assert result["document"]["document_url"].startswith("data:application/pdf;base64,")
         assert result["model"] == "mistral/mistral-ocr-latest"

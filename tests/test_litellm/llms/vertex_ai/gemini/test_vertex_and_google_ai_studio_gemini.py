@@ -474,6 +474,22 @@ def test_vertex_ai_empty_content():
                 reasoning_tokens=5,
             ),
         ),
+        (
+            UsageMetadata(
+                promptTokenCount=4647,
+                candidatesTokenCount=1495,
+                totalTokenCount=29426,
+                thoughtsTokenCount=10785,
+                toolUsePromptTokenCount=12499,
+            ),
+            False,
+            Usage(
+                prompt_tokens=17146,
+                completion_tokens=12280,
+                total_tokens=29426,
+                reasoning_tokens=10785,
+            ),
+        ),
     ],
 )
 def test_vertex_ai_candidate_token_count_inclusive(
@@ -492,6 +508,43 @@ def test_vertex_ai_candidate_token_count_inclusive(
     assert usage.prompt_tokens == expected_usage.prompt_tokens
     assert usage.completion_tokens == expected_usage.completion_tokens
     assert usage.total_tokens == expected_usage.total_tokens
+
+
+def test_vertex_ai_grounded_usage_surfaces_tool_use_tokens():
+    """
+    Grounded Gemini requests (googleSearch) return toolUsePromptTokenCount as part of totalTokenCount.
+    Regression for https://github.com/BerriAI/litellm/issues/33530: it must be folded into
+    prompt_tokens (so prompt_tokens + completion_tokens == total_tokens) and surfaced on
+    prompt_tokens_details.tool_use_tokens.
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = UsageMetadata(
+        promptTokenCount=4647,
+        candidatesTokenCount=1495,
+        totalTokenCount=29426,
+        thoughtsTokenCount=10785,
+        toolUsePromptTokenCount=12499,
+    )
+
+    usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
+    assert usage.prompt_tokens_details.tool_use_tokens == 12499
+
+
+def test_vertex_ai_non_grounded_usage_omits_tool_use_tokens():
+    """Non-grounded responses must not surface a tool_use_tokens field on prompt_tokens_details."""
+    v = VertexGeminiConfig()
+    usage_metadata = UsageMetadata(
+        promptTokenCount=10,
+        candidatesTokenCount=10,
+        totalTokenCount=20,
+    )
+
+    usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert usage.prompt_tokens == 10
+    assert not hasattr(usage.prompt_tokens_details, "tool_use_tokens")
 
 
 def test_streaming_chunk_includes_reasoning_tokens():
@@ -878,6 +931,12 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
         + result.prompt_tokens_details.image_tokens
         == result.prompt_tokens
     )
+
+
+def test_map_response_modalities_video():
+    """The video modality maps to VIDEO instead of MODALITY_UNSPECIFIED, which Gemini rejects."""
+    v = VertexGeminiConfig()
+    assert v.map_response_modalities(["text", "video"]) == ["TEXT", "VIDEO"]
 
 
 def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
@@ -2797,6 +2856,77 @@ def test_partial_json_chunk_on_first_chunk():
     assert (
         iterator.chunk_type == "accumulated_json"
     ), "Should switch to accumulated_json mode"
+
+
+def test_accumulated_json_does_not_reparse_every_fragment():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/26181
+
+    handle_accumulated_json_chunk used to call json.loads on the entire
+    accumulated buffer after EVERY fragment. For a large response fragmented
+    across many chunks that is O(n^2) work in a single GIL-holding C call,
+    which freezes the asyncio event loop for seconds and kills liveness probes.
+
+    The buffer only becomes a complete JSON object on the final fragment, so a
+    correct implementation parses it ~once, not once per fragment. We assert the
+    full chunk still parses correctly AND that json.loads is not called on every
+    fragment (which is what made it quadratic).
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    text = "x" * 200_000  # no braces/brackets so only the final fragment closes
+    blob = json.dumps(
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]}
+    )
+    fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
+    assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
+
+    parsed = None
+    with patch("json.loads", wraps=json.loads) as spy:
+        for fragment in fragments:
+            out = iterator.handle_accumulated_json_chunk(chunk=fragment)
+            if out is not None:
+                parsed = out
+        parse_calls = spy.call_count
+
+    assert parsed is not None, "the reassembled chunk must still parse"
+    assert parsed.choices[0].delta.content == text, "content must be preserved intact"
+
+    assert parse_calls <= 2, (
+        f"json.loads was called {parse_calls} times for {len(fragments)} "
+        "fragments; the O(n^2) per-fragment re-parse has regressed"
+    )
+
+
+def test_accumulated_json_partial_fragment_returns_none_without_parsing():
+    """A fragment that cannot complete the JSON must not trigger a json.loads
+    parse of the whole growing buffer (issue #26181)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    with patch("json.loads", wraps=json.loads) as spy:
+        result = iterator.handle_accumulated_json_chunk(
+            chunk='{"candidates": [{"content": {"parts": [{"text": "partial'
+        )
+    assert result is None
+    assert spy.call_count == 0, "incomplete buffer should not be parsed"
 
 
 def test_google_ai_studio_presence_penalty_supported():
@@ -5139,3 +5269,41 @@ class TestModelResponseIteratorCleanup:
 
         mock_iterator.aclose.assert_awaited_once()
         mock_response.aclose.assert_awaited_once()
+
+
+def test_process_candidates_merges_thought_signatures_and_server_side_tools():
+    """
+    thought_signatures and server_side_tool_invocations must both survive in
+    provider_specific_fields when a candidate carries the two at once; the second
+    merge must extend the dict created by the first, not replace it.
+    """
+    candidates = [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "the weather is sunny", "thoughtSignature": "sig-text"},
+                    {
+                        "toolCall": {
+                            "toolType": "google_search",
+                            "id": "tool-1",
+                            "args": {"query": "weather"},
+                        }
+                    },
+                ],
+            },
+            "finishReason": "STOP",
+        }
+    ]
+    model_response = ModelResponse()
+
+    VertexGeminiConfig._process_candidates(
+        _candidates=candidates,
+        model_response=model_response,
+        standard_optional_params={},
+        cumulative_tool_call_index=0,
+    )
+
+    fields = model_response.choices[-1].message.provider_specific_fields
+    assert fields["thought_signatures"] == ["sig-text"]
+    assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"

@@ -51,9 +51,7 @@ class BaseLLMModelInfo(ABC):
         return None
 
     @abstractmethod
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         """
         Returns a list of models supported by this provider.
         """
@@ -132,9 +130,7 @@ def _convert_tool_response_to_message(
     return None
 
 
-def _dict_to_response_format_helper(
-    response_format: dict, ref_template: Optional[str] = None
-) -> dict:
+def _dict_to_response_format_helper(response_format: dict, ref_template: Optional[str] = None) -> dict:
     if ref_template is not None and response_format.get("type") == "json_schema":
         # Deep copy to avoid modifying original
         modified_format = copy.deepcopy(response_format)

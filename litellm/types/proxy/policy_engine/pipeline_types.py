@@ -53,9 +53,7 @@ class PipelineStep(BaseModel):
         if v is None:
             return None
         if v not in VALID_PIPELINE_ACTIONS:
-            raise ValueError(
-                f"Invalid action '{v}'. Must be one of: {sorted(VALID_PIPELINE_ACTIONS)}"
-            )
+            raise ValueError(f"Invalid action '{v}'. Must be one of: {sorted(VALID_PIPELINE_ACTIONS)}")
         return v
 
 
@@ -79,9 +77,7 @@ class GuardrailPipeline(BaseModel):
     @classmethod
     def validate_mode(cls, v: str) -> str:
         if v not in VALID_PIPELINE_MODES:
-            raise ValueError(
-                f"Invalid mode '{v}'. Must be one of: {sorted(VALID_PIPELINE_MODES)}"
-            )
+            raise ValueError(f"Invalid mode '{v}'. Must be one of: {sorted(VALID_PIPELINE_MODES)}")
         return v
 
 
@@ -99,8 +95,11 @@ class PipelineStepResult(BaseModel):
 class PipelineExecutionResult(BaseModel):
     """Result of executing an entire pipeline."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     terminal_action: str  # block | allow | modify_response
     step_results: List[PipelineStepResult]
     modified_data: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
     modify_response_message: Optional[str] = None
+    original_exception: Optional[Exception] = Field(default=None, exclude=True)
