@@ -126,6 +126,14 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                         payload.get("compression_saved_tokens", 0) or 0
                     ) + daily_transaction.get("compression_saved_tokens", 0)
 
+                    daily_transaction["compression_savings_spend"] = (
+                        payload.get("compression_savings_spend", 0) or 0
+                    ) + daily_transaction.get("compression_savings_spend", 0)
+
+                    daily_transaction["prompt_caching_savings_spend"] = (
+                        payload.get("prompt_caching_savings_spend", 0) or 0
+                    ) + daily_transaction.get("prompt_caching_savings_spend", 0)
+
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
         return aggregated_daily_spend_update_transactions

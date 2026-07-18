@@ -494,6 +494,8 @@ async def test_compression_saved_tokens_aggregation(daily_spend_update_queue):
         "cache_read_input_tokens": 7,
         "cache_creation_input_tokens": 3,
         "compression_saved_tokens": 7000,
+        "compression_savings_spend": 0.007,
+        "prompt_caching_savings_spend": 0.0063,
     }
     transaction2 = {
         "spend": 2.0,
@@ -505,6 +507,8 @@ async def test_compression_saved_tokens_aggregation(daily_spend_update_queue):
         "cache_read_input_tokens": 5,
         "cache_creation_input_tokens": 4,
         "compression_saved_tokens": 600,
+        "compression_savings_spend": 0.0006,
+        "prompt_caching_savings_spend": 0.0045,
     }
 
     await daily_spend_update_queue.add_update({test_key: transaction1})
@@ -517,3 +521,5 @@ async def test_compression_saved_tokens_aggregation(daily_spend_update_queue):
     assert agg["compression_saved_tokens"] == 7600
     assert agg["cache_read_input_tokens"] == 12
     assert agg["cache_creation_input_tokens"] == 7
+    assert agg["compression_savings_spend"] == pytest.approx(0.0076)
+    assert agg["prompt_caching_savings_spend"] == pytest.approx(0.0108)
