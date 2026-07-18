@@ -8,6 +8,7 @@ use tokio::net::{TcpListener, TcpStream};
 use super::common_utils::{
     has_header, messages_provider_config, string_headers, truncate_error_body,
 };
+use super::prepare::prepare_messages_call;
 use super::{messages, MessagesRequest};
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
@@ -52,10 +53,71 @@ fn write_response(body: &str) -> String {
 }
 
 #[test]
-fn provider_config_only_resolves_azure_ai() {
+fn provider_config_resolves_supported_providers() {
     assert!(messages_provider_config("azure_ai").is_some());
-    assert!(messages_provider_config("anthropic").is_none());
+    assert!(messages_provider_config("anthropic").is_some());
     assert!(messages_provider_config("openai").is_none());
+}
+
+#[test]
+fn prepare_messages_call_resolves_native_anthropic() {
+    let prepared = prepare_messages_call(MessagesRequest {
+        model: "claude-opus-4-8",
+        body: json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 16,
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": "hi",
+                    "cache_control": {"type": "ephemeral", "scope": "global"}
+                }]
+            }]
+        }),
+        api_key: Some("sk-ant-test"),
+        api_base: None,
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: None,
+    })
+    .expect("native Anthropic provider resolves");
+
+    assert_eq!(prepared.url, "https://api.anthropic.com/v1/messages");
+    assert!(prepared
+        .upstream_headers
+        .iter()
+        .any(|(name, value)| name == "x-api-key" && value == "sk-ant-test"));
+    assert!(prepared
+        .upstream_headers
+        .iter()
+        .any(|(name, value)| name == "anthropic-version" && value == "2023-06-01"));
+    assert!(prepared
+        .upstream_headers
+        .iter()
+        .any(|(name, value)| name == "content-type" && value == "application/json"));
+    assert_eq!(
+        prepared.body["messages"][0]["content"][0]["cache_control"],
+        json!({"type": "ephemeral", "scope": "global"})
+    );
+}
+
+#[test]
+fn prepare_messages_call_rejects_unknown_provider() {
+    let result = prepare_messages_call(MessagesRequest {
+        model: "some-model",
+        body: json!({"model": "some-model", "max_tokens": 8, "messages": []}),
+        api_key: Some("sk-test"),
+        api_base: None,
+        custom_llm_provider: Some("openai"),
+        extra_headers: None,
+        timeout: None,
+    });
+
+    assert!(matches!(
+        result,
+        Err(CoreError::InvalidProvider(provider)) if provider == "openai"
+    ));
 }
 
 #[test]
@@ -248,12 +310,12 @@ async fn messages_rejects_unsupported_provider() {
         body: json!({"model": "claude-3-5-sonnet", "max_tokens": 8, "messages": []}),
         api_key: Some("sk"),
         api_base: Some("http://127.0.0.1:1"),
-        custom_llm_provider: Some("anthropic"),
+        custom_llm_provider: Some("openai"),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
     })
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "anthropic"));
+    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "openai"));
 }

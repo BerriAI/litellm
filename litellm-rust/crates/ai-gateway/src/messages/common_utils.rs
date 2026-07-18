@@ -1,5 +1,6 @@
 use litellm_core::error::{json_type_name, CoreError};
 use litellm_core::messages::transformation::AnthropicMessagesProviderConfig;
+use litellm_core::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
 use litellm_core::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
 use litellm_core::CoreResult;
 use serde_json::{Map, Value};
@@ -18,6 +19,7 @@ pub(super) fn messages_provider_config(
     provider: &str,
 ) -> Option<&'static dyn AnthropicMessagesProviderConfig> {
     match provider {
+        "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
         "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
         _ => None,
     }

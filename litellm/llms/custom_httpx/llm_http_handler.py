@@ -2261,7 +2261,9 @@ class BaseLLMHTTPHandler:
         request_body: dict,
         timeout: float | httpx.Timeout | None,
     ) -> AnthropicMessagesResponse | None:
-        if custom_llm_provider != "azure_ai" or litellm_params.get("rust") is not True:
+        from litellm.rust_bridge.messages import rust_messages_enabled
+
+        if not rust_messages_enabled():
             return None
         if stream and not rust_stream_eligible:
             return None
