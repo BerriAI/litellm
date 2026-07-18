@@ -20,6 +20,7 @@ from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from models import (
     AnthropicMessagesBody,
     BudgetWindow,
+    BudgetWindowState,
     ChatBody,
     ChatMessage,
     ChatMetadata,
@@ -130,8 +131,13 @@ class TeamInfoParams(BaseModel):
     team_id: str
 
 
+class TeamInfoRow(BaseModel):
+    budget_limits: list[BudgetWindowState] | None = None
+
+
 class TeamInfoResponse(BaseModel):
     team_memberships: list[TeamMembershipRow] = []
+    team_info: TeamInfoRow | None = None
 
 
 class TagNewBody(BaseModel):
@@ -171,6 +177,10 @@ class BudgetRow(BaseModel):
 
 class BudgetInfoResponse(RootModel[list[BudgetRow]]):
     pass
+
+
+def _window_reset_at(windows: list[BudgetWindowState], budget_duration: str) -> str | None:
+    return next((w.reset_at for w in windows if w.budget_duration == budget_duration), None)
 
 
 def is_budget_block(result: StreamingResponse) -> bool:
@@ -220,6 +230,28 @@ class BudgetClient:
 
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
+
+    def key_window_reset_at(self, key: str, budget_duration: str) -> str | None:
+        """The stored reset_at of one budget_limits window on a key, or None if the
+        window (or the whole list) is missing. The reset job advances this in the
+        same pass that zeroes the window's spend counter, so a strictly-later value
+        proves that window's spend was wiped."""
+        windows = self.proxy.key_info(key).budget_limits or []
+        return _window_reset_at(windows, budget_duration)
+
+    def team_window_reset_at(self, team_id: str, budget_duration: str) -> str | None:
+        """Team analog of key_window_reset_at, read from /team/info."""
+        result = self.proxy.transport.get(
+            "/team/info",
+            headers=self.proxy.transport.master,
+            params=TeamInfoParams(team_id=team_id),
+            response_type=TeamInfoResponse,
+        )
+        match result:
+            case Success(data=data) if data.team_info is not None:
+                return _window_reset_at(data.team_info.budget_limits or [], budget_duration)
+            case _:
+                return None
 
     def delete_customers(self, user_ids: list[str]) -> None:
         self.proxy.delete_customers(user_ids)

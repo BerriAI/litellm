@@ -23,6 +23,10 @@ class BudgetWindow(BaseModel):
     max_budget: float
 
 
+class BudgetWindowState(BudgetWindow):
+    reset_at: str | None = None
+
+
 class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
@@ -94,6 +98,7 @@ class KeyInfo(BaseModel):
     budget_reset_at: str | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
+    budget_limits: list[BudgetWindowState] | None = None
 
 
 class KeyInfoResponse(BaseModel):
