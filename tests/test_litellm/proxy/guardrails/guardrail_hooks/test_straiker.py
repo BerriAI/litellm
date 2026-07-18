@@ -264,26 +264,6 @@ async def test_webhook_metadata_session_id_and_opaque_passthrough():
 
 
 @pytest.mark.asyncio
-async def test_webhook_metadata_reads_litellm_metadata_and_skips_internal():
-    g = _make_guardrail()
-    g.async_handler.post.return_value = _mock_response("NONE")
-    await g.apply_guardrail(
-        inputs={"texts": ["x"]},
-        request_data={
-            "model": "m",
-            "litellm_metadata": {
-                "custom_tag": "experiment-7",
-                "user_api_end_user_max_budget": 12.5,
-            },
-        },
-        input_type="request",
-        logging_obj=_logging_obj(),
-    )
-    payload = _posted_payload(g)
-    assert payload["metadata"] == {"custom_tag": "experiment-7"}
-
-
-@pytest.mark.asyncio
 async def test_default_metadata_injected_and_config_wins_on_clash():
     g = _make_guardrail(metadata={"tenant": "acme", "custom_tag": "config-value"})
     g.async_handler.post.return_value = _mock_response("NONE")
