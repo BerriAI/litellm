@@ -14,7 +14,11 @@ from zoneinfo import ZoneInfo
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
-    match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+    # Guard against stringified None values from frontend
+    if duration is None or str(duration).strip().lower() in ["", "none", "null"]:
+        raise ValueError("Invalid duration format")
+        
+    match = re.match(r"(\d+)(mo|[smhdw]?)", str(duration))
 
     if not match:
         raise ValueError("Invalid duration format")
@@ -35,7 +39,7 @@ def get_last_day_of_month(year, month):
     return last_day_of_month
 
 
-def duration_in_seconds(duration: str) -> int:
+def duration_in_seconds(duration: Optional[str]) -> Optional[int]:
     """
     Parameters:
     - duration:
@@ -48,7 +52,11 @@ def duration_in_seconds(duration: str) -> int:
 
     Returns time in seconds till when budget needs to be reset
     """
-    value, unit = _extract_from_regex(duration=duration)
+    # BUG FIX: Intercept "None" strings from the UI and safely return None for Unlimited budgets
+    if duration is None or str(duration).strip().lower() in ["", "none", "null"]:
+        return None
+
+    value, unit = _extract_from_regex(duration=str(duration))
 
     if unit == "s":
         return value
@@ -94,7 +102,7 @@ def duration_in_seconds(duration: str) -> int:
         raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
 
 
-def get_next_standardized_reset_time(duration: str, current_time: datetime, timezone_str: str = "UTC") -> datetime:
+def get_next_standardized_reset_time(duration: Optional[str], current_time: datetime, timezone_str: str = "UTC") -> Optional[datetime]:
     """
     Get the next standardized reset time based on the duration.
 
@@ -112,11 +120,14 @@ def get_next_standardized_reset_time(duration: str, current_time: datetime, time
     Returns:
     - Next reset time at a standardized interval in the specified timezone
     """
+    if duration is None or str(duration).strip().lower() in ["", "none", "null"]:
+        return None
+
     # Set up timezone and normalize current time
     current_time, tz = _setup_timezone(current_time, timezone_str)
 
     # Parse duration
-    value, unit = _parse_duration(duration)
+    value, unit = _parse_duration(str(duration))
     if value is None:
         # Fall back to default if format is invalid
         return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
@@ -165,9 +176,13 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> Tuple[
     return current_time, tz
 
 
-def _parse_duration(duration: str) -> Tuple[Optional[int], Optional[str]]:
+def _parse_duration(duration: Optional[str]) -> Tuple[Optional[int], Optional[str]]:
     """Parse the duration string into value and unit."""
-    match = re.match(r"(\d+)([a-z]+)", duration)
+    # Guard against stringified None values from frontend
+    if duration is None or str(duration).strip().lower() in ["", "none", "null"]:
+        return None, None
+        
+    match = re.match(r"(\d+)([a-z]+)", str(duration))
     if not match:
         return None, None
 
