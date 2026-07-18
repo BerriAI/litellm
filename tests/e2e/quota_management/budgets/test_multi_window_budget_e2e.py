@@ -23,14 +23,16 @@ pytestmark = pytest.mark.e2e
 WINDOW_SECONDS = 30  # the tight window; calls succeed again only after it elapses
 # Prefer the OpenAI cheap model for this polling test: under the full stage suite
 # Claude chat latency + ALB target idle timeout (~60s) can surface as awselb 502
-# HTML mid-wait, which is not a budget signal. gpt-5.5 + 1 token stays well under
-# that ceiling so the wait loop measures window reset, not provider/ALB timeout.
+# HTML mid-wait, which is not a budget signal. gpt-5.5 stays well under that
+# ceiling so the wait loop measures window reset, not provider/ALB timeout.
+# max_tokens must be >1: gpt-5.5 refuses completions that hit the output limit
+# mid-message when capped at 1 token.
 MODEL = CHEAP_OPENAI_MODEL
 
 
 def _call(client: BudgetClient, key: str):
     return client.chat(
-        key, MODEL, f"window {unique_marker()}", max_tokens=1
+        key, MODEL, f"window {unique_marker()}", max_tokens=16
     )
 
 

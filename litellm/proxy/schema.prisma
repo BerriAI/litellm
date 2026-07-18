@@ -396,6 +396,13 @@ model LiteLLM_MCPUserEnvVars {
   @@index([server_id])
 }
 
+model LiteLLM_MCPServerOAuthClient {
+  server_id   String   @id
+  credentials Json?
+  created_at  DateTime @default(now()) @map("created_at")
+  updated_at  DateTime @default(now()) @updatedAt @map("updated_at")
+}
+
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @id

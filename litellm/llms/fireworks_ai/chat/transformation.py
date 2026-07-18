@@ -48,7 +48,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIException
+from ..common_utils import FireworksAIMixin, FireworksAIException
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -70,7 +70,7 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
     return {**top_level, **per_choice}
 
 
-class FireworksAIConfig(OpenAIGPTConfig):
+class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     """
     Reference: https://docs.fireworks.ai/api-reference/post-chatcompletions
 
@@ -114,6 +114,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
         prompt_truncate_len: Optional[int] = None,
         context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None,
     ) -> None:
+        OpenAIGPTConfig.__init__(
+            self,
+            frequency_penalty=frequency_penalty,
+            max_tokens=max_tokens,
+            n=n,
+            stop=stop,
+            temperature=temperature,
+            top_p=top_p,
+            response_format=response_format,
+        )
         locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:

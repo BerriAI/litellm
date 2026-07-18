@@ -21,6 +21,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   semanticMatchingEnabled: false,
   embeddingModel: undefined,
   matchThreshold: 0.5,
+  escalationKeywords: ["LITELLM ESCALATE"],
   adaptive: false,
   adaptiveWeights: { quality: 0.3, cost: 0.7 },
   tierDistancePenalty: 0.5,
@@ -28,9 +29,22 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
-  it("emits only tiers and classifier_type when nothing else is configured", () => {
+  it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
-    expect(config).toEqual({ tiers, classifier_type: "heuristic" });
+    expect(config).toEqual({ tiers, classifier_type: "heuristic", escalation_keywords: ["LITELLM ESCALATE"] });
+  });
+
+  it("trims escalation keywords and drops blank entries", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      escalationKeywords: [" LITELLM ESCALATE ", "", "  ", "MAKE IT BETTER"],
+    });
+    expect(config.escalation_keywords).toEqual(["LITELLM ESCALATE", "MAKE IT BETTER"]);
+  });
+
+  it("emits an empty escalation_keywords list so clearing the field disables escalation", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, escalationKeywords: [] });
+    expect(config.escalation_keywords).toEqual([]);
   });
 
   it("passes through a tier configured with more than one model as a pool", () => {
