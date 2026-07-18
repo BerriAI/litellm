@@ -522,6 +522,7 @@ async def acompletion(
         model=model,
         custom_llm_provider=cast(Optional[str], custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
+        is_first_pass=True,
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
