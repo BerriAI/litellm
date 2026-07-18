@@ -8221,6 +8221,14 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.common_utils import (
+                azure_ai_supports_native_responses,
+            )
+
+            if azure_ai_supports_native_responses(model):
+                return litellm.AzureAIResponsesAPIConfig()
+            return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
