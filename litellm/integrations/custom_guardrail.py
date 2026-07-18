@@ -105,7 +105,7 @@ def _guardrail_log_containers(request_data: dict) -> tuple:
     (deduplicated by identity) rather than only the client one.
     """
 
-    def _ensure_dict(key: str) -> Optional[dict]:
+    def _ensure_dict(key: str) -> "dict | None":
         if key not in request_data:
             return None
         if request_data[key] is None:
