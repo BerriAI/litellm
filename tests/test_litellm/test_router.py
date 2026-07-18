@@ -3535,6 +3535,98 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     litellm.credential_list = []
 
 
+def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
+    return {
+        "model_name": f"model_name_team-1_{model_id}",
+        "litellm_params": {"model": "openai/*", "api_key": api_key},
+        "model_info": {
+            "id": model_id,
+            "team_id": "team-1",
+            "team_public_model_name": "openai/*",
+        },
+    }
+
+
+def test_get_deployment_credentials_with_provider_team_wildcard_priority():
+    """
+    Regression: a global wildcard pattern (e.g. "openai/*") must not shadow a
+    team's own wildcard entry. When team_id is provided, the team wildcard
+    deployment's credentials win; without team_id the global one is used.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "global-key"},
+            },
+            _team_wildcard_model(api_key="team-key"),
+        ],
+    )
+
+    team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-1"
+    )
+    assert team_credentials is not None
+    assert team_credentials["api_key"] == "team-key"
+
+    global_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2"
+    )
+    assert global_credentials is not None
+    assert global_credentials["api_key"] == "global-key"
+
+
+def test_team_wildcard_credentials_not_usable_after_delete_deployment():
+    """
+    Regression: team_pattern_routers retained deleted deployments, so a team
+    user could keep resolving credentials of a deleted wildcard deployment.
+    """
+    router = litellm.Router(model_list=[_team_wildcard_model(api_key="old-key")])
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is not None
+    )
+
+    router.delete_deployment(id="team-wildcard-id")
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is None
+    )
+
+
+def test_team_wildcard_credentials_refreshed_on_upsert_and_set_model_list():
+    """
+    Regression: replacing a team wildcard deployment (upsert or model list
+    reload) must serve the new credentials, not the stale cached ones.
+    """
+    from litellm.types.router import Deployment
+
+    router = litellm.Router(model_list=[_team_wildcard_model(api_key="old-key")])
+
+    router.upsert_deployment(
+        deployment=Deployment(**_team_wildcard_model(api_key="new-key"))
+    )
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-1"
+    )
+    assert credentials is not None
+    assert credentials["api_key"] == "new-key"
+
+    router.set_model_list(model_list=[])
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is None
+    )
+
+
 def test_get_available_guardrail_single_deployment():
     """
     Test get_available_guardrail returns the single guardrail when only one exists.
