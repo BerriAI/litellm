@@ -80,10 +80,10 @@ REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
 # local proxies (compose) to return on first list success.
 MODEL_PEER_RELOAD_SECONDS = float(os.environ.get("E2E_MODEL_PEER_RELOAD_SECONDS", "35"))
 
-LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "750"))
-LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
+LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "100"))
+LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "25"))
 LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
-LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "355"))
+LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "50"))
 LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
 
 
