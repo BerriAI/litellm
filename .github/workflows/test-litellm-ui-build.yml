@@ -4,11 +4,7 @@ permissions:
 
 on:
   pull_request:
-    branches:
-      - main
-      - litellm_internal_staging
-      - litellm_oss_staging
-      - "litellm_**"
+    branches: [main]
 
 jobs:
   build-ui:
@@ -25,7 +21,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0
         with:
           node-version: "20"
           cache: "npm"

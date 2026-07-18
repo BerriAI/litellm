@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - main
-      - litellm_internal_staging
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
   # Allow CodSpeed to trigger backtest performance analysis
   # in order to generate initial data
   workflow_dispatch:
@@ -23,8 +21,8 @@ concurrency:
 
 jobs:
   benchmarks:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -36,23 +34,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
-        with:
-          version: "0.10.9"
+      - name: Install dependencies
+        run: |
+          pip install -e "."
+          pip install pytest pytest-codspeed==4.3.0
 
       - name: Run benchmarks
         uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
         with:
           mode: simulation
-          run: >
-            env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-            uv run --frozen --no-default-groups
-            --with pytest==8.3.5
-            --with pytest-codspeed==4.3.0
-            --with "mcp>=1.26.0,<2.0"
-            --with "a2a-sdk>=1.1.0,<2.0"
-            pytest
-            -p pytest_codspeed.plugin
-            tests/benchmarks/
-            --codspeed
+          run: pytest tests/benchmarks/ --codspeed

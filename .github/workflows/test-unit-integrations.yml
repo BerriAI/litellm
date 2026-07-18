@@ -2,11 +2,7 @@ name: "Unit Tests: Integrations (Callbacks & Logging)"
 
 on:
   pull_request:
-    branches:
-      - main
-      - litellm_internal_staging
-      - litellm_oss_staging
-      - "litellm_**"
+    branches: [main]
 
 permissions:
   contents: read

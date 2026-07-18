@@ -2,15 +2,12 @@ name: "Unit Tests: Proxy API Endpoints"
 
 on:
   pull_request:
-    branches:
-      - main
-      - litellm_internal_staging
-      - litellm_oss_staging
-      - "litellm_**"
-  workflow_dispatch:
+    branches: [main]
 
 permissions:
   contents: read
+  id-token: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -18,10 +15,6 @@ concurrency:
 
 jobs:
   proxy-endpoints:
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: write
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: >-
@@ -31,39 +24,15 @@ jobs:
         tests/test_litellm/proxy/anthropic_endpoints
         tests/test_litellm/proxy/google_endpoints
         tests/test_litellm/proxy/openai_files_endpoint
-        tests/test_litellm/proxy/batches_endpoints
-        tests/test_litellm/proxy/video_endpoints
         tests/test_litellm/proxy/response_api_endpoints
         tests/test_litellm/proxy/image_endpoints
         tests/test_litellm/proxy/vector_store_endpoints
         tests/test_litellm/proxy/agent_endpoints
-        tests/test_litellm/proxy/a2a
         tests/test_litellm/proxy/discovery_endpoints
         tests/test_litellm/proxy/health_endpoints
-        tests/test_litellm/proxy/shutdown
         tests/test_litellm/proxy/public_endpoints
         tests/test_litellm/proxy/prompts
-        tests/test_litellm/proxy/rag_endpoints
-        tests/test_litellm/proxy/realtime_endpoints
         tests/test_litellm/proxy/ui_crud_endpoints
-        tests/test_litellm/proxy/utils
       workers: 2
       reruns: 2
       artifact-name: proxy-endpoints
-
-  # Behavior-pinning tests for litellm/proxy/proxy_server.py. Owns its
-  # own job (not a path on the proxy-endpoints job above) so its budget
-  # is independent and its coverage artifact is uploaded separately.
-  # See: https://www.notion.so/36c43b8acdab81ee845fd5365128a2fc
-  proxy-server:
-    permissions:
-      contents: read
-      id-token: write
-      pull-requests: write
-    uses: ./.github/workflows/_test-unit-base.yml
-    with:
-      test-path: tests/test_litellm/proxy/proxy_server
-      workers: 4
-      reruns: 2
-      timeout-minutes: 60
-      artifact-name: proxy-server

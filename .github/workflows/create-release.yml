@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. 1.84.0, 1.84.0rc1, 1.84.0.dev42, 1.84.0-dev.2, 1.84.0.post1; legacy v1.83.10-stable still accepted)"
+        description: "Release tag (e.g. v1.83.0-stable)"
         required: true
         type: string
       commit_hash:
@@ -30,8 +30,8 @@ jobs:
             echo "::error::commit_hash must be a full 40-character commit SHA"
             exit 1
           fi
-          if ! echo "${TAG}" | grep -qE '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
-            echo "::error::tag must start with X.Y.Z (optional leading v), e.g. 1.84.0, 1.84.0rc1, 1.84.0.dev42, or v1.83.10-stable"
+          if ! echo "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::tag must start with vX.Y.Z"
             exit 1
           fi
 
@@ -44,29 +44,6 @@ jobs:
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
-
-            // Mark RC / dev / nightly / alpha / beta tags as GitHub pre-releases.
-            // Accept both PEP 440 (`.dev`) and SemVer (`-dev`) separators so tags
-            // like `1.84.0.dev2` and `1.84.0-dev.2` are both detected.
-            // PEP 440 post-releases (e.g. `1.84.0.post1`) and legacy `-stable[.patch.N]`
-            // are stable maintenance releases, not pre-releases.
-            const isPrerelease = /(?:rc|nightly|alpha|beta|[-.]dev)/i.test(tag);
-
-            // A stable release should only claim the repo "latest" badge when its
-            // version is >= the current latest. Otherwise a backport (e.g. 1.84.6)
-            // would steal "latest" from a newer line (e.g. 1.88.1).
-            const versionKey = (rawTag) => {
-              const m = String(rawTag).match(/^v?(\d+)\.(\d+)\.(\d+)/);
-              if (!m) return null;
-              const maintenance = String(rawTag).match(/(?:\.post|\.patch\.)(\d+)/i);
-              return [Number(m[1]), Number(m[2]), Number(m[3]), maintenance ? Number(maintenance[1]) : 0];
-            };
-            const isAtLeast = (a, b) => {
-              for (let i = 0; i < a.length; i++) {
-                if (a[i] !== b[i]) return a[i] > b[i];
-              }
-              return true;
-            };
 
             const cosignSection = [
               `## Verify Docker Image Signature`,
@@ -106,47 +83,13 @@ jobs:
             ].join('\n');
 
             try {
-              let makeLatest = "false";
-              const newVersion = versionKey(tag);
-              if (!isPrerelease && newVersion) {
-                let latestVersion = null;
-                try {
-                  const latest = await github.rest.repos.getLatestRelease({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                  });
-                  latestVersion = versionKey(latest.data.tag_name);
-                } catch (error) {
-                  if (error.status !== 404) throw error;
-                }
-                makeLatest = (!latestVersion || isAtLeast(newVersion, latestVersion)) ? "true" : "false";
-              }
-
-              try {
-                await github.rest.git.createRef({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ref: `refs/tags/${tag}`,
-                  sha: commitHash,
-                });
-              } catch (error) {
-                if (error.status !== 422) throw error;
-                const existing = await github.rest.git.getRef({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ref: `tags/${tag}`,
-                });
-                if (existing.data.object.sha !== commitHash) {
-                  throw new Error(`Tag ${tag} already exists at ${existing.data.object.sha}, expected ${commitHash}`);
-                }
-              }
-
               const response = await github.rest.repos.createRelease({
                 draft: true,
                 generate_release_notes: true,
+                target_commitish: commitHash,
                 name: tag,
                 owner: context.repo.owner,
-                prerelease: isPrerelease,
+                prerelease: false,
                 repo: context.repo.repo,
                 tag_name: tag,
               });
@@ -156,31 +99,9 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: response.data.id,
-                tag_name: tag,
                 body: updatedBody,
                 draft: false,
               });
-
-              if (!isPrerelease) {
-                await github.rest.repos.updateRelease({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: response.data.id,
-                  tag_name: tag,
-                  make_latest: makeLatest,
-                });
-              }
-
             } catch (error) {
               core.setFailed(error.message);
             }
-
-  create-branch:
-    name: Create Release Branch
-    needs: release
-    permissions:
-      contents: write
-    uses: ./.github/workflows/create-release-branch.yml
-    with:
-      tag: ${{ inputs.tag }}
-      commit_hash: ${{ inputs.commit_hash }}

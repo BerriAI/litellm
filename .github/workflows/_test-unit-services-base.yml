@@ -1,4 +1,4 @@
-name: _Unit Test Base (Reusable)
+name: _Unit Test Services Base (Reusable)
 
 on:
   workflow_call:
@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       workers:
-        description: "Number of pytest-xdist workers"
+        description: "Number of pytest-xdist workers (0 = no parallelism)"
         required: false
         type: number
         default: 2
@@ -27,10 +27,23 @@ on:
         required: false
         type: number
         default: 10
+      enable-postgres:
+        description: "Start a local Postgres service container and run Prisma migrations"
+        required: false
+        type: boolean
+        default: false
       artifact-name:
         description: "Unique name for the coverage artifact (must be unique per run)"
-        required: true
+        required: false
         type: string
+        default: "run"
+    secrets:
+      DATABASE_URL:
+        required: false
+      POSTGRES_USER:
+        required: false
+      POSTGRES_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -40,6 +53,28 @@ jobs:
     name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Environment is derived from the enable-* flags, not caller-controllable.
+    # This prevents callers from passing arbitrary environment names to bypass secret scoping.
+    environment: >-
+      ${{
+        inputs.enable-postgres && 'integration-postgres' ||
+        ''
+      }}
+
+    services:
+      postgres:
+        image: postgres@sha256:705a5d5b5836f3fcba0d02c4d281e6a7dd9ed2dd4078640f08a1e1e9896e097d # postgres:14
+        env:
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: litellm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -61,9 +96,9 @@ jobs:
             ~/.cache/pypoetry
             ~/.cache/pip
             .venv
-          key: ${{ runner.os }}-poetry-${{ hashFiles('poetry.lock') }}
+          key: ${{ runner.os }}-poetry-services-${{ hashFiles('poetry.lock') }}
           restore-keys: |
-            ${{ runner.os }}-poetry-
+            ${{ runner.os }}-poetry-services-
 
       - name: Install dependencies
         run: |
@@ -83,24 +118,44 @@ jobs:
           poetry run pip install nodejs-wheel-binaries==24.13.1
           poetry run prisma generate --schema litellm/proxy/schema.prisma
 
+      - name: Run Prisma migrations
+        if: ${{ inputs.enable-postgres }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          poetry run prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+
       - name: Run tests
         env:
           TEST_PATH: ${{ inputs.test-path }}
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
+          DATABASE_URL: ${{ inputs.enable-postgres && secrets.DATABASE_URL || '' }}
         run: |
-          poetry run pytest ${TEST_PATH:?} \
-            --tb=short -vv \
-            --maxfail="${MAX_FAILURES}" \
-            -n "${WORKERS}" \
-            --reruns "${RERUNS}" \
-            --reruns-delay 1 \
-            --dist=loadscope \
-            --durations=20 \
-            --cov=litellm \
-            --cov-report=xml:coverage.xml \
-            --cov-config=pyproject.toml
+          if [ "${WORKERS}" = "0" ]; then
+            poetry run pytest ${TEST_PATH:?} \
+              --tb=short -vv \
+              --maxfail="${MAX_FAILURES}" \
+              --reruns "${RERUNS}" \
+              --reruns-delay 1 \
+              --durations=20 \
+              --cov=litellm \
+              --cov-report=xml:coverage.xml \
+              --cov-config=pyproject.toml
+          else
+            poetry run pytest ${TEST_PATH:?} \
+              --tb=short -vv \
+              --maxfail="${MAX_FAILURES}" \
+              -n "${WORKERS}" \
+              --reruns "${RERUNS}" \
+              --reruns-delay 1 \
+              --dist=loadscope \
+              --durations=20 \
+              --cov=litellm \
+              --cov-report=xml:coverage.xml \
+              --cov-config=pyproject.toml
+          fi
 
       - name: Save coverage report
         if: always()

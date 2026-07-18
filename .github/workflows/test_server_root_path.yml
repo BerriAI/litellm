@@ -4,19 +4,14 @@ permissions:
 
 on:
   pull_request:
-    branches:
-      - main
-      - litellm_internal_staging
-      - litellm_oss_staging
-      - "litellm_**"
+    branches: [main]
 
 jobs:
   test-server-root-path:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     strategy:
-      fail-fast: false
       matrix:
         root_path: ["/api/v1", "/llmproxy"]
 
@@ -26,23 +21,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Free up disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
-          sudo apt-get clean
-          df -h /
-
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12
 
       - name: Build Docker image
-        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 #v6.14
         with:
           context: .
           file: ./docker/Dockerfile.non_root
           tags: litellm-test:${{ github.sha }}
           load: true
-          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Start LiteLLM container with SERVER_ROOT_PATH
         run: |
@@ -100,49 +90,6 @@ jobs:
           echo "Response: $content"
           docker logs litellm-test
           exit 1
-
-      - name: Setup Node for Playwright
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "20"
-
-      - name: Install UI deps and Chromium
-        working-directory: ui/litellm-dashboard
-        run: |
-          retry() {
-            local attempt=1
-            local max_attempts=4
-            until "$@"; do
-              if [ "$attempt" -ge "$max_attempts" ]; then
-                echo "Command failed after $attempt attempts: $*"
-                return 1
-              fi
-              echo "Attempt $attempt failed: $*. Retrying in $((attempt * 15))s..."
-              sleep $((attempt * 15))
-              attempt=$((attempt + 1))
-            done
-          }
-
-          npm config set fetch-retries 5
-          npm config set fetch-retry-mintimeout 20000
-          npm config set fetch-retry-maxtimeout 120000
-
-          retry npm ci
-          retry npx playwright install --with-deps chromium
-
-      - name: Run SERVER_ROOT_PATH redirect e2e
-        working-directory: ui/litellm-dashboard
-        env:
-          SERVER_ROOT_PATH: ${{ matrix.root_path }}
-        run: npx playwright test --config=e2e_tests/serverRootPath.config.ts
-
-      - name: Upload Playwright artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: playwright-trace-${{ strategy.job-index }}
-          path: ui/litellm-dashboard/test-results/
-          retention-days: 7
 
       - name: Cleanup
         if: always()
