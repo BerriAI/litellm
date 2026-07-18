@@ -5381,6 +5381,7 @@ def completion(
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            xai_oauth_token_file=kwargs.get("xai_oauth_token_file"),
             **{key: kwargs[key] for key in AWS_CREDENTIAL_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(

@@ -252,6 +252,14 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
     )
+    xai_oauth_token_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "Per-deployment xAI OAuth token file path. When set with use_xai_oauth=True, "
+            "the request reads that account's OAuth credentials instead of the global "
+            "token file, enabling multi-account SuperGrok routing."
+        ),
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     model_info: dict | None = None

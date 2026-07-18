@@ -85,9 +85,22 @@ class _CallbackServer(HTTPServer):
 
 
 class XAIOAuthAuthenticator:
-    def __init__(self, http_client: httpx.Client | HTTPHandler | None = None) -> None:
-        self.token_dir = get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser("~/.config/litellm/xai_oauth")
-        self.auth_file = os.path.join(self.token_dir, get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json")
+    def __init__(
+        self,
+        http_client: httpx.Client | HTTPHandler | None = None,
+        auth_file: str | None = None,
+        token_dir: str | None = None,
+    ) -> None:
+        self.token_dir = (
+            token_dir or get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser("~/.config/litellm/xai_oauth")
+        )
+        if auth_file:
+            self.auth_file = auth_file if os.path.isabs(auth_file) else os.path.join(self.token_dir, auth_file)
+        else:
+            self.auth_file = os.path.join(
+                self.token_dir,
+                get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json",
+            )
         self.http_client = http_client
 
     def get_api_base(self) -> str:
