@@ -2,7 +2,7 @@ import os
 import sys
 from typing import List, Literal, Optional
 
-from litellm.litellm_core_utils.env_utils import get_env_int
+from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
 
 DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
@@ -269,9 +269,18 @@ TOOL_POLICY_CACHE_TTL_SECONDS = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 6
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8)))
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000))
 ###############################################################################################
-MINIMUM_PROMPT_CACHE_TOKEN_COUNT = int(
-    os.getenv("MINIMUM_PROMPT_CACHE_TOKEN_COUNT", 1024)
-)  # minimum number of tokens to cache a prompt by Anthropic
+# Providers will not cache a prefix below a minimum size. That minimum is per-model, not global:
+# Anthropic's ranges from 512 to 4096 depending on the model, and can differ per platform for the
+# same model. The real minimum is resolved from `prompt_cache_min_tokens` in the model cost map;
+# this value is only the fallback for models the cost map has no entry for, and doubles as a global
+# escape hatch when `MINIMUM_PROMPT_CACHE_TOKEN_COUNT` is explicitly set.
+MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE: int | None = get_env_int_or_none("MINIMUM_PROMPT_CACHE_TOKEN_COUNT")
+DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT = 1024
+MINIMUM_PROMPT_CACHE_TOKEN_COUNT = (
+    MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE
+    if MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE is not None
+    else DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+)
 DEFAULT_TRIM_RATIO = float(
     os.getenv("DEFAULT_TRIM_RATIO", 0.75)
 )  # default ratio of tokens to trim from the end of a prompt

@@ -1,41 +1,7 @@
 # local setup to run e2e tests
 configs:
-  dd_sink_script:
-    content: |
-      # Minimal DataDog logs-intake sink for the logging suite: records every
-      # POST (gunzipping the compressed batches the integration sends) and
-      # replays them as JSON on GET /requests so tests can assert delivery.
-      import gzip, json
-      from http.server import BaseHTTPRequestHandler, HTTPServer
-
-      REQUESTS = []
-
-      class Handler(BaseHTTPRequestHandler):
-          def do_POST(self):
-              body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-              if self.headers.get("Content-Encoding") == "gzip":
-                  body = gzip.decompress(body)
-              REQUESTS.append({"path": self.path, "body": body.decode("utf-8", "replace")})
-              self.send_response(202)
-              self.end_headers()
-              self.wfile.write(b"{}")
-
-          def do_GET(self):
-              self.send_response(200)
-              if self.path == "/health":
-                  self.send_header("Content-Type", "text/plain")
-                  self.end_headers()
-                  self.wfile.write(b"ok")
-                  return
-              self.send_header("Content-Type", "application/json")
-              self.end_headers()
-              self.wfile.write(json.dumps({"requests": REQUESTS}).encode())
-
-          def log_message(self, *args):
-              pass
-
-      HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
-
+  mcp_upstream_server:
+    file: ../mcp_tests/mcp_e2e_upstream_server.py
   litellm_config:
     content: |
       general_settings:
@@ -129,15 +95,16 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_healthy
-      dd-sink:
-        condition: service_healthy
     env_file: .env
     environment:
       LITELLM_MASTER_KEY: sk-1234
       STORE_MODEL_IN_DB: "True"
-      DD_API_KEY: local-sink-noauth
-      DD_SITE: datadoghq.com
-      DD_BASE_URL: http://dd-sink:8080
+      # Real DataDog delivery (no local sink): the key comes from the
+      # environment - the cluster's secret manager injects it, locally
+      # tests/e2e/.env provides it. Tests read delivery back via the DataDog
+      # Logs Search API (DD_APP_KEY, test-side only - see logging/datadog_reader.py).
+      DD_API_KEY: ${DD_API_KEY:-}
+      DD_SITE: ${DD_SITE:-datadoghq.com}
       LITELLM_OTEL_V2: "true"
       PHOENIX_COLLECTOR_HTTP_ENDPOINT: http://jaeger:4318/v1/traces
       PHOENIX_API_KEY: local-jaeger-noauth
@@ -166,7 +133,27 @@ services:
         target: /app/config.yaml
     command: ["--config", "/app/config.yaml", "--port", "4000"]
 
-# throwaway db 
+# deterministic self-hosted upstream MCP server (FastMCP add/multiply over
+# streamable-http), reachable by the litellm container at mcp-upstream:8090/mcp.
+# Not a depends_on of litellm on purpose: only the mcp suite needs it, and it
+# boots long before the proxy is live, so it must not gate the other suites'
+# stack. The suite registers it through /v1/mcp/server at test time.
+  mcp-upstream:
+    image: ghcr.io/berriai/litellm:main-latest
+    entrypoint: ["python3", "/app/mcp_upstream_server.py"]
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8090"
+    configs:
+      - source: mcp_upstream_server
+        target: /app/mcp_upstream_server.py
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8090), 2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+# throwaway db
   db:
     image: postgres:16
     environment:
@@ -195,22 +182,6 @@ services:
       - "16686:16686"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:14269/"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-
-# throwaway DataDog logs-intake sink (records POSTs, replays on GET /requests;
-# see E2E_DD_SINK_URL)
-  dd-sink:
-    image: python:3.12-alpine
-    command: ["python", "/sink.py"]
-    configs:
-      - source: dd_sink_script
-        target: /sink.py
-    ports:
-      - "9915:8080"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
       interval: 3s
       timeout: 3s
       retries: 20

@@ -7,9 +7,9 @@ references the proxy resolves at call time, so adding a provider is a new type
 rather than another inline body. Start the proxy with the Rust OCR path enabled:
 
 Each case creates its deployment, drives a real /v1/ocr call, and asserts a
-well-formed OCR document comes back. Per the e2e "skip on environment, fail on
-behavior" rule, a case skips when no proxy answers but fails (never skips) once a
-request reaches it: the proxy fetches each provider's referenced secrets, so a
+well-formed OCR document comes back. Per the e2e hard-fail contract, a case
+fails when no proxy answers and also fails once a request reaches it: the proxy
+fetches each provider's referenced secrets, so a
 missing credential surfaces as a live provider error rather than silent green.
 """
 

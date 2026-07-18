@@ -1,6 +1,6 @@
 """Realtime suite's `client` and `realtime_models` fixtures.
 
-The shared lifecycle (resources/scoped_key), proxy liveness skip, and e2e marker
+The shared lifecycle (resources/scoped_key), proxy liveness gate, and e2e marker
 live in the parent tests/e2e/conftest.py. RealtimeClient holds the shared Gateway,
 so the `resources` fixture cleans up keys this suite creates.
 
