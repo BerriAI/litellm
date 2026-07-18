@@ -4992,6 +4992,16 @@ class ProxyConfig:
 
             await global_mcp_server_manager.load_servers_from_config(mcp_servers_config, mcp_aliases)
 
+        ## MCP IdP OAUTH PROVIDERS (delegated-OBO consent capture)
+        mcp_idp_oauth_providers = config.get("mcp_idp_oauth_providers", None)
+        if mcp_idp_oauth_providers:
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.idp_oauth_config import (
+                load_idp_oauth_providers,
+                set_idp_oauth_registry,
+            )
+
+            set_idp_oauth_registry(load_idp_oauth_providers(mcp_idp_oauth_providers))
+
         ## VECTOR STORES
         vector_store_registry_config = config.get("vector_store_registry", None)
         if vector_store_registry_config:
