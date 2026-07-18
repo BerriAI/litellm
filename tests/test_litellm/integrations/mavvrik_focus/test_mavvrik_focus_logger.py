@@ -102,6 +102,29 @@ def test_with_token_tags_recovers_from_malformed_tags_json() -> None:
     }
 
 
+def test_with_token_tags_recovers_from_non_dict_tags_json() -> None:
+    data = pl.DataFrame({"prompt_tokens": [57], "completion_tokens": [753]})
+    normalized = pl.DataFrame({"Tags": ["null"]})
+
+    result = _with_token_tags(data, normalized)
+
+    tags = json.loads(result["Tags"][0])
+    assert tags == {
+        "prompt_tokens": "57",
+        "completion_tokens": "753",
+        "total_tokens": "810",
+    }
+
+
+def test_with_token_tags_noop_when_tags_column_absent() -> None:
+    data = pl.DataFrame({"prompt_tokens": [57], "completion_tokens": [753]})
+    normalized = pl.DataFrame({"OtherColumn": ["x"]})
+
+    result = _with_token_tags(data, normalized)
+
+    assert result is normalized
+
+
 def test_with_token_tags_omits_total_when_only_one_token_column_present() -> None:
     data = pl.DataFrame({"prompt_tokens": [57]})
     normalized = pl.DataFrame({"Tags": [json.dumps({"model": "azure/gpt-4o-mini"})]})

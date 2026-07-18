@@ -53,7 +53,7 @@ def _with_token_tags(data: pl.DataFrame, normalized: pl.DataFrame) -> pl.DataFra
     adds/renames columns, it never filters or reorders rows.
     """
     available = [k for k in _TOKEN_TAG_KEYS if k in data.columns]
-    if not available or len(data) != len(normalized):
+    if not available or len(data) != len(normalized) or "Tags" not in normalized.columns:
         return normalized
 
     token_rows = data.select(available).to_dicts()
@@ -63,6 +63,8 @@ def _with_token_tags(data: pl.DataFrame, normalized: pl.DataFrame) -> pl.DataFra
         try:
             tags = json.loads(tags_json) if tags_json else {}
         except (TypeError, ValueError):
+            tags = {}
+        if not isinstance(tags, dict):
             tags = {}
         for key in available:
             value = row.get(key)
