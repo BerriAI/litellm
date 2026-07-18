@@ -33,9 +33,11 @@ from batch_client import (
     is_result_access_denied,
 )
 from capabilities import (
+    AZURE_BATCH_MODEL,
     BATCH_ID_SHAPE,
     CAPABILITIES,
     FILE_ID_SHAPE,
+    OPENAI_BATCH_MODEL,
     Capability,
     coverage_cells_for_lifecycle,
     matches_id_shape,
@@ -72,6 +74,22 @@ def cancel_batch(
             case UnknownApiError(status_code=500):
                 time.sleep(1)
                 last = client.cancel_batch(batch_id, key=key, provider=provider)
+            case _:
+                break
+    return unwrap(last)
+
+
+def retrieve_batch(
+    client: BatchClient, batch_id: str, *, key: str, provider: str | None
+) -> BatchObject:
+    last = client.retrieve_batch(batch_id, key=key, provider=provider)
+    for _ in range(BATCH_CANCEL_RETRIES - 1):
+        match last:
+            case Success(data=data):
+                return data
+            case UnknownApiError(status_code=500):
+                time.sleep(1)
+                last = client.retrieve_batch(batch_id, key=key, provider=provider)
             case _:
                 break
     return unwrap(last)
@@ -218,7 +236,7 @@ def test_batch_lifecycle(
             cap.provider, batch.id
         ), f"{cap.provider} batch id {batch.id!r} not in that provider's native shape; misrouted?"
 
-    fetched = unwrap(client.retrieve_batch(batch.id, key=key, provider=provider))
+    fetched = retrieve_batch(client, batch.id, key=key, provider=provider)
     assert_batch_object(fetched)
     assert fetched.id == batch.id
     assert (
@@ -228,7 +246,7 @@ def test_batch_lifecycle(
 
     if cap.can_cancel:
         time.sleep(BATCH_CANCEL_DELAY_SECONDS)
-        pre_cancel = unwrap(client.retrieve_batch(batch.id, key=key, provider=provider))
+        pre_cancel = retrieve_batch(client, batch.id, key=key, provider=provider)
         assert (
             pre_cancel.status not in BATCH_TERMINAL_BEFORE_CANCEL
         ), (
@@ -281,12 +299,12 @@ def test_batch_lifecycle(
 def test_batch_key_model_access_denied(
     client: BatchClient, resources: ResourceManager, batch_deployments: None
 ) -> None:
-    key = resources.key(models=["openai-batch"])
+    key = resources.key(models=[OPENAI_BATCH_MODEL])
 
     denied_upload = client.upload_file(
-        content=render_jsonl("azure-batch"),
+        content=render_jsonl(AZURE_BATCH_MODEL),
         form=FileUploadForm(purpose="batch"),
-        model="azure-batch",
+        model=AZURE_BATCH_MODEL,
         key=key,
     )
     assert is_result_access_denied(
@@ -295,7 +313,7 @@ def test_batch_key_model_access_denied(
 
     raw_file = unwrap(
         client.upload_file(
-            content=render_jsonl("openai-batch"),
+            content=render_jsonl(OPENAI_BATCH_MODEL),
             form=FileUploadForm(purpose="batch"),
             key=key,
             provider="openai",
@@ -306,7 +324,7 @@ def test_batch_key_model_access_denied(
     )
 
     denied_create = client.create_batch(
-        body=BatchCreateBody(input_file_id=raw_file, model="azure-batch"), key=key
+        body=BatchCreateBody(input_file_id=raw_file, model=AZURE_BATCH_MODEL), key=key
     )
     assert is_model_access_denied(
         denied_create
@@ -323,9 +341,9 @@ def test_file_upload_and_delete_outputs(
     key = resources.key()
     file = unwrap(
         client.upload_file(
-            content=render_jsonl("openai-batch"),
+            content=render_jsonl(OPENAI_BATCH_MODEL),
             form=FileUploadForm(purpose="batch"),
-            model="openai-batch",
+            model=OPENAI_BATCH_MODEL,
             key=key,
         )
     )
@@ -390,7 +408,7 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
         client.upload_file(
             content=render_jsonl("gpt-4o-mini"),
             form=FileUploadForm(purpose="batch"),
-            model="openai-batch",
+            model=OPENAI_BATCH_MODEL,
             key=key,
         )
     )

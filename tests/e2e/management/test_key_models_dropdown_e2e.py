@@ -45,11 +45,25 @@ def _models_dropdown_texts(page: Page, must_contain: str) -> list[str]:
     return dropdown.locator(".ant-select-item-option-content").all_inner_texts()
 
 
+def _goto_api_keys(page: Page) -> None:
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            page.goto(f"{UI_BASE_URL}/ui/api-keys/", wait_until="domcontentloaded")
+            return
+        except Exception as exc:
+            msg = str(exc)
+            if "ERR_ABORTED" not in msg and "interrupted" not in msg.lower():
+                raise
+            last_error = exc
+            if attempt < 2:
+                page.wait_for_timeout(1000)
+    assert last_error is not None
+    raise last_error
+
+
 def _open_create_key_modal(page: Page) -> None:
-    # Avoid /ui/api-keys/?create=true: on stage the SPA auth redirect often
-    # aborts that navigation mid-flight ("interrupted by another navigation").
-    # Land on the list, wait for the shell, then open create via the button.
-    page.goto(f"{UI_BASE_URL}/ui/api-keys/", wait_until="domcontentloaded")
+    _goto_api_keys(page)
     create_btn = page.get_by_role("button", name="+ Create New Key")
     expect(create_btn).to_be_visible(timeout=60_000)
     create_btn.click()
@@ -75,7 +89,7 @@ def _submit_create_modal(page: Page, sentinel_label: str) -> str:
 
 
 def _open_key_edit_form(page: Page, key_alias: str) -> None:
-    page.goto(f"{UI_BASE_URL}/ui/api-keys/")
+    _goto_api_keys(page)
     # The list is async; wait for the provisioned row before opening detail.
     row = page.locator("tr").filter(has_text=key_alias).first
     expect(row).to_be_visible(timeout=60_000)
