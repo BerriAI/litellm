@@ -285,11 +285,20 @@ def test_to_subject_unauthenticated_is_empty_with_inbound_token():
 
 
 def test_to_subject_maps_principal_fields():
-    principal = SimpleNamespace(org_id="org1", team_id="team1", user_id="user1")
+    principal = SimpleNamespace(org_id="org1", team_id="team1", user_id="user1", delegated_user_id=None)
     subject = to_subject(principal, None)
     assert subject.tenant_id == "org1"
     assert subject.subject_id == "user1"
     assert subject.inbound_token is None
+
+
+def test_to_subject_delegated_user_replaces_credential_subject():
+    principal = SimpleNamespace(
+        org_id=None, team_id="team1", user_id="agent-svc-user", delegated_user_id="delegated-user"
+    )
+    subject = to_subject(principal, None)
+    assert subject.subject_id == "delegated-user"
+    assert subject.tenant_id == "team1"
 
 
 @pytest.mark.parametrize(

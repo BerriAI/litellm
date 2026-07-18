@@ -280,6 +280,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
   mcp_tool_search_enabled Boolean?
+  mcp_can_delegate      Boolean?       // Agents with this permission may act on behalf of consenting users on MCP routes
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -367,6 +368,20 @@ model LiteLLM_MCPToolsetTable {
   created_by   String?
   updated_at   DateTime @default(now()) @updatedAt
   updated_by   String?
+}
+
+// User consent records authorizing an agent to act on the user's behalf on MCP routes
+model LiteLLM_UserAgentDelegationTable {
+  delegation_id String    @id @default(uuid())
+  user_id       String
+  agent_id      String
+  granted_at    DateTime  @default(now())
+  granted_by    String
+  revoked_at    DateTime?
+  revoked_by    String?
+  updated_at    DateTime  @default(now()) @updatedAt
+
+  @@unique([user_id, agent_id])
 }
 
 // Per-user BYOK credentials for MCP servers

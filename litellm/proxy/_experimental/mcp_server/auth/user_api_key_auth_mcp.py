@@ -322,6 +322,10 @@ class MCPRequestHandler:
                 else:
                     raise
 
+        validated_user_api_key_auth = await MCPRequestHandler.resolve_delegated_user_auth(
+            validated_user_api_key_auth, headers
+        )
+
         return (
             validated_user_api_key_auth,
             mcp_auth_header,
@@ -330,6 +334,115 @@ class MCPRequestHandler:
             oauth2_headers,
             dict(headers),
         )
+
+    @staticmethod
+    async def resolve_delegated_user_auth(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        headers: Headers,
+    ) -> UserAPIKeyAuth | None:
+        """Validate an x-litellm-delegated-user assertion and stamp the delegated subject.
+
+        The asserted email is untrusted input: it grants nothing unless the gateway
+        enables delegation, the calling key is bound to an agent whose object
+        permission carries mcp_can_delegate, AND the asserted user holds an active
+        consent record for that agent. Every failure is a 403 (never a silent
+        ignore, which would let an agent believe it acted as the user while acting
+        as itself). Requests without the header are returned unchanged.
+
+        Scope of the swap: the stamped delegated_user_id changes only the
+        credential-resolution subject for the per-user OAuth (authorization_code)
+        arm, where the delegated user's own stored token is injected upstream (or
+        the request fails closed if they have none). For modes that do not resolve
+        a per-user stored token (token_exchange/OBO, passthrough, client
+        credentials, BYOK), the agent's own credentials are used unchanged; this
+        is not an escalation (the agent never gains the user's identity upstream),
+        and per-user token exchange for OBO servers is a follow-up (the mint arm).
+        """
+        asserted_email = (headers.get(SpecialHeaders.mcp_delegated_user.value) or "").strip()
+        if not asserted_email:
+            return user_api_key_auth
+
+        from litellm.proxy._experimental.mcp_server.delegation_db import (
+            get_active_user_agent_delegation,
+        )
+        from litellm.proxy.proxy_server import general_settings, prisma_client
+
+        if not general_settings.get("mcp_user_delegation_enabled", False):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "User delegation is not enabled on this gateway (mcp_user_delegation_enabled)."},
+            )
+
+        if user_api_key_auth is None or not user_api_key_auth.agent_id:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Delegation requires a key bound to an agent (key has no agent_id)."},
+            )
+
+        agent_object_permission = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        if agent_object_permission is None or not getattr(agent_object_permission, "mcp_can_delegate", False):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Agent {user_api_key_auth.agent_id} is not permitted to act on behalf of users (mcp_can_delegate)."
+                },
+            )
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Delegation requires a connected database."},
+            )
+
+        delegated_user_id = await MCPRequestHandler._resolve_single_user_id_by_email(asserted_email)
+        active_delegation = (
+            await get_active_user_agent_delegation(
+                prisma_client, user_id=delegated_user_id, agent_id=user_api_key_auth.agent_id
+            )
+            if delegated_user_id is not None
+            else None
+        )
+        if active_delegation is None:
+            verbose_logger.warning(
+                "MCP delegation rejected: no active consent for asserted user (agent_id=%s, user_resolved=%s)",
+                user_api_key_auth.agent_id,
+                delegated_user_id is not None,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Delegation not authorized for the asserted user."},
+            )
+
+        return user_api_key_auth.model_copy(update={"delegated_user_id": delegated_user_id})
+
+    @staticmethod
+    async def _resolve_single_user_id_by_email(email: str) -> str | None:
+        """The user_id for an email, or None when unknown OR ambiguous.
+
+        user_email has no unique constraint, so a multi-match must fail closed
+        rather than picking an arbitrary row. This is intentionally NOT cached:
+        the ambiguity guard is a security control, and a cached mapping would go
+        stale on user creation/deletion/email-reassignment (there is no
+        user-mutation invalidation hook), which could resolve the assertion to
+        the wrong or a deleted user. The hot path stays light because the
+        downstream consent lookup is cached; this resolves the identity live.
+        """
+        from litellm.proxy.proxy_server import prisma_client
+        from litellm.repositories.user_repository import UserRepository
+
+        if prisma_client is None:
+            return None
+
+        users = await UserRepository(prisma_client).table.find_many(
+            where={"user_email": {"equals": email, "mode": "insensitive"}}, take=2
+        )
+        if len(users) != 1:
+            verbose_logger.warning(
+                "MCP delegation user lookup returned %d matches for the asserted email; failing closed",
+                len(users),
+            )
+            return None
+        return users[0].user_id
 
     @staticmethod
     def _extract_target_server_names_from_path(path: str) -> List[str]:

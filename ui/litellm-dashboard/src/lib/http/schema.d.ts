@@ -22600,6 +22600,11 @@ export interface components {
              */
             mcp_trusted_proxy_ranges?: string[] | null;
             /**
+             * Mcp User Delegation Enabled
+             * @description Enables the x-litellm-delegated-user assertion on MCP routes: an agent-bound key whose agent has the mcp_can_delegate permission and an active consent record from the asserted user resolves upstream per-user credentials as that user. Default False; when disabled, requests carrying the header are rejected.
+             */
+            mcp_user_delegation_enabled?: boolean | null;
+            /**
              * Mcp Xff Num Trusted Hops
              * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
              */
@@ -25418,6 +25423,8 @@ export interface components {
             blocked_tools?: string[] | null;
             /** Mcp Access Groups */
             mcp_access_groups?: string[] | null;
+            /** Mcp Can Delegate */
+            mcp_can_delegate?: boolean | null;
             /** Mcp Servers */
             mcp_servers?: string[] | null;
             /** Mcp Tool Permissions */
@@ -25460,6 +25467,8 @@ export interface components {
              * @default []
              */
             mcp_access_groups: string[] | null;
+            /** Mcp Can Delegate */
+            mcp_can_delegate?: boolean | null;
             /**
              * Mcp Servers
              * @default []
@@ -32818,6 +32827,8 @@ export interface components {
             created_by?: string | null;
             /** Created By User */
             created_by_user?: unknown | null;
+            /** Delegated User Id */
+            delegated_user_id?: string | null;
             /** End User Id */
             end_user_id?: string | null;
             /** End User Max Budget */

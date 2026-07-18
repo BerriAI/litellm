@@ -174,6 +174,7 @@ class AgentObjectPermission(TypedDict, total=False):
     mcp_tool_permissions: Optional[Dict[str, List[str]]]
     models: Optional[List[str]]
     agents: Optional[List[str]]
+    mcp_can_delegate: Optional[bool]
 
 
 class AgentConfig(TypedDict, total=False):

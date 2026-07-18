@@ -1009,6 +1009,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = None
     search_tools: Optional[List[str]] = None
     mcp_tool_search_enabled: Optional[bool] = None
+    mcp_can_delegate: bool | None = None
 
 
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
@@ -2367,6 +2368,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
     )
+    mcp_user_delegation_enabled: bool | None = Field(
+        None,
+        description="Enables the x-litellm-delegated-user assertion on MCP routes: an agent-bound key whose agent has the mcp_can_delegate permission and an active consent record from the asserted user resolves upstream per-user credentials as that user. Default False; when disabled, requests carrying the header are rejected.",
+    )
     store_prompts_in_spend_logs: Optional[bool] = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
@@ -2576,6 +2581,10 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     api_key: Optional[str] = None
     user_role: Optional[LitellmUserRoles] = None
     allowed_model_region: Optional[AllowedModelRegion] = None
+    # Set only after a validated MCP delegation assertion: upstream per-user
+    # credential resolution runs as this user while admission, permissions,
+    # and attribution stay on the calling agent key
+    delegated_user_id: str | None = None
     parent_otel_span: Optional[Span] = None
     rpm_limit_per_model: Optional[Dict[str, int]] = None
     tpm_limit_per_model: Optional[Dict[str, int]] = None
@@ -3859,6 +3868,7 @@ class SpecialHeaders(enum.Enum):
     mcp_auth = "x-mcp-auth"
     mcp_servers = "x-mcp-servers"
     mcp_access_groups = "x-mcp-access-groups"
+    mcp_delegated_user = "x-litellm-delegated-user"
 
     @classmethod
     def litellm_credential_header_names(cls) -> "frozenset[str]":

@@ -724,6 +724,12 @@ if MCP_AVAILABLE:
             MCPRequestHandler,
         )
 
+        # Validate any delegation assertion up front, outside the try below, so a
+        # delegation 403 propagates instead of being swallowed into a 200 empty-tools
+        # response; also runs before the virtual-tools early return so that path
+        # cannot bypass the assertion check.
+        user_api_key_dict = await MCPRequestHandler.resolve_delegated_user_auth(user_api_key_dict, request.headers)
+
         try:
             mcp_server_name = _as_query_str(mcp_server_name)
             toolset_name = _as_query_str(toolset_name)
@@ -924,6 +930,8 @@ if MCP_AVAILABLE:
         )
 
         try:
+            user_api_key_dict = await MCPRequestHandler.resolve_delegated_user_auth(user_api_key_dict, request.headers)
+
             data = await request.json()
 
             tool_name = data.get("name")

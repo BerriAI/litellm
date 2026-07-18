@@ -6131,3 +6131,214 @@ class TestMCPDcrBridgeDelegateAdmission:
                     route="/mcp/bridge_delegate_server",
                 )
         assert exc_info.value.status_code == 500
+
+
+class TestMCPUserDelegation:
+    """The x-litellm-delegated-user assertion ladder: untrusted input that grants
+    nothing without the flag, an agent binding, the agent capability, and an
+    active consent record; absent header = byte-identical behavior."""
+
+    def _headers(self, email=None):
+        return Headers({"x-litellm-delegated-user": email} if email else {})
+
+    def _agent_auth(self, agent_id="agent-1"):
+        return UserAPIKeyAuth(api_key="test-key", user_id="agent-svc-user", agent_id=agent_id)
+
+    def _general_settings(self, enabled):
+        return {"mcp_user_delegation_enabled": enabled}
+
+    @pytest.mark.asyncio
+    async def test_no_header_returns_auth_unchanged(self):
+        auth = self._agent_auth()
+        result = await MCPRequestHandler.resolve_delegated_user_auth(auth, self._headers())
+        assert result is auth
+        assert result.delegated_user_id is None
+
+    @pytest.mark.asyncio
+    async def test_header_with_flag_disabled_rejected(self):
+        with patch("litellm.proxy.proxy_server.general_settings", self._general_settings(False)):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.resolve_delegated_user_auth(
+                    self._agent_auth(), self._headers("alice@example.com")
+                )
+        assert exc_info.value.status_code == 403
+        assert "mcp_user_delegation_enabled" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_header_on_key_without_agent_binding_rejected(self):
+        auth = UserAPIKeyAuth(api_key="test-key", user_id="someone")
+        with patch("litellm.proxy.proxy_server.general_settings", self._general_settings(True)):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.resolve_delegated_user_auth(auth, self._headers("alice@example.com"))
+        assert exc_info.value.status_code == 403
+        assert "agent" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
+    async def test_header_on_anonymous_auth_rejected(self):
+        with patch("litellm.proxy.proxy_server.general_settings", self._general_settings(True)):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.resolve_delegated_user_auth(None, self._headers("alice@example.com"))
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_agent_without_can_delegate_rejected(self):
+        agent_op = MagicMock()
+        agent_op.mcp_can_delegate = None
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", self._general_settings(True)),
+            patch.object(MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=agent_op)),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.resolve_delegated_user_auth(
+                    self._agent_auth(), self._headers("alice@example.com")
+                )
+        assert exc_info.value.status_code == 403
+        assert "mcp_can_delegate" in str(exc_info.value.detail)
+
+    def _capable_agent_op(self):
+        agent_op = MagicMock()
+        agent_op.mcp_can_delegate = True
+        return agent_op
+
+    @pytest.mark.asyncio
+    async def test_unknown_asserted_user_rejected_uniformly(self):
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", self._general_settings(True)),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch.object(
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=self._capable_agent_op())
+            ),
+            patch.object(MCPRequestHandler, "_resolve_single_user_id_by_email", AsyncMock(return_value=None)),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.resolve_delegated_user_auth(
+                    self._agent_auth(), self._headers("nobody@example.com")
+                )
+        assert exc_info.value.status_code == 403
+        assert "not authorized" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_missing_consent_rejected_with_same_error_as_unknown_user(self):
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", self._general_settings(True)),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch.object(
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=self._capable_agent_op())
+            ),
+            patch.object(MCPRequestHandler, "_resolve_single_user_id_by_email", AsyncMock(return_value="alice-id")),
+            patch(
+                "litellm.proxy._experimental.mcp_server.delegation_db.get_active_user_agent_delegation",
+                AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.resolve_delegated_user_auth(
+                    self._agent_auth(), self._headers("alice@example.com")
+                )
+        assert exc_info.value.status_code == 403
+        assert "not authorized" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_active_consent_stamps_delegated_user_id(self):
+        delegation = MagicMock()
+        auth = self._agent_auth()
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", self._general_settings(True)),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch.object(
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=self._capable_agent_op())
+            ),
+            patch.object(MCPRequestHandler, "_resolve_single_user_id_by_email", AsyncMock(return_value="alice-id")),
+            patch(
+                "litellm.proxy._experimental.mcp_server.delegation_db.get_active_user_agent_delegation",
+                AsyncMock(return_value=delegation),
+            ),
+        ):
+            result = await MCPRequestHandler.resolve_delegated_user_auth(auth, self._headers("alice@example.com"))
+
+        assert result is not None
+        assert result.delegated_user_id == "alice-id"
+        assert result.user_id == "agent-svc-user"
+        assert auth.delegated_user_id is None
+
+    @pytest.mark.asyncio
+    async def test_email_lookup_fails_closed_on_ambiguity(self):
+        two_rows = [MagicMock(user_id="u1"), MagicMock(user_id="u2")]
+        mock_prisma = MagicMock()
+        mock_table = MagicMock()
+        mock_table.find_many = AsyncMock(return_value=two_rows)
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch(
+                "litellm.repositories.user_repository.UserRepository",
+                MagicMock(return_value=MagicMock(table=mock_table)),
+            ),
+        ):
+            resolved = await MCPRequestHandler._resolve_single_user_id_by_email("dupe@example.com")
+        assert resolved is None
+
+    @pytest.mark.asyncio
+    async def test_email_lookup_single_match_case_insensitive(self):
+        one_row = [MagicMock(user_id="alice-id")]
+        mock_table = MagicMock()
+        mock_table.find_many = AsyncMock(return_value=one_row)
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch(
+                "litellm.repositories.user_repository.UserRepository",
+                MagicMock(return_value=MagicMock(table=mock_table)),
+            ),
+        ):
+            resolved = await MCPRequestHandler._resolve_single_user_id_by_email("Alice@Example.com")
+        assert resolved == "alice-id"
+        where = mock_table.find_many.await_args.kwargs["where"]
+        assert where["user_email"]["mode"] == "insensitive"
+
+
+class TestMCPUserDelegationWiring:
+    """Pins the SEAMS: admission calls the delegation resolver and uses its
+    result. The resolver's own ladder is covered above; these fail if the call
+    site is deleted."""
+
+    @pytest.mark.asyncio
+    async def test_process_mcp_request_routes_auth_through_delegation_resolver(self):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [
+                (b"x-litellm-api-key", b"Bearer sk-agent"),
+                (b"x-litellm-delegated-user", b"alice@example.com"),
+            ],
+        }
+        admitted = UserAPIKeyAuth(api_key="hashed", user_id="agent-svc-user", agent_id="agent-1")
+        delegated = admitted.model_copy(update={"delegated_user_id": "alice-id"})
+
+        async def mock_user_api_key_auth(api_key, request):
+            return admitted
+
+        resolve_mock = AsyncMock(return_value=delegated)
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth,
+            ),
+            patch.object(MCPRequestHandler, "resolve_delegated_user_auth", resolve_mock),
+        ):
+            auth_result, *_ = await MCPRequestHandler.process_mcp_request(scope)
+
+        assert auth_result is delegated
+        assert resolve_mock.await_args.args[0] is admitted
+        assert resolve_mock.await_args.args[1].get("x-litellm-delegated-user") == "alice@example.com"
+
+
+def test_object_permission_table_model_surfaces_mcp_can_delegate():
+    """The read model returned by get_object_permission must carry the field, or
+    the capability check silently reads a missing attribute as False even when
+    the DB column is true. Both the base and the table model must declare it."""
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase
+
+    assert "mcp_can_delegate" in LiteLLM_ObjectPermissionBase.model_fields
+    op = LiteLLM_ObjectPermissionTable(object_permission_id="x", mcp_can_delegate=True)
+    assert op.mcp_can_delegate is True
