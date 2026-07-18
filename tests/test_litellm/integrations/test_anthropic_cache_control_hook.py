@@ -1622,6 +1622,13 @@ class TestEnableAnthropicPromptCaching:
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert [p["index"] for p in self._points(tools=tools)] == [None, -1]
 
+    def test_stands_down_when_tool_function_carries_cache_control(self, monkeypatch):
+        """OpenAI-shaped tools nest cache_control under ``function``; the Anthropic
+        chat transform honors that location, so the stand-down must see it too."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        tools = [{"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}}]
+        assert self._points(tools=tools) == []
+
     def test_seed_stands_down_when_only_tools_carry_cache_control(self, monkeypatch):
         """Same guard on the /chat/completions seeding path."""
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
@@ -1724,6 +1731,128 @@ class TestEnableAnthropicPromptCaching:
 
         assert result_sys == "sys"
         assert result_msgs == messages
+
+
+class TestConfiguredInjectionPointsStandDown:
+    """Configured cache_control_injection_points must stand down entirely when the
+    client already set its own cache_control anywhere in the request (LIT-4582);
+    injecting alongside client breakpoints clashes with the client's caching
+    strategy and can push the request past Anthropic's four-block limit."""
+
+    CONFIGURED = [{"location": "message", "role": "system"}]
+
+    CLEAN_MESSAGES: List[AllMessageValues] = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    MARKED_MESSAGES: List[AllMessageValues] = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]},
+    ]
+
+    V1_MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+
+    def _seed(self, params, messages, tools=None, is_first_pass=True):
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=messages,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=tools,
+            is_first_pass=is_first_pass,
+        )
+
+    def _inject(self, messages, kwargs, system="sys", tools=None, is_first_pass=True):
+        return AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages,
+            system,
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            tools=tools,
+            is_first_pass=is_first_pass,
+        )
+
+    def test_configured_points_dropped_when_messages_carry_cache_control(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        self._seed(params, copy.deepcopy(self.MARKED_MESSAGES))
+        assert "cache_control_injection_points" not in params
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "function", "function": {"name": "t", "parameters": {}}, "cache_control": {"type": "ephemeral"}},
+            {"type": "function", "function": {"name": "t", "parameters": {}, "cache_control": {"type": "ephemeral"}}},
+        ],
+        ids=["top_level", "nested_in_function"],
+    )
+    def test_configured_points_dropped_when_tools_carry_cache_control(self, tool):
+        params = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        self._seed(params, copy.deepcopy(self.CLEAN_MESSAGES), tools=[tool])
+        assert "cache_control_injection_points" not in params
+
+    def test_configured_points_kept_when_request_is_unmarked(self):
+        configured = copy.deepcopy(self.CONFIGURED)
+        params = {"cache_control_injection_points": configured}
+        self._seed(params, copy.deepcopy(self.CLEAN_MESSAGES))
+        assert params["cache_control_injection_points"] is configured
+
+    def test_second_pass_keeps_points_despite_injected_marks(self):
+        """acompletion() re-enters completion() after injection ran, with only the
+        non-message points written back; the second pass must not misread litellm's
+        own marks as client ones and drop that remainder."""
+        remainder = [{"location": "tool_config"}]
+        params = {"cache_control_injection_points": remainder}
+        self._seed(params, copy.deepcopy(self.MARKED_MESSAGES), is_first_pass=False)
+        assert params["cache_control_injection_points"] is remainder
+
+    def test_v1_messages_stand_down_when_content_block_marked(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}
+        ]
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        result_msgs, result_sys = self._inject(copy.deepcopy(messages), kwargs)
+        assert result_msgs == messages
+        assert result_sys == "sys"
+        assert "cache_control_injection_points" not in kwargs
+
+    def test_v1_messages_stand_down_when_system_block_marked(self):
+        """A configured point targeting a message must not fire when the client
+        marked the system prompt; the old behavior injected into the message
+        because only the exact targeted position was guarded."""
+        system = [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "role": "user"}]}
+        result_msgs, result_sys = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs, system=system)
+        assert result_msgs == self.V1_MESSAGES
+        assert result_sys == system
+        assert "cache_control_injection_points" not in kwargs
+
+    def test_v1_messages_stand_down_when_tools_marked(self):
+        tools = [{"name": "t", "input_schema": {}, "cache_control": {"type": "ephemeral"}}]
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        result_msgs, result_sys = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs, tools=tools)
+        assert result_msgs == self.V1_MESSAGES
+        assert result_sys == "sys"
+        assert "cache_control_injection_points" not in kwargs
+
+    def test_v1_messages_configured_points_apply_when_unmarked(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        _, result_sys = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs)
+        assert result_sys == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+
+    def test_v1_messages_second_pass_writes_back_remainder(self):
+        """The async entry re-dispatches into the sync handler after injecting; the
+        surviving tool_config remainder must survive that second pass even though
+        the messages now carry litellm's own marks."""
+        marked = [
+            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}
+        ]
+        remainder = [{"location": "tool_config"}]
+        kwargs = {"cache_control_injection_points": remainder}
+        result_msgs, _ = self._inject(copy.deepcopy(marked), kwargs, is_first_pass=False)
+        assert result_msgs == marked
+        assert kwargs["cache_control_injection_points"] == remainder
 
 
 class TestAnthropicPromptCachingEnvVars:

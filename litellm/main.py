@@ -5080,6 +5080,7 @@ def completion(  # type: ignore
         model=model,
         custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
+        is_first_pass=not acompletion,
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (

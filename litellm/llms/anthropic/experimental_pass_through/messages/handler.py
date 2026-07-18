@@ -351,9 +351,11 @@ async def anthropic_messages(
         custom_llm_provider=custom_llm_provider,
         # messages were already empty-text-block sanitized at the top of this
         # function and are NOT reassigned before this dispatch, so the handler
-        # can skip its (otherwise redundant) second full-messages scan. Passed
-        # explicitly (not via **kwargs) so it only affects this direct
-        # dispatch -- interceptor / sync entry points still sanitize.
+        # can skip its (otherwise redundant) second full-messages scan. It also
+        # tells the handler that cache_control injection already judged the
+        # pristine client input here. Passed explicitly (not via **kwargs) so
+        # it only affects this direct dispatch -- interceptor / sync entry
+        # points still sanitize.
         _litellm_messages_presanitized=True,
         **kwargs,
     )
@@ -419,8 +421,12 @@ def anthropic_messages_handler(
     # protection as the async wrapper. The async wrapper already sanitized and
     # does not reassign messages before dispatch, so it sets
     # ``_litellm_messages_presanitized`` to skip this redundant second
-    # full-messages scan. Pop it so it never leaks into provider params.
-    if not kwargs.pop("_litellm_messages_presanitized", False):
+    # full-messages scan. The same flag marks this call as a second pass for
+    # cache_control injection: the async wrapper already judged the pristine
+    # client input, and re-judging after injection would misread litellm's own
+    # marks as client ones. Pop it so it never leaks into provider params.
+    presanitized = kwargs.pop("_litellm_messages_presanitized", False)
+    if not presanitized:
         messages = strip_empty_text_blocks_from_anthropic_messages(messages)
         messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
 
@@ -429,7 +435,13 @@ def anthropic_messages_handler(
     )
 
     messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
-        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+        messages,
+        system,
+        kwargs,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        tools=tools,
+        is_first_pass=not presanitized,
     )
 
     metadata = validate_anthropic_api_metadata(metadata)
