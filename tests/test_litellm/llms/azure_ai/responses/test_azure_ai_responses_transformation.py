@@ -65,6 +65,14 @@ def test_azure_ai_resolves_native_responses_config(model):
     assert isinstance(config, AzureAIResponsesAPIConfig)
 
 
+def test_azure_ai_resolves_native_config_for_management_ops():
+    """Management ops (delete/get/cancel/list) call the lookup with model=None; it must
+    still return the native config so those operations can build the right URL after a
+    native create succeeds."""
+    config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model=None)
+    assert isinstance(config, AzureAIResponsesAPIConfig)
+
+
 @pytest.mark.parametrize("model", ["claude-3-5-sonnet", "model_router/gpt-5", "agents/my-agent"])
 def test_azure_ai_non_responses_models_keep_bridge(model):
     """Claude / model-router / agents routes have their own surfaces, so they must
