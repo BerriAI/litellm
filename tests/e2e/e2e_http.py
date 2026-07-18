@@ -32,6 +32,15 @@ class AuthHeaders(Headers):
     x_litellm_api_key: str | None = Field(default=None, alias="x-litellm-api-key")
 
 
+class AnthropicHeaders(AuthHeaders):
+    """Auth plus the ``anthropic-version`` header the Anthropic-native
+    /v1/messages and /v1/messages/count_tokens routes expect. It is harmless on
+    the other providers the proxy routes to, and matches what Claude Code sends
+    on its own internal calls."""
+
+    anthropic_version: str = Field(default="2023-06-01", alias="anthropic-version")
+
+
 class NoBody(BaseModel):
     """Empty body/query for routes that take none."""
 

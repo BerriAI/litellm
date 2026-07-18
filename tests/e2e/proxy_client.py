@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from e2e_http import (
+    AnthropicHeaders,
     NoBody,
     ProbeResult,
     Result,
@@ -24,8 +25,12 @@ from e2e_http import (
     unwrap,
 )
 from models import (
+    AnthropicMessagesBody,
+    AnthropicMessagesResponse,
     ChatBody,
     ChatResponse,
+    CountTokensBody,
+    CountTokensResponse,
     CustomerDeleteBody,
     EmbedBody,
     EmbedResponse,
@@ -242,6 +247,31 @@ class ProxyClient:
             json=body,
             response_type=OcrResponse,
         )
+
+    def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
+        """POST /v1/messages/count_tokens (Anthropic-native). Sends the
+        anthropic-version header so the native path accepts it; harmless on the
+        other providers the proxy fronts."""
+        return self.transport.post(
+            "/v1/messages/count_tokens",
+            headers=self._anthropic_headers(key),
+            json=body,
+            response_type=CountTokensResponse,
+        )
+
+    def messages(self, key: str, body: AnthropicMessagesBody) -> Result[AnthropicMessagesResponse]:
+        """POST /v1/messages (Anthropic-native). The response is either the
+        Anthropic-shape passthrough (`content`) or the OpenAI-normalized shape
+        (`choices`); AnthropicMessagesResponse models both."""
+        return self.transport.post(
+            "/v1/messages",
+            headers=self._anthropic_headers(key),
+            json=body,
+            response_type=AnthropicMessagesResponse,
+        )
+
+    def _anthropic_headers(self, key: str) -> AnthropicHeaders:
+        return AnthropicHeaders(authorization=self.transport.bearer(key).authorization)
 
     # ---- spend read-back ------------------------------------------------
 
