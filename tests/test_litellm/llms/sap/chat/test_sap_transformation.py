@@ -795,3 +795,70 @@ class TestReasoningCapability:
         """reasoning_effort is silently dropped for models that don't support it."""
         body = self._transform("gpt-4o", reasoning_effort="high")
         assert "reasoning_effort" not in self._model_params(body)
+
+
+class TestCacheControl:
+    """Unit tests for cache_control preservation on message content parts.
+
+    Verifies that TextContent with extra fields (cache_control) survives
+    pydantic validation and reaches the SAP payload intact.
+    """
+
+    def _transform(self, model: str, messages: list) -> dict:
+        from unittest.mock import MagicMock
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        return cfg.transform_request(
+            model=model,
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+    def _template(self, body: dict) -> list:
+        return body["config"]["modules"]["prompt_templating"]["prompt"]["template"]
+
+    def test_cache_control_preserved_on_text_content(self):
+        """cache_control on a TextContent part survives validation and appears in payload."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        content = template[0]["content"]
+        assert isinstance(content, list)
+        assert content[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_plain_text_content_unaffected(self):
+        """Text content without cache_control still serialises cleanly."""
+        messages = [{"role": "user", "content": "Hello"}]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        template = self._template(body)
+        assert template[0]["content"] == "Hello"
+
+    def test_cache_control_preserved_on_multiple_parts(self):
+        """cache_control is preserved on each part independently."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Part A", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "Part B"},
+                ],
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content = self._template(body)[0]["content"]
+        assert content[0].get("cache_control") == {"type": "ephemeral"}
+        assert "cache_control" not in content[1]

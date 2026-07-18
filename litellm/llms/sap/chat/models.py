@@ -2,7 +2,7 @@ from typing import Union, Literal, Optional
 from enum import Enum
 import warnings
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def validate_different_content(v: Union[str, dict, list]) -> str:
@@ -25,6 +25,7 @@ def validate_different_content(v: Union[str, dict, list]) -> str:
 
 
 class TextContent(BaseModel):
+    model_config = ConfigDict(extra="allow")  # preserves cache_control and future Anthropic fields
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
 
