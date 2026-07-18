@@ -7857,7 +7857,9 @@ def speech(
         Coroutine[Any, Any, HttpxBinaryResponseContent],
         None,
     ] = None
-    if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
+    if (
+        custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers
+    ) and custom_llm_provider != "dashscope":
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",

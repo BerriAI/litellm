@@ -102,3 +102,30 @@ def test_transform_response_raises_without_audio_url(config: DashScopeTextToSpee
         config.transform_text_to_speech_response(
             model="qwen3-tts-vc", raw_response=raw, logging_obj=MagicMock()
         )
+
+
+def test_speech_dispatches_to_dashscope_handler():
+    import litellm
+
+    fake_audio = MagicMock()
+
+    with patch.object(
+        litellm.main.base_llm_http_handler,
+        "text_to_speech_handler",
+        return_value=fake_audio,
+    ) as mock_handler:
+        result = litellm.speech(
+            model="dashscope/qwen3-tts-vc",
+            input="hello world",
+            voice="my-cloned-voice",
+            api_key="sk-test",
+        )
+
+    assert result is fake_audio
+    mock_handler.assert_called_once()
+    kwargs = mock_handler.call_args.kwargs
+    assert kwargs["custom_llm_provider"] == "dashscope"
+    assert kwargs["model"] == "qwen3-tts-vc"
+    assert kwargs["voice"] == "my-cloned-voice"
+    assert isinstance(kwargs["text_to_speech_provider_config"], DashScopeTextToSpeechConfig)
+    assert kwargs["litellm_params"]["api_key"] == "sk-test"
