@@ -232,6 +232,9 @@ class ProxyClient:
     def chat_stream(self, key: str, body: ChatBody) -> StreamingResponse:
         return self.transport.stream("/chat/completions", headers=self.transport.bearer(key), json=body)
 
+    def messages_stream(self, key: str, body: AnthropicMessagesBody) -> StreamingResponse:
+        return self.transport.stream("/v1/messages", headers=self.transport.bearer(key), json=body)
+
     def embed(self, key: str, body: EmbedBody) -> Result[EmbedResponse]:
         return self.transport.post(
             "/embeddings",
