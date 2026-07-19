@@ -241,6 +241,32 @@ def _without_authorization(
     return filtered or None
 
 
+def _openapi_forwarded_extra_headers(
+    mcp_server: MCPServer,
+    raw_headers: Optional[dict[str, str]],
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> Optional[dict[str, str]]:
+    if not mcp_server.extra_headers or not raw_headers:
+        return None
+
+    normalized_raw_headers = {
+        header_name.lower(): header_value
+        for header_name, header_value in raw_headers.items()
+    }
+    strip_caller_authorization = _should_strip_caller_authorization(
+        mcp_server=mcp_server,
+        raw_headers=raw_headers,
+        user_api_key_auth=user_api_key_auth,
+    )
+    forwarded_headers = {
+        header_name: normalized_raw_headers[header_name.lower()]
+        for header_name in mcp_server.extra_headers
+        if not (strip_caller_authorization and header_name.lower() == "authorization")
+        and header_name.lower() in normalized_raw_headers
+    }
+    return forwarded_headers or None
+
+
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[Tuple[int, Optional[str]]]:
@@ -3523,7 +3549,24 @@ class MCPServerManager:
                     "transport to enable hook header injection.",
                     server_name,
                 )
-            tasks.append(asyncio.create_task(self._call_openapi_tool_handler(mcp_server, name, arguments)))
+            forwarded_headers = _openapi_forwarded_extra_headers(
+                mcp_server=mcp_server,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+            )
+
+            async def _call_openapi_via_handler() -> CallToolResult:
+                from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+                    _request_extra_headers,
+                )
+
+                extra_headers_token = _request_extra_headers.set(forwarded_headers)
+                try:
+                    return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+                finally:
+                    _request_extra_headers.reset(extra_headers_token)
+
+            tasks.append(asyncio.create_task(_call_openapi_via_handler()))
         else:
             return await self._call_regular_mcp_tool(
                 mcp_server=mcp_server,
