@@ -149,6 +149,52 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
 }
 
 #[tokio::test]
+async fn messages_round_trip_builds_native_anthropic_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body = r#"{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}],"model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}"#;
+        socket
+            .write_all(write_response(response_body).as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+
+    let response = messages(MessagesRequest {
+        model: "claude-sonnet-4-5",
+        body: json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+        api_key: Some("sk-ant"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect("messages request succeeds");
+
+    assert_eq!(response["content"][0]["text"], "hi");
+    assert_eq!(response["stop_reason"], "end_turn");
+
+    let request = server.await.expect("server task completes");
+    let (head, _) = request.split_once("\r\n\r\n").expect("has body");
+    assert!(head.starts_with("POST /v1/messages "), "{head}");
+    let head_lower = head.to_ascii_lowercase();
+    assert!(head_lower.contains("x-api-key: sk-ant"), "{head}");
+    assert!(
+        head_lower.contains("anthropic-version: 2023-06-01"),
+        "{head}"
+    );
+}
+
+#[tokio::test]
 async fn messages_does_not_duplicate_auth_when_x_api_key_supplied() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
     let addr = listener.local_addr().expect("addr");
