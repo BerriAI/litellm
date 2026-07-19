@@ -47,7 +47,7 @@ def _poll_until_serves_again(client: BudgetClient, key: str) -> None:
     pytest.fail(f"budget never reset within {RESET_DEADLINE_SECONDS}s")
 
 
-class TestBudgetResetDiagonal:
+class TestBudgetResetPerLevel:
     @pytest.mark.covers("quota_management.budget.key.resets_after_window")
     def test_bare_key_budget_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
         key = client.generate_key(max_budget=TINY_CAP, budget_duration=WINDOW)
