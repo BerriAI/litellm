@@ -25,6 +25,7 @@ import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/re
 import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { isImeComposing } from "../../utils/keyboard";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
@@ -480,6 +481,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [chatHistory]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImeComposing(event)) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault(); // Prevent default to avoid newline
       handleSendMessage();
