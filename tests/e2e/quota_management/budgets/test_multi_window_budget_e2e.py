@@ -13,6 +13,10 @@ a mint-time read races the boundary; the reset job zeroes the counter in the sam
 pass), the key must still be refused with "over 1d budget". That check polls because
 enforcement's cached auth view lags the DB write; any 200 or non-budget error fails
 immediately.
+
+The blocks-then-resets check also sweeps the personal / team / team-member mint
+shapes: the same budget_limits pair rides a key minted to roomy (100.0)
+surroundings, so only the key's own windows can block regardless of who holds it.
 """
 
 import time
@@ -56,20 +60,20 @@ def _drive_to_block(client: BudgetClient, key: str) -> StreamingResponse:
     pytest.fail("budget never enforced before block")
 
 
-@pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
-def test_short_window_blocks_then_resets(client: BudgetClient, resources: ResourceManager) -> None:
-    key = client.generate_key(
-        models=[MODEL],
-        budget_limits=[
-            BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=TINY_CAP),
-            BudgetWindow(budget_duration="1m", max_budget=1.0),  # roomy: never blocks
-        ],
-    )
-    resources.defer(lambda: client.delete_key(key))
+def _short_roomy_limits() -> list[BudgetWindow]:
+    return [
+        BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=TINY_CAP),
+        BudgetWindow(budget_duration="1m", max_budget=1.0),  # roomy: never blocks
+    ]
 
+
+def _assert_short_window_blocks_then_resets(client: BudgetClient, key: str) -> None:
     # 1. exhaust the tight window -> litellm returns budget_exceeded
     start = time.monotonic()
-    _drive_to_block(client, key)
+    blocked = _drive_to_block(client, key)
+    assert f"over {SHORT_WINDOW} budget" in blocked.body, (
+        f"block must be attributed to the {SHORT_WINDOW} window, got: {blocked.body[:200]}"
+    )
 
     # 2. the window resets at the next wall-clock-aligned boundary (up to a window
     #    after start), then the reset job (~15-20s rescheduler) zeroes the spend.
@@ -87,6 +91,51 @@ def test_short_window_blocks_then_resets(client: BudgetClient, resources: Resour
             f"non-budget error during reset wait: status={result.status_code} body={result.body[:200]}"
         )
     pytest.fail(f"{WINDOW_SECONDS}s window never reset within 150s")
+
+
+@pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
+def test_short_window_blocks_then_resets(client: BudgetClient, resources: ResourceManager) -> None:
+    key = client.generate_key(models=[MODEL], budget_limits=_short_roomy_limits())
+    resources.defer(lambda: client.delete_key(key))
+
+    _assert_short_window_blocks_then_resets(client, key)
+
+
+def _mint_key_of_kind(client: BudgetClient, resources: ResourceManager, kind: str) -> str:
+    """A key carrying the tight+roomy budget_limits pair, minted to roomy (100.0)
+    surroundings so only the key's own windows can block."""
+    match kind:
+        case "personal":
+            user_id = client.create_user(max_budget=100.0)
+            resources.defer(lambda: client.delete_user(user_id))
+            key = client.generate_key(models=[MODEL], user_id=user_id, budget_limits=_short_roomy_limits())
+        case "team":
+            team_id = client.create_team(alias=f"e2e-mw-team-{unique_marker()}", max_budget=100.0)
+            resources.defer(lambda: client.delete_team(team_id))
+            key = client.generate_key(models=[MODEL], team_id=team_id, budget_limits=_short_roomy_limits())
+        case "team_member":
+            team_id = client.create_team(alias=f"e2e-mw-team-{unique_marker()}", max_budget=100.0)
+            resources.defer(lambda: client.delete_team(team_id))
+            member_id = client.create_user(max_budget=100.0)
+            resources.defer(lambda: client.delete_user(member_id))
+            client.add_team_member(team_id, member_id, max_budget_in_team=100.0)
+            key = client.generate_key(
+                models=[MODEL], team_id=team_id, user_id=member_id, budget_limits=_short_roomy_limits()
+            )
+        case _:
+            pytest.fail(f"unknown key kind: {kind}")
+    resources.defer(lambda: client.delete_key(key))
+    return key
+
+
+@pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
+@pytest.mark.parametrize("kind", ["personal", "team", "team_member"])
+def test_short_window_blocks_then_resets_across_key_kinds(
+    client: BudgetClient, resources: ResourceManager, kind: str
+) -> None:
+    key = _mint_key_of_kind(client, resources, kind)
+
+    _assert_short_window_blocks_then_resets(client, key)
 
 
 @pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
