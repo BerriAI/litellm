@@ -99,6 +99,12 @@ print(response.text)
 
 ```
 
+### `/audio/transcriptions` (POST)
+
+Use `custom_openai` to proxy OpenAI-compatible speech-to-text services through
+LiteLLM. For a self-hosted FunASR or SenseVoice server, see the
+[FunASR audio transcription cookbook](./funasr_audio_transcriptions.md).
+
 ### Output [Response Format]
 
 Responses from the server are given in the following format.
