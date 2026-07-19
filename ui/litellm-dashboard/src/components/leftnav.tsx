@@ -44,6 +44,7 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  PiggyBank,
   PlayCircle,
   Route,
   ScrollText,
@@ -180,6 +181,13 @@ const menuGroups: MenuGroup[] = [
         icon: <BarChart3 {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "Usage",
+      },
+      {
+        key: "cost-optimization",
+        page: "cost-optimization",
+        icon: <PiggyBank {...ICON} />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+        label: "Cost Optimization",
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
       {

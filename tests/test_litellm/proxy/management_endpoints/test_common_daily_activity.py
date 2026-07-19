@@ -150,6 +150,9 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "mcp_namespaced_tool_name": None,
         "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -492,6 +495,9 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.completion_tokens = 200
     mock_record_1.cache_read_input_tokens = 0
     mock_record_1.cache_creation_input_tokens = 0
+    mock_record_1.compression_saved_tokens = 0
+    mock_record_1.compression_savings_spend = 0.0
+    mock_record_1.prompt_caching_savings_spend = 0.0
     mock_record_1.api_requests = 10
     mock_record_1.successful_requests = 9
     mock_record_1.failed_requests = 1
@@ -511,6 +517,9 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.completion_tokens = 100
     mock_record_2.cache_read_input_tokens = 0
     mock_record_2.cache_creation_input_tokens = 0
+    mock_record_2.compression_saved_tokens = 0
+    mock_record_2.compression_savings_spend = 0.0
+    mock_record_2.prompt_caching_savings_spend = 0.0
     mock_record_2.api_requests = 5
     mock_record_2.successful_requests = 5
     mock_record_2.failed_requests = 0
@@ -570,6 +579,9 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "mcp_namespaced_tool_name": None,
         "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -654,6 +666,9 @@ def _daily_user_spend_record(*, user_id, api_key, spend):
         completion_tokens=5,
         cache_read_input_tokens=0,
         cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0.0,
+        prompt_caching_savings_spend=0.0,
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
@@ -865,6 +880,9 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "completion_tokens": None,
             "cache_read_input_tokens": None,
             "cache_creation_input_tokens": None,
+            "compression_saved_tokens": None,
+            "compression_savings_spend": None,
+            "prompt_caching_savings_spend": None,
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
@@ -894,6 +912,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
     assert result.metadata.total_failed_requests == 0
     assert result.metadata.total_cache_read_input_tokens == 0
     assert result.metadata.total_cache_creation_input_tokens == 0
+    assert result.metadata.total_compression_saved_tokens == 0
 
 
 def _no_spend_record():
@@ -904,6 +923,9 @@ def _no_spend_record():
         completion_tokens=None,
         cache_read_input_tokens=None,
         cache_creation_input_tokens=None,
+        compression_saved_tokens=None,
+        compression_savings_spend=None,
+        prompt_caching_savings_spend=None,
         api_requests=None,
         successful_requests=None,
         failed_requests=None,
@@ -922,6 +944,7 @@ def test_record_to_spend_metrics_handles_none_values():
     assert metrics.failed_requests == 0
     assert metrics.cache_read_input_tokens == 0
     assert metrics.cache_creation_input_tokens == 0
+    assert metrics.compression_saved_tokens == 0
 
 
 def test_update_metrics_handles_none_values():
@@ -936,3 +959,4 @@ def test_update_metrics_handles_none_values():
     assert metrics.failed_requests == 0
     assert metrics.cache_read_input_tokens == 0
     assert metrics.cache_creation_input_tokens == 0
+    assert metrics.compression_saved_tokens == 0
