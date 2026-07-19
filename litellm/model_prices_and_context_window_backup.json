@@ -44568,6 +44568,25 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "bedrock_mantle/google.gemma-4-e4b": {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "use_openai_responses_path": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "bedrock_mantle/xai.grok-4.3": {
         "use_openai_responses_path": true,
         "input_cost_per_token": 1.25e-06,
