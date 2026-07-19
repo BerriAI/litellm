@@ -71,6 +71,31 @@ class TestStandardizedResetTime(unittest.TestCase):
         second_result = get_next_standardized_reset_time("15s", base_time, "UTC")
         self.assertEqual(second_result, second_expected)
 
+    def test_multi_day_rollover_resets(self):
+        """Durations spanning more than 24h must advance the full number of days."""
+        # Base time: 2023-05-15 10:00 UTC
+        base_time = datetime(2023, 5, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+        # 48h aligns to midnight + 48h; first boundary after 10:00 is the 17th.
+        self.assertEqual(
+            get_next_standardized_reset_time("48h", base_time, "UTC"),
+            datetime(2023, 5, 17, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        # 72h -> the 18th (previously advanced only a single day).
+        self.assertEqual(
+            get_next_standardized_reset_time("72h", base_time, "UTC"),
+            datetime(2023, 5, 18, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        # 3000m == 50h and 180000s == 50h -> 10:00 + 50h == the 17th at 12:00.
+        self.assertEqual(
+            get_next_standardized_reset_time("3000m", base_time, "UTC"),
+            datetime(2023, 5, 17, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            get_next_standardized_reset_time("180000s", base_time, "UTC"),
+            datetime(2023, 5, 17, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
     def test_timezone_handling(self):
         """Test timezone handling with different regions"""
         # Base time: 2023-05-15 22:30:00 UTC (late in UTC day)
