@@ -237,6 +237,74 @@ class TestResponses:
             f"got {result.response_cost!r}"
         )
 
+    @pytest.mark.covers("llm.responses.vertex.basic.nonstream.works")
+    def test_responses_vertex_returns_completion(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-vertex-{unique_marker()}"
+        model_id = endpoints_client.create_model(model, _vertex_gemini_params())
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.responses(key, model, "reply with one word")
+        require_successful_call(result)
+        assert result.call_id, "Responses→Vertex must set x-litellm-call-id"
+        parsed = ResponsesResult.model_validate_json(result.body)
+        assert parsed.text.strip(), f"/responses vertex returned no output text: {result.body[:300]}"
+        assert result.response_cost is not None and result.response_cost > 0, (
+            f"Responses→Vertex must set x-litellm-response-cost > 0; got {result.response_cost!r}"
+        )
+
+    @pytest.mark.covers("llm.responses.vertex.tool_use.nonstream.works")
+    def test_responses_vertex_returns_function_call(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-vertex-{unique_marker()}"
+        model_id = endpoints_client.create_model(model, _vertex_gemini_params())
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.responses_with_tools(
+            key,
+            model,
+            "What is the weather in San Francisco? Use the get_weather tool.",
+            [
+                ResponsesFunctionTool(
+                    name="get_weather",
+                    description="Get the weather for a location",
+                    parameters=FunctionParameters(
+                        properties={"location": FunctionParameterProperty(type="string")},
+                        required=["location"],
+                    ),
+                )
+            ],
+        )
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        function_call = next(
+            (call for call in parsed.function_calls if call.name == "get_weather"),
+            None,
+        )
+        assert function_call is not None, (
+            f"vertex responses returned no get_weather function call: {result.body[:500]}"
+        )
+        assert function_call.arguments is not None
+        raw_arguments = cast(object, json.loads(function_call.arguments))
+        arguments = WeatherArguments.model_validate(raw_arguments)
+        assert arguments.location, (
+            f"vertex function call arguments missing location: {function_call.arguments}"
+        )
+
+
+def _vertex_gemini_params() -> LiteLLMParamsBody:
+    """Vertex Gemini via gateway-held SA (os.environ/* resolved on the proxy)."""
+    return LiteLLMParamsBody(
+        model="vertex_ai/gemini-2.5-flash",
+        vertex_project="os.environ/VERTEXAI_PROJECT",
+        vertex_location="us-central1",
+        vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
+    )
+
 
 def _parse_stream_event(
     event: str,
