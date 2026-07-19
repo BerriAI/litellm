@@ -328,11 +328,14 @@ pub async fn resolve_credentials(
             let credentials = response.credentials().ok_or_else(|| {
                 CoreError::Auth("AWS web identity response had no credentials".to_string())
             })?;
+            let expiration = SystemTime::try_from(*credentials.expiration()).map_err(|error| {
+                CoreError::Auth(format!("AWS web identity expiration was invalid: {error}"))
+            })?;
             Ok(Credentials::new(
                 credentials.access_key_id(),
                 credentials.secret_access_key(),
                 Some(credentials.session_token().to_string()),
-                None,
+                Some(expiration),
                 "litellm-web-identity",
             ))
         }

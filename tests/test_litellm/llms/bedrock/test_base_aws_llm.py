@@ -770,11 +770,6 @@ def test_get_request_headers_with_sigv4():
 
 
 def test_sigv4_matches_rust_golden_vector():
-    class FrozenDateTime:
-        @classmethod
-        def utcnow(cls):
-            return datetime(2024, 1, 2, 3, 4, 5)
-
     request = AWSRequest(
         method="POST",
         url="https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke",
