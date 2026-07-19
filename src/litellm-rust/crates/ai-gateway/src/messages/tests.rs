@@ -52,9 +52,9 @@ fn write_response(body: &str) -> String {
 }
 
 #[test]
-fn provider_config_only_resolves_azure_ai() {
+fn provider_config_resolves_anthropic_and_azure_ai() {
     assert!(messages_provider_config("azure_ai").is_some());
-    assert!(messages_provider_config("anthropic").is_none());
+    assert!(messages_provider_config("anthropic").is_some());
     assert!(messages_provider_config("openai").is_none());
 }
 
@@ -145,6 +145,52 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
     assert_eq!(
         sent_body["messages"][0]["content"][0]["cache_control"],
         json!({"type": "ephemeral"})
+    );
+}
+
+#[tokio::test]
+async fn messages_round_trip_builds_native_anthropic_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body = r#"{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}],"model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}"#;
+        socket
+            .write_all(write_response(response_body).as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+
+    let response = messages(MessagesRequest {
+        model: "claude-sonnet-4-5",
+        body: json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+        api_key: Some("sk-ant"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect("messages request succeeds");
+
+    assert_eq!(response["content"][0]["text"], "hi");
+    assert_eq!(response["stop_reason"], "end_turn");
+
+    let request = server.await.expect("server task completes");
+    let (head, _) = request.split_once("\r\n\r\n").expect("has body");
+    assert!(head.starts_with("POST /v1/messages "), "{head}");
+    let head_lower = head.to_ascii_lowercase();
+    assert!(head_lower.contains("x-api-key: sk-ant"), "{head}");
+    assert!(
+        head_lower.contains("anthropic-version: 2023-06-01"),
+        "{head}"
     );
 }
 
@@ -248,12 +294,12 @@ async fn messages_rejects_unsupported_provider() {
         body: json!({"model": "claude-3-5-sonnet", "max_tokens": 8, "messages": []}),
         api_key: Some("sk"),
         api_base: Some("http://127.0.0.1:1"),
-        custom_llm_provider: Some("anthropic"),
+        custom_llm_provider: Some("openai"),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
     })
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "anthropic"));
+    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "openai"));
 }
