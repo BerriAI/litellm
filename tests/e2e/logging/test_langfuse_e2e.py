@@ -42,7 +42,7 @@ from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
 
-DRIVER_MODEL = "gemini-2.5-flash"
+DRIVER_MODEL = "e2e-langfuse-haiku"
 FAIL_BACKEND = "openai/gpt-4o-mini"
 
 

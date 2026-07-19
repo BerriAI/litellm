@@ -21,7 +21,7 @@ from quota_client import QuotaClient
 
 pytestmark = pytest.mark.e2e
 
-BACKEND = "gemini/gemini-2.5-flash"
+BACKEND = "anthropic/claude-haiku-4-5-20251001"
 RECOVERY_TIMEOUT = float(
     os.environ.get("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "60") or "60"
 )
@@ -52,7 +52,7 @@ class TestRedisCircuitBreakerPath:
         model = f"e2e-cb-model-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
-            LiteLLMParamsBody(model=BACKEND, api_key="os.environ/GEMINI_API_KEY"),
+            LiteLLMParamsBody(model=BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
 

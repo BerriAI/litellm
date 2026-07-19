@@ -69,15 +69,15 @@ class TestResponsesMetadata:
     def test_store_metadata_continues_and_redis_keys_have_ttl(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        # Gemini avoids OpenAI account quota flakes; Responses translation still
+        # Anthropic avoids OpenAI/Gemini quota flakes; Responses translation still
         # exercises store + metadata + previous_response_id on the proxy.
         marker = unique_marker()
         model = f"e2e-resp-meta-{marker}"
         model_id = endpoints_client.create_model(
             model,
             LiteLLMParamsBody(
-                model="gemini/gemini-2.5-flash",
-                api_key="os.environ/GEMINI_API_KEY",
+                model="anthropic/claude-haiku-4-5-20251001",
+                api_key="os.environ/ANTHROPIC_API_KEY",
             ),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))

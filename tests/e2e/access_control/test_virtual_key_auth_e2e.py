@@ -15,7 +15,7 @@ from proxy_client import ProxyClient
 
 pytestmark = pytest.mark.e2e
 
-BACKEND = "gemini/gemini-2.5-flash"
+BACKEND = "anthropic/claude-haiku-4-5-20251001"
 
 
 class TestVirtualKeyAuth:
@@ -30,7 +30,7 @@ class TestVirtualKeyAuth:
         model = f"e2e-auth-chat-{unique_marker()}"
         model_id = proxy.create_model(
             model,
-            LiteLLMParamsBody(model=BACKEND, api_key="os.environ/GEMINI_API_KEY"),
+            LiteLLMParamsBody(model=BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
         )
         resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()

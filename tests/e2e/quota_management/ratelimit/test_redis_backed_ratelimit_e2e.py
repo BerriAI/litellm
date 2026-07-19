@@ -19,7 +19,7 @@ from quota_client import QuotaClient
 
 pytestmark = pytest.mark.e2e
 
-BACKEND = "gemini/gemini-2.5-flash"
+BACKEND = "anthropic/claude-haiku-4-5-20251001"
 
 
 def _require_redis_reachable() -> None:
@@ -47,7 +47,7 @@ class TestRedisBackedRateLimit:
         model = f"e2e-redis-rpm-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
-            LiteLLMParamsBody(model=BACKEND, api_key="os.environ/GEMINI_API_KEY"),
+            LiteLLMParamsBody(model=BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
 

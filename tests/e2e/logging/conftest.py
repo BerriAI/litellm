@@ -17,7 +17,7 @@ from otel_client import OtelReader, build_otel_reader
 from proxy_client import ProxyClient
 
 # Static name used by test_langfuse_e2e.py team/key/org cases.
-_LANGFUSE_DRIVER_MODEL = "gemini-2.5-flash"
+_LANGFUSE_DRIVER_MODEL = "e2e-langfuse-haiku"
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -32,19 +32,15 @@ def client(proxy: ProxyClient) -> LoggingClient:
     """The logging suite's client: holds the shared ProxyClient so `resources` /
     `scoped_key` clean up keys and teams, and adds `/metrics` scraping plus
     Langfuse read-back."""
-    # Proxy configs often omit gemini-2.5-flash; register it once so langfuse
-    # team keys with models=[gemini-2.5-flash] can complete.
-    try:
-        proxy.create_model(
-            _LANGFUSE_DRIVER_MODEL,
-            LiteLLMParamsBody(
-                model="gemini/gemini-2.5-flash",
-                api_key="os.environ/GEMINI_API_KEY",
-            ),
-        )
-    except Exception:
-        # Already present or racing another worker; chat will hard-fail if broken.
-        pass
+    # Register a cheap Anthropic driver so langfuse cases do not depend on a
+    # static gateway model_list entry or a flaky Gemini quota.
+    proxy.create_model(
+        _LANGFUSE_DRIVER_MODEL,
+        LiteLLMParamsBody(
+            model="anthropic/claude-haiku-4-5-20251001",
+            api_key="os.environ/ANTHROPIC_API_KEY",
+        ),
+    )
     return build_logging_client(proxy)
 
 
