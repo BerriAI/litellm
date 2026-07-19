@@ -19,8 +19,8 @@ pub(super) fn messages_provider_config(
     provider: &str,
 ) -> Option<&'static dyn AnthropicMessagesProviderConfig> {
     match provider {
-        "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
         "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
+        "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
         _ => None,
     }
 }
