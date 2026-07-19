@@ -689,6 +689,41 @@ def _count_anthropic_content(
     return tokens
 
 
+def _count_anthropic_image_tokens(
+    source: Any,
+    use_default_image_token_count: bool,
+) -> int:
+    """
+    Count tokens for an Anthropic image content block source
+    ({"type": "base64", "media_type": ..., "data": ...} or {"type": "url", "url": ...}).
+
+    Converts the source to the URL / data-URI form understood by
+    _count_image_tokens so the dimension-aware estimate applies; falls back to
+    DEFAULT_IMAGE_TOKEN_COUNT when the source cannot be interpreted.
+    """
+    data = None
+    if isinstance(source, dict):
+        source_type = source.get("type")
+        if source_type == "url" and source.get("url"):
+            data = source["url"]
+        elif source_type == "base64" and source.get("data"):
+            media_type = source.get("media_type") or "image/png"
+            data = f"data:{media_type};base64,{source['data']}"
+    if data is None:
+        return DEFAULT_IMAGE_TOKEN_COUNT
+    try:
+        # mode="high" applies the dimension-based tile math; "auto" resolves to
+        # the flat low-detail estimate, and anthropic image billing always
+        # scales with dimensions (there is no detail tier to select)
+        return calculate_img_tokens(
+            data=data,
+            mode="high",
+            use_default_image_token_count=use_default_image_token_count,
+        )
+    except Exception:
+        return DEFAULT_IMAGE_TOKEN_COUNT
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: OpenAIMessageContent,
@@ -709,9 +744,13 @@ def _count_content_list(
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
             elif c["type"] == "image":
-                # Anthropic-format image block ({"type": "image", "source": ...});
-                # base64 payload has no URL/detail to inspect, use the flat default
-                num_tokens += DEFAULT_IMAGE_TOKEN_COUNT
+                # Anthropic-format image block ({"type": "image", "source": ...}).
+                # Reuse the dimension-aware image_url counting by converting the
+                # source to a URL / data URI; a flat default would under-count
+                # large images since billed tokens scale with dimensions.
+                num_tokens += _count_anthropic_image_tokens(
+                    c.get("source"), use_default_image_token_count
+                )
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
