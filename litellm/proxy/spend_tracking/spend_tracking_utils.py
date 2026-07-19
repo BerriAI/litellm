@@ -171,8 +171,23 @@ def generate_hash_from_response(response_obj: Any) -> str:
         return hashlib.md5(str(response_obj).encode()).hexdigest()
 
 
+BATCH_COST_CALL_ID_PREFIX = "batch-cost-"
+
+
 def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> Optional[str]:
     if call_type == "aretrieve_batch" or call_type == "acreate_file":
+        # CheckBatchCost supplies a deterministic per-batch call id (prefixed
+        # so ordinary user polls — whose random call ids must NOT override the
+        # response-hash dedup below — are unaffected). The response hash is
+        # not stable across the poller's retries: each attempt mints fresh
+        # managed file ids, changing the hash and defeating dedup, so retried
+        # pricing would insert distinct spend rows (codex P1 round 4).
+        caller_id = cast(
+            Optional[str],
+            kwargs.get("litellm_call_id") or (kwargs.get("litellm_params") or {}).get("litellm_call_id"),
+        )
+        if call_type == "aretrieve_batch" and caller_id and caller_id.startswith(BATCH_COST_CALL_ID_PREFIX):
+            return caller_id
         # Generate a hash from the response object
         id: Optional[str] = generate_hash_from_response(response_obj)
     else:
