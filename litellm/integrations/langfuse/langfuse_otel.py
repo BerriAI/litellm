@@ -382,9 +382,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
             )
-            dynamic_headers.update(
-                LangfuseOtelLogger._build_langfuse_otel_headers(auth_header)
-            )
+            dynamic_headers.update(LangfuseOtelLogger._build_langfuse_otel_headers(auth_header))
 
         return dynamic_headers
 

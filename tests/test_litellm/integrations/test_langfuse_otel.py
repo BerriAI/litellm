@@ -456,10 +456,7 @@ class TestLangfuseOtelKeyDynamicConfig:
         import base64
 
         expected_auth = base64.b64encode(b"key_public:key_secret").decode()
-        assert (
-            config.headers
-            == f"Authorization=Basic {expected_auth},x-langfuse-ingestion-version=4"
-        )
+        assert config.headers == f"Authorization=Basic {expected_auth},x-langfuse-ingestion-version=4"
 
     def test_construct_dynamic_otel_config_host_without_protocol(self):
         with self._clean_env():
