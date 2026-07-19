@@ -2474,6 +2474,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cost_optimization/usage/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cost Optimization Usage Logs */
+        get: operations["cost_optimization_usage_logs_cost_optimization_usage_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials": {
         parameters: {
             query?: never;
@@ -28573,6 +28590,49 @@ export interface components {
              */
             type: "openIdConnect";
         };
+        /** OptimizedRequestLog */
+        OptimizedRequestLog: {
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Compression Savings Spend */
+            compression_savings_spend: number;
+            /** Model */
+            model: string;
+            /**
+             * Optimization Type
+             * @enum {string}
+             */
+            optimization_type: "compression" | "caching" | "both";
+            /** Original Cost */
+            original_cost: number;
+            /** Prompt Caching Savings Spend */
+            prompt_caching_savings_spend: number;
+            /** Request Id */
+            request_id: string;
+            /** Savings */
+            savings: number;
+            /** Spend */
+            spend: number;
+            /** Timestamp */
+            timestamp: string;
+            /** Tokens Saved */
+            tokens_saved: number;
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** OptimizedRequestLogsResponse */
+        OptimizedRequestLogsResponse: {
+            /** Logs */
+            logs: components["schemas"]["OptimizedRequestLog"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total */
+            total: number;
+            /** Total Pages */
+            total_pages: number;
+        };
         /** OrgMember */
         OrgMember: {
             /**
@@ -37629,6 +37689,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CostEstimateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cost_optimization_usage_logs_cost_optimization_usage_logs_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                start_date?: string | null;
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptimizedRequestLogsResponse"];
                 };
             };
             /** @description Validation Error */

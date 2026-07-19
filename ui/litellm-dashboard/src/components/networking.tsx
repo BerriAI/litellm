@@ -1403,6 +1403,55 @@ export const userDailyActivityCall = async (
   });
 };
 
+export interface OptimizedRequestLog {
+  request_id: string;
+  timestamp: string;
+  model: string;
+  total_tokens: number;
+  optimization_type: "compression" | "caching" | "both";
+  spend: number;
+  savings: number;
+  original_cost: number;
+  compression_savings_spend: number;
+  prompt_caching_savings_spend: number;
+  tokens_saved: number;
+  cache_read_tokens: number;
+}
+
+export interface OptimizedRequestLogsResponse {
+  logs: OptimizedRequestLog[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface CostOptimizationUsageLogsArgs {
+  accessToken: string;
+  startDate: string;
+  endDate: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export const getCostOptimizationUsageLogs = async ({
+  accessToken,
+  startDate,
+  endDate,
+  page = 1,
+  pageSize = 50,
+}: CostOptimizationUsageLogsArgs): Promise<OptimizedRequestLogsResponse> => {
+  return apiClient.get<OptimizedRequestLogsResponse>("/cost_optimization/usage/logs", {
+    accessToken,
+    query: {
+      start_date: startDate,
+      end_date: endDate,
+      page,
+      page_size: pageSize,
+    },
+  });
+};
+
 export const tagDailyActivityCall = async (
   accessToken: string,
   startTime: Date,

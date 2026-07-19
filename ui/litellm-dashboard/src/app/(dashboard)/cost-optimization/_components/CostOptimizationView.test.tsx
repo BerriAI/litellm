@@ -4,6 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
 const mockUsePaginatedDailyActivity = vi.fn();
+const mockUseQuery = vi.fn();
+
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: (args: unknown) => mockUseQuery(args),
+}));
 
 vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", () => ({
   usePaginatedDailyActivity: (args: unknown) => mockUsePaginatedDailyActivity(args),
@@ -11,6 +16,7 @@ vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", (
 
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
+  getCostOptimizationUsageLogs: vi.fn(),
 }));
 
 vi.mock("@/components/shared/advanced_date_picker", () => ({
@@ -57,6 +63,29 @@ const day = (date: string, metrics: Partial<SpendMetrics>): DailyData => ({
 
 const renderWith = (results: DailyData[]) => {
   mockUsePaginatedDailyActivity.mockReturnValue({ data: { results }, loading: false, isFetchingMore: false });
+  mockUseQuery.mockReturnValue({
+    data: {
+      logs: [
+        {
+          request_id: "req-123456789",
+          timestamp: "2026-07-13T12:00:00Z",
+          model: "test-model",
+          total_tokens: 150,
+          optimization_type: "both",
+          spend: 0.02,
+          savings: 0.14,
+          original_cost: 0.16,
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    },
+    isLoading: false,
+    isFetching: false,
+    error: null,
+  });
   return render(<CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />);
 };
 
@@ -105,5 +134,16 @@ describe("CostOptimizationView", () => {
 
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([{ driver: "Compression", usd: expect.closeTo(0.04, 5) }]);
+  });
+
+  it("renders recent optimized requests with savings and optimization type", () => {
+    const { getByText } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
+
+    expect(getByText("Recent Optimized Requests")).toBeInTheDocument();
+    expect(getByText("req-123456789")).toBeInTheDocument();
+    expect(getByText("Both")).toBeInTheDocument();
+    expect(getByText("$0.1600")).toBeInTheDocument();
+    expect(getByText("$0.0200")).toBeInTheDocument();
+    expect(getByText("$0.1400")).toBeInTheDocument();
   });
 });

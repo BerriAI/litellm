@@ -2,11 +2,17 @@
 
 import React, { useMemo, useState } from "react";
 import { PiggyBank } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
 import { AreaChart, DonutChart } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { userDailyActivityCall } from "@/components/networking";
+import {
+  getCostOptimizationUsageLogs,
+  type OptimizedRequestLog,
+  type OptimizedRequestLogsResponse,
+  userDailyActivityCall,
+} from "@/components/networking";
 import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles } from "@/utils/roles";
@@ -46,6 +52,112 @@ const SummaryCard = ({ label, value, hint }: { label: string; value: string; hin
   </Card>
 );
 
+const optimizationTypeLabel = (type: OptimizedRequestLog["optimization_type"]): string => {
+  if (type === "both") return "Both";
+  if (type === "caching") return "Caching";
+  return "Compression";
+};
+
+const optimizationTypeClass = (type: OptimizedRequestLog["optimization_type"]): string => {
+  if (type === "both") return "bg-purple-50 text-purple-700 border-purple-200";
+  if (type === "caching") return "bg-green-50 text-green-700 border-green-200";
+  return "bg-blue-50 text-blue-700 border-blue-200";
+};
+
+const optimizedLogsDescription = (
+  loading: boolean,
+  fetching: boolean,
+  error: unknown,
+  data: OptimizedRequestLogsResponse | undefined,
+): string => {
+  if (loading || fetching) return "Loading...";
+  if (error) return "Failed to load optimized requests";
+  if (data?.total) return `Showing ${data.logs.length} of ${data.total} requests`;
+  return "No optimized requests for this period";
+};
+
+const OptimizedRequestsTable = ({
+  data,
+  logsPage,
+  onPrevious,
+  onNext,
+}: {
+  data: OptimizedRequestLogsResponse;
+  logsPage: number;
+  onPrevious: () => void;
+  onNext: () => void;
+}) => (
+  <>
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-xs text-muted-foreground">
+            <th className="px-3 py-3 font-medium">Request ID</th>
+            <th className="px-3 py-3 font-medium">Timestamp</th>
+            <th className="px-3 py-3 font-medium">Model</th>
+            <th className="px-3 py-3 text-right font-medium">Tokens</th>
+            <th className="px-3 py-3 font-medium">Type</th>
+            <th className="px-3 py-3 text-right font-medium">Original Cost</th>
+            <th className="px-3 py-3 text-right font-medium">Optimized Cost</th>
+            <th className="px-3 py-3 text-right font-medium">Savings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.logs.map((log) => (
+            <tr key={log.request_id} className="border-b last:border-0">
+              <td className="max-w-40 truncate px-3 py-3 font-mono text-xs" title={log.request_id}>
+                {log.request_id}
+              </td>
+              <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">
+                {new Date(log.timestamp).toLocaleString()}
+              </td>
+              <td className="max-w-48 truncate px-3 py-3" title={log.model}>
+                {log.model}
+              </td>
+              <td className="px-3 py-3 text-right">{formatNumberWithCommas(log.total_tokens)}</td>
+              <td className="px-3 py-3">
+                <span
+                  className={`inline-flex rounded border px-2 py-0.5 text-xs font-medium ${optimizationTypeClass(log.optimization_type)}`}
+                >
+                  {optimizationTypeLabel(log.optimization_type)}
+                </span>
+              </td>
+              <td className="px-3 py-3 text-right text-muted-foreground line-through">{usd(log.original_cost)}</td>
+              <td className="px-3 py-3 text-right">{usd(log.spend)}</td>
+              <td className="px-3 py-3 text-right font-medium text-emerald-600">{usd(log.savings)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    {data.total_pages > 1 && (
+      <div className="mt-4 flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          Page {data.page} of {data.total_pages}
+        </p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded border px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={logsPage === 1}
+            onClick={onPrevious}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="rounded border px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={logsPage >= data.total_pages}
+            onClick={onNext}
+          >
+            Next
+          </button>
+        </div>
+      </div>
+    )}
+  </>
+);
+
 const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken, userId, userRole }) => {
   const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
   const initialTo = useMemo(() => new Date(), []);
@@ -68,6 +180,32 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
   const totalSaved = compressionTotal + cachingTotal;
+  const [logsPage, setLogsPage] = useState(1);
+  const startDate = startTime ? startTime.toISOString().slice(0, 10) : "";
+  const endDate = endTime ? endTime.toISOString().slice(0, 10) : "";
+  const {
+    data: optimizedLogsData,
+    isLoading: optimizedLogsLoading,
+    isFetching: optimizedLogsFetching,
+    error: optimizedLogsError,
+  } = useQuery({
+    queryKey: ["cost-optimization-usage-logs", startDate, endDate, logsPage],
+    queryFn: () =>
+      getCostOptimizationUsageLogs({
+        accessToken: accessToken!,
+        startDate,
+        endDate,
+        page: logsPage,
+        pageSize: 50,
+      }),
+    enabled: !!accessToken && !!startDate && !!endDate,
+  });
+  const logsDescription = optimizedLogsDescription(
+    optimizedLogsLoading,
+    optimizedLogsFetching,
+    optimizedLogsError,
+    optimizedLogsData,
+  );
 
   const overTime = useMemo(
     () =>
@@ -100,7 +238,13 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
             Money saved by prompt compression and prompt caching across your requests
           </p>
         </div>
-        <AdvancedDatePicker value={dateValue} onValueChange={(v) => setDateValue(v)} />
+        <AdvancedDatePicker
+          value={dateValue}
+          onValueChange={(v) => {
+            setDateValue(v);
+            setLogsPage(1);
+          }}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -150,6 +294,32 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Optimized Requests</CardTitle>
+          <p className="text-sm text-muted-foreground">{logsDescription}</p>
+        </CardHeader>
+        <CardContent>
+          {optimizedLogsLoading && (
+            <div className="py-10 text-center text-sm text-muted-foreground">Loading optimized requests...</div>
+          )}
+          {!optimizedLogsLoading && optimizedLogsError && (
+            <div className="py-10 text-center text-sm text-red-600">Failed to load optimized requests.</div>
+          )}
+          {!optimizedLogsLoading && !optimizedLogsError && optimizedLogsData?.logs.length ? (
+            <OptimizedRequestsTable
+              data={optimizedLogsData}
+              logsPage={logsPage}
+              onPrevious={() => setLogsPage((page) => Math.max(1, page - 1))}
+              onNext={() => setLogsPage((page) => Math.min(optimizedLogsData.total_pages, page + 1))}
+            />
+          ) : null}
+          {!optimizedLogsLoading && !optimizedLogsError && !optimizedLogsData?.logs.length && (
+            <div className="py-10 text-center text-sm text-muted-foreground">No optimized requests to display.</div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 };
