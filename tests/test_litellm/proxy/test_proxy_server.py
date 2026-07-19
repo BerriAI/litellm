@@ -946,7 +946,7 @@ def test_get_config_ignores_non_string_callback_entries(monkeypatch):
     config_data = {
         "litellm_settings": {
             "success_callback": ["langfuse", _StubLogger()],
-            "callbacks": [_StubLogger()],
+            "callbacks": _StubLogger(),
             "failure_callback": ["langfuse"],
         },
         "general_settings": {},
