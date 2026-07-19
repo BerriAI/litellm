@@ -368,11 +368,11 @@ async fn is_already_running_as_role(role: &str, config: &AwsAuthConfig) -> CoreR
     if let (Ok(current_role), Ok(token_file)) = (
         std::env::var(AWS_ROLE_ARN),
         std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE),
-    ) {
-        if !token_file.is_empty() {
-            return Ok(same_role_arns(role, &current_role));
-        }
+    ) && !token_file.is_empty()
+    {
+        return Ok(same_role_arns(role, &current_role));
     }
+
     let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
     if let Some(region) = config.region_name.clone() {
         loader = loader.region(aws_types::region::Region::new(region));
