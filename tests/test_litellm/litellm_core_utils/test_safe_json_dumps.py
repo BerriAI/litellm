@@ -277,3 +277,24 @@ def test_integer_dict_keys_are_stringified():
     assert result["1"] == "one"
     assert result["2"] == "two"
     assert result["three"] == 3
+
+
+def test_dict_key_with_raising_str_uses_placeholder():
+    """A hashable key whose __str__ raises must not propagate the exception."""
+
+    class RaisingKey:
+        def __hash__(self):
+            return 7
+
+        def __eq__(self, other):
+            return self is other
+
+        def __str__(self):
+            raise RuntimeError("intentional __str__ failure")
+
+    data = {RaisingKey(): "value", "normal": 1}
+    result = json.loads(safe_dumps(data))
+    assert result.get("UnserializableKey") == "value", (
+        "key whose __str__ raises should fall back to 'UnserializableKey'"
+    )
+    assert result["normal"] == 1
