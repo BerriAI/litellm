@@ -687,6 +687,14 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "so only a valid guardrail response can block or modify it."
         ),
     )
+    skip_unscannable_attachments: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
+            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
+            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+        ),
+    )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
