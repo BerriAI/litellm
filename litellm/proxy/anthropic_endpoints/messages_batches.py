@@ -59,6 +59,7 @@ import os
 import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote as _url_quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -66,9 +67,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router = APIRouter()
 
@@ -219,8 +222,8 @@ async def _aws_call(
     region: str,
 ) -> httpx.Response:
     headers, payload = _sign(method, url, body, service, aws_params, region)
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        return await client.request(method, url, headers=headers, content=payload)
+    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint, params={"timeout": 120.0})
+    return await client.client.request(method, url, headers=headers, content=payload)
 
 
 # ── Upstream (api.anthropic.com) forwarding ──────────────────────────────────
@@ -339,8 +342,8 @@ async def _forward_upstream(
     body: Optional[bytes] = None,
 ) -> Response:
     url = f"{_upstream_base()}{path}"
-    async with httpx.AsyncClient(timeout=600.0) as client:
-        upstream = await client.request(method, url, headers=_upstream_headers(request), content=body)
+    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint, params={"timeout": 600.0})
+    upstream = await client.client.request(method, url, headers=_upstream_headers(request), content=body)
     media_type = upstream.headers.get("content-type", "application/json")
     content = upstream.content
     # Rewrite results_url (and any data[].results_url on list responses) to
@@ -368,17 +371,11 @@ async def _forward_upstream(
                 content = json.dumps(payload).encode()
         except (ValueError, TypeError):
             pass
-    response_headers = {
-        name: value
-        for name in ("request-id", "retry-after")
-        if (value := upstream.headers.get(name))
-    }
+    response_headers = {name: value for name in ("request-id", "retry-after") if (value := upstream.headers.get(name))}
     response_headers.update(
         {name: value for name, value in upstream.headers.items() if name.lower().startswith("anthropic-ratelimit-")}
     )
-    return Response(
-        content=content, status_code=upstream.status_code, media_type=media_type, headers=response_headers
-    )
+    return Response(content=content, status_code=upstream.status_code, media_type=media_type, headers=response_headers)
 
 
 # ── Billing: managed-object registration (CheckBatchCost pickup) ─────────────
@@ -591,7 +588,9 @@ def _map_job_to_message_batch(job: Dict[str, Any], batch_id: str, results_base_u
         "expires_at": expires_at,
         "ended_at": end_time if ended else None,
         "archived_at": None,
-        "cancel_initiated_at": _rfc3339(datetime.datetime.now(datetime.timezone.utc)) if status in ("Stopping",) else None,
+        "cancel_initiated_at": _rfc3339(datetime.datetime.now(datetime.timezone.utc))
+        if status in ("Stopping",)
+        else None,
         "results_url": f"{results_base_url}/v1/messages/batches/{batch_id}/results" if ended else None,
     }
 
@@ -637,11 +636,7 @@ async def create_message_batch(
     # Bedrock enforces a fixed 100-record minimum per invocation job, so small
     # batches take the Anthropic-native leg even for Bedrock-batch-backed
     # models (same models, same 50% batch rate — just a different backend).
-    deployment = (
-        _find_bedrock_batch_deployment(single_model)
-        if single_model and len(requests_list) >= 100
-        else None
-    )
+    deployment = _find_bedrock_batch_deployment(single_model) if single_model and len(requests_list) >= 100 else None
     if deployment is None:
         # Mixed-model batches, sub-100-record batches, and models without a
         # Bedrock batch backend run on the Anthropic API upstream (which
@@ -672,11 +667,13 @@ async def create_message_batch(
             if not recorded and _billing_required():
                 # Refuse + best-effort cancel of the just-created upstream batch.
                 try:
-                    async with httpx.AsyncClient(timeout=60.0) as client:
-                        await client.post(
-                            f"{_upstream_base()}/v1/messages/batches/{upstream_batch_id}/cancel",
-                            headers=_upstream_headers(request),
-                        )
+                    client = get_async_httpx_client(
+                        llm_provider=httpxSpecialProvider.PassThroughEndpoint, params={"timeout": 60.0}
+                    )
+                    await client.post(
+                        f"{_upstream_base()}/v1/messages/batches/{upstream_batch_id}/cancel",
+                        headers=_upstream_headers(request),
+                    )
                 except Exception:
                     verbose_proxy_logger.exception(
                         "messages/batches billing: cancel of unbillable upstream batch %s failed", upstream_batch_id
@@ -826,7 +823,7 @@ async def retrieve_message_batch(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     if not batch_id.startswith(BEDROCK_MSGBATCH_PREFIX):
-        return await _forward_upstream(request, "GET", f"/v1/messages/batches/{batch_id}")
+        return await _forward_upstream(request, "GET", f"/v1/messages/batches/{_url_quote(batch_id, safe='')}")
     _check_bedrock_batch_owner(batch_id, user_api_key_dict)
     job, _ctx = await _get_bedrock_job(batch_id)
     return JSONResponse(status_code=200, content=_map_job_to_message_batch(job, batch_id, _results_base_url(request)))
@@ -844,7 +841,7 @@ async def message_batch_results(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     if not batch_id.startswith(BEDROCK_MSGBATCH_PREFIX):
-        return await _forward_upstream(request, "GET", f"/v1/messages/batches/{batch_id}/results")
+        return await _forward_upstream(request, "GET", f"/v1/messages/batches/{_url_quote(batch_id, safe='')}/results")
 
     _check_bedrock_batch_owner(batch_id, user_api_key_dict)
     job, ctx = await _get_bedrock_job(batch_id)
@@ -950,14 +947,12 @@ async def cancel_message_batch(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     if not batch_id.startswith(BEDROCK_MSGBATCH_PREFIX):
-        return await _forward_upstream(request, "POST", f"/v1/messages/batches/{batch_id}/cancel")
+        return await _forward_upstream(request, "POST", f"/v1/messages/batches/{_url_quote(batch_id, safe='')}/cancel")
     _check_bedrock_batch_owner(batch_id, user_api_key_dict)
     job, ctx = await _get_bedrock_job(batch_id)
     job_id, _owner8 = _split_bedrock_batch_id(batch_id)
     if job.get("status") not in _ENDED_STATUSES:
-        stop = await _aws_call(
-            "POST", _job_url(job_id, ctx, "/stop"), None, "bedrock", ctx["params"], ctx["region"]
-        )
+        stop = await _aws_call("POST", _job_url(job_id, ctx, "/stop"), None, "bedrock", ctx["params"], ctx["region"])
         job, ctx = await _get_bedrock_job(batch_id)
         if stop.status_code not in (200, 202) and job.get("status") not in {"Stopping", *_ENDED_STATUSES}:
             # Stop failed AND the refetched job doesn't independently confirm
@@ -1004,7 +999,7 @@ async def delete_message_batch(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     if not batch_id.startswith(BEDROCK_MSGBATCH_PREFIX):
-        return await _forward_upstream(request, "DELETE", f"/v1/messages/batches/{batch_id}")
+        return await _forward_upstream(request, "DELETE", f"/v1/messages/batches/{_url_quote(batch_id, safe='')}")
     _check_bedrock_batch_owner(batch_id, user_api_key_dict)
     job, ctx = await _get_bedrock_job(batch_id)
     if job.get("status") not in _ENDED_STATUSES:
