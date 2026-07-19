@@ -144,6 +144,52 @@ class TestResponses:
         arguments = WeatherArguments.model_validate(raw_arguments)
         assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
 
+    @pytest.mark.covers("llm.responses.openai.vision.nonstream.works")
+    def test_responses_vision_describes_image(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-4o", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.responses_vision(
+            key,
+            model,
+            "What animal is shown in this image? Answer in one word",
+            "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg",
+        )
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        text = parsed.text.strip().lower()
+        assert text, f"/responses vision returned no output text: {result.body[:300]}"
+        assert any(
+            keyword in text
+            for keyword in ("cat", "feline")
+        ), f"vision response did not describe the image: {parsed.text[:300]}"
+
+    @pytest.mark.covers("llm.responses.anthropic.basic.nonstream.works")
+    def test_responses_anthropic_returns_completion(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(
+                model="anthropic/claude-haiku-4-5", api_key="os.environ/ANTHROPIC_API_KEY"
+            ),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.responses(key, model, "reply with one word")
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        assert parsed.text.strip(), f"/responses returned no output text: {result.body[:300]}"
+
 
 def _parse_stream_event(
     event: str,

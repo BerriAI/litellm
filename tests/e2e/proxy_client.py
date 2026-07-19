@@ -31,6 +31,8 @@ from models import (
     ChatResponse,
     CountTokensBody,
     CountTokensResponse,
+    CredentialCreateBody,
+    CredentialCreateResponse,
     CustomerDeleteBody,
     EmbedBody,
     EmbedResponse,
@@ -219,6 +221,26 @@ class ProxyClient:
         if not is_ok(result):
             warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
 
+    def create_credential(self, body: CredentialCreateBody) -> None:
+        unwrap(
+            self.transport.post(
+                "/credentials",
+                headers=self.transport.master,
+                json=body,
+                response_type=CredentialCreateResponse,
+            )
+        )
+
+    def delete_credential(self, credential_name: str) -> None:
+        result = self.transport.delete(
+            f"/credentials/{credential_name}",
+            headers=self.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_credential({credential_name!r}) failed: {result}", stacklevel=2)
+
     # ---- LLM calls ------------------------------------------------------
 
     def chat(self, key: str, body: ChatBody) -> Result[ChatResponse]:
@@ -231,6 +253,9 @@ class ProxyClient:
 
     def chat_stream(self, key: str, body: ChatBody) -> StreamingResponse:
         return self.transport.stream("/chat/completions", headers=self.transport.bearer(key), json=body)
+
+    def messages_stream(self, key: str, body: AnthropicMessagesBody) -> StreamingResponse:
+        return self.transport.stream("/v1/messages", headers=self.transport.bearer(key), json=body)
 
     def embed(self, key: str, body: EmbedBody) -> Result[EmbedResponse]:
         return self.transport.post(
