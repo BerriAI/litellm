@@ -83,8 +83,8 @@ impl ResponsesWebSocketConnection {
     }
 
     pub async fn recv_text(&self) -> CoreResult<Option<String>> {
-        let mut socket = self.socket.lock().await;
-        let Some(socket) = socket.as_mut() else {
+        let mut socket_guard = self.socket.lock().await;
+        let Some(socket) = socket_guard.as_mut() else {
             return Ok(None);
         };
         match socket.next().await {
