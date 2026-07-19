@@ -3,10 +3,10 @@ use litellm_core::ocr::transformation::OcrResponseHandling;
 use litellm_core::CoreResult;
 use serde_json::Value;
 
+use crate::errors::map_reqwest_error;
+
 use super::client::http_client;
-use super::common_utils::{
-    classify_reqwest_error, poll_document_intelligence, truncate_error_body,
-};
+use super::common_utils::{poll_document_intelligence, truncate_error_body};
 use super::types::ProviderOcrRequest;
 
 pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> CoreResult<Value> {
@@ -18,10 +18,7 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Co
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
-        .await
-        .map_err(classify_reqwest_error)?;
+    let response = request_builder.send().await.map_err(map_reqwest_error)?;
 
     let status = response.status();
     if request.config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
@@ -51,7 +48,7 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Co
             .into_json());
     }
 
-    let text = response.text().await.map_err(classify_reqwest_error)?;
+    let text = response.text().await.map_err(map_reqwest_error)?;
 
     if !status.is_success() {
         return Err(CoreError::Http {

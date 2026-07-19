@@ -9,6 +9,8 @@ use litellm_core::CoreResult;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
+use crate::errors::map_reqwest_error;
+
 use litellm_core::providers::azure_ai::ocr::transformation::{
     AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
 };
@@ -26,14 +28,6 @@ use crate::constants::{
     AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS, DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
     DEFAULT_OCR_REQUEST_TIMEOUT_SECS, MAX_SAFE_FETCH_REDIRECTS, OCR_ERROR_BODY_MAX_CHARS,
 };
-
-pub(super) fn classify_reqwest_error(err: reqwest::Error) -> CoreError {
-    if err.is_timeout() {
-        CoreError::Timeout
-    } else {
-        CoreError::Network(err.to_string())
-    }
-}
 
 pub(super) fn truncate_error_body(body: &str) -> String {
     if body.chars().count() <= OCR_ERROR_BODY_MAX_CHARS {
@@ -226,7 +220,7 @@ async fn safe_fetch_request(url: Url, timeout: Duration) -> CoreResult<reqwest::
         .timeout(timeout)
         .send()
         .await
-        .map_err(classify_reqwest_error)
+        .map_err(map_reqwest_error)
 }
 
 async fn safe_get_document_url(
@@ -285,7 +279,7 @@ async fn read_response_with_limit(
 
     let mut bytes = Vec::new();
     let mut bytes_downloaded: u64 = 0;
-    while let Some(chunk) = response.chunk().await.map_err(classify_reqwest_error)? {
+    while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
         bytes_downloaded += chunk.len() as u64;
         enforce_download_size(bytes_downloaded, max_bytes, url)?;
         bytes.extend_from_slice(&chunk);
@@ -404,12 +398,9 @@ async fn upload_reducto_bytes(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
-        .await
-        .map_err(classify_reqwest_error)?;
+    let response = request_builder.send().await.map_err(map_reqwest_error)?;
     let status = response.status();
-    let text = response.text().await.map_err(classify_reqwest_error)?;
+    let text = response.text().await.map_err(map_reqwest_error)?;
     if !status.is_success() {
         return Err(CoreError::Http {
             status: status.as_u16(),
@@ -542,13 +533,10 @@ pub(super) async fn poll_document_intelligence(
             }
         }
         request_builder = request_builder.timeout(remaining);
-        let response = request_builder
-            .send()
-            .await
-            .map_err(classify_reqwest_error)?;
+        let response = request_builder.send().await.map_err(map_reqwest_error)?;
         let retry_after = retry_after_secs(&response);
         let status = response.status();
-        let text = response.text().await.map_err(classify_reqwest_error)?;
+        let text = response.text().await.map_err(map_reqwest_error)?;
         if !status.is_success() {
             return Err(CoreError::Http {
                 status: status.as_u16(),

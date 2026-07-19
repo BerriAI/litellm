@@ -16,6 +16,8 @@ pub mod io;
 pub mod messages;
 pub mod ocr;
 
+mod errors;
+
 /// GIL-activity tracking. Pure (atomics only); shared by the `server` routes and
 /// the `python-config` reader, so it is available without either feature.
 pub mod gil;
