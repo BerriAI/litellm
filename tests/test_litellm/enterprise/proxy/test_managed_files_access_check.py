@@ -192,6 +192,12 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
         return_value=[mock_job]
     )
     mock_prisma.db.litellm_managedobjecttable.update = AsyncMock()
+    # The claim/reclaim/finalize path (PR #136) awaits update_many; return 1 so
+    # this worker wins the claim and reaches the afile_content call.
+    mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+    # No prior spend row / no user row for the enrichment lookup.
+    mock_prisma.db.litellm_spendlogs.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
     # Mock proxy_logging_obj — should NOT be called for file content
     mock_proxy_logging = MagicMock()
@@ -261,13 +267,23 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
         # managed_files_obj.afile_content should NOT have been called
         mock_managed_files_hook.afile_content.assert_not_called()
 
-        # Verify the DB update writes batch_processed, status, and file_object
-        mock_prisma.db.litellm_managedobjecttable.update.assert_called_once()
-        update_call_kwargs = (
-            mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        # Verify the finalize write (claim-fenced update_many since PR #136)
+        # sets batch_processed, status, and file_object.
+        finalize_calls = [
+            c
+            for c in mock_prisma.db.litellm_managedobjecttable.update_many.call_args_list
+            if c.kwargs.get("data", {}).get("status") == "complete"
+        ]
+        assert len(finalize_calls) == 1, (
+            f"expected exactly one finalize update_many call, got: "
+            f"{mock_prisma.db.litellm_managedobjecttable.update_many.call_args_list}"
         )
-        assert update_call_kwargs["data"]["batch_processed"] is True
-        assert update_call_kwargs["data"]["status"] == "complete"
+        finalize_data = finalize_calls[0].kwargs["data"]
+        assert finalize_data["batch_processed"] is True
+        assert finalize_data["status"] == "complete"
         assert (
-            "file_object" in update_call_kwargs["data"]
+            "file_object" in finalize_data
         ), "file_object must be written to DB so list_batches reads updated status"
+        # The legacy unconditional update() path must not be used on schemas
+        # that have the batch_processed column.
+        mock_prisma.db.litellm_managedobjecttable.update.assert_not_called()

@@ -588,9 +588,7 @@ async def _get_billing_row(batch_id: str, *, raise_on_error: bool = False) -> Op
             return await prisma_client.db.litellm_managedobjecttable.find_first(
                 where={"model_object_id": {"endswith": f"/model-invocation-job/{job_id}"}}
             )
-        return await prisma_client.db.litellm_managedobjecttable.find_first(
-            where={"model_object_id": batch_id}
-        )
+        return await prisma_client.db.litellm_managedobjecttable.find_first(where={"model_object_id": batch_id})
     except Exception:
         verbose_proxy_logger.exception("messages/batches: billing-row lookup failed for %s", batch_id)
         if raise_on_error:
@@ -669,14 +667,13 @@ async def _unbilled_delete_block(batch_id: str, user_api_key_dict: UserAPIKeyAut
     try:
         row = await _get_billing_row(batch_id, raise_on_error=_billing_required())
     except Exception:
-        return _anthropic_error(
-            500, "api_error", "batch accounting is unavailable; retry the delete shortly"
-        )
+        return _anthropic_error(500, "api_error", "batch accounting is unavailable; retry the delete shortly")
     if row is None:
         return None
-    finalized = getattr(row, "batch_processed", False) is True and str(
-        getattr(row, "status", "") or ""
-    ) in _FINALIZED_ROW_STATUSES
+    finalized = (
+        getattr(row, "batch_processed", False) is True
+        and str(getattr(row, "status", "") or "") in _FINALIZED_ROW_STATUSES
+    )
     if not finalized:
         return _anthropic_error(
             400,

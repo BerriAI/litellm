@@ -31,6 +31,13 @@ EXCLUDED_ROLLOUT_FLAGS = {
     "LITELLM_RUST",
 }
 
+# Fork-internal operational tuning knobs. The documented reference table lives
+# in the external BerriAI/litellm-docs repo (checked out into docs/my-website in
+# CI), which this fork cannot edit; these stay undocumented until upstreamed.
+EXCLUDED_FORK_INTERNAL_VARS = {
+    "ABANDONED_PRICING_CLAIM_RECLAIM_SECONDS",
+}
+
 EXCLUDED_TERMINAL_VARS = {
     "TERM",
     "TERM_PROGRAM",
@@ -79,6 +86,7 @@ for root, dirs, files in os.walk(repo_base):
                     if match not in EXCLUDED_TERMINAL_VARS
                     and match not in EXCLUDED_GUARD_ONLY_VARS
                     and match not in EXCLUDED_ROLLOUT_FLAGS
+                    and match not in EXCLUDED_FORK_INTERNAL_VARS
                 )  # Extract only the key part, excluding terminal vars
 
                 # Find all keys using litellm.get_secret()
