@@ -2115,6 +2115,27 @@ def _raise_budget_unverifiable(counter_key: str) -> None:
     )
 
 
+def _raise_budget_reservation_unavailable(counter_key: str) -> None:
+    verbose_proxy_logger.warning(
+        "fail_closed_budget_enforcement: rejecting request — atomic budget "
+        "reservation for %s could not be written, so concurrent requests cannot "
+        "be held against the configured budget",
+        counter_key,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "error": (
+                "Budget enforcement unavailable: an atomic budget reservation "
+                "could not be written against Redis or the database, and "
+                "fail_closed_budget_enforcement is enabled, so the request was "
+                "rejected to avoid exceeding the configured budget under "
+                "concurrency. Retry shortly."
+            )
+        },
+    )
+
+
 async def get_current_spend(
     counter_key: str,
     fallback_spend: float,

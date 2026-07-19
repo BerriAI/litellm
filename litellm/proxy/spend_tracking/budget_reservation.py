@@ -193,6 +193,7 @@ async def reserve_budget_for_request(
                         default_reserved_cost=reservation_cost,
                     )
                 applied_entries.remove(entry)
+                _reject_if_fail_closed(counter_key=counter.counter_key)
                 continue
 
             if reserved_value is not None:
@@ -633,6 +634,25 @@ def _coerce_window(window: Any) -> dict:
     if hasattr(window, "model_dump"):
         return window.model_dump()
     return {}
+
+
+def _reject_if_fail_closed(counter_key: str) -> None:
+    """Reject the request when an atomic reservation could not be written and
+    ``fail_closed_budget_enforcement`` is enabled.
+
+    A failed reservation means this counter has no admission hold, so concurrent
+    requests can each pass the read-time spend check and collectively overspend
+    the configured budget. Under fail-closed the operator opted out of that
+    silent degradation, so raise 503 instead of proceeding on read-time-only
+    enforcement. No-op unless the flag is set, so default behavior is unchanged.
+    """
+    from litellm.proxy.proxy_server import (
+        _fail_closed_budget_enforcement,
+        _raise_budget_reservation_unavailable,
+    )
+
+    if _fail_closed_budget_enforcement():
+        _raise_budget_reservation_unavailable(counter_key)
 
 
 async def _reserve_counter(
