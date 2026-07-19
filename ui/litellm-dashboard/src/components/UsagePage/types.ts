@@ -11,6 +11,9 @@ export interface SpendMetrics {
   compression_saved_tokens?: number;
   compression_savings_spend?: number;
   prompt_caching_savings_spend?: number;
+  autorouter_savings_spend?: number;
+  autorouter_requests?: number;
+  autorouter_escalated_requests?: number;
 }
 
 export type DailyData = {

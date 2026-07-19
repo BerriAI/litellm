@@ -33,6 +33,11 @@ const shortDate = (iso: string): string =>
 const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
 const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
 const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
+const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
+const autorouterRequestsOf = (m: SpendMetrics): number => m.autorouter_requests ?? 0;
+const autorouterEscalatedOf = (m: SpendMetrics): number => m.autorouter_escalated_requests ?? 0;
+
+const pct = (value: number): string => `${formatNumberWithCommas(value * 100, 1)}%`;
 
 const SummaryCard = ({ label, value, hint }: { label: string; value: string; hint?: string }) => (
   <Card>
@@ -67,7 +72,17 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal;
+  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
+  const autorouterRequestsTotal = useMemo(
+    () => results.reduce((sum, d) => sum + autorouterRequestsOf(d.metrics), 0),
+    [results],
+  );
+  const autorouterEscalatedTotal = useMemo(
+    () => results.reduce((sum, d) => sum + autorouterEscalatedOf(d.metrics), 0),
+    [results],
+  );
+  const escalationRate = autorouterRequestsTotal > 0 ? autorouterEscalatedTotal / autorouterRequestsTotal : 0;
+  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
 
   const overTime = useMemo(
     () =>
@@ -82,10 +97,11 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const byDriver = useMemo(
     () =>
       [
+        { driver: "Autorouter (est.)", usd: autorouterTotal },
         { driver: "Compression", usd: compressionTotal },
         { driver: "Prompt caching", usd: cachingTotal },
       ].filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal],
+    [autorouterTotal, compressionTotal, cachingTotal],
   );
 
   return (
@@ -97,7 +113,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
             <h1 className="text-xl font-semibold text-foreground">Cost Optimization</h1>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Money saved by prompt compression and prompt caching across your requests
+            Money saved by autorouter routing, prompt compression, and prompt caching across your requests
           </p>
         </div>
         <AdvancedDatePicker value={dateValue} onValueChange={(v) => setDateValue(v)} />
@@ -107,7 +123,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
         <SummaryCard
           label="Total saved"
           value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching"}
+          hint={loading || isFetchingMore ? "Loading..." : "Autorouter (est.) + compression + prompt caching"}
         />
         <SummaryCard
           label="Compression savings"
@@ -115,6 +131,25 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
         />
         <SummaryCard label="Prompt caching savings" value={usd(cachingTotal)} hint="Cache read discount" />
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <SummaryCard
+          label="Autorouter saved"
+          value={usd(autorouterTotal)}
+          hint="Estimated vs the most expensive configured model"
+        />
+        <SummaryCard
+          label="Escalation rate"
+          value={autorouterRequestsTotal > 0 ? pct(escalationRate) : "—"}
+          hint={
+            autorouterRequestsTotal > 0
+              ? `${formatNumberWithCommas(autorouterEscalatedTotal)} of ${formatNumberWithCommas(
+                  autorouterRequestsTotal,
+                )} routed requests asked to escalate`
+              : "No autorouter requests yet"
+          }
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -142,7 +177,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
               data={byDriver}
               index="driver"
               category="usd"
-              colors={["emerald", "blue"]}
+              colors={["amber", "emerald", "blue"]}
               valueFormatter={usd}
               showLabel
               label={usd(totalSaved)}

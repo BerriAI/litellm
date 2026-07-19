@@ -3400,3 +3400,107 @@ class TestEscalationKeywords:
             messages=[{"role": "user", "content": "LITELLM ESCALATE do better"}],
         )
         assert result.model == "o1-b"  # unchanged: no random hop to o1-a / o1-c
+
+
+class TestAutorouterSavingsStamping:
+    """The pre-routing hook stamps baseline pricing + escalation onto request metadata
+    so the daily spend writer can estimate autorouter savings."""
+
+    @staticmethod
+    def _priced_router(pricing: Dict[str, tuple]) -> MagicMock:
+        from types import SimpleNamespace
+
+        router = MagicMock()
+        router.get_model_group_info.side_effect = lambda name: (
+            SimpleNamespace(input_cost_per_token=pricing[name][0], output_cost_per_token=pricing[name][1])
+            if name in pricing
+            else None
+        )
+        return router
+
+    @staticmethod
+    def _config() -> Dict:
+        return {
+            "tiers": {
+                "SIMPLE": "gpt-4o-mini",
+                "MEDIUM": "gpt-4o",
+                "COMPLEX": "claude-sonnet-4-20250514",
+                "REASONING": "o1-preview",
+            }
+        }
+
+    @staticmethod
+    def _pricing() -> Dict[str, tuple]:
+        return {
+            "gpt-4o-mini": (1e-7, 4e-7),
+            "gpt-4o": (5e-6, 15e-6),
+            "claude-sonnet-4-20250514": (3e-6, 15e-6),
+            "o1-preview": (15e-6, 60e-6),
+        }
+
+    @pytest.mark.asyncio
+    async def test_stamps_most_expensive_candidate_as_baseline(self):
+        router = ComplexityRouter(
+            model_name="smart-router",
+            litellm_router_instance=self._priced_router(self._pricing()),
+            complexity_router_config=self._config(),
+        )
+        request_kwargs: Dict = {}
+        result = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result is not None
+        stamped = request_kwargs["metadata"]["autorouter_savings"]
+        assert stamped["autorouter_name"] == "smart-router"
+        assert stamped["baseline_model"] == "o1-preview"
+        assert stamped["baseline_input_cost_per_token"] == 15e-6
+        assert stamped["baseline_output_cost_per_token"] == 60e-6
+        assert stamped["escalated"] is False
+
+    @pytest.mark.asyncio
+    async def test_escalation_keyword_sets_escalated_true(self):
+        router = ComplexityRouter(
+            model_name="smart-router",
+            litellm_router_instance=self._priced_router(self._pricing()),
+            complexity_router_config=self._config(),
+        )
+        request_kwargs: Dict = {}
+        await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "LITELLM ESCALATE please help me"}],
+        )
+        assert request_kwargs["metadata"]["autorouter_savings"]["escalated"] is True
+
+    @pytest.mark.asyncio
+    async def test_no_escalation_keyword_keeps_escalated_false(self):
+        router = ComplexityRouter(
+            model_name="smart-router",
+            litellm_router_instance=self._priced_router(self._pricing()),
+            complexity_router_config=self._config(),
+        )
+        request_kwargs: Dict = {}
+        await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "please escalate this ticket to your manager"}],
+        )
+        assert request_kwargs["metadata"]["autorouter_savings"]["escalated"] is False
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_pricing_unresolvable(self):
+        router = ComplexityRouter(
+            model_name="smart-router",
+            litellm_router_instance=self._priced_router({}),
+            complexity_router_config=self._config(),
+        )
+        request_kwargs: Dict = {}
+        result = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result is not None
+        assert "autorouter_savings" not in request_kwargs.get("metadata", {})

@@ -37,6 +37,9 @@ from litellm.types.mcp import (
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
+from litellm.types.router_strategy.autorouter_savings import (
+    AutorouterSavingsMetadata,
+)
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
@@ -3246,6 +3249,7 @@ class SpendLogsMetadata(TypedDict):
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
+    autorouter_savings: AutorouterSavingsMetadata | None
 
 
 class SpendLogsPayload(TypedDict):
@@ -4470,6 +4474,9 @@ class BaseDailySpendTransaction(TypedDict):
     # cost-savings metrics (dollars, priced per request before aggregation)
     compression_savings_spend: float
     prompt_caching_savings_spend: float
+    autorouter_savings_spend: float
+    autorouter_requests: int
+    autorouter_escalated_requests: int
 
     # request level metrics
     spend: float

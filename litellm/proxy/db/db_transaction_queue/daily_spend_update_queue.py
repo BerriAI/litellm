@@ -134,6 +134,18 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                         payload.get("prompt_caching_savings_spend", 0) or 0
                     ) + daily_transaction.get("prompt_caching_savings_spend", 0)
 
+                    daily_transaction["autorouter_savings_spend"] = (
+                        payload.get("autorouter_savings_spend", 0) or 0
+                    ) + daily_transaction.get("autorouter_savings_spend", 0)
+
+                    daily_transaction["autorouter_requests"] = (
+                        payload.get("autorouter_requests", 0) or 0
+                    ) + daily_transaction.get("autorouter_requests", 0)
+
+                    daily_transaction["autorouter_escalated_requests"] = (
+                        payload.get("autorouter_escalated_requests", 0) or 0
+                    ) + daily_transaction.get("autorouter_escalated_requests", 0)
+
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
         return aggregated_daily_spend_update_transactions

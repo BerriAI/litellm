@@ -106,4 +106,40 @@ describe("CostOptimizationView", () => {
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([{ driver: "Compression", usd: expect.closeTo(0.04, 5) }]);
   });
+
+  it("shows autorouter saved dollars and escalation rate from routed request counters", () => {
+    const firstDay = {
+      autorouter_savings_spend: 1.5,
+      autorouter_requests: 10,
+      autorouter_escalated_requests: 2,
+      compression_savings_spend: 0.1,
+    };
+    const { getByText } = renderWith([
+      day("2026-07-12", firstDay),
+      day("2026-07-13", { autorouter_savings_spend: 2.5, autorouter_requests: 30, autorouter_escalated_requests: 1 }),
+    ]);
+
+    expect(getByText("$4.00")).toBeInTheDocument();
+    expect(getByText("7.5%")).toBeInTheDocument();
+    expect(getByText("3 of 40 routed requests asked to escalate")).toBeInTheDocument();
+  });
+
+  it("shows an em dash for escalation rate when there are no autorouter requests", () => {
+    const { getByText } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
+
+    expect(getByText("\u2014")).toBeInTheDocument();
+    expect(getByText("No autorouter requests yet")).toBeInTheDocument();
+  });
+
+  it("adds an autorouter (est.) slice ahead of the realized-savings drivers", () => {
+    const { getByTestId } = renderWith([
+      day("2026-07-12", { autorouter_savings_spend: 4.0, compression_savings_spend: 0.1 }),
+    ]);
+
+    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
+    expect(slices).toEqual([
+      { driver: "Autorouter (est.)", usd: expect.closeTo(4.0, 5) },
+      { driver: "Compression", usd: expect.closeTo(0.1, 5) },
+    ]);
+  });
 });

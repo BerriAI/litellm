@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from litellm._logging import verbose_router_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.router_strategy.autorouter_savings import AutorouterSavingsMetadata
 from litellm.types.utils import ModelResponse
 
 from .config import (
@@ -68,6 +69,15 @@ Tiers:
 
 {system_context}Request:
 {prompt}"""
+
+
+def _as_cost(value: object) -> float | None:
+    """Coerce a per-token cost to float, or None when it is not a real number."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def _append_custom_keywords(base_keywords: list[str], custom_keywords: list[str] | None) -> list[str]:
@@ -200,6 +210,7 @@ class ComplexityRouter(CustomLogger):
         self.adaptive_router: AdaptiveRouter | None = None
         self._model_tiers: dict[str, tuple[ComplexityTier, ...]] = {}
         self._adaptive_init_attempted = False
+        self._baseline_cache: tuple[str, float, float] | None = None
 
         verbose_router_logger.debug(f"ComplexityRouter initialized for {model_name} with tiers: {self.config.tiers}")
 
@@ -935,6 +946,73 @@ class ComplexityRouter(CustomLogger):
         caller_scope = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
+    def _resolve_candidate_pricing(self, name: str) -> tuple[str, float, float] | None:
+        """Resolve ``(name, input_cost_per_token, output_cost_per_token)`` for one candidate
+        via the router's model-group pricing, or None when it has no numeric pricing."""
+        info = self.litellm_router_instance.get_model_group_info(name)
+        if info is None:
+            return None
+        input_cost = _as_cost(info.input_cost_per_token)
+        output_cost = _as_cost(info.output_cost_per_token)
+        if input_cost is None and output_cost is None:
+            return None
+        return (name, input_cost or 0.0, output_cost or 0.0)
+
+    def _autorouter_baseline(self) -> tuple[str, float, float] | None:
+        """Return ``(model_name, input_cost_per_token, output_cost_per_token)`` for the
+        most expensive candidate this router can route to, the baseline the Cost
+        Optimization dashboard prices savings against.
+
+        Candidates are every model across the configured tiers plus the default model.
+        "Most expensive" ranks by blended input+output per-token price, resolved through
+        the router's own model-group pricing (which already accounts for custom deployment
+        prices). Memoized because the config and its pricing do not change per request;
+        returns None when no candidate has resolvable, non-zero pricing.
+        """
+        if self._baseline_cache is not None:
+            return self._baseline_cache
+        pools = self._tier_pools()
+        candidates = tuple(
+            dict.fromkeys(
+                [model for models in pools.values() for model in models]
+                + ([self.config.default_model] if self.config.default_model else [])
+            )
+        )
+        priced = tuple(entry for name in candidates if (entry := self._resolve_candidate_pricing(name)) is not None)
+        if not priced:
+            return None
+        best = max(priced, key=lambda entry: entry[1] + entry[2])
+        if best[1] + best[2] <= 0.0:
+            return None
+        self._baseline_cache = best
+        return self._baseline_cache
+
+    def _stamp_autorouter_savings(
+        self,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None,
+    ) -> None:
+        """Record baseline pricing and the escalation flag onto the request metadata so
+        the daily spend writer can estimate autorouter savings for this request without
+        the router instance. No-op when no baseline pricing is resolvable."""
+        baseline = self._autorouter_baseline()
+        if baseline is None:
+            return
+        baseline_model, baseline_input_cost, baseline_output_cost = baseline
+        resolved_messages = self._resolve_messages(messages, request_kwargs)
+        user_message = self._extract_user_message_and_system_prompt(resolved_messages)[0] if resolved_messages else None
+        escalated = self._escalation_triggered(user_message) if user_message is not None else False
+        metadata_key = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
+        metadata = request_kwargs.setdefault(metadata_key, {})
+        if isinstance(metadata, dict):
+            metadata["autorouter_savings"] = AutorouterSavingsMetadata(
+                autorouter_name=self.model_name,
+                baseline_model=baseline_model,
+                baseline_input_cost_per_token=baseline_input_cost,
+                baseline_output_cost_per_token=baseline_output_cost,
+                escalated=escalated,
+            )
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -1001,6 +1079,7 @@ class ComplexityRouter(CustomLogger):
                         f"ComplexityRouter: routing decision cause={cause}, routed_model={routed_model}"
                     )
                     has_original_messages = messages is not None and len(messages) > 0
+                    self._stamp_autorouter_savings(request_kwargs, messages)
                     return PreRoutingHookResponse(
                         model=routed_model,
                         messages=messages if has_original_messages else None,
@@ -1019,6 +1098,8 @@ class ComplexityRouter(CustomLogger):
                 value=response.model,
                 ttl=self.config.session_affinity_ttl_seconds,
             )
+        if response is not None:
+            self._stamp_autorouter_savings(request_kwargs, messages)
         return response
 
     async def _classify_and_route(
