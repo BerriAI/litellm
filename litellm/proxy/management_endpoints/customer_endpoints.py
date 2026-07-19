@@ -22,6 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -51,6 +52,22 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     cleanup.
     """
     return CustomerResponse.model_validate(record.model_dump())
+
+
+def _with_budget_reset_at(budget_table_data: dict[str, object]) -> dict[str, object]:
+    """Populate budget_reset_at from budget_duration when the caller didn't pin one.
+
+    Mirrors /budget/new so a customer budget created or updated with a
+    budget_duration actually resets on schedule instead of persisting a null
+    budget_reset_at that reset_budget_job never picks up.
+    """
+    budget_duration = budget_table_data.get("budget_duration")
+    if not isinstance(budget_duration, str) or budget_table_data.get("budget_reset_at") is not None:
+        return budget_table_data
+    return {
+        **budget_table_data,
+        "budget_reset_at": get_budget_reset_time(budget_duration=budget_duration),
+    }
 
 
 @router.post(
@@ -594,6 +611,7 @@ async def update_end_user(
 
         ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
+            budget_table_data = _with_budget_reset_at(budget_table_data)
             if end_user_budget_table is None:
                 ## Create new budget ##
                 budget_table_data_record = await BudgetRepository(prisma_client).table.create(

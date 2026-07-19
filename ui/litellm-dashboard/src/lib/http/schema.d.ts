@@ -31946,6 +31946,8 @@ export interface components {
              * @default false
              */
             blocked: boolean;
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Default Model */
