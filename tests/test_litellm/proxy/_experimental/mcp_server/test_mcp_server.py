@@ -6162,6 +6162,71 @@ async def test_execute_mcp_tool_jsonrpc_unprefixed_ambiguous_tool_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_execute_mcp_tool_jsonrpc_never_dispatches_to_an_out_of_scope_server():
+    """End to end: a tool whose only owner is outside the caller's scope must not be dispatched.
+
+    resolve_tool_route already fails closed, but a later scope-blind fallback that only runs
+    when no server resolved would re-resolve the out-of-scope owner and dispatch to it,
+    bypassing the permission gate because no server_name was set for it to check.
+    """
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    in_scope = MCPServer(
+        server_id="in-scope-id",
+        name="echo_alpha",
+        server_name="echo_alpha",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="in-scope-secret",
+    )
+    out_of_scope = MCPServer(
+        server_id="out-of-scope-id",
+        name="echo_zulu",
+        server_name="echo_zulu",
+        url="http://127.0.0.1:5115/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="out-of-scope-secret",
+    )
+
+    dispatched: dict = {}
+
+    async def fake_create_mcp_client(server, **kwargs):
+        dispatched["server"] = server
+        raise AssertionError("must not dispatch to an out-of-scope server")
+
+    with (
+        patch.dict(
+            mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_ids_mapping,
+            {"secret_tool": frozenset({out_of_scope.server_id})},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "get_registry",
+            return_value={in_scope.server_id: in_scope, out_of_scope.server_id: out_of_scope},
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_create_mcp_client",
+            new=fake_create_mcp_client,
+        ),
+        patch.object(mcp_module.MCPRequestHandler, "is_tool_allowed", return_value=True),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=None),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        pytest.raises(HTTPException),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="secret_tool",
+            arguments={"message": "hello"},
+            allowed_mcp_servers=[in_scope],
+            start_time=datetime.now(),
+        )
+
+    assert "server" not in dispatched
+
+
+@pytest.mark.asyncio
 async def test_execute_mcp_tool_jsonrpc_unprefixed_resolves_when_caller_reaches_one_server():
     """A caller scoped to one server is served unprefixed names and must still route.
 

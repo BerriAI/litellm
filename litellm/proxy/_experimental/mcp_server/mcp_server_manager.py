@@ -1558,13 +1558,12 @@ class MCPServerManager:
             openapi_key_prefix = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
             global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
 
-        surviving = {
-            tool_name: remaining
-            for tool_name, owner_ids in self.tool_name_to_mcp_server_ids_mapping.items()
-            if (remaining := owner_ids - {server.server_id})
-        }
-        self.tool_name_to_mcp_server_ids_mapping.clear()
-        self.tool_name_to_mcp_server_ids_mapping.update(surviving)
+        for tool_name in list(self.tool_name_to_mcp_server_ids_mapping):
+            remaining = self.tool_name_to_mcp_server_ids_mapping[tool_name] - {server.server_id}
+            if remaining:
+                self.tool_name_to_mcp_server_ids_mapping[tool_name] = remaining
+            else:
+                del self.tool_name_to_mcp_server_ids_mapping[tool_name]
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """

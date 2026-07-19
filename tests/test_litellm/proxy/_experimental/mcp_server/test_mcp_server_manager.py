@@ -4006,6 +4006,28 @@ class TestMCPServerManager:
         assert manager.tool_name_to_mcp_server_ids_mapping["echo"] == frozenset({"id-alpha"})
         assert manager._get_mcp_server_from_tool_name("echo") is alpha
 
+    def test_cleanup_mutates_the_mapping_in_place_without_emptying_it(self):
+        """Cleanup must keep the same dict object and never clear it wholesale.
+
+        The initialize task is dispatched without being awaited and holds a reference to
+        this dict, so rebinding it would drop that task's writes; clearing it would let a
+        concurrent reader briefly see an empty map and mis-route.
+        """
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        zulu = MCPServer(server_id="id-zulu", name="echo_zulu", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha, "id-zulu": zulu}
+        manager._register_tool_route("shared", "id-alpha")
+        manager._register_tool_route("shared", "id-zulu")
+        manager._register_tool_route("alpha_only", "id-alpha")
+        original_map = manager.tool_name_to_mcp_server_ids_mapping
+
+        manager._cleanup_server_tool_routing_artifacts(zulu)
+
+        assert manager.tool_name_to_mcp_server_ids_mapping is original_map
+        assert manager.tool_name_to_mcp_server_ids_mapping["shared"] == frozenset({"id-alpha"})
+        assert manager.tool_name_to_mcp_server_ids_mapping["alpha_only"] == frozenset({"id-alpha"})
+
     def test_cleanup_drops_the_route_when_its_last_owner_leaves(self):
         manager = MCPServerManager()
         alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)

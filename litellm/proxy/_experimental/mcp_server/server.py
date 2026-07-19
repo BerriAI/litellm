@@ -2690,8 +2690,13 @@ if MCP_AVAILABLE:
             litellm_logging_obj.model_call_details["model"] = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
+        # Stay within the caller's scope: a scope-blind lookup here would undo the
+        # scope decision already made above and dispatch to an out-of-scope server.
         if mcp_server is None:
-            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            allowed_server_ids = {server.server_id for server in allowed_mcp_servers}
+            fallback_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if fallback_server is not None and fallback_server.server_id in allowed_server_ids:
+                mcp_server = fallback_server
 
         if mcp_server:
             standard_logging_mcp_tool_call["mcp_server_cost_info"] = (mcp_server.mcp_info or {}).get(
