@@ -1630,6 +1630,7 @@ DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
 # Providers that support advisor_20260301 natively (no LiteLLM orchestration needed).
 # Add vertex_ai here once verified.
 ADVISOR_NATIVE_PROVIDERS: frozenset = frozenset({"anthropic"})
+SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES: frozenset = frozenset({"aresponses", "anthropic_messages"})
 # Hard cap on advisor iterations per request to prevent runaway loops.
 ADVISOR_MAX_USES: int = 5
 # Description injected into the synthetic advisor tool definition sent to non-native providers.

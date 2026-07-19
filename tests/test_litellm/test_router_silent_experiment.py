@@ -209,11 +209,7 @@ async def test_router_silent_experiment_acompletion():
 
         # Find the silent call
         silent_call = next(
-            (
-                c
-                for c in call_args_list
-                if c[1].get("metadata", {}).get("is_silent_experiment") is True
-            ),
+            (c for c in call_args_list if c[1].get("metadata", {}).get("is_silent_experiment") is True),
             None,
         )
         assert silent_call is not None
@@ -221,11 +217,7 @@ async def test_router_silent_experiment_acompletion():
 
         # Find the primary call
         primary_call = next(
-            (
-                c
-                for c in call_args_list
-                if not c[1].get("metadata", {}).get("is_silent_experiment")
-            ),
+            (c for c in call_args_list if not c[1].get("metadata", {}).get("is_silent_experiment")),
             None,
         )
         assert primary_call is not None
@@ -294,11 +286,7 @@ def test_router_silent_experiment_completion():
 
         # Find the silent call
         silent_call = next(
-            (
-                c
-                for c in call_args_list
-                if c[1].get("metadata", {}).get("is_silent_experiment") is True
-            ),
+            (c for c in call_args_list if c[1].get("metadata", {}).get("is_silent_experiment") is True),
             None,
         )
         assert silent_call is not None
@@ -333,6 +321,7 @@ async def test_router_silent_experiment_aresponses():
 
     mock_response = MagicMock()
     mock_aresponses = AsyncMock(return_value=mock_response)
+    mock_aresponses.__name__ = "aresponses"
 
     with patch.object(litellm, "aresponses", mock_aresponses):
         router = Router(model_list=model_list)
@@ -363,6 +352,45 @@ async def test_router_silent_experiment_aresponses():
         )
         assert primary_call is not None
         assert primary_call.kwargs["model"] == "openai/gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_router_silent_experiment_skips_mutating_call_types():
+    """
+    Regression test: silent_model mirroring must not replay mutating
+    operations (fine-tuning jobs, skill deletion, file operations,
+    passthrough) against the silent deployment's account. Only the explicit
+    allowlist of safe inference call types (aresponses, anthropic_messages)
+    is eligible for mirroring.
+    """
+    model_list = [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "fake-key",
+                "silent_model": "silent-model",
+            },
+        },
+        {
+            "model_name": "silent-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": "fake-key",
+            },
+        },
+    ]
+
+    mock_response = MagicMock()
+    mock_adelete_skill = AsyncMock(return_value=mock_response)
+
+    with patch.object(litellm, "adelete_skill", mock_adelete_skill):
+        router = Router(model_list=model_list)
+        await router.adelete_skill(model="primary-model", skill_id="skill-123")
+
+        await asyncio.sleep(0.1)
+
+        assert mock_adelete_skill.call_count == 1
 
 
 @pytest.mark.asyncio

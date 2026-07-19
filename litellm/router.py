@@ -60,6 +60,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -2715,7 +2716,7 @@ class Router:
             await self._ageneric_api_call_with_fallbacks(
                 original_function=original_function, model=silent_model, **silent_kwargs
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001  # a background mirror failure must never break the primary request
             verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {str(e)}")
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: List[Any], **kwargs):
@@ -4486,7 +4487,10 @@ class Router:
 
             data = deployment["litellm_params"].copy()
             silent_model = data.pop("silent_model", None)
-            if silent_model is not None:
+            if (
+                silent_model is not None
+                and getattr(original_generic_function, "__name__", None) in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES
+            ):
                 asyncio.create_task(
                     self._silent_experiment_ageneric(
                         silent_model=silent_model,
