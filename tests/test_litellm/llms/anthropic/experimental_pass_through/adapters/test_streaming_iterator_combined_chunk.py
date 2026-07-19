@@ -183,9 +183,12 @@ def test_is_combined_false_when_delta_missing():
     assert _CombinedChunkSplitter._is_combined(chunk) is False
 
 
-def test_split_clears_reasoning_and_thinking_on_finish_chunk():
-    """When the combined delta carries reasoning/thinking, only the content
-    chunk keeps them — the finish chunk is cleared."""
+def test_split_separates_reasoning_content_and_finish_into_three_chunks():
+    """A chunk combining reasoning, content, AND finish_reason must split into
+    three single-payload chunks (reasoning, then content, then finish) — not
+    two. Bundling reasoning into the same chunk as content is exactly the
+    input shape that causes a `thinking_delta` to land on a block the client
+    was told is `text` (see test_streaming_iterator_reasoning_content_chunk.py)."""
     delta = SimpleNamespace(
         content="hi",
         tool_calls=None,
@@ -196,9 +199,19 @@ def test_split_clears_reasoning_and_thinking_on_finish_chunk():
         choices=[SimpleNamespace(finish_reason="stop", delta=delta)]
     )
 
-    content_chunk, finish_chunk = _CombinedChunkSplitter._split(chunk)
+    reasoning_chunk, content_chunk, finish_chunk = _CombinedChunkSplitter._split(chunk)
 
-    assert content_chunk.choices[0].delta.reasoning_content == "some reasoning"
-    assert content_chunk.choices[0].delta.thinking_blocks == [{"type": "thinking"}]
+    assert reasoning_chunk.choices[0].delta.reasoning_content == "some reasoning"
+    assert reasoning_chunk.choices[0].delta.thinking_blocks == [{"type": "thinking"}]
+    assert reasoning_chunk.choices[0].delta.content is None
+    assert reasoning_chunk.choices[0].finish_reason is None
+
+    assert content_chunk.choices[0].delta.content == "hi"
+    assert content_chunk.choices[0].delta.reasoning_content is None
+    assert content_chunk.choices[0].delta.thinking_blocks is None
+    assert content_chunk.choices[0].finish_reason is None
+
+    assert finish_chunk.choices[0].finish_reason == "stop"
+    assert finish_chunk.choices[0].delta.content is None
     assert finish_chunk.choices[0].delta.reasoning_content is None
     assert finish_chunk.choices[0].delta.thinking_blocks is None
