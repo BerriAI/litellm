@@ -26,6 +26,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAuth,
     MCPAuthType,
     MCPCredentials,
     MCPTransport,
@@ -189,6 +190,9 @@ class LitellmTableNames(str, enum.Enum):
     TOOL_TABLE_NAME = "LiteLLM_ToolTable"
     CACHE_CONFIG_TABLE_NAME = "LiteLLM_CacheConfig"
     CONFIG_OVERRIDES_TABLE_NAME = "LiteLLM_ConfigOverrides"
+    CONFIG_TABLE_NAME = "LiteLLM_Config"
+    SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
+    UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -585,6 +589,7 @@ class LiteLLMRoutes(enum.Enum):
             # team
             "/team/new",
             "/team/update",
+            "/team/{team_id}",
             "/team/delete",
             "/team/list",
             "/v2/team/list",
@@ -1003,8 +1008,12 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
     search_tools: Optional[List[str]] = None
+    mcp_tool_search_enabled: Optional[bool] = None
 
 
+from litellm.types.object_permission import (  # noqa: E402
+    ObjectPermissionDict as ObjectPermissionDict,
+)
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 
@@ -1032,11 +1041,13 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
     model_max_budget: Optional[dict] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    budget_fallbacks: Optional[dict[str, list[str]]] = None
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     mcp_rpm_limit: Optional[Dict[str, int]] = None
+    tag_rpm_limit: Optional[dict[str, int]] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
@@ -1062,6 +1073,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     disable_global_guardrails: Optional[bool] = None
+    throttle_on_budget_exceeded: Optional[bool] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
     allowed_passthrough_routes: Optional[list] = None
@@ -1106,6 +1118,7 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
+    key_type: str | None = None
     expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
@@ -1129,6 +1142,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "config",
             "permissions",
             "model_max_budget",
+            "budget_fallbacks",
             "router_settings",
             "budget_limits",
         ]
@@ -1218,6 +1232,14 @@ from litellm.models.mcp_server import (  # noqa: E402
 
 
 # MCP Proxy Request Types
+def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
+    return ValueError(
+        f"dcr_bridge is only supported for auth_type true_passthrough or oauth_delegate (got {auth_type!r}). "
+        "The DCR bridge serves gateway-hosted OAuth discovery for the client-forwarded token modes; "
+        "interactive oauth2 servers already run the gateway authorization-code flow."
+    )
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
     server_name: Optional[str] = None
@@ -1241,19 +1263,30 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Token Exchange (OBO) fields — RFC 8693. These top-level fields are the
+    # canonical shape; the same keys inside ``credentials`` are the legacy
+    # pre-column REST shape and are lifted into these columns on write (an
+    # explicit top-level value wins) and stripped from the stored blob.
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
@@ -1302,6 +1335,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         """
         return values
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_dcr_bridge_auth_type(cls, values):
+        if not isinstance(values, dict) or not values.get("dcr_bridge"):
+            return values
+        auth_type = values.get("auth_type")
+        if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+            return values
+        raise _dcr_bridge_auth_type_error(auth_type)
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1326,19 +1369,30 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Token Exchange (OBO) fields — RFC 8693. These top-level fields are the
+    # canonical shape; the same keys inside ``credentials`` are the legacy
+    # pre-column REST shape and are lifted into these columns on write (an
+    # explicit top-level value wins) and stripped from the stored blob.
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
+    dcr_bridge: Optional[bool] = None
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1361,6 +1415,21 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("url") and not values.get("spec_path"):
                     raise ValueError("url or spec_path is required for HTTP/SSE transport")
         return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_dcr_bridge_auth_type(cls, values):
+        """Partial updates omit auth_type; that case is validated against the stored row by the
+        update endpoint, which can read the database. This validator covers payloads that carry
+        both fields."""
+        if not isinstance(values, dict) or not values.get("dcr_bridge"):
+            return values
+        if "auth_type" not in values:
+            return values
+        auth_type = values.get("auth_type")
+        if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+            return values
+        raise _dcr_bridge_auth_type_error(auth_type)
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -2086,6 +2155,41 @@ class PluginConfig(LiteLLMPydanticObjectBase):
     )
 
 
+class CoordinationRedisNode(LiteLLMPydanticObjectBase):
+    """A single startup node of a cluster-mode Redis used for proxy coordination."""
+
+    host: str = Field(description="hostname of the cluster node")
+    port: int = Field(description="port of the cluster node")
+
+
+class CoordinationRedisParams(LiteLLMPydanticObjectBase):
+    """
+    Connection params for the proxy's coordination Redis (cross-pod tpm/rpm rate
+    limits, spend tracking, pod lock manager, shared health checks), configured
+    independently of the response-cache backend in `litellm_settings.cache_params`.
+    """
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    host: Optional[str] = Field(None, description="Redis hostname")
+    port: Optional[int] = Field(None, description="Redis port")
+    password: Optional[str] = Field(None, description="Redis password")
+    username: Optional[str] = Field(None, description="Redis username")
+    url: Optional[str] = Field(None, description="full Redis connection url, e.g. redis://:pass@host:6379")
+    ssl: Optional[bool] = Field(None, description="connect over TLS")
+    startup_nodes: Optional[List[CoordinationRedisNode]] = Field(
+        None, description="cluster-mode startup nodes; when set a cluster client is used"
+    )
+    sentinel_nodes: Optional[List[List[Union[str, int]]]] = Field(
+        None, description="sentinel [host, port] pairs; when set a sentinel-managed client is used"
+    )
+    sentinel_password: Optional[str] = Field(None, description="password for the sentinel nodes")
+    service_name: Optional[str] = Field(None, description="sentinel service name")
+
+    def has_connection_target(self) -> bool:
+        return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2101,6 +2205,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: Optional[bool] = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: Optional[bool] = Field(None, description="load keys from azure key vault")
     master_key: Optional[str] = Field(None, description="require a key for all calls to proxy")
+    coordination_redis: Optional[CoordinationRedisParams] = Field(
+        None,
+        description=(
+            "standalone Redis for cross-pod coordination (tpm/rpm rate limits, "
+            "spend tracking, pod lock manager, shared health checks), configured "
+            "independently of the response-cache backend; takes precedence over "
+            "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
@@ -2256,6 +2369,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_auto_add_proxy_admin_to_teams: bool | None = Field(
+        None,
+        description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
@@ -2310,6 +2427,38 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "A proxy-level WARNING is logged on every request while this flag "
             "is active as a reminder that hard enforcement is relaxed."
         ),
+    )
+    skip_user_budget_on_team_key: bool | None = Field(
+        None,
+        description=(
+            "If True, restores the legacy behavior where a user's personal "
+            "max_budget is NOT enforced when their key belongs to a team; only "
+            "the team (and team-member) budgets apply. Defaults to False, meaning "
+            "the user's personal max_budget is always enforced regardless of "
+            "whether the key belongs to a team (see GitHub issue #12905)."
+        ),
+    )
+    user_url_validation: Optional[bool] = Field(
+        None,
+        description=(
+            "Master switch for the SSRF guard applied to user-supplied URLs "
+            "(image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. "
+            "Set to False to disable DNS/IP validation entirely (not recommended)."
+        ),
+    )
+    user_url_allowed_hosts: Optional[list[str]] = Field(
+        None,
+        description=(
+            "SSRF allowlist for user-supplied URLs. Entries are `hostname` or "
+            "`hostname:port` (bracketed for IPv6, e.g. `[::1]:8080`). Allowlisted "
+            "hosts skip the blocked-network check in validate_url() but still "
+            "resolve DNS. Use this to permit legitimate internal targets, e.g. "
+            "an internal OpenAPI/MCP server."
+        ),
+    )
+    provider_url_destination_allowed_hosts: Optional[list[str]] = Field(
+        None,
+        description="Allowlist of hosts a request may redirect a provider call's destination URL to.",
     )
 
 
@@ -2436,6 +2585,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     request_route: Optional[str] = None
     is_session_token: bool = False
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
+    budget_throttle_pct: Optional[float] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
     created_by_user: Optional[Any] = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
@@ -3818,6 +3968,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
     "mcp_rpm_limit",
+    "tag_rpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
     "enforced_params",
@@ -3826,6 +3977,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "allowed_vector_store_indexes",
     "enforced_batch_output_expires_after",
     "enforced_file_expires_after",
+    "throttle_on_budget_exceeded",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
@@ -4171,6 +4323,17 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "the single-team DB fallback (caller's only team membership) "
             "instead of raising. Default False preserves strict claim-based "
             "authorization."
+        ),
+    )
+    fallback_to_db_teams: bool = Field(
+        default=False,
+        description=(
+            "When True, users whose JWT contains no team claims are authenticated "
+            "using their database team memberships instead of receiving HTTP 403. "
+            "Usage is attributed to the user's first resolvable DB team, or to the "
+            "team specified via the x-litellm-team-id request header (validated "
+            "against DB membership). Requires user_id_upsert=True so that user "
+            "records exist before the fallback runs."
         ),
     )
     issuers: Optional[List[JWTIssuerConfig]] = Field(

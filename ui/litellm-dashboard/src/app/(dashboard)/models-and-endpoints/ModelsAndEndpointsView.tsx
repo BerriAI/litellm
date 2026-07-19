@@ -4,6 +4,7 @@ import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUpdateRetryPolicy } from "@/app/(dashboard)/hooks/routerSettings/useUpdateRetryPolicy";
 import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTab";
+import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
@@ -19,14 +20,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import type { UploadProps } from "antd";
 import { Form } from "antd";
-import { PlusCircleOutlined } from "@ant-design/icons";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
 import ModelInfoView from "../../../components/model_info_view";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
-import PassThroughSettings from "../../../components/pass_through_settings";
+import PassThroughSettings from "../../../components/PassThroughSettings/PassThroughSettings";
 import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
 
@@ -70,12 +70,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
   const [healthCurrentPage, setHealthCurrentPage] = useState(1);
-  const [showMissingProviderBanner, setShowMissingProviderBanner] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("hideMissingProviderBanner") !== "true";
-    }
-    return true;
-  });
 
   const queryClient = useQueryClient();
   const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
@@ -302,7 +296,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   }
 
   return (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
           {/* Model Management Header */}
@@ -315,75 +309,10 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 <p className="text-sm text-gray-600">Add and manage models for the proxy</p>
               )}
             </div>
-            {!showMissingProviderBanner && (
-              <a
-                href="https://models.litellm.ai/?request=true"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#6366f1] hover:text-[#5558e3] border border-[#6366f1] hover:border-[#5558e3] rounded-lg transition-colors"
-              >
-                <PlusCircleOutlined style={{ fontSize: "12px" }} />
-                Request Provider
-              </a>
-            )}
           </div>
 
-          {/* Missing Provider Banner */}
-          {showMissingProviderBanner && (
-            <div className="mb-4 px-4 py-3 bg-blue-50 rounded-lg border border-blue-100 flex items-center gap-4">
-              <div className="flex-shrink-0 w-10 h-10 bg-white rounded-full flex items-center justify-center border border-blue-200">
-                <PlusCircleOutlined style={{ fontSize: "18px", color: "#6366f1" }} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h4 className="text-gray-900 font-semibold text-sm m-0">Missing a provider?</h4>
-                <p className="text-gray-500 text-xs m-0 mt-0.5">
-                  The LiteLLM engineering team is constantly adding support for new LLM models, providers, endpoints. If
-                  you don&apos;t see the one you need, let us know and we&apos;ll prioritize it.
-                </p>
-              </div>
-              <a
-                href="https://models.litellm.ai/?request=true"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#5558e3] text-white text-sm font-medium rounded-lg transition-colors"
-              >
-                Request Provider
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                  />
-                </svg>
-              </a>
-              <button
-                onClick={() => {
-                  setShowMissingProviderBanner(false);
-                  localStorage.setItem("hideMissingProviderBanner", "true");
-                }}
-                className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-                aria-label="Dismiss banner"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          )}
+          {/* Cost Optimization Feedback Banner */}
+          <CostOptimizationFeedbackBanner />
           {selectedModelId && !isLoading ? (
             <ModelInfoView
               modelId={selectedModelId}
@@ -467,7 +396,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                           accessToken={accessToken}
                           userRole={userRole}
                           userID={userID}
-                          modelData={processedModelData}
                           premiumUser={premiumUser}
                         />
                       </TabPanel>

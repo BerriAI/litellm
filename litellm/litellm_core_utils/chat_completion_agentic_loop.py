@@ -137,8 +137,8 @@ async def _execute_chat_completion_agentic_plan(
     optional_params_for_followup = {**optional_params, **patch.optional_params}
     if patch.tools is not None:
         optional_params_for_followup["tools"] = patch.tools
-        if "tool_choice" not in patch.optional_params:
-            optional_params_for_followup.pop("tool_choice", None)
+    if "tool_choice" not in patch.optional_params:
+        optional_params_for_followup.pop("tool_choice", None)
 
     kwargs_for_followup = _filter_followup_kwargs(kwargs)
     kwargs_for_followup.update(
@@ -206,10 +206,11 @@ async def maybe_run_chat_completion_agentic_loop(
     for callback in callbacks:
         if not isinstance(callback, CustomLogger):
             continue
+
         if not _gate_overridden(callback):
             continue
 
-        gate_kwargs = {
+        hook_kwargs = {
             **kwargs,
             "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
             "custom_llm_provider": custom_llm_provider,
@@ -222,7 +223,7 @@ async def maybe_run_chat_completion_agentic_loop(
                 tools=tools,
                 stream=stream,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=gate_kwargs,
+                kwargs=hook_kwargs,
             )
         except Exception as e:
             verbose_logger.exception(
@@ -243,11 +244,6 @@ async def maybe_run_chat_completion_agentic_loop(
         )
 
         try:
-            plan_kwargs = {
-                **kwargs,
-                "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
-                "custom_llm_provider": custom_llm_provider,
-            }
             if not _build_plan_overridden(callback):
                 return await callback.async_run_agentic_loop(
                     tools=tool_calls,
@@ -258,7 +254,7 @@ async def maybe_run_chat_completion_agentic_loop(
                     anthropic_messages_optional_request_params=optional_params,
                     logging_obj=logging_obj,
                     stream=stream,
-                    kwargs=plan_kwargs,
+                    kwargs=hook_kwargs,
                 )
 
             plan = await callback.async_build_agentic_loop_plan(
@@ -270,7 +266,7 @@ async def maybe_run_chat_completion_agentic_loop(
                 anthropic_messages_optional_request_params=optional_params,
                 logging_obj=logging_obj,
                 stream=stream,
-                kwargs=plan_kwargs,
+                kwargs=hook_kwargs,
             )
 
             if plan.response_override is not None:

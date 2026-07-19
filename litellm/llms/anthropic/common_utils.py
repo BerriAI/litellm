@@ -290,6 +290,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
 
     @staticmethod
+    def _strip_version_suffix(model: str) -> str:
+        at = model.rfind("@")
+        if at > 0:
+            return model[:at]
+        return model
+
+    @staticmethod
     def _model_map_lookup_candidates(model: str) -> List[str]:
         """Model-map keys to try for ``model``: the id itself, the same id with a
         bedrock/vertex routing prefix removed, the Bedrock base model, and each of
@@ -324,6 +331,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 _DATED_RELEASE_SUFFIX_RE.sub("", cand),
                 _DOTTED_VERSION_RE.sub(r"\1-\2", cand),
                 _strip_bedrock_id_suffixes(cand),
+                AnthropicModelInfo._strip_version_suffix(cand),
             )
         )
         return list(dict.fromkeys((*primary, *normalized)))
@@ -332,11 +340,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def _get_model_capability(model: str, key: str) -> Optional[bool]:
         """Read boolean capability ``key`` from the model map, or None when
         no entry declares it."""
+        from litellm.utils import _get_bundled_model_cost_map
+
         try:
-            for cand in AnthropicModelInfo._model_map_lookup_candidates(model):
-                value = litellm.model_cost.get(cand, {}).get(key)
-                if isinstance(value, bool):
-                    return value
+            candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
+            for model_cost in (litellm.model_cost, _get_bundled_model_cost_map()):
+                for cand in candidates:
+                    value = model_cost.get(cand, {}).get(key)
+                    if isinstance(value, bool):
+                        return value
         except Exception:
             pass
         return None
@@ -352,18 +364,43 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return value if isinstance(value, bool) else None
 
     @staticmethod
-    def _supports_model_capability(model: str, key: str) -> bool:
-        """Check a boolean capability ``key`` in the model map.
+    def _get_provider_resolved_capability(model: str, key: str, custom_llm_provider: str) -> Optional[bool]:
+        """Resolve boolean capability ``key`` for ``model`` under the caller's provider.
 
-        Strips bedrock/vertex prefixes so a provider-routed Claude still
-        resolves to the Anthropic model-map entry.
+        Returns the flag when the provider-aware lookup resolves ``model`` to an
+        entry (or fallback rule) that sets it explicitly, and ``None`` when the
+        model does not resolve under that provider or the resolved entry has no
+        opinion on ``key``.
+        """
+        from litellm.utils import _get_model_info_helper
+
+        try:
+            resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            value = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
+        except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
+            return None
+        return value if isinstance(value, bool) else None
+
+    @staticmethod
+    def _supports_model_capability(model: str, key: str, custom_llm_provider: str) -> bool:
+        """Check a boolean capability ``key`` in the model map under the caller's provider.
+
+        The provider-aware lookup is authoritative when it resolves an explicit flag,
+        so ``key: false`` on the provider-namespaced entry wins over every fallback.
+        Otherwise ``_supports_factory``'s provider-level fallbacks and the raw
+        model-map walk remain as backstops for alias forms the lookup misses.
         """
         from litellm.utils import _supports_factory
 
+        resolved = AnthropicModelInfo._get_provider_resolved_capability(model, key, custom_llm_provider)
+        if resolved is not None:
+            return resolved
         try:
             if _supports_factory(
                 model=model,
-                custom_llm_provider="anthropic",
+                custom_llm_provider=custom_llm_provider,
                 key=key,
             ):
                 return True
@@ -372,17 +409,24 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicModelInfo._get_model_capability(model, key) is True
 
     @staticmethod
-    def _is_adaptive_thinking_model(model: str) -> bool:
+    def _is_adaptive_thinking_model(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` uses adaptive thinking (``output_config.effort``).
 
         The model cost map is authoritative: an explicit ``supports_adaptive_thinking``
-        entry, or a ``fallback_generalizations`` rule for unknown Claude models. The
-        version gate (>= 4.6, including provider-prefixed Bedrock/Vertex ids that map to
-        no exact entry) lives entirely in that declarative rule, not here.
+        entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
+        rule for unknown Claude models. The version gate (>= 4.6, including
+        provider-prefixed Bedrock/Vertex ids that map to no exact entry) lives entirely
+        in that declarative rule, not here.
         """
-        return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking")
+        return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
 
-    def is_effort_used(self, optional_params: Optional[dict], model: Optional[str] = None) -> bool:
+    def is_effort_used(
+        self,
+        optional_params: Optional[dict],
+        model: Optional[str] = None,
+        *,
+        custom_llm_provider: str,
+    ) -> bool:
         """
         Check if effort parameter is being used and requires a beta header.
 
@@ -394,7 +438,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return False
 
         # Claude 4.6+ models use output_config as a stable API feature — no beta header needed
-        if model and self._is_adaptive_thinking_model(model):
+        if model and self._is_adaptive_thinking_model(model, custom_llm_provider):
             return False
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
@@ -475,6 +519,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         prompt_caching_set: bool = False,
         file_id_used: bool = False,
         mcp_server_used: bool = False,
+        *,
+        custom_llm_provider: str,
     ) -> List[str]:
         """
         Get list of common beta headers based on the features that are active.
@@ -487,7 +533,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         betas = []
 
         # Detect features
-        effort_used = self.is_effort_used(optional_params, model)
+        effort_used = self.is_effort_used(optional_params, model, custom_llm_provider=custom_llm_provider)
 
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
@@ -643,7 +689,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         tool_search_used = self.is_tool_search_used(tools=tools)
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
         input_examples_used = self.is_input_examples_used(tools=tools)
-        effort_used = self.is_effort_used(optional_params=optional_params, model=model)
+        effort_used = self.is_effort_used(optional_params=optional_params, model=model, custom_llm_provider="anthropic")
         code_execution_tool_used = self.is_code_execution_tool_used(tools=tools)
         container_with_skills_used = self.is_container_with_skills_used(optional_params=optional_params)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(

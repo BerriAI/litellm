@@ -90,6 +90,7 @@ from typing_extensions import (
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
+    CustomToolCallOutputItem,
     GenericResponseOutputItem,
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
@@ -533,7 +534,7 @@ class ChatCompletionCachedContent(TypedDict):
 class ChatCompletionThinkingBlock(TypedDict, total=False):
     type: Required[Literal["thinking"]]
     thinking: str
-    signature: str
+    signature: Optional[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -914,6 +915,7 @@ class OpenAIChatCompletionToolParam(TypedDict):
 
 class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
+    allowed_callers: List[str]
 
 
 class Function(TypedDict, total=False):
@@ -1183,7 +1185,7 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: int = 0
+    reasoning_tokens: Optional[int] = None
 
     text_tokens: Optional[int] = None
 
@@ -1253,6 +1255,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
                 ResponseFunctionToolCall,
+                CustomToolCallOutputItem,
             ]
         ],
     ]
@@ -1717,7 +1720,7 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
-    param: Optional[str] = None
+    param: Optional[Union[str, Dict[str, Any]]] = None
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):

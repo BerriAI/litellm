@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
+from dataclasses import dataclass
 from typing import Any, Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
@@ -444,6 +445,7 @@ class PromptTokensDetailsResult(TypedDict):
     text_tokens: int
     audio_tokens: int
     image_tokens: int
+    video_tokens: int
     character_count: int
     image_count: int
     video_length_seconds: float
@@ -472,6 +474,7 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     )
     audio_tokens = cast(Optional[int], getattr(usage.prompt_tokens_details, "audio_tokens", 0)) or 0
     image_tokens = cast(Optional[int], getattr(usage.prompt_tokens_details, "image_tokens", 0)) or 0
+    video_tokens = _coerce_token_count(getattr(usage.prompt_tokens_details, "video_tokens", 0))
     character_count = (
         cast(
             Optional[int],
@@ -502,6 +505,7 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         text_tokens=text_tokens,
         audio_tokens=audio_tokens,
         image_tokens=image_tokens,
+        video_tokens=video_tokens,
         character_count=character_count,
         image_count=image_count,
         video_length_seconds=float(video_length_seconds),
@@ -514,6 +518,7 @@ class CompletionTokensDetailsResult(TypedDict):
     text_tokens: int
     reasoning_tokens: int
     image_tokens: int
+    video_tokens: int
 
 
 def _parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
@@ -545,12 +550,14 @@ def _parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsRes
         )
         or 0
     )
+    video_tokens = _coerce_token_count(getattr(usage.completion_tokens_details, "video_tokens", 0))
 
     return CompletionTokensDetailsResult(
         audio_tokens=audio_tokens,
         text_tokens=text_tokens,
         reasoning_tokens=reasoning_tokens,
         image_tokens=image_tokens,
+        video_tokens=video_tokens,
     )
 
 
@@ -584,6 +591,13 @@ def _calculate_input_cost(
         if model_info.get(image_token_cost_key) is None:
             image_token_cost_key = "input_cost_per_token"
         prompt_cost += calculate_cost_component(model_info, image_token_cost_key, prompt_tokens_details["image_tokens"])
+
+    ### VIDEO TOKEN COST
+    if prompt_tokens_details["video_tokens"]:
+        video_token_cost_key = "input_cost_per_video_token"
+        if model_info.get(video_token_cost_key) is None:
+            video_token_cost_key = "input_cost_per_token"
+        prompt_cost += calculate_cost_component(model_info, video_token_cost_key, prompt_tokens_details["video_tokens"])
 
     ### CACHE WRITING COST - Now uses tiered pricing
     if (
@@ -697,6 +711,7 @@ def generic_cost_per_token(
         text_tokens=usage.prompt_tokens,
         audio_tokens=0,
         image_tokens=0,
+        video_tokens=0,
         character_count=0,
         image_count=0,
         video_length_seconds=0.0,
@@ -715,13 +730,14 @@ def generic_cost_per_token(
     audio_tokens = prompt_tokens_details["audio_tokens"]
     cache_creation = prompt_tokens_details["cache_creation_tokens"]
     image_tokens = prompt_tokens_details["image_tokens"]
+    video_tokens = prompt_tokens_details["video_tokens"]
 
     # Check for double-counting: sum of details > prompt_tokens means overlap
-    total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
     has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
 
     if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
-        text_tokens = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens
+        text_tokens = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens
         # Clamp to zero: inconsistent streaming usage
         if text_tokens < 0:
             text_tokens = 0
@@ -750,6 +766,7 @@ def generic_cost_per_token(
     audio_tokens = 0
     reasoning_tokens = 0
     image_tokens = 0
+    video_tokens = 0
     is_text_tokens_total = False
     if usage.completion_tokens_details is not None:
         completion_tokens_details = _parse_completion_tokens_details(usage)
@@ -757,19 +774,20 @@ def generic_cost_per_token(
         text_tokens = completion_tokens_details["text_tokens"]
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
         image_tokens = completion_tokens_details["image_tokens"]
+        video_tokens = completion_tokens_details["video_tokens"]
 
     # Handle text_tokens calculation:
     # 1. If text_tokens is explicitly provided and > 0, use it
-    # 2. If there's a breakdown (reasoning/audio/image tokens), calculate text_tokens as the remainder
+    # 2. If there's a breakdown (reasoning/audio/image/video tokens), calculate text_tokens as the remainder
     # 3. If no breakdown at all, assume all completion_tokens are text_tokens
-    has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
+    has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0 or video_tokens > 0
     if text_tokens == 0:
         if has_token_breakdown:
             # Calculate text tokens as remainder when we have a breakdown
             # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
             text_tokens = max(
                 0,
-                usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens,
+                usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens - video_tokens,
             )
         else:
             # No breakdown at all, all tokens are text tokens
@@ -802,6 +820,14 @@ def generic_cost_per_token(
         )
         completion_cost += float(image_tokens) * _output_cost_per_image_token
 
+    ## VIDEO COST
+    if not is_text_tokens_total and video_tokens and video_tokens > 0:
+        _output_cost_per_video_token = _get_cost_per_unit(model_info, "output_cost_per_video_token", None)
+        _output_cost_per_video_token = (
+            _output_cost_per_video_token if _output_cost_per_video_token is not None else completion_base_cost
+        )
+        completion_cost += float(video_tokens) * _output_cost_per_video_token
+
     ## REGIONAL DATA-RESIDENCY UPLIFT
     # Applied as a flat multiplier across all token costs for the request
     # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
@@ -811,6 +837,107 @@ def generic_cost_per_token(
         completion_cost *= uplift
 
     return prompt_cost, completion_cost
+
+
+def _coerce_token_count(value: object) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
+
+
+@dataclass(frozen=True, slots=True)
+class TokenTypeCostBreakdown:
+    reasoning_cost: float
+    cache_read_cost: float
+    cache_creation_cost: float
+
+
+def get_token_type_cost_breakdown(
+    model: str,
+    custom_llm_provider: Optional[str],
+    usage: Usage,
+    service_tier: Optional[str] = None,
+    data_residency: Optional[str] = None,
+) -> TokenTypeCostBreakdown:
+    """
+    Provider-agnostic cost of reasoning and cache tokens, derived from the usage
+    object and model pricing alone.
+
+    This works for every provider, including Perplexity/Cerebras/Dashscope whose
+    cost calculators bypass ``generic_cost_per_token``, because cache tokens always
+    land on ``prompt_tokens_details`` (via the Usage constructor and provider
+    transformations) and reasoning tokens on ``completion_tokens_details``. It reuses
+    the same rate-resolution primitives as the total-cost path so the breakdown can
+    never drift from the totals. Returns zeros (never raises) when the model or its
+    pricing cannot be resolved.
+    """
+    try:
+        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
+
+    (
+        _prompt_base_cost,
+        completion_base_cost,
+        cache_creation_cost_rate,
+        cache_creation_cost_above_1hr_rate,
+        cache_read_cost_rate,
+    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
+
+    reasoning_tokens = (
+        _parse_completion_tokens_details(usage)["reasoning_tokens"]
+        if usage.completion_tokens_details is not None
+        else 0
+    )
+    if not reasoning_tokens:
+        reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
+
+    # Reasoning is billed at the explicit per-reasoning-token rate when the model
+    # defines one, otherwise at the standard output-token rate - this mirrors how the
+    # total completion cost is computed, so the breakdown can never diverge from it.
+    reasoning_rate = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
+    if reasoning_rate is None:
+        reasoning_rate = completion_base_cost
+    reasoning_cost = float(reasoning_tokens) * reasoning_rate
+
+    cache_read_tokens = 0
+    cache_creation_tokens = 0
+    cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
+    if usage.prompt_tokens_details is not None:
+        prompt_tokens_details = _parse_prompt_tokens_details(usage)
+        cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
+        cache_creation_tokens = prompt_tokens_details["cache_creation_tokens"]
+        cache_creation_token_details = prompt_tokens_details["cache_creation_token_details"]
+        # Some OpenAI-compatible providers (e.g. kimi-k2) report cache-write tokens
+        # under `cache_write_tokens`; mirror the total-cost normalization path.
+        if not cache_creation_tokens:
+            cache_creation_tokens = _coerce_token_count(getattr(usage.prompt_tokens_details, "cache_write_tokens", 0))
+    # Fall back to the private top-level counters the Usage constructor mirrors cache
+    # tokens onto, so providers/callers that bypass prompt_tokens_details are covered.
+    if not cache_read_tokens:
+        cache_read_tokens = _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0))
+    if not cache_creation_tokens:
+        cache_creation_tokens = _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0))
+
+    cache_read_cost = float(cache_read_tokens) * cache_read_cost_rate
+    cache_creation_cost = calculate_cache_writing_cost(
+        cache_creation_tokens=cache_creation_tokens,
+        cache_creation_token_details=cache_creation_token_details,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr_rate,
+        cache_creation_cost=cache_creation_cost_rate,
+    )
+
+    # Apply the same flat regional-processing uplift the totals get, so per-type
+    # costs stay reconciled with input_cost/output_cost for regionalized OpenAI hosts.
+    uplift = _get_regional_uplift_multiplier(model_info, data_residency)
+    if uplift != 1.0:
+        reasoning_cost *= uplift
+        cache_read_cost *= uplift
+        cache_creation_cost *= uplift
+
+    return TokenTypeCostBreakdown(
+        reasoning_cost=reasoning_cost,
+        cache_read_cost=cache_read_cost,
+        cache_creation_cost=cache_creation_cost,
+    )
 
 
 def calculate_image_response_cost_from_usage(

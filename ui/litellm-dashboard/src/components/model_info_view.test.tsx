@@ -16,6 +16,7 @@ vi.mock("./molecules/notifications_manager", () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    warning: vi.fn(),
     fromBackend: vi.fn(),
   },
 }));
@@ -27,6 +28,7 @@ vi.mock("./networking", () => ({
   getGuardrailsList: vi.fn(),
   tagListCall: vi.fn(),
   testConnectionRequest: vi.fn(),
+  testModelGroupConnection: vi.fn(),
   modelPatchUpdateCall: vi.fn(),
   modelDeleteCall: vi.fn(),
   credentialCreateCall: vi.fn(),
@@ -52,6 +54,7 @@ const mockCredentialListCall = vi.mocked(networking.credentialListCall);
 const mockGetGuardrailsList = vi.mocked(networking.getGuardrailsList);
 const mockTagListCall = vi.mocked(networking.tagListCall);
 const mockTestConnectionRequest = vi.mocked(networking.testConnectionRequest);
+const mockTestModelGroupConnection = vi.mocked(networking.testModelGroupConnection);
 const mockModelPatchUpdateCall = vi.mocked(networking.modelPatchUpdateCall);
 const mockModelDeleteCall = vi.mocked(networking.modelDeleteCall);
 const mockCredentialCreateCall = vi.mocked(networking.credentialCreateCall);
@@ -633,6 +636,51 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params).not.toHaveProperty("output_cost_per_token");
   });
 
+  it("never re-sends a masked secret on save (regression: masked auth value must not overwrite the real secret)", async () => {
+    // /model/info redacts secrets by masking (e.g. "azur****BBCC"), not removing them.
+    // A plain save re-PATCHes the whole litellm_params blob; if the masked value were
+    // sent, the backend would encrypt the asterisks over the real azure_ad_token and
+    // silently destroy the credential. The edit form must strip masked values entirely.
+    const maskedSecret = "azur********************************************BBCC";
+    const maskedModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        model: "azure/gpt-4o",
+        api_base: "https://example-az.openai.azure.com",
+        custom_llm_provider: "azure",
+        azure_ad_token: maskedSecret,
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [maskedModelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [maskedModelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.azure_ad_token).not.toBe(maskedSecret);
+    // No masked value may appear anywhere in the outbound params.
+    expect(JSON.stringify(updatePayload.litellm_params)).not.toContain("**");
+  });
+
   it("should display health check model field for wildcard models", async () => {
     const wildcardModelData = {
       ...defaultModelData,
@@ -685,6 +733,158 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /edit auto router/i })).toBeInTheDocument();
     });
+  });
+
+  it("does not offer Test Connection for semantic auto router models (no tier-based test exists yet)", async () => {
+    const semanticAutoRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        auto_router_config: {},
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [semanticAutoRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("test-connection-button")).not.toBeInTheDocument();
+  });
+
+  it("tests each complexity tier's model group instead of sending the router pseudo-model to /health/test_connection (regression: raw test previously threw 'Unmapped LLM provider... model=complexity_router')", async () => {
+    const complexityRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "auto_router/complexity_router",
+        complexity_router_config: {
+          tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: [], REASONING: [] },
+        },
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [complexityRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+    mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const testConnectionButton = await screen.findByTestId("test-connection-button");
+    await userEvent.click(testConnectionButton);
+
+    await waitFor(() => {
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
+    });
+    expect(mockTestConnectionRequest).not.toHaveBeenCalled();
+  });
+
+  it("also tests the configured default model when an unconfigured tier would fall back to it in production", async () => {
+    const complexityRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "auto_router/complexity_router",
+        complexity_router_config: {
+          tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        },
+        complexity_router_default_model: "gpt-4o",
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [complexityRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+    mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const testConnectionButton = await screen.findByTestId("test-connection-button");
+    await userEvent.click(testConnectionButton);
+
+    await waitFor(() => {
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
+    });
+  });
+
+  it("does not duplicate the default model as a test target when it is already covered by a configured tier", async () => {
+    const complexityRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "auto_router/complexity_router",
+        complexity_router_config: {
+          tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: [], REASONING: [] },
+        },
+        complexity_router_default_model: "gpt-4o",
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [complexityRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+    mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const testConnectionButton = await screen.findByTestId("test-connection-button");
+    await userEvent.click(testConnectionButton);
+
+    await waitFor(() => {
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
+    });
+    expect(mockTestModelGroupConnection).toHaveBeenCalledTimes(2);
+  });
+
+  it("warns instead of erroring when no complexity tiers are configured to test", async () => {
+    const complexityRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "auto_router/complexity_router",
+        complexity_router_config: {
+          tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        },
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [complexityRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const testConnectionButton = await screen.findByTestId("test-connection-button");
+    await userEvent.click(testConnectionButton);
+
+    await waitFor(() => {
+      expect(mockNotificationsManager.warning).toHaveBeenCalledWith(
+        "No complexity tiers are configured yet, so there is nothing to test.",
+      );
+    });
+    expect(mockTestModelGroupConnection).not.toHaveBeenCalled();
   });
 
   it("should display model access groups field", async () => {

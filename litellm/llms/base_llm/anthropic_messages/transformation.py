@@ -103,6 +103,30 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return headers, None
 
+    def should_filter_anthropic_beta_headers(self) -> bool:
+        """
+        Whether ``anthropic-beta`` header values should be filtered down to the
+        ones the routed provider supports before the upstream request.
+
+        Cross-provider translation paths (bedrock, vertex_ai, ...) need this so
+        unsupported betas are dropped. Configs that forward natively to an
+        Anthropic-compatible endpoint return False to pass betas through verbatim.
+        """
+        return True
+
+    def handles_web_search_natively(self) -> bool:
+        """
+        Whether the upstream this config routes to executes ``web_search`` tools
+        itself as part of its Anthropic Messages agentic loop.
+
+        The web-search interception handler short-circuits web-search-only
+        requests (running the search itself and returning synthetic results) only
+        for providers that do NOT. Providers whose agentic loop already performs
+        the search plus a follow-up synthesis step (bedrock, vertex_ai, ...)
+        return True so those requests flow through untouched.
+        """
+        return True
+
     def get_async_streaming_response_iterator(
         self,
         model: str,
