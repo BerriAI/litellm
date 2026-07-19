@@ -423,6 +423,46 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.text_tokens == 20
         assert result.completion_tokens_details.audio_tokens is None
 
+    def test_transform_response_api_usage_carries_cache_write_tokens(self):
+        """Regression for #33772: the Responses API reports cache writes under
+        input_tokens_details.cache_write_tokens. The chat-usage translation must carry
+        that split through (from both a dict and a ResponseAPIUsage object) so cost is
+        computed identically to the /chat/completions path."""
+        from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage
+
+        # dict form
+        dict_result = (
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                {
+                    "input_tokens": 1000,
+                    "output_tokens": 0,
+                    "total_tokens": 1000,
+                    "input_tokens_details": {
+                        "cached_tokens": 0,
+                        "cache_write_tokens": 1000,
+                    },
+                }
+            )
+        )
+        assert dict_result.prompt_tokens_details is not None
+        assert dict_result.prompt_tokens_details.cache_write_tokens == 1000
+
+        # object form (else-branch that previously omitted the mapping)
+        usage_obj = ResponseAPIUsage(
+            input_tokens=1000,
+            output_tokens=0,
+            total_tokens=1000,
+            input_tokens_details=InputTokensDetails(cached_tokens=0),
+        )
+        setattr(usage_obj.input_tokens_details, "cache_write_tokens", 1000)
+        obj_result = (
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                usage_obj
+            )
+        )
+        assert obj_result.prompt_tokens_details is not None
+        assert obj_result.prompt_tokens_details.cache_write_tokens == 1000
+
 
 class TestResponsesAPIProviderSpecificParams:
     """

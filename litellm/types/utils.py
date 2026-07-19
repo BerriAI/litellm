@@ -187,7 +187,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
+    cache_creation_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
+    cache_creation_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_above_200k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
@@ -1503,6 +1506,9 @@ class PromptTokensDetailsWrapper(
     cache_creation_tokens: Optional[int] = None
     """Number of cache creation tokens sent to the model. Used for Anthropic prompt caching."""
 
+    cache_write_tokens: Optional[int] = None
+    """Number of cache-write tokens sent to the model. Used for OpenAI-style prompt caching (priced at the cache-creation rate)."""
+
     cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
@@ -1522,6 +1528,8 @@ class PromptTokensDetailsWrapper(
             del self.tool_use_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
+        if self.cache_write_tokens is None:
+            del self.cache_write_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
 
@@ -3038,8 +3046,11 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_token_flex: Optional[float] = None
     input_cost_per_token_priority: Optional[float] = None
     cache_creation_input_token_cost: Optional[float] = None
+    cache_creation_input_token_cost_flex: Optional[float] = None
+    cache_creation_input_token_cost_priority: Optional[float] = None
     cache_creation_input_token_cost_above_1hr: Optional[float] = None
     cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float] = None
     cache_creation_input_audio_token_cost: Optional[float] = None
     cache_read_input_token_cost: Optional[float] = None
     cache_read_input_token_cost_flex: Optional[float] = None

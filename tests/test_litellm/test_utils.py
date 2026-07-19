@@ -63,6 +63,21 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
     assert generalized["supports_adaptive_thinking"] is True
 
 
+def test_get_model_info_surfaces_tiered_cache_creation_costs(local_model_cost_map):
+    """Regression for #33772: the tiered cache-creation cost keys (_flex, _priority,
+    _above_272k_tokens) shipped in the JSON but were never declared on ModelInfo nor
+    copied during get_model_info construction, so cache-write cost could not vary by
+    service or long-context tier the way the other token costs already do."""
+    raw = litellm.model_cost["gpt-5.6"]
+    info = litellm.get_model_info(model="gpt-5.6", custom_llm_provider="openai")
+    for key in (
+        "cache_creation_input_token_cost_flex",
+        "cache_creation_input_token_cost_priority",
+        "cache_creation_input_token_cost_above_272k_tokens",
+    ):
+        assert info[key] == raw[key]
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.

@@ -459,6 +459,7 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
             Optional[int],
             getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
         )
+        or _coerce_token_count(getattr(usage.prompt_tokens_details, "cache_write_tokens", 0))
         or 0
     )
     cache_creation_token_details = (
