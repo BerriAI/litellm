@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    coerce_token_limit,
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
@@ -8544,18 +8545,10 @@ class Router:
         if deployment is None:
             return (None, None)
 
-        def _as_int(value: object) -> "int | None":
-            if value is None or isinstance(value, bool):
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
-
         model_info = deployment.model_info
         return (
-            _as_int(model_info.get("max_input_tokens")),
-            _as_int(model_info.get("max_output_tokens")),
+            coerce_token_limit(model_info.get("max_input_tokens")),
+            coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
     def get_deployment_credentials_with_provider(
