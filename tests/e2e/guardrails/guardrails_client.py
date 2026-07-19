@@ -70,6 +70,17 @@ class GuardrailCreateResponse(BaseModel):
     guardrail_id: str
 
 
+class ApplyGuardrailRequest(BaseModel):
+    guardrail_name: str
+    text: str
+    language: str | None = None
+    input_type: str = "request"
+
+
+class ApplyGuardrailResponse(BaseModel):
+    response_text: str
+
+
 @dataclass(frozen=True, slots=True)
 class GuardrailsClient:
     proxy: ProxyClient
@@ -168,6 +179,14 @@ class GuardrailsClient:
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=16,
             ),
+        )
+
+    def apply_guardrail(self, key: str, *, name: str, text: str) -> Result[ApplyGuardrailResponse]:
+        return self.proxy.transport.post(
+            "/guardrails/apply_guardrail",
+            headers=self.proxy.transport.bearer(key),
+            json=ApplyGuardrailRequest(guardrail_name=name, text=text),
+            response_type=ApplyGuardrailResponse,
         )
 
     def _await_team(self, team_id: str) -> None:

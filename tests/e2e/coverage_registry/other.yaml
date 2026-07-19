@@ -2,6 +2,9 @@
 # PROMOTION NOTE: the auth cluster (~14 cells) is a candidate to promote to its own module once stable.
 - {id: other.auth.master_key.valid_allows, module: other, tier: P0, area: auth, assertions: [valid_allows], source: "user_api_key_auth.py:1569-1588", rationale: "Master key authenticates; timing-safe compare"}
 - {id: other.auth.master_key.invalid_denied, module: other, tier: P0, area: auth, assertions: [invalid_denied], source: "user_api_key_auth.py:1580", rationale: "Invalid master key rejected"}
+- {id: other.auth.virtual_key.valid_allows, module: other, tier: P0, area: auth, assertions: [valid_allows], source: "user_api_key_auth.py", rationale: "Virtual key authenticates chat the way production OpenAI clients do"}
+- {id: other.auth.virtual_key.invalid_denied, module: other, tier: P0, area: auth, assertions: [invalid_denied], source: "user_api_key_auth.py", rationale: "Bogus bearer is rejected before provider call"}
+- {id: other.config.responses.metadata_redis_ttl_bounded, module: other, tier: P0, area: config, assertions: [ttl_bounded], source: "responses + redis cache", rationale: "Responses store+metadata must not leave TTL-unbounded Redis entries (LIT-1201)"}
 - {id: other.auth.jwt.valid_token_allows, module: other, tier: P0, area: auth, assertions: [valid_token_allows], source: "handle_jwt.py:77-150", rationale: "Valid JWT with correct issuer + claims grants access"}
 - {id: other.auth.jwt.expired_denied, module: other, tier: P0, area: auth, assertions: [expired_denied], source: "handle_jwt.py:125-135", rationale: "Expired JWT rejected even with valid signature"}
 - {id: other.auth.jwt.invalid_signature_denied, module: other, tier: P0, area: auth, assertions: [invalid_signature_denied], source: "handle_jwt.py:145-150", rationale: "Bad/missing signature fails verification"}
