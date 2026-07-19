@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Final, Protocol, Union, cast
+from typing import TYPE_CHECKING, Awaitable, Final, Protocol, Union, cast
 
 import httpx
+
+from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
+
+if TYPE_CHECKING:
+    from litellm.rust_bridge.messages import RustAmessages, RustMessages
+    from litellm.rust_bridge.responses_websocket import (
+        RustResponsesWebSocketConnection,
+    )
 
 
 class RustOcrError(Exception):
@@ -69,11 +77,33 @@ def use_litellm_rust(
     *,
     ocr: RustOcr | None | _Unset = _UNSET,
     aocr: RustAocr | None | _Unset = _UNSET,
+    messages: RustMessages | None | _Unset = _UNSET,
+    amessages: RustAmessages | None | _Unset = _UNSET,
+    responses_websocket: type[RustResponsesWebSocketConnection] | None | _Unset = _UNSET,
 ) -> None:
-    if not enabled:
-        _set_rust_ocr_bridge(ocr=None, aocr=None)
+    configuring_ocr = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
+    configuring_messages = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
+    configuring_responses_websocket = not isinstance(responses_websocket, _Unset)
+    if configuring_ocr or (not configuring_messages and not configuring_responses_websocket):
+        if enabled:
+            _set_rust_ocr_bridge(ocr=ocr, aocr=aocr)
+        else:
+            _set_rust_ocr_bridge(ocr=None, aocr=None)
+    if not configuring_messages and not configuring_responses_websocket:
         return
-    _set_rust_ocr_bridge(ocr=ocr, aocr=aocr)
+    if configuring_messages:
+        from litellm.rust_bridge.messages import set_rust_messages
+
+        if not isinstance(messages, _Unset) and not isinstance(amessages, _Unset):
+            set_rust_messages(messages=messages, amessages=amessages)
+        elif not isinstance(messages, _Unset):
+            set_rust_messages(messages=messages)
+        elif not isinstance(amessages, _Unset):
+            set_rust_messages(amessages=amessages)
+    if configuring_responses_websocket:
+        from litellm.rust_bridge.responses_websocket import set_rust_responses_websocket
+
+        set_rust_responses_websocket(connection=responses_websocket)
 
 
 def rust_ocr_enabled() -> bool:
@@ -102,22 +132,14 @@ def load_rust_aocr() -> RustAocr | None:
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
 
 
-def _timeout_to_seconds(timeout: Union[float, httpx.Timeout] | None) -> float | None:
-    if timeout is None:
-        return None
-    if isinstance(timeout, httpx.Timeout):
-        return timeout.read
-    return float(timeout)
-
-
 def ocr(
     *,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, Any] | None,
+    extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: Union[float, httpx.Timeout] | None,
 ) -> dict[str, object] | None:
@@ -126,11 +148,11 @@ def ocr(
         return None
     return rust_ocr(
         model=model,
-        document=cast(dict[str, object], document),
+        document=document,
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
-        extra_headers=cast(dict[str, object] | None, extra_headers),
+        extra_headers=extra_headers,
         optional_params=optional_params,
         timeout_seconds=_timeout_to_seconds(timeout),
     )
@@ -139,11 +161,11 @@ def ocr(
 async def aocr(
     *,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, Any] | None,
+    extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: Union[float, httpx.Timeout] | None,
 ) -> dict[str, object] | None:
@@ -152,11 +174,11 @@ async def aocr(
         return None
     return await rust_aocr(
         model=model,
-        document=cast(dict[str, object], document),
+        document=document,
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
-        extra_headers=cast(dict[str, object] | None, extra_headers),
+        extra_headers=extra_headers,
         optional_params=optional_params,
         timeout_seconds=_timeout_to_seconds(timeout),
     )

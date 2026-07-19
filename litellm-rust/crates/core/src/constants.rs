@@ -11,3 +11,6 @@ pub(crate) const MIME_IMAGE_JPEG: &str = "image/jpeg";
 pub(crate) const MIME_IMAGE_PNG: &str = "image/png";
 pub(crate) const MIME_IMAGE_TIFF: &str = "image/tiff";
 pub(crate) const MIME_IMAGE_WEBP: &str = "image/webp";
+pub const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com";
+pub const OPENAI_RESPONSES_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
+pub const OPENAI_RESPONSES_PATH: &str = "/responses";

@@ -22711,6 +22711,10 @@ export interface components {
             field_description: string;
             /** Field Name */
             field_name: string;
+            /** Field Options */
+            field_options?: string[] | null;
+            /** Field Tab */
+            field_tab?: string | null;
             /** Field Type */
             field_type: string;
             /** Field Value */
@@ -23240,6 +23244,16 @@ export interface components {
              */
             total_completion_tokens: number;
             /**
+             * Total Compression Saved Tokens
+             * @default 0
+             */
+            total_compression_saved_tokens: number;
+            /**
+             * Total Compression Savings Spend
+             * @default 0
+             */
+            total_compression_savings_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -23249,6 +23263,11 @@ export interface components {
              * @default 1
              */
             total_pages: number;
+            /**
+             * Total Prompt Caching Savings Spend
+             * @default 0
+             */
+            total_prompt_caching_savings_spend: number;
             /**
              * Total Prompt Tokens
              * @default 0
@@ -27284,7 +27303,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "true_passthrough" | "oauth_delegate") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
@@ -30865,10 +30884,25 @@ export interface components {
              */
             completion_tokens: number;
             /**
+             * Compression Saved Tokens
+             * @default 0
+             */
+            compression_saved_tokens: number;
+            /**
+             * Compression Savings Spend
+             * @default 0
+             */
+            compression_savings_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
             failed_requests: number;
+            /**
+             * Prompt Caching Savings Spend
+             * @default 0
+             */
+            prompt_caching_savings_spend: number;
             /**
              * Prompt Tokens
              * @default 0
