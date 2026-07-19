@@ -20,6 +20,9 @@ from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+    ModelArmorAPIError,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -645,14 +648,12 @@ async def test_model_armor_api_failure_returns_400():
     with patch.object(
         guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
     ):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ModelArmorAPIError) as exc_info:
             await guardrail.make_model_armor_request(
                 content="test content",
                 source="user_prompt",
             )
 
-        # Should be 400, NOT the upstream 500
-        assert exc_info.value.status_code == 400
         assert exc_info.value.detail == "Model Armor API error (upstream 500)"
         assert "Internal Server Error" not in str(exc_info.value.detail)
 
@@ -676,7 +677,7 @@ async def test_model_armor_error_output_sanitization(sanitize: bool):
         guardrail.async_handler, "post", AsyncMock(return_value=error_response)
     ), patch.object(verbose_proxy_logger, "debug") as debug_log, patch.object(
         verbose_proxy_logger, "error"
-    ) as error_log, pytest.raises(HTTPException) as exc_info:
+    ) as error_log, pytest.raises(ModelArmorAPIError) as exc_info:
         await guardrail.make_model_armor_request(content=marker)
 
     direct_log = f"{debug_log.call_args_list} {error_log.call_args_list}"
@@ -686,6 +687,57 @@ async def test_model_armor_error_output_sanitization(sanitize: bool):
     else:
         assert marker in str(exc_info.value.detail)
         assert marker in direct_log
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_model_armor_api_error_honors_fail_open(fail_on_error: bool):
+    """An upstream API failure (raised by the real handler as MaskedHTTPStatusError)
+    must block with a sanitized 400 when fail_on_error is true and let the request
+    proceed when the operator configured fail-open."""
+    marker = "SYNTHETIC_FAIL_OPEN_MARKER"
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=fail_on_error,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    request = httpx.Request("POST", "https://modelarmor.example.test/v1")
+    upstream = httpx.Response(503, content=marker.encode(), request=request)
+    original = httpx.HTTPStatusError("Service Unavailable", request=request, response=upstream)
+    masked = MaskedHTTPStatusError(original, message=marker, text=marker)
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+    }
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=masked)):
+        if fail_on_error:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=MagicMock(spec=DualCache),
+                    data=request_data,
+                    call_type="completion",
+                )
+            assert exc_info.value.status_code == 400
+            assert exc_info.value.detail == "Model Armor API error (upstream 503)"
+            assert marker not in str(exc_info.value.detail)
+        else:
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(spec=DualCache),
+                data=request_data,
+                call_type="completion",
+            )
+            assert result is request_data
 
 
 def test_model_armor_redactor_depth_cap_fails_closed():
@@ -732,7 +784,7 @@ async def test_model_armor_handler_raised_http_error_sanitized(sanitize: bool):
         guardrail.async_handler, "post", AsyncMock(side_effect=masked)
     ), patch.object(verbose_proxy_logger, "debug") as debug_log, patch.object(
         verbose_proxy_logger, "error"
-    ) as error_log, pytest.raises(HTTPException) as exc_info:
+    ) as error_log, pytest.raises(ModelArmorAPIError) as exc_info:
         await guardrail.make_model_armor_request(content=marker)
 
     direct_log = f"{debug_log.call_args_list} {error_log.call_args_list}"
