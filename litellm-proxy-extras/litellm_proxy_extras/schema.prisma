@@ -399,6 +399,13 @@ model LiteLLM_MCPUserEnvVars {
   @@index([server_id])
 }
 
+model LiteLLM_MCPServerOAuthClient {
+  server_id   String   @id
+  credentials Json?
+  created_at  DateTime @default(now()) @map("created_at")
+  updated_at  DateTime @default(now()) @updatedAt @map("updated_at")
+}
+
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @id
@@ -734,6 +741,9 @@ model LiteLLM_DailyUserSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -765,6 +775,9 @@ model LiteLLM_DailyOrganizationSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -796,6 +809,9 @@ model LiteLLM_DailyEndUserSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -826,6 +842,9 @@ model LiteLLM_DailyAgentSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -856,6 +875,9 @@ model LiteLLM_DailyTeamSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -888,6 +910,9 @@ model LiteLLM_DailyTagSpend {
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
   cache_creation_input_tokens BigInt      @default(0)
+  compression_saved_tokens    BigInt      @default(0)
+  compression_savings_spend    Float       @default(0.0)
+  prompt_caching_savings_spend Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)

@@ -11,8 +11,9 @@ import os
 import pytest
 
 from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds
-from datadog_sink import DdSinkReader, build_dd_sink_reader
+from datadog_reader import DdLogsReader, build_dd_logs_reader
 from otel_client import OtelReader, build_otel_reader
+from proxy_client import ProxyClient
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -23,11 +24,11 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(scope="session")
-def client() -> LoggingClient:
-    """The logging suite's client: holds the shared Gateway so `resources` /
+def client(proxy: ProxyClient) -> LoggingClient:
+    """The logging suite's client: holds the shared ProxyClient so `resources` /
     `scoped_key` clean up keys and teams, and adds `/metrics` scraping plus
     Langfuse read-back."""
-    return build_logging_client()
+    return build_logging_client(proxy)
 
 
 @pytest.fixture(scope="session")
@@ -37,9 +38,10 @@ def otel_reader() -> OtelReader:
 
 
 @pytest.fixture(scope="session")
-def dd_sink() -> DdSinkReader:
-    """Read-back client for the compose stack's DataDog logs-intake sink."""
-    return build_dd_sink_reader()
+def dd_logs() -> DdLogsReader:
+    """Read-back client for the real DataDog Logs Search API (keys from the
+    secret manager on the cluster, tests/e2e/.env locally)."""
+    return build_dd_logs_reader()
 
 
 @pytest.fixture

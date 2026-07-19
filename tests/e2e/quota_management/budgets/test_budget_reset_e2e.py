@@ -1,12 +1,4 @@
-"""Live e2e: a key budget resets (zeroes spend) after its budget_duration.
-
-Short budget_duration (30s) + the fast-rescheduled reset job: a key blocked for
-exceeding its max_budget starts succeeding again once the duration elapses and the
-reset job zeroes key.spend. Closes the reset-zeroing gap in
-BUDGET_TEST_COVERAGE_MATRIX.md (reset_budget_for_litellm_keys), which the unit
-suite covers but no live test did - distinct from the per-window reset in
-test_multi_window_budget_e2e.py.
-"""
+"""Live e2e: an entity blocked over its max_budget serves again after its budget_duration window."""
 
 import time
 
@@ -19,42 +11,107 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+TINY_CAP = 3e-6
+WINDOW = "30s"
+RESET_DEADLINE_SECONDS = 150
+
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(
-        key, "claude-haiku-4-5", f"reset {unique_marker()}", max_tokens=16
-    )
+    return client.chat(key, "claude-haiku-4-5", f"reset {unique_marker()}", max_tokens=16)
 
 
-@pytest.mark.covers("quota_management.budget.key.resets_after_window")
-def test_key_budget_resets_after_duration(
-    client: BudgetClient, resources: ResourceManager
-) -> None:
-    key = client.generate_key(max_budget=3e-6, budget_duration="30s")
-    resources.defer(lambda: client.delete_key(key))
-
-    # 1. exceed the budget -> litellm returns budget_exceeded
-    blocked = False
-    for _ in range(20):
+def _drive_to_block(client: BudgetClient, key: str) -> None:
+    """Spend until the cap blocks a call, staying under one window so the block
+    is observed before the reset job can fire; fail hard if enforcement never trips."""
+    for _ in range(12):
         result = _call(client, key)
         if is_budget_block(result):
-            blocked = True
-            break
+            return
         require_successful_call(result)
         time.sleep(2)
-    assert blocked, "key budget never enforced"
+    pytest.fail("budget never enforced before the window could reset")
 
-    # 2. once the 30s duration elapses + the reset job runs, key.spend zeroes and
-    #    calls flow again. The window is wall-clock-aligned, so the reset lands up to
-    #    a window later, then the rescheduler (~15-20s) zeroes the spend; allow
-    #    generous headroom over that. A stuck rescheduler is caught by the wait-loop
-    #    timeout, not this elapsed bound.
-    start = time.monotonic()
-    while time.monotonic() < start + 150:
+
+def _poll_until_serves_again(client: BudgetClient, key: str) -> None:
+    """Poll past the window until the blocked key serves again; every refusal must
+    stay a budget block, so a crashed reset path or provider error fails loudly."""
+    deadline = time.monotonic() + RESET_DEADLINE_SECONDS
+    while time.monotonic() < deadline:
         time.sleep(5)
         result = _call(client, key)
         if result.ok:
-            assert time.monotonic() - start < 120, "reset too slow for a 30s budget"
             return
-        assert is_budget_block(result), f"non-budget error: {result.body[:200]}"
-    pytest.fail("key budget never reset within 150s")
+        if not is_budget_block(result):
+            pytest.fail(f"non-budget error during reset wait: HTTP {result.status_code}: {result.body[:200]}")
+    pytest.fail(f"budget never reset within {RESET_DEADLINE_SECONDS}s")
+
+
+class TestBudgetResetDiagonal:
+    @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+    def test_bare_key_budget_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        key = client.generate_key(max_budget=TINY_CAP, budget_duration=WINDOW)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+    @pytest.mark.covers("quota_management.budget.team.resets_after_window")
+    def test_team_budget_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        team_id = client.create_team(
+            alias=f"e2e-team-reset-{unique_marker()}", max_budget=TINY_CAP, budget_duration=WINDOW
+        )
+        resources.defer(lambda: client.delete_team(team_id))
+        key = client.generate_key(team_id=team_id)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+    @pytest.mark.covers("quota_management.budget.organization.resets_after_window")
+    def test_org_budget_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        org_id = client.create_org(
+            max_budget=TINY_CAP, alias=f"e2e-org-reset-{unique_marker()}", budget_duration=WINDOW
+        )
+        resources.defer(lambda: client.delete_org(org_id))
+        team_id = client.create_team(alias=f"e2e-org-team-{unique_marker()}", organization_id=org_id)
+        resources.defer(lambda: client.delete_team(team_id))
+        key = client.generate_key(team_id=team_id)
+        resources.defer(lambda: client.delete_key(key))
+
+        budget_id = client.org_budget_id(org_id)
+        assert budget_id, "org created without a budget row"
+        deadline = time.monotonic() + 30
+        while not any(row.budget_reset_at for row in client.budget_info(budget_id)):
+            if time.monotonic() > deadline:
+                pytest.fail("org budget window never scheduled by the reset job")
+            time.sleep(2)
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+    @pytest.mark.covers("quota_management.budget.internal_user.resets_after_window")
+    def test_personal_key_user_budget_resets_after_window(
+        self, client: BudgetClient, resources: ResourceManager
+    ) -> None:
+        user_id = client.create_user(max_budget=TINY_CAP, budget_duration=WINDOW)
+        resources.defer(lambda: client.delete_user(user_id))
+        key = client.generate_key(user_id=user_id)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+    @pytest.mark.covers("quota_management.budget.internal_user.resets_after_window")
+    def test_team_member_key_user_budget_resets_after_window(
+        self, client: BudgetClient, resources: ResourceManager
+    ) -> None:
+        user_id = client.create_user(max_budget=TINY_CAP, budget_duration=WINDOW)
+        resources.defer(lambda: client.delete_user(user_id))
+        team_id = client.create_team(alias=f"e2e-user-team-reset-{unique_marker()}")
+        resources.defer(lambda: client.delete_team(team_id))
+        client.add_team_member(team_id, user_id, max_budget_in_team=100.0)
+        key = client.generate_key(team_id=team_id, user_id=user_id)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)

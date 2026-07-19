@@ -1731,18 +1731,42 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         Check if the candidate token count is inclusive of the thinking token count
 
-        if prompttokencount + candidatesTokenCount == totalTokenCount, then the candidate token count is inclusive of the thinking token count
+        if promptTokenCount + candidatesTokenCount + toolUsePromptTokenCount == totalTokenCount, then the candidate token count is inclusive of the thinking token count
 
         else the candidate token count is exclusive of the thinking token count
 
         Addresses - https://github.com/BerriAI/litellm/pull/10141#discussion_r2052272035
         """
-        if usage_metadata.get("promptTokenCount", 0) + usage_metadata.get(
-            "candidatesTokenCount", 0
-        ) == usage_metadata.get("totalTokenCount", 0):
-            return True
-        else:
+        non_thinking_tokens = (
+            usage_metadata.get("promptTokenCount", 0)
+            + usage_metadata.get("candidatesTokenCount", 0)
+            + usage_metadata.get("toolUsePromptTokenCount", 0)
+        )
+        return non_thinking_tokens == usage_metadata.get("totalTokenCount", 0)
+
+    @staticmethod
+    def _response_has_search_grounding(
+        completion_response: Union[GenerateContentResponseBody, BidiGenerateContentServerMessage],
+    ) -> bool:
+        """
+        Whether the response used Grounding with Google Search, detected via
+        groundingMetadata.webSearchQueries (an actual web search was performed).
+
+        Google bills grounding-with-Google-Search retrieved tokens separately (a per-request /
+        per-query search fee) and excludes them from input token billing, unlike URL context /
+        File Search / code execution whose tool-use tokens are charged at the input token rate.
+        URL context also emits groundingMetadata (with groundingChunks but no webSearchQueries),
+        so presence of groundingMetadata alone is not a sufficient signal.
+        See https://ai.google.dev/gemini-api/docs/pricing and
+        https://github.com/BerriAI/litellm/discussions/33198
+        """
+        if "candidates" not in completion_response:
             return False
+        for candidate in completion_response["candidates"] or []:
+            grounding_metadata, _, _, _ = VertexGeminiConfig._extract_candidate_metadata(candidate)
+            if VertexGeminiConfig._calculate_web_search_requests(grounding_metadata):
+                return True
+        return False
 
     @staticmethod
     def _calculate_usage(
@@ -1888,12 +1912,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_tokens_details = CompletionTokensDetailsWrapper()
             response_tokens_details.reasoning_tokens = reasoning_tokens
 
+        tool_use_prompt_tokens = usage_metadata.get("toolUsePromptTokenCount") or None
+
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
             audio_tokens=prompt_audio_tokens,
             text_tokens=prompt_text_tokens,
             image_tokens=prompt_image_tokens,
             video_tokens=prompt_video_tokens,
+            tool_use_tokens=tool_use_prompt_tokens,
+        )
+
+        billable_tool_use_prompt_tokens = (
+            0
+            if VertexGeminiConfig._response_has_search_grounding(completion_response)
+            else (tool_use_prompt_tokens or 0)
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
@@ -1901,7 +1934,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
         usage = Usage(
-            prompt_tokens=usage_metadata.get("promptTokenCount", 0),
+            prompt_tokens=usage_metadata.get("promptTokenCount", 0) + billable_tool_use_prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=usage_metadata.get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,

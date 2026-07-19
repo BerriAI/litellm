@@ -1030,6 +1030,120 @@ def test_guardrail_span_anchors_to_root_inside_active_phase_span():
     assert guard.parent.span_id != auth_span.get_span_context().span_id
 
 
+# --------------------------------------------------------------------------- #
+#  LIT-4179 — proxy-level failures that never reach an LLM call must still stamp
+#  the structured error.* attributes onto the request's spans, restoring the v1
+#  behavior v2 dropped when it stopped subclassing ``OpenTelemetry``.
+# --------------------------------------------------------------------------- #
+
+
+def _proxy_exc(message, code):
+    from litellm.proxy._types import ProxyException
+
+    return ProxyException(message=message, type="bad_request_error", param=None, code=code)
+
+
+def test_async_post_call_failure_hook_stamps_error_on_root_span():
+    """PATH B: an endpoint-level failure (empty body rejected before dispatch)
+    reaches ``async_post_call_failure_hook``; it must stamp error.* + an exception
+    event on the anchored request root span."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc = _proxy_exc("litellm.BadRequestError: messages is required", 400)
+    result = asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={}, original_exception=exc, user_api_key_dict=UserAPIKeyAuth()
+        )
+    )
+    server.end()
+    assert result is None
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["error.type"] == "ProxyException"
+    assert "messages is required" in span.attributes["error.message"]
+    assert span.attributes["litellm.provider.error.code"] == "400"
+    assert span.status.status_code is StatusCode.ERROR
+    assert any(e.name == "exception" for e in span.events)
+
+
+def test_async_post_call_failure_hook_falls_back_to_user_api_key_parent_span():
+    """With no anchor set (a path that never captured the root), the hook must fall
+    back to ``user_api_key_dict.parent_otel_span`` rather than dropping the error."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={},
+            original_exception=_proxy_exc("boom", 401),
+            user_api_key_dict=UserAPIKeyAuth(parent_otel_span=server),
+        )
+    )
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["error.type"] == "ProxyException"
+    assert span.attributes["litellm.provider.error.code"] == "401"
+
+
+def test_record_error_attributes_on_span_decorates_without_ending():
+    """PATH A: a failure that dies before any LLM-call span (malformed body,
+    validation) is stamped onto the instrumentor-owned SERVER span. The method must
+    not end the span or emit a duplicate exception event, and must pin error.code
+    to the real response status (not the exception's own code)."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    logger.record_error_attributes_on_span(server, _proxy_exc("Invalid JSON body", 400), 422)
+    assert server.is_recording()
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["error.type"] == "ProxyException"
+    assert span.attributes["error.message"] == "Invalid JSON body"
+    assert span.attributes["litellm.provider.error.code"] == "422"
+    assert all(e.name != "exception" for e in span.events)
+
+
+def test_record_error_attributes_on_span_ignores_below_400_and_missing_span():
+    logger, _ = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    logger.record_error_attributes_on_span(None, _proxy_exc("boom", 400), 400)  # no span → no-op
+    logger.record_error_attributes_on_span(server, None, 400)  # no exception → no-op
+    server.end()
+    assert "error.type" not in (server.attributes or {})
+
+
+def test_start_phase_span_stamps_error_attributes_on_failure():
+    """An ``auth`` phase span that dies (expired key) must carry the structured
+    error.* attributes, not only the exception event ``use_span`` records."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc = _proxy_exc("Authentication Error, ExpiredToken", 401)
+    with trace.use_span(server, end_on_exit=False):
+        with contextlib.suppress(Exception):
+            with logger.start_phase_span("auth /chat/completions"):
+                raise exc
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    auth = by_name["auth /chat/completions"]
+    assert auth.attributes["error.type"] == "ProxyException"
+    assert "ExpiredToken" in auth.attributes["error.message"]
+    assert auth.attributes["litellm.provider.error.code"] == "401"
+    assert auth.status.status_code is StatusCode.ERROR
+    assert any(e.name == "exception" for e in auth.events)
+
+
+def test_start_phase_span_success_carries_no_error():
+    logger, exporter = _logger()
+    with logger.start_phase_span("auth /chat/completions"):
+        pass
+    (span,) = exporter.get_finished_spans()
+    assert "error.type" not in span.attributes
+    assert span.status.status_code is not StatusCode.ERROR
+
+
 def test_real_logging_pre_call_opens_span_end_to_end():
     """Regression guard: a real ``LiteLLMLoggingObj.pre_call`` must fire
     ``log_pre_api_call`` on the V2 logger (via ``litellm.input_callback``), so the

@@ -19,6 +19,7 @@ vi.mock("@/components/networking", () => ({
   fetchMCPServers: vi.fn(),
   getUiSettings: vi.fn(),
   getClaudeCodeMarketplace: vi.fn(),
+  getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -150,6 +151,21 @@ describe("ModelHubTable", () => {
     await waitFor(() => {
       expect(screen.getByText("AI Hub")).toBeInTheDocument();
     });
+  });
+
+  it("should resolve loading to the empty state when there is no access token on the admin page", async () => {
+    vi.mocked(networking.getUiSettings).mockResolvedValue({
+      values: {},
+    });
+    mockUseUISettings.mockReturnValue({
+      data: { values: {} },
+      isLoading: false,
+    });
+
+    renderWithProviders(<ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} />);
+
+    expect(await screen.findByText("No models yet")).toBeInTheDocument();
+    expect(networking.modelHubCall).not.toHaveBeenCalled();
   });
 
   it("should call getUiConfig before modelHubPublicModelsCall when publicPage is true", async () => {
