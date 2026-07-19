@@ -11,6 +11,7 @@ from typing import (
     Union,
 )
 
+import httpx
 from fastapi import HTTPException
 
 if TYPE_CHECKING:
@@ -48,6 +49,22 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME = "model_armor"
+
+
+_SCANNED_CONTENT_KEYS = frozenset({"text", "sanitizedText", "findings"})
+
+RedactablePayload = Union[dict, list, str, int, float, bool, None]
+
+
+def _redact_scanned_content(payload: RedactablePayload) -> RedactablePayload:
+    if isinstance(payload, dict):
+        return {
+            key: "[REDACTED]" if key in _SCANNED_CONTENT_KEYS else _redact_scanned_content(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_redact_scanned_content(item) for item in payload]
+    return payload
 
 
 class ModelArmorGuardrail(CustomGuardrail, VertexBase):
@@ -145,18 +162,17 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _build_api_error_detail(self, status_code: int, response_text: str) -> str:
         if self.sanitize_error_detail:
-            return "Model Armor API error: upstream request failed"
+            return f"Model Armor API error (upstream {status_code})"
         return f"Model Armor API error (upstream {status_code}): {response_text}"
 
-    def _build_block_error_detail(self, message: str, armor_response: Any) -> dict:
-        detail = {"error": message}
-        if not self.sanitize_error_detail:
-            detail["model_armor_response"] = armor_response
-        return detail
-
-    def _build_logging_response(self, armor_response: Any) -> Any:
+    def _build_block_error_detail(self, message: str, armor_response: RedactablePayload) -> dict:
         if self.sanitize_error_detail:
-            return {}
+            return {"error": message}
+        return {"error": message, "model_armor_response": armor_response}
+
+    def _build_logging_response(self, armor_response: RedactablePayload) -> RedactablePayload:
+        if self.sanitize_error_detail:
+            return _redact_scanned_content(armor_response)
         return armor_response
 
     async def make_model_armor_request(
@@ -225,11 +241,20 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if self.async_handler is None:
             raise ValueError("Async handler not initialized")
 
-        response = await self.async_handler.post(
-            url=url,
-            json=body,
-            headers=headers,
-        )
+        try:
+            response = await self.async_handler.post(
+                url=url,
+                json=body,
+                headers=headers,
+            )
+        except httpx.HTTPStatusError as e:
+            detail = self._build_api_error_detail(e.response.status_code, e.response.text)
+            verbose_proxy_logger.error(
+                "Model Armor API error - Status: %s, Detail: %s",
+                e.response.status_code,
+                detail,
+            )
+            raise HTTPException(status_code=400, detail=detail) from None
 
         if self.sanitize_error_detail:
             verbose_proxy_logger.debug(
@@ -375,15 +400,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         Override to store only the Model Armor API response, not the entire data dict.
         This prevents circular references in logging.
         """
-        from litellm.proxy.common_utils.callback_utils import (
-            get_metadata_variable_name_from_kwargs,
-        )
-
-        metadata = (
-            request_data.get(get_metadata_variable_name_from_kwargs(request_data), {})
-            if isinstance(request_data, dict)
-            else {}
-        )
+        metadata = request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
         guardrail_response = self._build_logging_response(metadata.get("_model_armor_response", {}))
 
         # Determine status – default to "success" but prefer the explicit value if present.
@@ -737,7 +754,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     guardrail_provider="model_armor",
                     guardrail_mode=GuardrailEventHooks.post_call,
                     guardrail_response=model_armor_logged_object,
-                    guardrail_status=model_armor_logged_object["model_armor_status"],
+                    guardrail_status="success",
                     start_time=data.get("start_time"),
                 )
                 add_guardrail_response_to_standard_logging_object(

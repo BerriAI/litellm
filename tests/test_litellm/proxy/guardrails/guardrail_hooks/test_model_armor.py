@@ -10,12 +10,14 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import httpx
 from fastapi import HTTPException
 
 import litellm
 import litellm.types.utils
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
@@ -413,7 +415,7 @@ async def test_model_armor_api_error_handling():
             )
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Model Armor API error: upstream request failed"
+        assert exc_info.value.detail == "Model Armor API error (upstream 500)"
         assert "Internal Server Error" not in str(exc_info.value.detail)
 
 
@@ -651,7 +653,7 @@ async def test_model_armor_api_failure_returns_400():
 
         # Should be 400, NOT the upstream 500
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Model Armor API error: upstream request failed"
+        assert exc_info.value.detail == "Model Armor API error (upstream 500)"
         assert "Internal Server Error" not in str(exc_info.value.detail)
 
 
@@ -684,6 +686,163 @@ async def test_model_armor_error_output_sanitization(sanitize: bool):
     else:
         assert marker in str(exc_info.value.detail)
         assert marker in direct_log
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_handler_raised_http_error_sanitized(sanitize: bool):
+    """The real AsyncHTTPHandler raises on non-2xx via raise_for_status, so a non-200
+    never returns a response object. The raised MaskedHTTPStatusError carries the raw
+    upstream body in its message; the guardrail must convert it to a sanitized
+    HTTPException instead of letting it bubble raw to callers and logs."""
+    marker = "SYNTHETIC_MODEL_ARMOR_MARKER"
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        sanitize_error_detail=sanitize,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+
+    request = httpx.Request("POST", "https://modelarmor.example.test/v1")
+    upstream = httpx.Response(403, content=marker.encode(), request=request)
+    original = httpx.HTTPStatusError("Forbidden", request=request, response=upstream)
+    masked = MaskedHTTPStatusError(original, message=marker, text=marker)
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(side_effect=masked)
+    ), patch.object(verbose_proxy_logger, "debug") as debug_log, patch.object(
+        verbose_proxy_logger, "error"
+    ) as error_log, pytest.raises(HTTPException) as exc_info:
+        await guardrail.make_model_armor_request(content=marker)
+
+    direct_log = f"{debug_log.call_args_list} {error_log.call_args_list}"
+    assert "403" in str(exc_info.value.detail)
+    if sanitize:
+        assert marker not in str(exc_info.value.detail)
+        assert marker not in direct_log
+    else:
+        assert marker in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_post_call_logging_redacts_scanned_content(sanitize: bool):
+    marker = "SYNTHETIC_POST_CALL_MARKER"
+    armor_response = {
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND",
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {
+                        "deidentifyResult": {
+                            "matchState": "MATCH_FOUND",
+                            "data": {"text": marker},
+                        }
+                    }
+                }
+            },
+        }
+    }
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        mask_response_content=True,
+        sanitize_error_detail=sanitize,
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    mock_llm_response = litellm.ModelResponse()
+    mock_llm_response.choices = [
+        litellm.Choices(message=litellm.Message(content="model output"))
+    ]
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+        "litellm_logging_obj": MagicMock(),
+    }
+
+    with patch(
+        "litellm.proxy.common_utils.callback_utils.add_guardrail_response_to_standard_logging_object"
+    ) as add_logging:
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_llm_response,
+        )
+
+    logged = add_logging.call_args.kwargs["guardrail_response"]
+    assert logged["guardrail_status"] == "success"
+    logged_armor_response = logged["guardrail_response"]["model_armor_response"]
+    if sanitize:
+        assert marker not in str(logged_armor_response)
+        assert (
+            logged_armor_response["sanitizationResult"]["filterResults"]["sdp"][
+                "sdpFilterResult"
+            ]["deidentifyResult"]["matchState"]
+            == "MATCH_FOUND"
+        )
+    else:
+        assert logged_armor_response == armor_response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize", [True, False])
+async def test_model_armor_streaming_logging_redacts_scanned_content(sanitize: bool):
+    marker = "SYNTHETIC_STREAMING_MARKER"
+    armor_response = {
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND",
+            "sanitizedText": marker,
+        }
+    }
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        sanitize_error_detail=sanitize,
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    async def mock_stream():
+        yield litellm.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="streamed output")
+                )
+            ]
+        )
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+    }
+
+    async for _ in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=mock_stream(),
+        request_data=request_data,
+    ):
+        pass
+
+    logged_response = request_data["metadata"]["_model_armor_response"]
+    if sanitize:
+        assert logged_response == {
+            "sanitizationResult": {
+                "filterMatchState": "NO_MATCH_FOUND",
+                "sanitizedText": "[REDACTED]",
+            }
+        }
+        assert marker not in str(logged_response)
+    else:
+        assert logged_response == armor_response
 
 
 @pytest.mark.asyncio
@@ -730,7 +889,20 @@ async def test_model_armor_match_found_sanitizes_caller_and_logging(sanitize: bo
     logged_response = request_data["metadata"]["_model_armor_response"]
     if sanitize:
         assert detail == {"error": "Content blocked by Model Armor"}
-        assert logged_response == {}
+        assert logged_response == {
+            "sanitizationResult": {
+                "filterResults": {
+                    "sdp": {
+                        "sdpFilterResult": {
+                            "inspectResult": {
+                                "matchState": "MATCH_FOUND",
+                                "findings": "[REDACTED]",
+                            }
+                        }
+                    }
+                }
+            }
+        }
         assert marker not in str(detail)
         assert marker not in str(logged_response)
     else:
