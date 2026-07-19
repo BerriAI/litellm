@@ -395,11 +395,14 @@ async fn is_already_running_as_role(role: &str, config: &AwsAuthConfig) -> CoreR
         loader = loader.endpoint_url(endpoint);
     }
     let sdk_config = loader.load().await;
-    let response = aws_sdk_sts::Client::new(&sdk_config)
+    let response = match aws_sdk_sts::Client::new(&sdk_config)
         .get_caller_identity()
         .send()
         .await
-        .map_err(|error| CoreError::Auth(format!("AWS caller identity failed: {error}")))?;
+    {
+        Ok(response) => response,
+        Err(_) => return Ok(false),
+    };
     Ok(response
         .arn()
         .is_some_and(|caller| same_role_arns(role, caller)))
