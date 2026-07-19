@@ -2,5 +2,5 @@
 //! with Python's `BaseAWSLLM`; the broader core purity guidance is reconciled
 //! separately.
 
-pub mod aws;
+pub mod aws_base;
 mod constants;

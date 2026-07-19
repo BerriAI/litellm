@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::caching::in_memory_cache::InMemoryCache;
 use crate::error::{CoreError, CoreResult};
 use aws_credential_types::provider::ProvideCredentials;
 use aws_credential_types::Credentials;
@@ -24,15 +24,9 @@ use super::constants::{
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
 
-#[derive(Clone)]
-struct CachedCredentials {
-    credentials: Credentials,
-    expires_at: SystemTime,
-}
+static IAM_CREDENTIALS_CACHE: OnceLock<Mutex<InMemoryCache<Credentials>>> = OnceLock::new();
 
-static IAM_CREDENTIAL_CACHE: OnceLock<Mutex<HashMap<String, CachedCredentials>>> = OnceLock::new();
-
-fn cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
+fn credential_cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
     match flow {
         AwsAuthFlow::StaticKeys { .. } => Some(STATIC_CREDENTIALS_TTL),
         AwsAuthFlow::DefaultChain => Some(AMBIENT_CREDENTIALS_TTL),
@@ -111,27 +105,16 @@ fn cache_key(config: &AwsAuthConfig, flow: &AwsAuthFlow) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn cached_credentials(key: &str) -> Option<Credentials> {
-    let cache = IAM_CREDENTIAL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+fn get_cached_credentials(key: &str) -> Option<Credentials> {
+    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(InMemoryCache::default()));
     let mut entries = cache.lock().ok()?;
-    let entry = entries.get(key)?;
-    if entry.expires_at > SystemTime::now() {
-        return Some(entry.credentials.clone());
-    }
-    entries.remove(key);
-    None
+    entries.get_cache(key)
 }
 
-fn cache_credentials(key: String, credentials: Credentials, ttl: Duration) {
-    let cache = IAM_CREDENTIAL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+fn set_cached_credentials(key: String, credentials: Credentials, ttl: Duration) {
+    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(InMemoryCache::default()));
     if let Ok(mut entries) = cache.lock() {
-        entries.insert(
-            key,
-            CachedCredentials {
-                credentials,
-                expires_at: SystemTime::now() + ttl,
-            },
-        );
+        entries.set_cache(key, credentials, Some(ttl));
     }
 }
 
@@ -238,7 +221,7 @@ pub async fn resolve_credentials(
                 region_name,
             };
             let key = cache_key(&resolved, &flow);
-            if let Some(credentials) = cached_credentials(&key) {
+            if let Some(credentials) = get_cached_credentials(&key) {
                 return Ok(credentials);
             }
             let credentials = Credentials::new(
@@ -248,10 +231,10 @@ pub async fn resolve_credentials(
                 None,
                 "litellm-static",
             );
-            cache_credentials(
+            set_cached_credentials(
                 key,
                 credentials.clone(),
-                cache_ttl(&flow).unwrap_or(STATIC_CREDENTIALS_TTL),
+                credential_cache_ttl(&flow).unwrap_or(STATIC_CREDENTIALS_TTL),
             );
             Ok(credentials)
         }
@@ -267,7 +250,7 @@ pub async fn resolve_credentials(
             if is_already_running_as_role(&role, &resolved).await? {
                 let ambient_flow = AwsAuthFlow::DefaultChain;
                 let key = cache_key(&resolved, &ambient_flow);
-                if let Some(credentials) = cached_credentials(&key) {
+                if let Some(credentials) = get_cached_credentials(&key) {
                     return Ok(credentials);
                 }
                 let provider =
@@ -277,10 +260,10 @@ pub async fn resolve_credentials(
                 let credentials = provider.provide_credentials().await.map_err(|error| {
                     CoreError::Auth(format!("AWS default credentials failed: {error}"))
                 })?;
-                cache_credentials(
+                set_cached_credentials(
                     key,
                     credentials.clone(),
-                    cache_ttl(&ambient_flow).unwrap_or(AMBIENT_CREDENTIALS_TTL),
+                    credential_cache_ttl(&ambient_flow).unwrap_or(AMBIENT_CREDENTIALS_TTL),
                 );
                 return Ok(credentials);
             }
@@ -355,7 +338,7 @@ pub async fn resolve_credentials(
         }
         AwsAuthFlow::DefaultChain => {
             let key = cache_key(&resolved, &AwsAuthFlow::DefaultChain);
-            if let Some(credentials) = cached_credentials(&key) {
+            if let Some(credentials) = get_cached_credentials(&key) {
                 return Ok(credentials);
             }
             let provider =
@@ -365,10 +348,10 @@ pub async fn resolve_credentials(
             let credentials = provider.provide_credentials().await.map_err(|error| {
                 CoreError::Auth(format!("AWS default credentials failed: {error}"))
             })?;
-            cache_credentials(
+            set_cached_credentials(
                 key,
                 credentials.clone(),
-                cache_ttl(&AwsAuthFlow::DefaultChain).unwrap_or(AMBIENT_CREDENTIALS_TTL),
+                credential_cache_ttl(&AwsAuthFlow::DefaultChain).unwrap_or(AMBIENT_CREDENTIALS_TTL),
             );
             Ok(credentials)
         }
@@ -551,7 +534,7 @@ mod tests {
     #[test]
     fn cache_policy_matches_python_flows() {
         assert_eq!(
-            cache_ttl(&AwsAuthFlow::StaticKeys {
+            credential_cache_ttl(&AwsAuthFlow::StaticKeys {
                 access_key_id: "ak".into(),
                 secret_access_key: "sk".into(),
                 region_name: "us-east-1".into(),
@@ -559,11 +542,11 @@ mod tests {
             Some(STATIC_CREDENTIALS_TTL)
         );
         assert_eq!(
-            cache_ttl(&AwsAuthFlow::DefaultChain),
+            credential_cache_ttl(&AwsAuthFlow::DefaultChain),
             Some(AMBIENT_CREDENTIALS_TTL)
         );
         assert_eq!(
-            cache_ttl(&AwsAuthFlow::SessionToken {
+            credential_cache_ttl(&AwsAuthFlow::SessionToken {
                 access_key_id: "ak".into(),
                 secret_access_key: "sk".into(),
                 session_token: "token".into(),
@@ -571,20 +554,20 @@ mod tests {
             None
         );
         assert_eq!(
-            cache_ttl(&AwsAuthFlow::Profile {
+            credential_cache_ttl(&AwsAuthFlow::Profile {
                 name: "profile".into()
             }),
             None
         );
         assert_eq!(
-            cache_ttl(&AwsAuthFlow::AssumeRole {
+            credential_cache_ttl(&AwsAuthFlow::AssumeRole {
                 role: "arn:aws:iam::123456789012:role/demo".into(),
                 session_name: None,
             }),
             None
         );
         assert_eq!(
-            cache_ttl(&AwsAuthFlow::WebIdentity {
+            credential_cache_ttl(&AwsAuthFlow::WebIdentity {
                 token: "token".into(),
                 role: "arn:aws:iam::123456789012:role/demo".into(),
                 session_name: "session".into(),
@@ -597,9 +580,9 @@ mod tests {
     fn cache_round_trip_preserves_credentials() {
         let key = format!("cache-test-{}", std::process::id());
         let credentials = Credentials::new("cache-ak", "cache-sk", None, None, "test");
-        cache_credentials(key.clone(), credentials.clone(), STATIC_CREDENTIALS_TTL);
+        set_cached_credentials(key.clone(), credentials.clone(), STATIC_CREDENTIALS_TTL);
         assert_eq!(
-            cached_credentials(&key).map(|value| value.access_key_id().to_string()),
+            get_cached_credentials(&key).map(|value| value.access_key_id().to_string()),
             Some("cache-ak".to_string())
         );
     }
