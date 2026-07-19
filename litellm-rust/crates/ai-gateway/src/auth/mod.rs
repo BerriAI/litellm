@@ -8,25 +8,13 @@
 //! A handler opts in by adding [`RequireMasterKey`] to its arguments; auth then
 //! runs during extraction, before the handler body. Routes never re-implement it.
 
-#[cfg(feature = "aws-auth")]
-pub mod aws;
-#[cfg(feature = "aws-auth")]
-mod constants;
-
-#[cfg(feature = "server")]
 use axum::extract::FromRequestParts;
-#[cfg(feature = "server")]
 use axum::http::header::AUTHORIZATION;
-#[cfg(feature = "server")]
 use axum::http::request::Parts;
-#[cfg(feature = "server")]
 use axum::http::StatusCode;
-#[cfg(feature = "server")]
 use sha2::{Digest, Sha256};
-#[cfg(feature = "server")]
 use subtle::ConstantTimeEq;
 
-#[cfg(feature = "server")]
 use crate::state::AppState;
 
 /// SHA-256 hex digest of a token — the exact transform the Python proxy applies
@@ -37,7 +25,6 @@ use crate::state::AppState;
 /// integration receive `user_api_key_hash`, so that field must be this hash, not
 /// the credential. Hashing here also means the value matches the key's hash in
 /// `LiteLLM_SpendLogs.api_key`, so realtime spend joins with the rest of LiteLLM.
-#[cfg(feature = "server")]
 pub fn hash_token(token: &str) -> String {
     let digest = Sha256::digest(token.as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
@@ -53,10 +40,8 @@ pub fn hash_token(token: &str) -> String {
 /// Rejections: `500` when no master key is configured (permanent
 /// misconfiguration, not a transient outage); `401` on a missing/incorrect
 /// token. The comparison is constant-time.
-#[cfg(feature = "server")]
 pub struct RequireMasterKey;
 
-#[cfg(feature = "server")]
 #[axum::async_trait]
 impl FromRequestParts<AppState> for RequireMasterKey {
     type Rejection = (StatusCode, String);
@@ -87,7 +72,7 @@ impl FromRequestParts<AppState> for RequireMasterKey {
     }
 }
 
-#[cfg(all(test, feature = "server"))]
+#[cfg(test)]
 mod tests {
     use super::hash_token;
 

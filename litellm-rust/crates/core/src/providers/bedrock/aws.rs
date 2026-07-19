@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::error::{CoreError, CoreResult};
 use aws_credential_types::provider::ProvideCredentials;
 use aws_credential_types::Credentials;
 use aws_sigv4::http_request::{
@@ -8,13 +12,36 @@ use aws_sigv4::http_request::{
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
-use litellm_core::error::{CoreError, CoreResult};
+use sha2::{Digest, Sha256};
 
 use super::constants::{
-    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_NAME,
-    AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN, AWS_STS_ENDPOINT,
-    AWS_WEB_IDENTITY_TOKEN, BEDROCK_SERVICE, DEFAULT_SESSION_NAME_PREFIX,
+    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
+    AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN, AWS_STS_ENDPOINT,
+    AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE, BEDROCK_SERVICE,
+    DEFAULT_SESSION_NAME_PREFIX,
 };
+
+const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
+const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
+
+#[derive(Clone)]
+struct CachedCredentials {
+    credentials: Credentials,
+    expires_at: SystemTime,
+}
+
+static IAM_CREDENTIAL_CACHE: OnceLock<Mutex<HashMap<String, CachedCredentials>>> = OnceLock::new();
+
+fn cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
+    match flow {
+        AwsAuthFlow::StaticKeys { .. } => Some(STATIC_CREDENTIALS_TTL),
+        AwsAuthFlow::DefaultChain => Some(AMBIENT_CREDENTIALS_TTL),
+        AwsAuthFlow::WebIdentity { .. }
+        | AwsAuthFlow::AssumeRole { .. }
+        | AwsAuthFlow::Profile { .. }
+        | AwsAuthFlow::SessionToken { .. } => None,
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AwsAuthConfig {
@@ -76,6 +103,60 @@ pub enum AwsAuthFlow {
         region_name: String,
     },
     DefaultChain,
+}
+
+fn cache_key(config: &AwsAuthConfig, flow: &AwsAuthFlow) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{config:?}:{flow:?}"));
+    format!("{:x}", hasher.finalize())
+}
+
+fn cached_credentials(key: &str) -> Option<Credentials> {
+    let cache = IAM_CREDENTIAL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut entries = cache.lock().ok()?;
+    let entry = entries.get(key)?;
+    if entry.expires_at > SystemTime::now() {
+        return Some(entry.credentials.clone());
+    }
+    entries.remove(key);
+    None
+}
+
+fn cache_credentials(key: String, credentials: Credentials, ttl: Duration) {
+    let cache = IAM_CREDENTIAL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut entries) = cache.lock() {
+        entries.insert(
+            key,
+            CachedCredentials {
+                credentials,
+                expires_at: SystemTime::now() + ttl,
+            },
+        );
+    }
+}
+
+fn role_identity(arn: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = arn.splitn(6, ':');
+    let ("arn", partition, _, _, account, resource) = (
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+        parts.next()?,
+    ) else {
+        return None;
+    };
+    let role = if let Some(role) = resource.strip_prefix("role/") {
+        role.rsplit('/').next()?
+    } else {
+        resource.strip_prefix("assumed-role/")?.split('/').next()?
+    };
+    Some((partition, account, role))
+}
+
+fn same_role_arns(target: &str, caller: &str) -> bool {
+    role_identity(target) == role_identity(caller)
 }
 
 pub fn classify_auth(
@@ -149,14 +230,31 @@ pub async fn resolve_credentials(
         AwsAuthFlow::StaticKeys {
             access_key_id,
             secret_access_key,
-            ..
-        } => Ok(Credentials::new(
-            access_key_id,
-            secret_access_key,
-            None,
-            None,
-            "litellm-static",
-        )),
+            region_name,
+        } => {
+            let flow = AwsAuthFlow::StaticKeys {
+                access_key_id: access_key_id.clone(),
+                secret_access_key: secret_access_key.clone(),
+                region_name,
+            };
+            let key = cache_key(&resolved, &flow);
+            if let Some(credentials) = cached_credentials(&key) {
+                return Ok(credentials);
+            }
+            let credentials = Credentials::new(
+                access_key_id,
+                secret_access_key,
+                None,
+                None,
+                "litellm-static",
+            );
+            cache_credentials(
+                key,
+                credentials.clone(),
+                cache_ttl(&flow).unwrap_or(STATIC_CREDENTIALS_TTL),
+            );
+            Ok(credentials)
+        }
         AwsAuthFlow::Profile { name } => {
             let provider = aws_config::profile::ProfileFileCredentialsProvider::builder()
                 .profile_name(name)
@@ -166,6 +264,26 @@ pub async fn resolve_credentials(
             })
         }
         AwsAuthFlow::AssumeRole { role, session_name } => {
+            if is_already_running_as_role(&role, &resolved).await? {
+                let ambient_flow = AwsAuthFlow::DefaultChain;
+                let key = cache_key(&resolved, &ambient_flow);
+                if let Some(credentials) = cached_credentials(&key) {
+                    return Ok(credentials);
+                }
+                let provider =
+                    aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
+                        .build()
+                        .await;
+                let credentials = provider.provide_credentials().await.map_err(|error| {
+                    CoreError::Auth(format!("AWS default credentials failed: {error}"))
+                })?;
+                cache_credentials(
+                    key,
+                    credentials.clone(),
+                    cache_ttl(&ambient_flow).unwrap_or(AMBIENT_CREDENTIALS_TTL),
+                );
+                return Ok(credentials);
+            }
             let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
             if let Some(region) = resolved.region_name.clone() {
                 loader = loader.region(aws_types::region::Region::new(region));
@@ -236,15 +354,55 @@ pub async fn resolve_credentials(
             ))
         }
         AwsAuthFlow::DefaultChain => {
+            let key = cache_key(&resolved, &AwsAuthFlow::DefaultChain);
+            if let Some(credentials) = cached_credentials(&key) {
+                return Ok(credentials);
+            }
             let provider =
                 aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
                     .build()
                     .await;
-            provider.provide_credentials().await.map_err(|error| {
+            let credentials = provider.provide_credentials().await.map_err(|error| {
                 CoreError::Auth(format!("AWS default credentials failed: {error}"))
-            })
+            })?;
+            cache_credentials(
+                key,
+                credentials.clone(),
+                cache_ttl(&AwsAuthFlow::DefaultChain).unwrap_or(AMBIENT_CREDENTIALS_TTL),
+            );
+            Ok(credentials)
         }
     }
+}
+
+async fn is_already_running_as_role(role: &str, config: &AwsAuthConfig) -> CoreResult<bool> {
+    if role_identity(role).is_none() {
+        return Ok(false);
+    }
+    if let (Ok(current_role), Ok(token_file)) = (
+        std::env::var(AWS_ROLE_ARN),
+        std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE),
+    ) {
+        if !token_file.is_empty() {
+            return Ok(same_role_arns(role, &current_role));
+        }
+    }
+    let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+    if let Some(region) = config.region_name.clone() {
+        loader = loader.region(aws_types::region::Region::new(region));
+    }
+    if let Some(endpoint) = config.sts_endpoint.clone() {
+        loader = loader.endpoint_url(endpoint);
+    }
+    let sdk_config = loader.load().await;
+    let response = aws_sdk_sts::Client::new(&sdk_config)
+        .get_caller_identity()
+        .send()
+        .await
+        .map_err(|error| CoreError::Auth(format!("AWS caller identity failed: {error}")))?;
+    Ok(response
+        .arn()
+        .is_some_and(|caller| same_role_arns(role, caller)))
 }
 
 fn default_session_name() -> String {
@@ -385,6 +543,82 @@ mod tests {
         .expect("static credentials");
         assert_eq!(credentials.access_key_id(), "ak");
         assert_eq!(credentials.session_token(), None);
+    }
+
+    #[test]
+    fn cache_policy_matches_python_flows() {
+        assert_eq!(
+            cache_ttl(&AwsAuthFlow::StaticKeys {
+                access_key_id: "ak".into(),
+                secret_access_key: "sk".into(),
+                region_name: "us-east-1".into(),
+            }),
+            Some(STATIC_CREDENTIALS_TTL)
+        );
+        assert_eq!(
+            cache_ttl(&AwsAuthFlow::DefaultChain),
+            Some(AMBIENT_CREDENTIALS_TTL)
+        );
+        assert_eq!(
+            cache_ttl(&AwsAuthFlow::SessionToken {
+                access_key_id: "ak".into(),
+                secret_access_key: "sk".into(),
+                session_token: "token".into(),
+            }),
+            None
+        );
+        assert_eq!(
+            cache_ttl(&AwsAuthFlow::Profile {
+                name: "profile".into()
+            }),
+            None
+        );
+        assert_eq!(
+            cache_ttl(&AwsAuthFlow::AssumeRole {
+                role: "arn:aws:iam::123456789012:role/demo".into(),
+                session_name: None,
+            }),
+            None
+        );
+        assert_eq!(
+            cache_ttl(&AwsAuthFlow::WebIdentity {
+                token: "token".into(),
+                role: "arn:aws:iam::123456789012:role/demo".into(),
+                session_name: "session".into(),
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn cache_round_trip_preserves_credentials() {
+        let key = format!("cache-test-{}", std::process::id());
+        let credentials = Credentials::new("cache-ak", "cache-sk", None, None, "test");
+        cache_credentials(key.clone(), credentials.clone(), STATIC_CREDENTIALS_TTL);
+        assert_eq!(
+            cached_credentials(&key).map(|value| value.access_key_id().to_string()),
+            Some("cache-ak".to_string())
+        );
+    }
+
+    #[test]
+    fn same_role_comparison_matches_partition_account_and_role() {
+        assert!(same_role_arns(
+            "arn:aws:iam::123456789012:role/path/demo",
+            "arn:aws:sts::123456789012:assumed-role/demo/session"
+        ));
+        assert!(!same_role_arns(
+            "arn:aws:iam::123456789012:role/demo",
+            "arn:aws:iam::999999999999:role/demo"
+        ));
+        assert!(!same_role_arns(
+            "arn:aws:iam::123456789012:role/demo",
+            "arn:aws-cn:iam::123456789012:role/demo"
+        ));
+        assert!(!same_role_arns(
+            "arn:aws:iam::123456789012:user/demo",
+            "arn:aws:iam::123456789012:role/demo"
+        ));
     }
 
     #[test]

@@ -19,7 +19,7 @@ pub mod ocr;
 /// the `python-config` reader, so it is available without either feature.
 pub mod gil;
 
-#[cfg(any(feature = "server", feature = "aws-auth"))]
+#[cfg(feature = "server")]
 pub mod auth;
 #[cfg(feature = "server")]
 pub mod routes;

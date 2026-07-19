@@ -1216,12 +1216,6 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 name = "litellm-ai-gateway"
 version = "0.1.0"
 dependencies = [
- "aws-config",
- "aws-credential-types",
- "aws-sdk-sts",
- "aws-sigv4",
- "aws-smithy-runtime-api",
- "aws-types",
  "axum",
  "base64",
  "futures-channel",
@@ -1241,9 +1235,16 @@ dependencies = [
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-sts",
+ "aws-sigv4",
+ "aws-smithy-runtime-api",
+ "aws-types",
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
 ]
