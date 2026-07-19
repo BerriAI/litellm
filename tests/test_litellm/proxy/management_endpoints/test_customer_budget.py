@@ -370,3 +370,100 @@ def test_new_budget_request_sets_budget_reset_at_when_duration_provided():
     expected_min = before + timedelta(days=30)
     expected_max = after + timedelta(days=30)
     assert expected_min <= result.budget_reset_at <= expected_max
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_persists_budget_duration_on_new_budget(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/33941
+
+    /customer/update on an end-user without an existing budget must persist
+    budget_duration and compute budget_reset_at on the new budget row,
+    instead of silently dropping both.
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-user",
+        "blocked": False,
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+
+    mock_created_budget = MagicMock()
+    mock_created_budget.budget_id = "new-budget-duration"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_created_budget
+    )
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-user",
+        max_budget=50.0,
+        budget_duration="30d",
+    )
+    assert update_request.budget_duration == "30d"
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    create_data = mock_prisma_client.db.litellm_budgettable.create.call_args[1]["data"]
+    assert create_data["max_budget"] == 50.0
+    assert create_data["budget_duration"] == "30d"
+    assert create_data["budget_reset_at"] is not None
+    reset_at = create_data["budget_reset_at"].replace(tzinfo=None)
+    assert reset_at > datetime.utcnow()
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_persists_budget_duration_on_existing_budget(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    /customer/update on an end-user with an existing budget must update
+    budget_duration and recompute budget_reset_at on that budget row.
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-user",
+        "blocked": False,
+        "litellm_budget_table": {
+            "budget_id": "existing-budget-123",
+            "max_budget": 10.0,
+        },
+    }
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock(return_value=MagicMock())
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {"user_id": "test-user", "blocked": False}
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-user",
+        budget_duration="7d",
+    )
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.update.assert_called_once()
+    update_call = mock_prisma_client.db.litellm_budgettable.update.call_args[1]
+    assert update_call["where"] == {"budget_id": "existing-budget-123"}
+    assert update_call["data"]["budget_duration"] == "7d"
+    assert update_call["data"]["budget_reset_at"] is not None
+    assert not mock_prisma_client.db.litellm_budgettable.create.called

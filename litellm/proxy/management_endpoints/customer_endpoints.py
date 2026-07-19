@@ -22,6 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -190,6 +191,16 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
             )
         return budget_request
     return None
+
+
+def _with_budget_reset_at(budget_table_data: dict) -> dict:
+    budget_duration = budget_table_data.get("budget_duration")
+    if budget_duration is None:
+        return budget_table_data
+    return {
+        **budget_table_data,
+        "budget_reset_at": get_budget_reset_time(budget_duration=budget_duration),
+    }
 
 
 async def _handle_customer_object_permission_update(
@@ -492,6 +503,7 @@ async def update_end_user(
     - blocked: bool = False  # allow/disallow requests for this end-user
     - max_budget: Optional[float] = None
     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    - budget_duration: Optional[str] = None  # Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
     )
@@ -583,6 +595,8 @@ async def update_end_user(
 
             elif k in LiteLLM_EndUserTable.model_fields.keys():
                 update_end_user_table_data[k] = v
+
+        budget_table_data = _with_budget_reset_at(budget_table_data)
 
         ## Handle object permission updates (MCP servers, vector stores, etc.)
         await _handle_customer_object_permission_update(

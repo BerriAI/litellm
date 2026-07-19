@@ -1730,6 +1730,7 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    budget_duration: "str | None" = None
     allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
     )
