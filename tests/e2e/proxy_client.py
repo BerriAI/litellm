@@ -31,6 +31,8 @@ from models import (
     ChatResponse,
     CountTokensBody,
     CountTokensResponse,
+    CredentialCreateBody,
+    CredentialCreateResponse,
     CustomerDeleteBody,
     EmbedBody,
     EmbedResponse,
@@ -218,6 +220,26 @@ class ProxyClient:
         )
         if not is_ok(result):
             warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
+
+    def create_credential(self, body: CredentialCreateBody) -> None:
+        unwrap(
+            self.transport.post(
+                "/credentials",
+                headers=self.transport.master,
+                json=body,
+                response_type=CredentialCreateResponse,
+            )
+        )
+
+    def delete_credential(self, credential_name: str) -> None:
+        result = self.transport.delete(
+            f"/credentials/{credential_name}",
+            headers=self.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_credential({credential_name!r}) failed: {result}", stacklevel=2)
 
     # ---- LLM calls ------------------------------------------------------
 
