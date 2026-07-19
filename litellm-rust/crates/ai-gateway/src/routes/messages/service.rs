@@ -5,13 +5,18 @@ use litellm_core::{CoreError, CoreResult};
 use serde_json::{Map, Value};
 
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
-use crate::messages::{messages, MessagesRequest};
+use crate::messages::{execute_messages, MessagesRequest};
+
+pub(crate) enum MessagesResponse {
+    Json(Value),
+    Stream(reqwest::Response),
+}
 
 pub async fn run(
     router: &Arc<Router>,
     body: Value,
     extra_headers: Option<Map<String, Value>>,
-) -> CoreResult<Value> {
+) -> CoreResult<MessagesResponse> {
     let model = body
         .get("model")
         .and_then(Value::as_str)
@@ -38,7 +43,7 @@ pub async fn run(
             Value::String(upstream_model.to_string()),
         );
 
-    messages(MessagesRequest {
+    let request = MessagesRequest {
         model: provider_model,
         body,
         api_key: deployment.litellm_params.api_key.as_deref(),
@@ -46,6 +51,14 @@ pub async fn run(
         custom_llm_provider,
         extra_headers,
         timeout: None,
-    })
-    .await
+    };
+    let stream = request.body.get("stream").and_then(Value::as_bool) == Some(true);
+    execute_messages(request, stream)
+        .await
+        .map(|response| match response {
+            crate::messages::MessagesResponse::Json(body) => MessagesResponse::Json(body),
+            crate::messages::MessagesResponse::Stream(upstream) => {
+                MessagesResponse::Stream(upstream)
+            }
+        })
 }
