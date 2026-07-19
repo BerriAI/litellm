@@ -32,16 +32,32 @@ if TYPE_CHECKING:
 
 class _CombinedChunkSplitter:
     """
-    Splits a streaming chunk that carries BOTH response content and a
-    ``finish_reason`` into two chunks: a content-only chunk followed by a
-    finish-only chunk.
+    Splits a streaming chunk that carries more than one of {reasoning,
+    content/tool_calls, finish_reason} into one chunk per payload, in that
+    order (reasoning precedes content; finish_reason is terminal).
 
-    ``AnthropicStreamWrapper`` (via ``translate_streaming_openai_response_to_anthropic``)
-    assumes content and ``finish_reason`` never arrive in the same chunk — true for
-    real provider streams, but false for fake-streamed providers (e.g. Vertex AI
-    Gemma ``:predict``) where ``MockResponseIterator`` collapses the entire response
-    into a single chunk. Without this split the assumption causes all content to be
-    silently dropped (only the ``message_delta`` stop event is emitted).
+    ``AnthropicStreamWrapper`` (via ``_should_start_new_content_block`` and
+    ``translate_streaming_openai_response_to_anthropic``) assumes each chunk
+    carries at most one semantic payload, and separately assumes reasoning
+    and content never arrive in the same chunk. Both assumptions are true for
+    most provider streams but false for:
+      - fake-streamed providers (e.g. Vertex AI Gemma ``:predict``) where
+        ``MockResponseIterator`` collapses the entire response, including
+        ``finish_reason``, into a single chunk
+      - vLLM reasoning parsers, which may flush the tail of ``reasoning_content``
+        bundled with the first token of ``content`` in the same chunk at the
+        reasoning/answer boundary
+
+    Without this split, the reasoning+content case is worse than dropped
+    content: ``_should_start_new_content_block`` (content-block-type
+    detection) and ``translate_streaming_openai_response_to_anthropic``
+    (delta emission) each pick a different payload as dominant — the former
+    prefers content, the latter prefers reasoning — so a ``thinking_delta``
+    gets emitted into a block the client was already told is ``text``.
+    Strict Anthropic SSE clients (Claude Code) reject that as "Content block
+    is not a thinking block" and the corrupted response gets replayed as
+    conversation history on every subsequent turn until the context is
+    cleared.
 
     Supports both sync and async iteration, since ``AnthropicStreamWrapper`` exposes
     both ``__next__`` and ``__anext__``. An instance is single-mode: callers must
@@ -57,45 +73,79 @@ class _CombinedChunkSplitter:
         self._buffer: deque = deque()
 
     @staticmethod
+    def _has_content_or_tool_calls(delta: Any) -> bool:
+        return bool(getattr(delta, "content", None) or getattr(delta, "tool_calls", None))
+
+    @staticmethod
+    def _has_reasoning(delta: Any) -> bool:
+        return bool(getattr(delta, "reasoning_content", None) or getattr(delta, "thinking_blocks", None))
+
+    @staticmethod
     def _is_combined(chunk: Any) -> bool:
-        """True if ``chunk`` carries response content AND a finish_reason."""
+        """True if ``chunk`` carries more than one of {reasoning, content/tool_calls, finish_reason}."""
         choices = getattr(chunk, "choices", None)
         if not choices:
             return False
         choice = choices[0]
-        if getattr(choice, "finish_reason", None) is None:
-            return False
         delta = getattr(choice, "delta", None)
         if delta is None:
             return False
-        return bool(
-            getattr(delta, "content", None)
-            or getattr(delta, "tool_calls", None)
-            or getattr(delta, "reasoning_content", None)
-            or getattr(delta, "thinking_blocks", None)
+        payload_count = sum(
+            (
+                _CombinedChunkSplitter._has_reasoning(delta),
+                _CombinedChunkSplitter._has_content_or_tool_calls(delta),
+                getattr(choice, "finish_reason", None) is not None,
+            )
         )
+        return payload_count > 1
 
     @staticmethod
     def _split(chunk: Any) -> List[Any]:
-        """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
+        """Return ``[chunk]``, or one chunk per payload (reasoning, then
+        content/tool_calls, then finish) if ``chunk`` combines more than one."""
         if not _CombinedChunkSplitter._is_combined(chunk):
             return [chunk]
 
-        # Content chunk: keep the delta payload, clear the finish_reason.
-        content_chunk = copy.deepcopy(chunk)
-        content_chunk.choices[0].finish_reason = None
+        choice = chunk.choices[0]
+        delta = choice.delta
+        has_reasoning = _CombinedChunkSplitter._has_reasoning(delta)
+        has_content_or_tool = _CombinedChunkSplitter._has_content_or_tool_calls(delta)
+        has_finish = choice.finish_reason is not None
 
-        # Finish chunk: keep finish_reason (and usage), clear the delta payload.
-        finish_chunk = copy.deepcopy(chunk)
-        finish_delta = finish_chunk.choices[0].delta
-        finish_delta.content = None
-        if hasattr(finish_delta, "tool_calls"):
-            finish_delta.tool_calls = None
-        if hasattr(finish_delta, "reasoning_content"):
-            finish_delta.reasoning_content = None
-        if hasattr(finish_delta, "thinking_blocks"):
-            finish_delta.thinking_blocks = None
-        return [content_chunk, finish_chunk]
+        pieces: list[Any] = []
+
+        if has_reasoning:
+            reasoning_chunk = copy.deepcopy(chunk)
+            reasoning_delta = reasoning_chunk.choices[0].delta
+            reasoning_delta.content = None
+            if hasattr(reasoning_delta, "tool_calls"):
+                reasoning_delta.tool_calls = None
+            reasoning_chunk.choices[0].finish_reason = None
+            pieces.append(reasoning_chunk)
+
+        if has_content_or_tool:
+            content_chunk = copy.deepcopy(chunk)
+            content_delta = content_chunk.choices[0].delta
+            if hasattr(content_delta, "reasoning_content"):
+                content_delta.reasoning_content = None
+            if hasattr(content_delta, "thinking_blocks"):
+                content_delta.thinking_blocks = None
+            content_chunk.choices[0].finish_reason = None
+            pieces.append(content_chunk)
+
+        if has_finish:
+            finish_chunk = copy.deepcopy(chunk)
+            finish_delta = finish_chunk.choices[0].delta
+            finish_delta.content = None
+            if hasattr(finish_delta, "tool_calls"):
+                finish_delta.tool_calls = None
+            if hasattr(finish_delta, "reasoning_content"):
+                finish_delta.reasoning_content = None
+            if hasattr(finish_delta, "thinking_blocks"):
+                finish_delta.thinking_blocks = None
+            pieces.append(finish_chunk)
+
+        return pieces
 
     def __iter__(self) -> "Iterator[Any]":
         return self
