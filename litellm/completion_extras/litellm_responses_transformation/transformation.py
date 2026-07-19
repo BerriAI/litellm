@@ -586,6 +586,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     and getattr(last_msg_choice.message, "reasoning_content", None) is None
                 ):
                     last_msg_choice.message.reasoning_content = reasoning_content
+                # Mirror the reasoning_content backfill above: reasoning_items carries
+                # encrypted_content, needed to round-trip reasoning to the provider on
+                # the next turn, and was being dropped on this merge path.
+                if (
+                    pending_reasoning_item is not None
+                    and getattr(last_msg_choice.message, "reasoning_items", None) is None
+                ):
+                    last_msg_choice.message.reasoning_items = cast(
+                        Optional[List[ChatCompletionReasoningItem]],
+                        [pending_reasoning_item],
+                    )
             else:
                 msg = Message(
                     content=None,
