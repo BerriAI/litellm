@@ -38,6 +38,45 @@ def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
 class TestGithubCopilotResponsesAPITransformation:
     """Test GitHub Copilot Responses API configuration and transformations"""
 
+    @pytest.mark.parametrize(
+        "model,input_cost_per_token,output_cost_per_token",
+        [
+            ("github_copilot/gpt-5.6-luna", 0.000001, 0.000006),
+            ("github_copilot/gpt-5.6-terra", 0.0000025, 0.000015),
+            ("github_copilot/gpt-5.6-sol", 0.000005, 0.000015),
+        ],
+    )
+    def test_github_copilot_gpt_5_6_model_catalog_metadata(
+        self,
+        model,
+        input_cost_per_token,
+        output_cost_per_token,
+    ):
+        """Validate local catalog metadata and native Responses config for
+        newly added GitHub Copilot gpt-5.6 models."""
+        assert model in litellm.model_cost
+
+        model_info = litellm.model_cost[model]
+        assert model_info["litellm_provider"] == "github_copilot"
+        assert model_info["mode"] == "responses"
+        assert "/v1/responses" in model_info["supported_endpoints"]
+        assert model_info["max_input_tokens"] == 128000
+        assert model_info["max_output_tokens"] == 128000
+        assert model_info["max_tokens"] == 128000
+        assert model_info["input_cost_per_token"] == input_cost_per_token
+        assert model_info["output_cost_per_token"] == output_cost_per_token
+        assert model_info["supports_function_calling"] is True
+        assert model_info["supports_parallel_function_calling"] is True
+        assert model_info["supports_response_schema"] is True
+        assert model_info["supports_vision"] is True
+
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model=model,
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+        assert config.custom_llm_provider == LlmProviders.GITHUB_COPILOT
+
     def test_github_copilot_provider_config_registration(self):
         """Test that GitHub Copilot provider returns the native Responses API
         config for a Responses-capable catalog model. Exercises the full stack:

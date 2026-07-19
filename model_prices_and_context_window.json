@@ -20689,6 +20689,54 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "github_copilot/gpt-5.6-luna": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000006,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-5.6-terra": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "input_cost_per_token": 0.0000025,
+        "output_cost_per_token": 0.000015,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-5.6-sol": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000015,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
     "github_copilot/mai-code-1-flash": {
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 7.5e-07,
