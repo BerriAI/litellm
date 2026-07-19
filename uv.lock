@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-13T22:37:30.905404Z"
+exclude-newer = "2026-07-16T01:46:19.064603Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -7344,15 +7344,15 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "1.1.0"
+version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/95/66/4d20cdf39a8d6a51e663b7038e3b828ff211d3891a43a713fe7e4643f3a8/starlette-1.1.0.tar.gz", hash = "sha256:e83c7fe0ddecd8719c5b840080325aec0260acec86e9832899e377b91d65e90f", size = 2660060, upload-time = "2026-05-23T16:55:41.376Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/e3/7c1dc7381d9f8ab7d854328ebfa884e62cb3f3d8549ddfd37c7814f42afa/starlette-1.3.1.tar.gz", hash = "sha256:05d0213193f2fbaae60e2ecb593b4add4262ad4e46536b54abe36f11a71724e0", size = 2703240, upload-time = "2026-06-12T09:23:11.602Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/79/920b8e0a8b20f793e8d64855095cb8febabf6175b8550b6f7a547d813891/starlette-1.1.0-py3-none-any.whl", hash = "sha256:7f0dfd38e428aad5cb6f9f667f0ca1d2d8ca3f3385dccac8305f79ec98458382", size = 72899, upload-time = "2026-05-23T16:55:39.201Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/bb/2799cc2ede3ed41131f8975621e7213dfc7ef4acbbaadfa440f32500c370/starlette-1.3.1-py3-none-any.whl", hash = "sha256:c7372aae11c3c3f26a42df7bd626cec2f47d03483d261d369516a615a53714c6", size = 73632, upload-time = "2026-06-12T09:23:10.017Z" },
 ]
 
 [[package]]
