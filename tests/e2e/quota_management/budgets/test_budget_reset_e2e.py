@@ -12,6 +12,7 @@ from lifecycle import ResourceManager
 pytestmark = pytest.mark.e2e
 
 TINY_CAP = 3e-6
+ROOMY_CAP = 100.0
 WINDOW = "30s"
 RESET_DEADLINE_SECONDS = 150
 
@@ -111,6 +112,45 @@ class TestBudgetResetDiagonal:
         resources.defer(lambda: client.delete_team(team_id))
         client.add_team_member(team_id, user_id, max_budget_in_team=100.0)
         key = client.generate_key(team_id=team_id, user_id=user_id)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+
+class TestKeyBudgetResetAcrossKeyKinds:
+    """The tiny max_budget and its 30s window sit on the key itself while the user,
+    team, and membership around it are roomy (100.0), so the key's own budget is
+    the only thing that can block and the only thing that has to reset."""
+
+    @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+    def test_personal_key_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        user_id = client.create_user(max_budget=ROOMY_CAP)
+        resources.defer(lambda: client.delete_user(user_id))
+        key = client.generate_key(user_id=user_id, max_budget=TINY_CAP, budget_duration=WINDOW)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+    @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+    def test_team_key_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        team_id = client.create_team(alias=f"e2e-key-reset-team-{unique_marker()}", max_budget=ROOMY_CAP)
+        resources.defer(lambda: client.delete_team(team_id))
+        key = client.generate_key(team_id=team_id, max_budget=TINY_CAP, budget_duration=WINDOW)
+        resources.defer(lambda: client.delete_key(key))
+
+        _drive_to_block(client, key)
+        _poll_until_serves_again(client, key)
+
+    @pytest.mark.covers("quota_management.budget.key.resets_after_window")
+    def test_team_member_key_resets_after_window(self, client: BudgetClient, resources: ResourceManager) -> None:
+        team_id = client.create_team(alias=f"e2e-key-reset-team-{unique_marker()}", max_budget=ROOMY_CAP)
+        resources.defer(lambda: client.delete_team(team_id))
+        member_id = client.create_user(max_budget=ROOMY_CAP)
+        resources.defer(lambda: client.delete_user(member_id))
+        client.add_team_member(team_id, member_id, max_budget_in_team=ROOMY_CAP)
+        key = client.generate_key(team_id=team_id, user_id=member_id, max_budget=TINY_CAP, budget_duration=WINDOW)
         resources.defer(lambda: client.delete_key(key))
 
         _drive_to_block(client, key)
