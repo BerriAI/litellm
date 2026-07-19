@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-16T01:47:10.60724Z"
+exclude-newer = "2026-07-16T01:47:11.528984Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -6006,14 +6006,14 @@ wheels = [
 
 [[package]]
 name = "pypdf"
-version = "6.13.1"
+version = "6.13.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/15/d9/9d12fa0d9660d03320725ff686c961b645a4218940a82296e1272d9e1ff0/pypdf-6.13.1.tar.gz", hash = "sha256:4841d8a4c1589e5833915dc0c7ddfacff80a2e0bcbeb5d1e681fecaa1674b03a", size = 6477811, upload-time = "2026-06-08T11:01:49.344Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/17/18/9947cc201af9ccf76720fd3347bf4f70eb882ce3fcf4cb05f7443e4cf871/pypdf-6.13.3.tar.gz", hash = "sha256:f3cb822769725f1bac658c406cfc9460399043f3750c2d3e4650e0a85eacabd7", size = 6484063, upload-time = "2026-06-17T15:22:00.898Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/dd/8f03e0a5788a5d1feb4550617c3e6db5e9099eaee248a3e482ddaeacbbb0/pypdf-6.13.1-py3-none-any.whl", hash = "sha256:e555e4ce3f561ef069307622f1374136ba964ca6ca24f24158701decaf83ed9b", size = 346259, upload-time = "2026-06-08T11:01:47.741Z" },
+    { url = "https://files.pythonhosted.org/packages/94/56/2967e621598987905fb8cdfadd8f8de6b5c68c9351f0523c4df8409f28f1/pypdf-6.13.3-py3-none-any.whl", hash = "sha256:c6e3f86afb625791510b02ad5480e94b63970bb957df75d44657c282ecc52224", size = 347288, upload-time = "2026-06-17T15:21:59.512Z" },
 ]
 
 [[package]]
