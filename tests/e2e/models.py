@@ -498,6 +498,7 @@ class LiteLLMParamsBody(BaseModel):
 
     model: str
     api_key: str | None = None
+    litellm_credential_name: str | None = None
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
@@ -560,6 +561,16 @@ class ModelsListResponse(BaseModel):
 
 class ModelDeleteBody(BaseModel):
     id: str
+
+
+class CredentialCreateBody(BaseModel):
+    credential_name: str
+    credential_values: dict[str, str]
+    credential_info: dict[str, str] = {}
+
+
+class CredentialCreateResponse(BaseModel):
+    success: bool
 
 
 # ---------- key / team / user / organization management ----------
