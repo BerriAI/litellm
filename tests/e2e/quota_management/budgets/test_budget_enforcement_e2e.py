@@ -5,6 +5,9 @@ the budgeted entity + a key, run() drives spend until a `budget_exceeded` block,
 teardown() deletes everything init() created (always runs, even on failure/skip).
 Covers the entities with no prior live coverage - internal user, end-user,
 organization, team member - plus key and team. See BUDGET_TEST_COVERAGE_MATRIX.md.
+The capped-key cases sweep the key's own max_budget across mint shapes (personal,
+team, team-member) with roomy surroundings, so the key-level cap is provably the
+blocker no matter who the key was minted to.
 
 A non-budget error fails hard (never a skip); if calls never get blocked, budget
 enforcement is broken -> fail.
@@ -228,6 +231,76 @@ class TeamMemberBudgetCase(_BudgetCase):
         require_successful_call(teammate)
 
 
+class _CappedKeyCase(_BudgetCase):
+    """The tiny max_budget sits on the key itself while every budget around it
+    (user / team / membership) is roomy at 100.0, so only the key-level cap can
+    block, and the refusal must be a 429 budget_exceeded. An uncapped control key
+    minted to the same surroundings must keep serving after the capped key is
+    refused, proving nothing around the key was the blocker."""
+
+    _control_key: str = ""
+
+    def run(self) -> None:
+        blocked = _assert_budget_blocks(self.client, self.key)
+        assert blocked.status_code == 429, (
+            f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+        )
+        control = self.client.chat(
+            self._control_key,
+            "claude-haiku-4-5",
+            f"spend {unique_marker()}",
+            max_tokens=16,
+        )
+        require_successful_call(control)
+
+
+class PersonalKeyBudgetCase(_CappedKeyCase):
+    """A personal key (user_id, no team_id) carrying its own tiny max_budget under
+    a roomy user budget."""
+
+    def init(self) -> None:
+        user_id = self.client.create_user(max_budget=100.0)
+        self._undo.append(lambda: self.client.delete_user(user_id))
+        self.key = self.client.generate_key(user_id=user_id, max_budget=3e-6)
+        self._undo.append(lambda: self.client.delete_key(self.key))
+        self._control_key = self.client.generate_key(user_id=user_id)
+        self._undo.append(lambda: self.client.delete_key(self._control_key))
+
+
+class TeamKeyBudgetCase(_CappedKeyCase):
+    """A team key (team_id, no user_id) carrying its own tiny max_budget under a
+    roomy team budget."""
+
+    def init(self) -> None:
+        team_id = self.client.create_team(
+            alias=f"e2e-key-cap-team-{unique_marker()}", max_budget=100.0
+        )
+        self._undo.append(lambda: self.client.delete_team(team_id))
+        self.key = self.client.generate_key(team_id=team_id, max_budget=3e-6)
+        self._undo.append(lambda: self.client.delete_key(self.key))
+        self._control_key = self.client.generate_key(team_id=team_id)
+        self._undo.append(lambda: self.client.delete_key(self._control_key))
+
+
+class TeamMemberKeyBudgetCase(_CappedKeyCase):
+    """A team-member key (team_id + user_id) carrying its own tiny max_budget while
+    the team budget, the member's user budget, and the membership allowance are all
+    roomy."""
+
+    def init(self) -> None:
+        team_id = self.client.create_team(
+            alias=f"e2e-key-cap-team-{unique_marker()}", max_budget=100.0
+        )
+        self._undo.append(lambda: self.client.delete_team(team_id))
+        member_id = self.client.create_user(max_budget=100.0)
+        self._undo.append(lambda: self.client.delete_user(member_id))
+        self.client.add_team_member(team_id, member_id, max_budget_in_team=100.0)
+        self.key = self.client.generate_key(team_id=team_id, user_id=member_id, max_budget=3e-6)
+        self._undo.append(lambda: self.client.delete_key(self.key))
+        self._control_key = self.client.generate_key(team_id=team_id, user_id=member_id)
+        self._undo.append(lambda: self.client.delete_key(self._control_key))
+
+
 def _case_id(case_cls: Type[_BudgetCase]) -> str:
     return case_cls.__name__
 
@@ -237,6 +310,18 @@ def _case_id(case_cls: Type[_BudgetCase]) -> str:
     [
         pytest.param(
             KeyBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.key.blocks_over_limit"),
+        ),
+        pytest.param(
+            PersonalKeyBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.key.blocks_over_limit"),
+        ),
+        pytest.param(
+            TeamKeyBudgetCase,
+            marks=pytest.mark.covers("quota_management.budget.key.blocks_over_limit"),
+        ),
+        pytest.param(
+            TeamMemberKeyBudgetCase,
             marks=pytest.mark.covers("quota_management.budget.key.blocks_over_limit"),
         ),
         pytest.param(
