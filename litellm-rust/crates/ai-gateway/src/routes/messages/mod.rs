@@ -139,11 +139,20 @@ mod tests {
     use crate::state::AppState;
 
     fn state(model: &str, api_base: String, master_key: Option<&str>) -> AppState {
+        state_with_provider(model, model, api_base, master_key)
+    }
+
+    fn state_with_provider(
+        model_alias: &str,
+        provider_model: &str,
+        api_base: String,
+        master_key: Option<&str>,
+    ) -> AppState {
         AppState {
             router: Arc::new(ModelRouter::new(vec![Deployment {
-                model_name: model.to_string(),
+                model_name: model_alias.to_string(),
                 litellm_params: LiteLLMParams {
-                    model: format!("anthropic/{model}"),
+                    model: format!("anthropic/{provider_model}"),
                     api_key: Some("upstream-key".to_string()),
                     api_base: Some(api_base),
                 },
@@ -291,6 +300,46 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(body).expect("upstream body is json");
         assert_eq!(body["model"], "claude-test");
         assert_eq!(body["messages"][0]["content"], "hello");
+    }
+
+    #[tokio::test]
+    async fn route_substitutes_model_alias_with_provider_model_upstream() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let (api_base, server) = upstream(listener).await;
+        let app = app(state_with_provider(
+            "production",
+            "claude-sonnet-4-5",
+            api_base,
+            Some("master-key"),
+        ));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/messages")
+                    .header("authorization", "Bearer master-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "production",
+                            "max_tokens": 16,
+                            "messages": [{"role": "user", "content": "hello"}]
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("route responds");
+        assert_eq!(response.status(), StatusCode::OK);
+        let upstream_request = server.await.expect("upstream task completes");
+        let (_, upstream_body) = upstream_request
+            .split_once("\r\n\r\n")
+            .expect("upstream request has body");
+        let upstream_body: serde_json::Value =
+            serde_json::from_str(upstream_body).expect("upstream body is json");
+        assert_eq!(upstream_body["model"], "claude-sonnet-4-5");
+        assert_ne!(upstream_body["model"], "production");
     }
 
     #[tokio::test]
