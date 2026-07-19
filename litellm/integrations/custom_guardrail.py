@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import datetime
 from typing import (
@@ -17,6 +18,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
@@ -57,6 +59,20 @@ from litellm.exceptions import (
 # field to suppress a guardrail on the direct-SDK path that never reaches the
 # proxy's metadata sanitizer.
 _PRE_CALL_EXECUTED_TOKEN = secrets.token_hex(16)
+
+
+def _strict_guardrail_modes_enabled() -> bool:
+    """Whether guardrail-mode validation raises (default) or logs a warning.
+
+    Set `LITELLM_STRICT_GUARDRAIL_MODES=false` to keep the pre-LIT-4226 behavior
+    for guardrails whose supported_event_hooks list newly includes their
+    configured mode: log the mismatch and continue instead of raising at boot.
+    """
+    raw = os.environ.get("LITELLM_STRICT_GUARDRAIL_MODES")
+    if raw is None:
+        return True
+    parsed = str_to_bool(raw)
+    return True if parsed is None else parsed
 
 
 def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[str]:
@@ -132,7 +148,17 @@ class CustomGuardrail(CustomLogger):
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
-            self._validate_event_hook(event_hook, supported_event_hooks)
+            try:
+                self._validate_event_hook(event_hook, supported_event_hooks)
+            except ValueError as validation_error:
+                if _strict_guardrail_modes_enabled():
+                    raise
+                verbose_logger.warning(
+                    "%s. LITELLM_STRICT_GUARDRAIL_MODES=false; continuing "
+                    "with unsupported event_hook. Set the env var to true "
+                    "(default) to enforce validation and fail at startup.",
+                    validation_error,
+                )
         super().__init__(**kwargs)
 
     def render_violation_message(self, default: str, context: Optional[Dict[str, Any]] = None) -> str:
@@ -300,6 +326,18 @@ class CustomGuardrail(CustomLogger):
         Returns the config model for the guardrail
 
         This is used to render the config model in the UI.
+        """
+        return None
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> Optional[List[GuardrailEventHooks]]:
+        """
+        Returns the event hooks this guardrail supports, for the UI to render.
+
+        Subclasses should override to return their supported hooks list. When a
+        subclass returns None, the endpoint omits it from the per-provider map
+        and the UI is expected to fall back to the global `supported_modes`
+        list client-side.
         """
         return None
 
@@ -477,6 +515,22 @@ class CustomGuardrail(CustomLogger):
                     return True
         return False
 
+    def uses_apply_guardrail_interface(self) -> bool:
+        return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+
+    def _deployment_pre_call_target(self) -> "CustomLogger":
+        if not self.uses_apply_guardrail_interface():
+            return self
+        try:
+            from litellm.proxy.utils import unified_guardrail
+        except ImportError as e:
+            raise ImportError(
+                f"Guardrail {self.guardrail_name or type(self).__name__} implements apply_guardrail, which needs "
+                "the litellm proxy dependencies to run at the deployment level. "
+                "Install them with: pip install 'litellm[proxy]'"
+            ) from e
+        return unified_guardrail
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
@@ -495,7 +549,10 @@ class CustomGuardrail(CustomLogger):
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
-            result = await self.async_pre_call_hook(
+            target = self._deployment_pre_call_target()
+            if target is not self:
+                kwargs["guardrail_to_apply"] = self
+            result = await target.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(
                     user_id=kwargs.get("user_api_key_user_id"),
                     team_id=kwargs.get("user_api_key_team_id"),
@@ -505,7 +562,7 @@ class CustomGuardrail(CustomLogger):
                 ),
                 cache=dc,
                 data=kwargs,
-                call_type=call_type.value or "acompletion",  # type: ignore
+                call_type="completion" if call_type == CallTypes.completion else "acompletion",
             )
 
             if result is not None and isinstance(result, dict):
@@ -756,6 +813,12 @@ class CustomGuardrail(CustomLogger):
         # guardrail logging payloads (single shared implementation; Bedrock hooks pass
         # raw provider JSON so redaction is not duplicated upstream).
         clean_guardrail_response = redact_nested_match_and_regex_keys(clean_guardrail_response)
+
+        from litellm.litellm_core_utils.sensitive_data_masker import (
+            mask_credentials_in_payload,
+        )
+
+        clean_guardrail_response = mask_credentials_in_payload(clean_guardrail_response)
 
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,

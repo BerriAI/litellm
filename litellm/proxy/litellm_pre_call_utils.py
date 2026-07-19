@@ -15,6 +15,9 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    iter_client_callback_metadata_dicts,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.proxy._types import (
@@ -42,6 +45,7 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+_ANTHROPIC_SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
 def _sanitize_for_log(value: Any) -> str:
@@ -302,6 +306,24 @@ def _key_or_team_allows_client_pricing_override(
     )
 
 
+def _strip_client_message_redaction_opt_out(data: dict[str, Any]) -> None:
+    stripped: list[str] = []
+    if "turn_off_message_logging" in data and _is_false_like(data["turn_off_message_logging"]):
+        stripped.append("turn_off_message_logging")
+        data.pop("turn_off_message_logging", None)
+    for slot_label, metadata in iter_client_callback_metadata_dicts(data):
+        if "turn_off_message_logging" in metadata and _is_false_like(metadata["turn_off_message_logging"]):
+            stripped.append(f"{slot_label}.turn_off_message_logging")
+            metadata.pop("turn_off_message_logging", None)
+    if stripped:
+        verbose_proxy_logger.debug(
+            "Stripped client-supplied message-redaction opt-out fields from request body: %s. "
+            "Set `allow_client_message_redaction_opt_out: true` on the key or team metadata "
+            "to keep these values.",
+            ", ".join(stripped),
+        )
+
+
 def _strip_client_pricing_overrides(data: Dict[str, Any]) -> None:
     """Drop pricing overrides from the request body and any metadata variant.
 
@@ -403,6 +425,30 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
     )
+
+
+def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+
+    user_id = metadata.get("user_id")
+    if isinstance(user_id, dict):
+        session_id = user_id.get("session_id")
+        if isinstance(session_id, str) and _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+            return session_id
+        return None
+    if not isinstance(user_id, str):
+        return None
+
+    session_marker = "_session_"
+    session_marker_index = user_id.rfind(session_marker)
+    if session_marker_index == -1:
+        return None
+
+    session_id = user_id[session_marker_index + len(session_marker) :]
+    if not session_id or not _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+        return None
+    return session_id
 
 
 def is_claude_code_user_agent(user_agent: str) -> bool:
@@ -914,6 +960,15 @@ class LiteLLMProxyRequestSetup:
             data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug(f"Extracted chain_id from header (trace-id/session-id): {chain_id}")
+        else:
+            body_metadata = data.get("metadata")
+            session_id = _get_anthropic_session_id_from_metadata(body_metadata)
+            if session_id:
+                metadata_from_headers["session_id"] = session_id
+                data["litellm_session_id"] = session_id
+                if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
+                    body_metadata["user_id"] = session_id
+                verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -928,6 +983,10 @@ class LiteLLMProxyRequestSetup:
             user_api_key_alias=user_api_key_dict.key_alias,
             user_api_key_spend=user_api_key_dict.spend,
             user_api_key_max_budget=user_api_key_dict.max_budget,
+            user_api_key_user_spend=user_api_key_dict.user_spend,
+            user_api_key_user_max_budget=user_api_key_dict.user_max_budget,
+            user_api_key_team_spend=user_api_key_dict.team_spend,
+            user_api_key_team_max_budget=user_api_key_dict.team_max_budget,
             user_api_key_team_id=user_api_key_dict.team_id,
             user_api_key_project_id=user_api_key_dict.project_id,
             user_api_key_project_alias=user_api_key_dict.project_alias,
@@ -1308,13 +1367,6 @@ async def add_litellm_data_to_request(
         _headers,
         allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
     )
-    if (
-        not _allow_client_message_redaction_opt_out
-        and litellm.turn_off_message_logging is True
-        and "turn_off_message_logging" in data
-        and _is_false_like(data["turn_off_message_logging"])
-    ):
-        data.pop("turn_off_message_logging", None)
     verbose_proxy_logger.debug(f"Request Headers: {_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
@@ -1465,6 +1517,9 @@ async def add_litellm_data_to_request(
     # would silently skip the field.
     if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
         _strip_client_pricing_overrides(data)
+
+    if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
+        _strip_client_message_redaction_opt_out(data)
 
     # Fill in the proxy_server_request body snapshot now that metadata has
     # been parsed. Consumers (standard_logging_payload, lago,
@@ -1648,6 +1703,16 @@ async def add_litellm_data_to_request(
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=tags,
         )
+
+    if _metadata_variable_name != "metadata":
+        _user_metadata = data.get("metadata")
+        if isinstance(_user_metadata, dict):
+            _user_tags = _user_metadata.get("tags")
+            if isinstance(_user_tags, list) and _user_tags:
+                data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=_user_tags,
+                )
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(

@@ -36,6 +36,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
 from ..utils import is_reasoning_auto_summary_enabled
@@ -148,6 +149,7 @@ async def _try_websearch_short_circuit(
     tools: Optional[List[Dict]],
     custom_llm_provider: Optional[str],
     stream: Optional[bool],
+    kwargs: Optional[dict] = None,
 ) -> Optional[Union[AnthropicMessagesResponse, AsyncIterator]]:
     """
     Attempt to short-circuit a web-search-only request.
@@ -177,6 +179,7 @@ async def _try_websearch_short_circuit(
             messages=messages,
             tools=tools,
             custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
         )
         if response is not None:
             anthropic_response = cast(AnthropicMessagesResponse, response)
@@ -234,7 +237,9 @@ async def anthropic_messages(
         AnthropicCacheControlHook,
     )
 
-    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+    )
 
     original_stream = stream or kwargs.get("_websearch_interception_converted_stream", False)
 
@@ -292,6 +297,7 @@ async def anthropic_messages(
         tools=tools,
         custom_llm_provider=custom_llm_provider,
         stream=original_stream,
+        kwargs={**kwargs, "metadata": metadata},
     )
     if short_circuit_response is not None:
         return short_circuit_response
@@ -422,7 +428,9 @@ def anthropic_messages_handler(
         AnthropicCacheControlHook,
     )
 
-    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+    )
 
     metadata = validate_anthropic_api_metadata(metadata)
 
@@ -460,6 +468,9 @@ def anthropic_messages_handler(
             "model": original_model,
             "custom_llm_provider": custom_llm_provider,
         }
+        litellm_logging_obj.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = (
+            is_async
+        )
 
         # Check if stream was converted for WebSearch interception
         # This is set in the async wrapper above when stream=True is converted to stream=False

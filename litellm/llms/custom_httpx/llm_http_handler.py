@@ -1,6 +1,8 @@
 import asyncio
 import json
+import os
 import ssl
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -147,12 +149,23 @@ from litellm.utils import (
     async_pre_call_deployment_hook,
 )
 
+
+def _rust_responses_websocket_enabled(
+    custom_llm_provider: str | None,
+    litellm_params: GenericLiteLLMParams,
+) -> bool:
+    return custom_llm_provider == "openai" and litellm_params.get("rust") is True
+
+
 from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        AnthropicMessagesStreamingResponse,
+    )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
@@ -1300,16 +1313,15 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
 
+        json_data = data if files is None and isinstance(data, dict) else None
+
         try:
-            # Make the POST request - clean and simple, always use data and files
             response = client.post(
                 url=complete_url,
                 headers=headers,
-                data=data,
+                data=data if json_data is None else None,
                 files=files,
-                json=(
-                    data if files is None and isinstance(data, dict) else None
-                ),  # Use json param only when no files and data is dict
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -1373,16 +1385,15 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
+        json_data = data if files is None and isinstance(data, dict) else None
+
         try:
-            # Make the async POST request - clean and simple, always use data and files
             response = await async_httpx_client.post(
                 url=complete_url,
                 headers=headers,
-                data=data,
+                data=data if json_data is None else None,
                 files=files,
-                json=(
-                    data if files is None and isinstance(data, dict) else None
-                ),  # Use json param only when no files and data is dict
+                json=json_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -1881,6 +1892,7 @@ class BaseLLMHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         api_key: Optional[str],
         model: str,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> httpx.Response:
         max_attempts = max(provider_config.max_retry_on_anthropic_messages_http_error, 1)
         litellm_params_dict = dict(litellm_params)
@@ -1893,6 +1905,7 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body or json.dumps(request_body),
                     stream=stream or False,
                     logging_obj=logging_obj,
+                    timeout=timeout,
                 )
                 response.raise_for_status()
                 return response
@@ -1926,6 +1939,32 @@ class BaseLLMHTTPHandler:
                 raise self._handle_error(e=e, provider_config=provider_config)
 
         raise RuntimeError("unreachable: anthropic messages HTTP retry loop exited without return")
+
+    @staticmethod
+    def _resolve_anthropic_messages_timeout(
+        litellm_params: GenericLiteLLMParams,
+        stream: bool,
+        custom_llm_provider: str,
+    ) -> Optional[Union[float, httpx.Timeout]]:
+        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+        from litellm.litellm_core_utils.request_timeout_resolver import (
+            get_configured_request_timeout,
+        )
+        from litellm.utils import supports_httpx_timeout
+
+        stream_timeout = litellm_params.get("stream_timeout") if stream else None
+        model_timeout = stream_timeout if stream_timeout is not None else litellm_params.get("timeout")
+        request_timeout = litellm_params.get("request_timeout")
+        global_timeout = get_configured_request_timeout()
+        if model_timeout is None and request_timeout is None and global_timeout is None:
+            return None
+        return CompletionTimeout.resolve(
+            model_timeout,
+            {"request_timeout": request_timeout},
+            custom_llm_provider,
+            global_timeout=global_timeout,
+            supports_httpx_timeout=supports_httpx_timeout,
+        )
 
     async def async_anthropic_messages_handler(
         self,
@@ -2065,6 +2104,37 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        rust_messages_response = await self._maybe_rust_anthropic_messages(
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            stream=stream or False,
+            rust_stream_eligible=bool(stream) and not self._has_agentic_completion_hook(logging_obj),
+            model=model,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            request_body=request_body,
+            timeout=self._resolve_anthropic_messages_timeout(
+                litellm_params=litellm_params,
+                stream=stream or False,
+                custom_llm_provider=custom_llm_provider,
+            ),
+        )
+        if rust_messages_response is not None:
+            if stream:
+                return self._rust_anthropic_messages_fake_stream(rust_messages_response)
+            return await self._finalize_anthropic_messages_response(
+                initial_response=rust_messages_response,
+                model=model,
+                messages=messages,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key,
+                kwargs=kwargs,
+            )
+
         response = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
             request_url=request_url,
@@ -2077,6 +2147,11 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
+            timeout=self._resolve_anthropic_messages_timeout(
+                litellm_params=litellm_params,
+                stream=stream or False,
+                custom_llm_provider=custom_llm_provider,
+            ),
         )
 
         # used for logging + cost tracking
@@ -2084,12 +2159,18 @@ class BaseLLMHTTPHandler:
 
         initial_response: Union[AsyncIterator, AnthropicMessagesResponse]
         if stream:
+            from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+                AnthropicMessagesStreamingResponse,
+                anthropic_messages_stream_hidden_params,
+            )
+
             completion_stream = anthropic_messages_provider_config.get_async_streaming_response_iterator(
                 model=model,
                 httpx_response=response,
                 request_body=request_body,
                 litellm_logging_obj=logging_obj,
             )
+            stream_hidden_params = anthropic_messages_stream_hidden_params(response.headers)
 
             if not self._has_agentic_completion_hook(logging_obj):
                 # No callback overrides async_should_run_agentic_loop, so the
@@ -2097,7 +2178,10 @@ class BaseLLMHTTPHandler:
                 # and rebuilding the response from SSE at end-of-stream to call
                 # hooks that all return (False, {}). Stream through directly and
                 # skip that per-chunk + end-of-stream overhead.
-                return completion_stream
+                return AnthropicMessagesStreamingResponse(
+                    completion_stream=completion_stream,
+                    hidden_params=stream_hidden_params,
+                )
 
             from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
                 AgenticAnthropicStreamingIterator,
@@ -2114,7 +2198,10 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 kwargs={**kwargs, "api_key": api_key} if api_key else kwargs,
             )
-            return initial_response
+            return AnthropicMessagesStreamingResponse(
+                completion_stream=initial_response,
+                hidden_params=stream_hidden_params,
+            )
         else:
             initial_response = anthropic_messages_provider_config.transform_anthropic_messages_response(
                 model=model,
@@ -2122,6 +2209,31 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
             )
 
+        return await self._finalize_anthropic_messages_response(
+            initial_response=initial_response,
+            model=model,
+            messages=messages,
+            anthropic_messages_provider_config=anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            api_key=api_key,
+            kwargs=kwargs,
+        )
+
+    async def _finalize_anthropic_messages_response(
+        self,
+        *,
+        initial_response: AnthropicMessagesResponse,
+        model: str,
+        messages: list[dict],
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str,
+        api_key: str | None,
+        kwargs: dict,
+    ) -> AnthropicMessagesResponse | AsyncIterator:
         # Inject api_key into kwargs so follow-up calls in agentic hooks can
         # authenticate. api_key is a named param here (not in kwargs), so
         # _prepare_followup_kwargs would miss it otherwise.
@@ -2143,6 +2255,76 @@ class BaseLLMHTTPHandler:
             final_response if final_response is not None else initial_response,
             logging_obj,
             "anthropic_messages",
+        )
+
+    @staticmethod
+    def _rust_env_enabled() -> bool:
+        return os.getenv("LITELLM_RUST", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    async def _maybe_rust_anthropic_messages(
+        *,
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        stream: bool,
+        rust_stream_eligible: bool,
+        model: str,
+        api_key: str | None,
+        api_base: str | None,
+        headers: dict,
+        request_body: dict,
+        timeout: float | httpx.Timeout | None,
+    ) -> AnthropicMessagesResponse | None:
+        if custom_llm_provider not in ("azure_ai", "anthropic"):
+            return None
+        if litellm_params.get("rust") is not True and not BaseLLMHTTPHandler._rust_env_enabled():
+            return None
+        if stream and not rust_stream_eligible:
+            return None
+
+        from litellm.rust_bridge import messages as rust_messages_bridge
+
+        upstream_body = {key: value for key, value in request_body.items() if key != "stream"}
+        try:
+            rust_response = await rust_messages_bridge.amessages(
+                model=model,
+                body=upstream_body,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=headers,
+                timeout=timeout,
+            )
+        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
+            verbose_logger.debug(
+                "Rust Anthropic messages bridge raised %s; falling back to Python path",
+                type(rust_error).__name__,
+            )
+            return None
+        if rust_response is None:
+            return None
+
+        response_obj = cast(AnthropicMessagesResponse, dict(rust_response))
+        response_obj["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
+        return response_obj
+
+    @staticmethod
+    def _rust_anthropic_messages_fake_stream(
+        rust_response: AnthropicMessagesResponse,
+    ) -> "AnthropicMessagesStreamingResponse":
+        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            AnthropicMessagesStreamHiddenParams,
+            AnthropicMessagesStreamingResponse,
+        )
+
+        completion_stream = cast(AsyncIterator[bytes], FakeAnthropicMessagesStreamIterator(response=rust_response))
+        hidden_params = AnthropicMessagesStreamHiddenParams(additional_headers={"x-litellm-rust": "true"})
+        return AnthropicMessagesStreamingResponse(
+            completion_stream=completion_stream,
+            hidden_params=hidden_params,
         )
 
     def anthropic_messages_handler(
@@ -2647,9 +2829,10 @@ class BaseLLMHTTPHandler:
         )
 
         result = final_response if final_response is not None else initial_response
-        if litellm_params.get("_code_interpreter_interception_converted_stream") and not litellm_params.get(
-            "_agentic_loop_depth"
-        ):
+        interception_converted_stream = litellm_params.get(
+            "_code_interpreter_interception_converted_stream"
+        ) or litellm_params.get("_websearch_interception_converted_stream")
+        if interception_converted_stream and not litellm_params.get("_agentic_loop_depth"):
             return self._wrap_responses_response_as_fake_stream(
                 result=result,
                 model=model,
@@ -2902,6 +3085,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(url=url, headers=headers, params=data)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -2973,9 +3157,9 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(url=url, headers=headers, params=data)
-
+            response.raise_for_status()
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving response: {e}")
+            verbose_logger.debug(f"Error retrieving response: {e}")
             raise self._handle_error(
                 e=e,
                 provider_config=responses_api_provider_config,
@@ -3066,6 +3250,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.get(url=url, headers=headers, params=params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 
@@ -3139,6 +3324,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.get(url=url, headers=headers, params=params)
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(e=e, provider_config=responses_api_provider_config)
 
@@ -4725,6 +4911,13 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        if response.status_code >= 400:
+            raise provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+
         return provider_config.transform_file_content_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -4780,6 +4973,13 @@ class BaseLLMHTTPHandler:
             response = await async_httpx_client.get(url=url, headers=headers, params=params)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        if response.status_code >= 400:
+            raise provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5197,6 +5397,8 @@ class BaseLLMHTTPHandler:
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
+        hook_kwargs = {**kwargs, "_agentic_loop_api_surface": api_surface}
+
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
                 continue
@@ -5217,7 +5419,7 @@ class BaseLLMHTTPHandler:
                     tools=tools,
                     stream=stream,
                     custom_llm_provider=custom_llm_provider,
-                    kwargs=kwargs,
+                    kwargs=hook_kwargs,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -5243,7 +5445,7 @@ class BaseLLMHTTPHandler:
             )
 
             try:
-                kwargs_with_provider = kwargs.copy() if kwargs else {}
+                kwargs_with_provider = hook_kwargs.copy()
                 kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
                 build_plan_overridden = (
                     callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
@@ -6028,12 +6230,29 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            async with websockets.connect(  # type: ignore
-                ws_url,
-                additional_headers=headers,
-                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                ssl=ssl_context,
-            ) as backend_ws:
+            @asynccontextmanager
+            async def _backend_connection():
+                if _rust_responses_websocket_enabled(custom_llm_provider, litellm_params):
+                    from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+
+                    rust_backend = await rust_responses_websocket.connect(
+                        url=ws_url,
+                        headers={str(key): str(value) for key, value in headers.items()},
+                        timeout=timeout,
+                    )
+                    if rust_backend is not None:
+                        yield rust_backend
+                        return
+
+                async with websockets.connect(  # type: ignore
+                    ws_url,
+                    additional_headers=headers,
+                    max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                    ssl=ssl_context,
+                ) as backend:
+                    yield backend
+
+            async with _backend_connection() as backend_ws:
                 _request_data: Dict[str, Any] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata

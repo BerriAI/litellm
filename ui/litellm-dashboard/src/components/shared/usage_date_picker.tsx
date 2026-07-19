@@ -135,7 +135,7 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
               zIndex: 110,
             }}
           >
-            <div className="flex items-center gap-1 text-green-600 text-sm font-medium bg-white px-2 py-1 rounded-full border border-green-200 shadow-sm whitespace-nowrap">
+            <div className="flex items-center gap-1 text-green-600 text-sm font-medium bg-white px-2 py-1 rounded-full border border-green-200 shadow-xs whitespace-nowrap">
               <div className="w-3 h-3 bg-green-500 text-white rounded-full flex items-center justify-center text-xs">
                 ✓
               </div>

@@ -28,7 +28,7 @@ Status: `covered` / `partial` / `gap`.
 |----------|---------------|-----------|------------|-------------|--------|
 | Gemini (`/gemini/v1beta/models/{m}:generateContent` / `:streamGenerateContent`) | live | live | live | live | **covered** |
 | Anthropic (`/anthropic/v1/messages`) | live | live | live | live | **covered** |
-| Vertex AI (`/vertex_ai/...`) | - | - | - | - | gap (gcloud auth) |
+| Vertex AI (`/vertex_ai/v1/projects/{p}/locations/{loc}/.../models/{m}:generateContent`) | live | - | - | live | **partial** |
 | OpenAI / Bedrock / Cohere / Mistral / VLLM | - | - | - | - | gap |
 
 Each covered cell asserts: `call_type == "pass_through_endpoint"`, `spend > 0`,
@@ -60,11 +60,21 @@ most likely to silently break and the one a mock can't prove works.
 | `test_anthropic_passthrough_nonstreaming_logs_cost` | anthropic native, non-stream, cost |
 | `test_anthropic_passthrough_streaming_logs_cost` | anthropic native, stream, cost |
 | `test_anthropic_passthrough_tool_call_logs_cost` | anthropic native, tool call, cost |
+| `test_vertex_passthrough_via_managed_model_logs_cost` | vertex_ai native, non-stream, cost |
+
+Vertex keeps the credential on the proxy like gemini/anthropic, but the deployment is
+added at runtime instead of declared in the gateway config: the test POSTs `/model/new`
+with `use_in_pass_through`, so the proxy registers that deployment's service account for
+the `/vertex_ai` route, then deletes it on teardown. The passthrough call sends only its
+litellm virtual key (`x-litellm-api-key`), no upstream bearer, and the proxy mints the
+Vertex token itself. Credentials (`VERTEXAI_PROJECT` / `VERTEXAI_CREDENTIALS`) are read
+from the same env the proxy uses, so the test never mints a token.
 
 ## Gaps
 
-- Vertex / OpenAI / Bedrock / Cohere passthrough (same shape; add once the
-  provider credential is configured; Vertex is closest - route exists, auth stale).
+- Vertex streaming / tool-call passthrough (non-streaming + cost now covered).
+- OpenAI / Bedrock / Cohere passthrough (same shape; add once the provider
+  credential is configured).
 - Non-passthrough tool calls over `/chat/completions` end to end with cost.
 - Image / audio / rerank / responses / realtime translation + cost.
 - Streaming cost-injection (`include_cost_in_streaming_usage`); passthrough on

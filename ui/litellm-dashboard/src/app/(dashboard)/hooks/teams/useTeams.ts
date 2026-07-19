@@ -77,12 +77,29 @@ export const teamListCall = async (
     }
 
     const data = await response.json();
-    console.log("/v2/team/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list teams:", error);
     throw error;
   }
+};
+
+export const teamsTableKeys = createQueryKeys("teamsTable");
+
+export const useTeamsTable = (
+  page: number,
+  pageSize: number,
+  options: TeamListCallOptions = {},
+): UseQueryResult<TeamsResponse> => {
+  const { accessToken } = useAuthorized();
+
+  return useQuery<TeamsResponse>({
+    queryKey: teamsTableKeys.list({ page, limit: pageSize, ...options }),
+    queryFn: async () => await teamListCall(accessToken!, page, pageSize, options),
+    enabled: Boolean(accessToken),
+    staleTime: 30000,
+    placeholderData: keepPreviousData,
+  });
 };
 
 const teamKeys = createQueryKeys("teams");
@@ -225,7 +242,6 @@ const deletedTeamListCall = async (
     }
 
     const data = await response.json();
-    console.log("/team/list?status=deleted API Response:", data);
 
     // Extract teams array from response if it's wrapped in a response object
     // Otherwise return the data directly if it's already an array

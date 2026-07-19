@@ -625,7 +625,7 @@ async def list_batches(
             route_type="alist_batches",
         )
 
-        # Try to use managed objects table for listing batches (returns encoded IDs)
+        # Try to use managed objects table for listing batches (returns encoded IDs).
         managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
             verbose_proxy_logger.debug("Using managed objects table for batch listing")

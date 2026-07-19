@@ -1082,6 +1082,7 @@ async def get_agent_daily_activity(
                     total_failed_requests=0,
                     total_cache_read_input_tokens=0,
                     total_cache_creation_input_tokens=0,
+                    total_compression_saved_tokens=0,
                     page=page,
                     total_pages=0,
                     has_more=False,

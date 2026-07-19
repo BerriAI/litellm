@@ -436,28 +436,31 @@ class TestClearCache:
             clear_cache,
         )
 
-        # Create mock router with mixed DB and config models
+        # Create mock router with mixed DB and config router deployments. The two DB
+        # entries are auto_router/* deployments (so their router-map entries should be
+        # cleared for reload); the config-defined router is preserved.
         mock_router = MagicMock()
         mock_router.model_list = [
             {
-                "model_name": "gpt-4",
+                "model_name": "db-auto-router",
                 "model_info": {"id": "db-model-1", "db_model": True},
-                "litellm_params": {"model": "gpt-4"},
+                "litellm_params": {"model": "auto_router/db-auto-router"},
             },
             {
-                "model_name": "gpt-3.5-turbo",
+                "model_name": "config-router",
                 "model_info": {"id": "config-model-1", "db_model": False},
-                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "litellm_params": {"model": "auto_router/complexity_router"},
             },
             {
-                "model_name": "claude-3",
+                "model_name": "db-complexity-router",
                 "model_info": {"id": "db-model-2", "db_model": True},
-                "litellm_params": {"model": "claude-3"},
+                "litellm_params": {"model": "auto_router/complexity_router"},
             },
         ]
         mock_router.delete_deployment = MagicMock(return_value=True)
-        mock_router.auto_routers = MagicMock()
-        mock_router.auto_routers.clear = MagicMock()
+        # Real dicts (not MagicMock) so we can assert on their actual contents below.
+        mock_router.auto_routers = {"db-auto-router": MagicMock(), "config-router": MagicMock()}
+        mock_router.complexity_routers = {"db-complexity-router": MagicMock(), "config-router": MagicMock()}
 
         mock_config = MagicMock()
         mock_config.add_deployment = AsyncMock(return_value=True)
@@ -479,13 +482,273 @@ class TestClearCache:
             mock_router.delete_deployment.assert_any_call(id="db-model-1")
             mock_router.delete_deployment.assert_any_call(id="db-model-2")
 
-            # Should have cleared auto routers
-            mock_router.auto_routers.clear.assert_called_once()
+            # DB-backed router entries are cleared so they can be re-populated by the
+            # reload below; the config-backed router must survive, since add_deployment()
+            # only reloads DB models and would otherwise leave it permanently unroutable
+            # (see TestClearCachePreservesConfigRouters).
+            assert "db-auto-router" not in mock_router.auto_routers
+            assert "db-complexity-router" not in mock_router.complexity_routers
+            assert "config-router" in mock_router.auto_routers
+            assert "config-router" in mock_router.complexity_routers
 
             # Should have called add_deployment to reload DB models
             mock_config.add_deployment.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
             )
+
+
+class TestClearCachePreservesConfigRouters:
+    """
+    Regression test: clear_cache() must not wipe config-defined auto/complexity
+    routers.
+
+    clear_cache() runs after any DB model write (e.g. a team admin patching a
+    team-owned model via PATCH /model/{id}/update). Before this fix, it called
+    auto_routers.clear() / complexity_routers.clear() unconditionally, which also
+    dropped routers defined in config.yaml belonging to *other* tenants. Those
+    entries are never restored, because the reload below only re-adds DB models
+    (proxy_config.add_deployment), so a config-defined router would stay
+    permanently unroutable until a full proxy restart - a cross-tenant
+    denial-of-service triggerable by any team admin's unrelated model update.
+    """
+
+    @pytest.mark.asyncio
+    async def test_config_backed_routers_survive_unrelated_db_model_update(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            clear_cache,
+        )
+
+        mock_router = MagicMock()
+        mock_router.model_list = [
+            {
+                "model_name": "team-a-db-router",
+                "model_info": {"id": "db-model-1", "db_model": True},
+                "litellm_params": {"model": "auto_router/complexity_router"},
+            },
+        ]
+        mock_router.delete_deployment = MagicMock(return_value=True)
+        mock_router.auto_routers = {"config-semantic-router": MagicMock()}
+        mock_router.complexity_routers = {
+            "team-a-db-router": MagicMock(),
+            "config-defined-complexity-router": MagicMock(),
+        }
+
+        mock_config = MagicMock()
+        mock_config.add_deployment = AsyncMock(return_value=True)
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
+        ):
+            await clear_cache()
+
+        # The DB-backed router for the model that was actually updated is cleared
+        # so the reload below can re-populate it.
+        assert "team-a-db-router" not in mock_router.complexity_routers
+        # Config-defined routers for unrelated tenants must survive untouched.
+        assert "config-defined-complexity-router" in mock_router.complexity_routers
+        assert "config-semantic-router" in mock_router.auto_routers
+
+    @pytest.mark.asyncio
+    async def test_config_router_sharing_name_with_regular_db_model_is_preserved(self):
+        """A config router must not be evicted just because a regular (non-router) DB
+        model happens to share its model_name; only DB deployments that are themselves
+        auto_router/* deployments should have their router entry cleared.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+
+        mock_router = MagicMock()
+        mock_router.model_list = [
+            {
+                "model_name": "shared-name",
+                "model_info": {"id": "db-model-1", "db_model": True},
+                "litellm_params": {"model": "openai/gpt-4o"},  # a regular model, NOT a router
+            },
+        ]
+        mock_router.delete_deployment = MagicMock(return_value=True)
+        # A config-defined complexity router registered under the same name as the DB model.
+        mock_router.auto_routers = {}
+        mock_router.complexity_routers = {"shared-name": MagicMock()}
+
+        mock_config = MagicMock()
+        mock_config.add_deployment = AsyncMock(return_value=True)
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
+        ):
+            await clear_cache()
+
+        # The DB model isn't a router, so the same-named config router must be left intact.
+        assert "shared-name" in mock_router.complexity_routers
+
+    @pytest.mark.asyncio
+    async def test_db_quality_and_adaptive_routers_are_evicted(self):
+        """The auto_router/ prefix also covers quality_router/ and adaptive_router/. Their
+        registry entries must be popped too, or reload's init raises 'already exists'
+        (quality) or leaves a stale entry (adaptive).
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+
+        mock_router = MagicMock()
+        mock_router.model_list = [
+            {
+                "model_name": "q1",
+                "model_info": {"id": "db-q", "db_model": True},
+                "litellm_params": {"model": "auto_router/quality_router/q1"},
+            },
+            {
+                "model_name": "a1",
+                "model_info": {"id": "db-a", "db_model": True},
+                "litellm_params": {"model": "auto_router/adaptive_router/a1"},
+            },
+        ]
+        mock_router.delete_deployment = MagicMock(return_value=True)
+        mock_router.auto_routers = {}
+        mock_router.complexity_routers = {}
+        mock_router.quality_routers = {"q1": MagicMock()}
+        mock_router.adaptive_routers = {"a1": MagicMock()}
+
+        mock_config = MagicMock()
+        mock_config.add_deployment = AsyncMock(return_value=True)
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
+        ):
+            await clear_cache()
+
+        assert "q1" not in mock_router.quality_routers
+        assert "a1" not in mock_router.adaptive_routers
+
+
+class TestDeleteModelClearsRouterRegistry:
+    """delete_model must evict the deleted deployment from the auto/complexity router maps,
+    not just from model_list, or a stale (now unbacked) router entry lingers until restart.
+    """
+
+    @pytest.mark.asyncio
+    async def test_delete_model_pops_router_registries(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
+
+        model_id = "router-del-1"
+        admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="smart-router",
+            litellm_params={"model": "auto_router/complexity_router"},
+            model_info={"id": model_id},
+            created_by="admin",
+            updated_by="admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+
+        mock_router = MagicMock()
+        mock_router.delete_deployment = MagicMock(
+            return_value={
+                "model_name": "smart-router",
+                "litellm_params": {"model": "auto_router/complexity_router"},
+                "model_info": {"id": model_id},
+            }
+        )
+        mock_router.auto_routers = {"smart-router": MagicMock()}
+        mock_router.complexity_routers = {"smart-router": MagicMock()}
+
+        _PS = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", MagicMock()),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+        ):
+            await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        mock_router.delete_deployment.assert_called_once_with(id=model_id)
+        assert "smart-router" not in mock_router.auto_routers
+        assert "smart-router" not in mock_router.complexity_routers
+
+    @pytest.mark.asyncio
+    async def test_delete_regular_model_preserves_config_router_sharing_name(self):
+        """Deleting a regular (non-router) DB model must not evict a config-defined router
+        that merely shares its model_name. delete_deployment pops the DB model, but the
+        auto/complexity registries hold a config router under the same name that
+        add_deployment never restores, so an unguarded pop would make it permanently
+        unroutable (the same cross-tenant DoS clear_cache was hardened against).
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete
+
+        model_id = "regular-del-1"
+        admin_user = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="shared-name",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"id": model_id},
+            created_by="admin",
+            updated_by="admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+
+        mock_router = MagicMock()
+        mock_router.delete_deployment = MagicMock(
+            return_value={
+                "model_name": "shared-name",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": model_id},
+            }
+        )
+        config_router = MagicMock()
+        mock_router.auto_routers = {}
+        mock_router.complexity_routers = {"shared-name": config_router}
+
+        _PS = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", MagicMock()),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+        ):
+            await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        mock_router.delete_deployment.assert_called_once_with(id=model_id)
+        assert mock_router.complexity_routers.get("shared-name") is config_router
 
 
 class TestUpdateModel:
@@ -1464,6 +1727,7 @@ class TestModelInfoEndpoint:
                 "gpt-3.5-turbo",
             ]
             mock_router.get_model_access_groups.return_value = {}
+            mock_router.get_configured_token_limits.return_value = (None, None)
             mock_get_key_models.return_value = ["gpt-4", "claude-3"]
             mock_get_team_models.return_value = ["gpt-3.5-turbo"]
             mock_get_complete_models.return_value = [
@@ -1549,6 +1813,7 @@ class TestModelInfoEndpoint:
             # Setup mocks
             mock_router.get_model_names.return_value = ["team-model-1"]
             mock_router.get_model_access_groups.return_value = {}
+            mock_router.get_configured_token_limits.return_value = (None, None)
             mock_get_key_models.return_value = []
             mock_get_team_models.return_value = ["team-model-1"]
             mock_get_complete_models.return_value = ["team-model-1"]
