@@ -73,6 +73,10 @@ else:
     ProxyLogging = Any
 
 
+def _extract_cache_read_tokens(usage_obj: dict) -> int:
+    return extract_cache_read_tokens({"usage_object": usage_obj})
+
+
 def _extract_cache_creation_tokens(usage_obj: dict) -> int:
     """
     Anthropic: top-level cache_creation_input_tokens field.
