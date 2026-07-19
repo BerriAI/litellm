@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use litellm_ai_gateway::io::messages::{messages as run_messages, MessagesRequest};
-use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
+use litellm_ai_gateway::io::messages::{MessagesRequest, messages as run_messages};
+use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::error::CoreError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
