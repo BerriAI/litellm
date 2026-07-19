@@ -6,7 +6,7 @@ ARG NODE_VERSION=20.18-alpine3.20
 ARG NGINX_VERSION=1.27-alpine
 
 # ---------- builder ----------
-FROM node:${NODE_VERSION} AS builder
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION} AS builder
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
     npm_config_fund=false \
