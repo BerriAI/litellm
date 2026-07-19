@@ -2072,6 +2072,9 @@ class FakeEmbeddingRouter:
         """How many times the given route utterance was embedded == number of route-index builds."""
         return sum(1 for batch in self.embedded_batches if utterance in batch)
 
+    def get_model_group_info(self, model_group: str) -> None:
+        return None
+
 
 class TestSemanticKeywordTierRules:
     """Test embedding-based keyword_tier_rules matching."""
