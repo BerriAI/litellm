@@ -27679,6 +27679,22 @@
         "supports_video_input": true,
         "supports_vision": true
     },
+    "moonshot/kimi-k3": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://platform.kimi.ai/docs/pricing/chat-k3",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "moonshot/kimi-latest": {
         "cache_read_input_token_cost": 1.5e-07,
         "deprecation_date": "2026-01-28",
@@ -34105,6 +34121,38 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "together_ai/thinkingmachines/Inkling": {
+        "cache_read_input_token_cost": 1.7e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 4.05e-06,
+        "source": "https://www.together.ai/models/inkling",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "together_ai/thinkingmachines/inkling": {
+        "cache_read_input_token_cost": 1.7e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 524288,
+        "max_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 4.05e-06,
+        "source": "https://www.together.ai/models/inkling",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "together_ai/togethercomputer/CodeLlama-34b-Instruct": {
         "litellm_provider": "together_ai",
