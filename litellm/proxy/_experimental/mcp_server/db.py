@@ -292,6 +292,9 @@ def _prepare_mcp_server_data(
         # The UI sends null to clear a whitelist — treat that as ``[]``.
         if "allowed_tools" in data_dict and data_dict["allowed_tools"] is None:
             data_dict["allowed_tools"] = []
+        # ``allowed_cidrs`` is a String[] with a ``[]`` default; null means clear.
+        if "allowed_cidrs" in data_dict and data_dict["allowed_cidrs"] is None:
+            data_dict["allowed_cidrs"] = []
         # Json map fields use ``@default("{}")``; explicit null means clear overrides.
         for json_map_field in (
             "tool_name_to_display_name",

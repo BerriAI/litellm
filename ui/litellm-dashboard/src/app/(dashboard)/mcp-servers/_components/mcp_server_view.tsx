@@ -324,6 +324,16 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       )}
                     </div>
                   </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Allowed CIDRs</Text>
+                    <div className="col-span-2">
+                      {mcpServer.allowed_cidrs && mcpServer.allowed_cidrs.length > 0 ? (
+                        <span className="font-mono text-sm text-gray-900">{mcpServer.allowed_cidrs.join(", ")}</span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </div>
+                  </div>
                   {handleAuth(mcpServer.auth_type) === "oauth2" && (
                     <div className="py-3 grid grid-cols-3 gap-4">
                       <Text className="text-sm font-medium text-gray-500">Delegate Auth to Upstream</Text>

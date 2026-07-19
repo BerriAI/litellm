@@ -694,6 +694,7 @@ if MCP_AVAILABLE:
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,
+            allowed_cidrs=payload.allowed_cidrs or [],
             timeout=payload.timeout,
             max_concurrent_requests=payload.max_concurrent_requests,
         )

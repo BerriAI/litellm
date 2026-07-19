@@ -95,6 +95,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    allowed_cidrs: list[str] = Field(default_factory=list)
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: Optional[bool] = None

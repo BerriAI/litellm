@@ -1350,6 +1350,7 @@ class MCPServerManager:
                 env_vars=server_config.get("env_vars", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(server_config.get("available_on_public_internet", True)),
+                allowed_cidrs=server_config.get("allowed_cidrs", None),
                 delegate_auth_to_upstream=bool(server_config.get("delegate_auth_to_upstream", False)),
                 oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
                 dcr_bridge=config_dcr_bridge,
@@ -1820,6 +1821,7 @@ class MCPServerManager:
             disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
             allow_all_keys=mcp_server.allow_all_keys,
             available_on_public_internet=bool(getattr(mcp_server, "available_on_public_internet", True)),
+            allowed_cidrs=getattr(mcp_server, "allowed_cidrs", None) or None,
             delegate_auth_to_upstream=bool(getattr(mcp_server, "delegate_auth_to_upstream", False)),
             oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
             dcr_bridge=getattr(mcp_server, "dcr_bridge", None),
@@ -5062,16 +5064,39 @@ class MCPServerManager:
             # Fallback if proxy_server not available
             return {}
 
+    def _passes_server_cidr_allowlist(self, server: MCPServer, client_ip: str | None) -> bool:
+        """
+        Enforce the per-server ``allowed_cidrs`` allowlist.
+
+        A server with no allowlist is unaffected (returns True). When an
+        allowlist is configured the caller's source IP must fall within one of
+        the ranges; a configured list that parses to zero valid networks fails
+        closed so an all-typo allowlist cannot silently expose the server.
+        """
+        configured = server.allowed_cidrs if isinstance(server, MCPServer) else None
+        if not configured:
+            return True
+        networks = IPAddressUtils.parse_cidrs(configured)
+        if not networks:
+            return False
+        return IPAddressUtils.is_ip_in_networks(client_ip, networks)
+
     def _is_server_accessible_from_ip(self, server: MCPServer, client_ip: Optional[str]) -> bool:
         """
         Check if a server is accessible from the given client IP.
 
         - If client_ip is None, no IP filtering is applied (internal callers).
-        - If the server has available_on_public_internet=True, it's always accessible.
+        - A per-server ``allowed_cidrs`` allowlist, when set, must always match
+          the caller's source IP; it applies on top of the global
+          available_on_public_internet / internal-network gate below.
+        - If the server has available_on_public_internet=True, it's otherwise
+          always accessible.
         - Otherwise, only internal/private IPs can access it.
         """
         if client_ip is None:
             return True
+        if not self._passes_server_cidr_allowlist(server, client_ip):
+            return False
         if server.available_on_public_internet:
             return True
         # Check backwards compat: litellm.public_mcp_servers
@@ -5082,6 +5107,27 @@ class MCPServerManager:
         general_settings = self._get_general_settings()
         internal_networks = IPAddressUtils.parse_internal_networks(general_settings.get("mcp_internal_ip_ranges"))
         return IPAddressUtils.is_internal_ip(client_ip, internal_networks)
+
+    def _ip_access_denied_message(self, server: MCPServer, client_ip: str | None) -> str | None:
+        """
+        Return a caller-facing reason when ``client_ip`` cannot reach ``server``,
+        or None when access is allowed. Distinguishes the per-server CIDR
+        allowlist from the internal-network gate so the 403 is actionable.
+        """
+        if self._is_server_accessible_from_ip(server, client_ip):
+            return None
+        if not self._passes_server_cidr_allowlist(server, client_ip):
+            return (
+                f"MCP server '{server.server_id}' is not accessible from your IP address "
+                f"({client_ip}). This server enforces a per-server CIDR allowlist and your "
+                "source IP is not within it."
+            )
+        return (
+            f"MCP server '{server.server_id}' is not accessible from your IP address "
+            f"({client_ip}). This server is restricted to internal networks only. To make "
+            "it externally accessible, set 'available_on_public_internet: true' in the server "
+            "configuration."
+        )
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """

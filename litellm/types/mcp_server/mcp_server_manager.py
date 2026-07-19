@@ -106,6 +106,7 @@ class MCPServer(BaseModel):
     access_groups: Optional[List[str]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    allowed_cidrs: list[str] | None = None
     # Explicit opt-in to upstream-delegated authentication for ``oauth2``
     # servers. When ``auth_type == oauth2`` and this is ``True``, MCP requests
     # bypass LiteLLM API-key/SSO auth (and the pre-emptive 401) so the client

@@ -459,12 +459,7 @@ if MCP_AVAILABLE:
                     status_code=403,
                     detail={
                         "error": "ip_filtering",
-                        "message": (
-                            f"MCP server '{server_id}' is not accessible from your IP address "
-                            f"({_rest_client_ip}). This server is restricted to internal "
-                            "networks only. To make it externally accessible, set "
-                            "'available_on_public_internet: true' in the server configuration."
-                        ),
+                        "message": global_mcp_server_manager._ip_access_denied_message(_server, _rest_client_ip),
                     },
                 )
             if _server is None:
@@ -594,12 +589,7 @@ if MCP_AVAILABLE:
                     status_code=403,
                     detail={
                         "error": "ip_filtering",
-                        "message": (
-                            f"MCP server '{server_id}' is not accessible from your IP address "
-                            f"({rest_client_ip}). This server is restricted to internal "
-                            "networks only. To make it externally accessible, set "
-                            "'available_on_public_internet: true' in the server configuration."
-                        ),
+                        "message": global_mcp_server_manager._ip_access_denied_message(_server, rest_client_ip),
                     },
                 )
             raise HTTPException(

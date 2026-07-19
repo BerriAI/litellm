@@ -367,6 +367,7 @@ export interface MCPServer {
   tool_name_to_description?: Record<string, string>;
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
+  allowed_cidrs?: string[] | null;
   delegate_auth_to_upstream?: boolean;
   oauth_passthrough?: boolean;
   dcr_bridge?: boolean | null;
