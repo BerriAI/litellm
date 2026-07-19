@@ -46,7 +46,7 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
                     try:
                         str_k = str(k)
                         clean_k = str_k.replace("\x00", "") if "\x00" in str_k else str_k
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - key __str__ must never propagate
                         clean_k = "UnserializableKey"
                 result[clean_k] = _serialize(v, seen, depth + 1)
             seen.remove(id(obj))
