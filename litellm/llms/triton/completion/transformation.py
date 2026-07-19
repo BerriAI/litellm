@@ -191,14 +191,25 @@ class TritonGenerateConfig(TritonConfig):
     ) -> dict:
         inference_params = optional_params.copy()
         stream = inference_params.pop("stream", False)
+        # max_tokens is handled explicitly below with an int() cast; pop it so the
+        # loop below does not overwrite that cast with a raw (possibly non-int) value.
+        inference_params.pop("max_tokens", None)
+        inference_params.pop("max_completion_tokens", None)
         data_for_triton: Dict[str, Any] = {
             "text_input": prompt_factory(model=model, messages=messages),
             "parameters": {
-                "max_tokens": int(optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)),
+                "max_tokens": int(optional_params.get("max_tokens", optional_params.get("max_completion_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON))),
             },
             "stream": bool(stream),
         }
-        data_for_triton["parameters"].update(inference_params)
+        for k, v in inference_params.items():
+            if isinstance(v, (dict, list, tuple)):
+                # Triton's `parameters` field only accepts int/bool/string values.
+                # JSON-encode nested structures (e.g. chat_template_kwargs) so they
+                # survive the round trip; backends can json.loads() them back.
+                data_for_triton["parameters"][k] = json.dumps(v)
+            else:
+                data_for_triton["parameters"][k] = v
         return data_for_triton
 
     def transform_response(
