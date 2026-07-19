@@ -924,6 +924,60 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     }
 
 
+def test_get_config_ignores_non_string_callback_entries(monkeypatch):
+    """
+    /get/config/callbacks must tolerate non-string entries in the
+    litellm_settings callback lists. process_callback() treats each entry as a
+    string name and calls CustomLogger.get_callback_env_vars(name).lower(); a live
+    CustomLogger instance (or any non-string) sitting in success_callback /
+    callbacks / failure_callback therefore raises AttributeError, which get_config()
+    turns into a non-200 ProxyException and blanks the Admin UI settings page.
+
+    normalize_callback() must drop non-string entries so the valid string
+    callbacks still render. Reverting the isinstance(callback, list) filter makes
+    this test fail with a 400.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    class _StubLogger(CustomLogger):
+        pass
+
+    config_data = {
+        "litellm_settings": {
+            "success_callback": ["langfuse", _StubLogger()],
+            "callbacks": [_StubLogger()],
+            "failure_callback": ["langfuse"],
+        },
+        "general_settings": {},
+        "environment_variables": {},
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    returned_names = [cb["name"] for cb in response.json()["callbacks"]]
+    # every surfaced callback name is a plain string; the CustomLogger instances
+    # were filtered out rather than crashing the endpoint
+    assert all(isinstance(name, str) for name in returned_names)
+    # the valid string callbacks still come through (success + failure)
+    assert returned_names.count("langfuse") == 2
+
+
 def test_get_config_returns_email_settings(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/19221
