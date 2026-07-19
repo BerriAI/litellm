@@ -375,7 +375,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # metadata user_id -> user
         metadata = anthropic_request.get("metadata")
         if isinstance(metadata, dict) and "user_id" in metadata:
-            responses_kwargs["user"] = str(metadata["user_id"])[:64]
+            import litellm
+
+            if not litellm.drop_params:
+                responses_kwargs["user"] = str(metadata["user_id"])[:64]
 
         return responses_kwargs
 

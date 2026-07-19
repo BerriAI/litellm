@@ -1034,3 +1034,48 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+
+# ---------------------------------------------------------------------------
+# metadata.user_id -> user honors litellm.drop_params (issue #26241)
+# ---------------------------------------------------------------------------
+
+
+class TestUserMappingHonorsDropParams:
+    """metadata.user_id maps to top-level `user` only when drop_params is off."""
+
+    def test_user_mapped_when_drop_params_false(self):
+        import litellm
+
+        original = litellm.drop_params
+        try:
+            litellm.drop_params = False
+            req = _make_request(metadata={"user_id": "u-123"})
+            kwargs = _ADAPTER.translate_request(req)
+            assert kwargs["user"] == "u-123"
+        finally:
+            litellm.drop_params = original
+
+    def test_user_dropped_when_drop_params_true(self):
+        import litellm
+
+        original = litellm.drop_params
+        try:
+            litellm.drop_params = True
+            req = _make_request(metadata={"user_id": "u-123"})
+            kwargs = _ADAPTER.translate_request(req)
+            assert "user" not in kwargs
+        finally:
+            litellm.drop_params = original
+
+    def test_no_user_id_leaves_no_user_key(self):
+        import litellm
+
+        original = litellm.drop_params
+        try:
+            litellm.drop_params = True
+            req = _make_request(metadata={"session": "s-1"})
+            kwargs = _ADAPTER.translate_request(req)
+            assert "user" not in kwargs
+        finally:
+            litellm.drop_params = original
