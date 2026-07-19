@@ -41,6 +41,9 @@ pub(crate) const MESSAGES_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// before truncation, so provider bodies are bounded and data-minimized.
 pub(crate) const MESSAGES_ERROR_BODY_MAX_CHARS: usize = 256;
 
+pub(crate) const DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub(crate) const DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS: u64 = 300;
+
 /// HTTP path for the non-streaming Anthropic Messages route.
 #[cfg(feature = "server")]
 pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
