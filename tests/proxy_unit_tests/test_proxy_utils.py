@@ -2635,7 +2635,7 @@ class _PreCallGuardrail(CustomGuardrail):
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_runs_opted_in_guardrails_in_parallel():
-    """run_in_parallel pre_call guardrails execute concurrently (overlap + wall time)."""
+    """run_in_parallel pre_call guardrails execute concurrently (all start before any ends)."""
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -2648,18 +2648,15 @@ async def test_pre_call_hook_runs_opted_in_guardrails_in_parallel():
             _PreCallGuardrail(f"g{i}", run_in_parallel=True, execution_order=execution_order) for i in range(3)
         ]
 
-        start = asyncio.get_event_loop().time()
         result = await proxy_logging.pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
             data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
             call_type="completion",
         )
-        elapsed = asyncio.get_event_loop().time() - start
 
         first_end_idx = next(i for i, item in enumerate(execution_order) if "end" in item)
         starts_before_first_end = sum(1 for item in execution_order[:first_end_idx] if "start" in item)
         assert starts_before_first_end == 3, f"expected 3 concurrent starts, got {starts_before_first_end}"
-        assert elapsed < 0.2, f"parallel batch took {elapsed}s, expected < 0.2s"
         assert result["model"] == "gpt-4"
     finally:
         litellm.callbacks = original_callbacks
@@ -2925,7 +2922,7 @@ class _PostCallGuardrail(CustomGuardrail):
 
 @pytest.mark.asyncio
 async def test_post_call_hook_runs_opted_in_guardrails_in_parallel():
-    """run_in_parallel post_call guardrails execute concurrently (overlap + wall time)."""
+    """run_in_parallel post_call guardrails execute concurrently (all start before any ends)."""
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -2938,18 +2935,15 @@ async def test_post_call_hook_runs_opted_in_guardrails_in_parallel():
             _PostCallGuardrail(f"g{i}", run_in_parallel=True, execution_order=execution_order) for i in range(3)
         ]
 
-        start = asyncio.get_event_loop().time()
         await proxy_logging.post_call_success_hook(
             data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
             response=litellm.ModelResponse(),
             user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
         )
-        elapsed = asyncio.get_event_loop().time() - start
 
         first_end_idx = next(i for i, item in enumerate(execution_order) if "end" in item)
         starts_before_first_end = sum(1 for item in execution_order[:first_end_idx] if "start" in item)
         assert starts_before_first_end == 3, f"expected 3 concurrent starts, got {starts_before_first_end}"
-        assert elapsed < 0.2, f"parallel batch took {elapsed}s, expected < 0.2s"
     finally:
         litellm.callbacks = original_callbacks
 

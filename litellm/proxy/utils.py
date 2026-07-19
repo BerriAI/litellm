@@ -1401,7 +1401,7 @@ class ProxyLogging:
                 cb
                 for cb in caps.resolved_callbacks
                 if isinstance(cb, CustomGuardrail)
-                and cb.run_in_parallel
+                and getattr(cb, "run_in_parallel", False)
                 and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
             )
 
@@ -1414,7 +1414,7 @@ class ProxyLogging:
                         if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
                             continue
 
-                        if _callback.run_in_parallel:
+                        if getattr(_callback, "run_in_parallel", False):
                             continue
 
                         result = await self._process_guardrail_callback(
@@ -2335,13 +2335,13 @@ class ProxyLogging:
             guardrail_data = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
 
             parallel_guardrails: tuple[CustomGuardrail, ...] = tuple(
-                callback for callback in guardrail_callbacks if callback.run_in_parallel
+                callback for callback in guardrail_callbacks if getattr(callback, "run_in_parallel", False)
             )
 
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
 
-                if callback.run_in_parallel:
+                if getattr(callback, "run_in_parallel", False):
                     continue
 
                 if (
@@ -2424,7 +2424,6 @@ class ProxyLogging:
         immediately before awaiting, and the unified hook pops it before its first
         suspension point, so concurrent guardrails never race on that key.
         """
-        from litellm.types.guardrails import GuardrailEventHooks
 
         async def _run_one(callback: CustomGuardrail) -> None:
             if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
