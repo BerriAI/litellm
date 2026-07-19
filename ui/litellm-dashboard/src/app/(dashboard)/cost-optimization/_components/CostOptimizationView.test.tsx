@@ -20,12 +20,15 @@ describe("CostOptimizationView", () => {
     expect(getByText("Prompt Caching")).toBeInTheDocument();
   });
 
-  it("defaults to the Usage tab and switches to a config tab on click", () => {
-    const { getByText, getByTestId } = renderView();
+  it("defaults to the Usage tab and switches the active tab on click", () => {
+    const { getByRole } = renderView();
 
-    expect(getByTestId("usage-tab")).toBeInTheDocument();
+    expect(getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
+    expect(getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "false");
 
-    fireEvent.click(getByText("Prompt Compression"));
-    expect(getByTestId("compression-tab")).toBeInTheDocument();
+    fireEvent.click(getByRole("tab", { name: "Prompt Compression" }));
+
+    expect(getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "false");
+    expect(getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "true");
   });
 });
