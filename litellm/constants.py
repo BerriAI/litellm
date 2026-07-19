@@ -1292,6 +1292,7 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
+RETURN_RAW_MODEL_NAME_METADATA_KEY = "_complexity_router_return_raw_model_name"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
     "Truncation is a DB storage safeguard. "

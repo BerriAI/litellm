@@ -26,6 +26,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   adaptiveWeights: { quality: 0.3, cost: 0.7 },
   tierDistancePenalty: 0.5,
   adaptiveEligible: "all",
+  returnRawModelName: false,
 };
 
 describe("buildComplexityRouterConfig", () => {
@@ -162,6 +163,16 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.adaptive_weights).toBeUndefined();
     expect(config.tier_distance_penalty).toBeUndefined();
     expect(config.adaptive_eligible).toBeUndefined();
+  });
+
+  it("omits return_raw_model_name when disabled", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: false });
+    expect(config.return_raw_model_name).toBeUndefined();
+  });
+
+  it("includes return_raw_model_name when enabled", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: true });
+    expect(config.return_raw_model_name).toBe(true);
   });
 
   it("includes tier_distance_penalty when adaptive is enabled with eligible='all'", () => {
