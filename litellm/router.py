@@ -69,6 +69,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    coerce_token_limit,
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
@@ -4791,6 +4792,7 @@ class Router:
                     model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
+                    input=kwargs.get("input", None),
                     specific_deployment=kwargs.pop("specific_deployment", None),
                 )
             except Exception as e:
@@ -4938,6 +4940,7 @@ class Router:
             deployment = self.get_available_deployment(
                 model=model,
                 messages=kwargs.get("messages", None),
+                input=kwargs.get("input", None),
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
@@ -8308,6 +8311,7 @@ class Router:
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
         self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        self.team_pattern_routers = {}
         self.team_public_model_names = frozenset()
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
@@ -8664,6 +8668,12 @@ class Router:
             public_model_name for _, public_model_name in self.team_model_to_deployment_indices
         )
 
+        for team_id in list(self.team_pattern_routers.keys()):
+            team_pattern_router = self.team_pattern_routers[team_id]
+            team_pattern_router.remove_deployment(model_id)
+            if not team_pattern_router.patterns:
+                del self.team_pattern_routers[team_id]
+
     def _update_team_model_index(self, model: dict, idx: int) -> None:
         """
         Helper to update team_model_to_deployment_indices for a single deployment.
@@ -8896,7 +8906,8 @@ class Router:
         Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
         deployment's model_info for model_name, via O(1) index lookup.
 
-        Returns (None, None) for wildcard-expanded or unknown names. Unlike
+        Returns (None, None) for wildcard-expanded or unknown names, and treats a
+        malformed configured value as absent rather than failing the listing. Unlike
         get_model_group_info, this never triggers pattern matching or deep copies, so it
         is safe to call per listed model on the /v1/models hot path.
         """
@@ -8905,14 +8916,14 @@ class Router:
             return (None, None)
 
         model_info = deployment.model_info
-        max_input = model_info.get("max_input_tokens")
-        max_output = model_info.get("max_output_tokens")
         return (
-            int(max_input) if max_input is not None else None,
-            int(max_output) if max_output is not None else None,
+            coerce_token_limit(model_info.get("max_input_tokens")),
+            coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
-    def get_deployment_credentials_with_provider(self, model_id: str) -> Optional[Dict[str, Any]]:
+    def get_deployment_credentials_with_provider(
+        self, model_id: str, team_id: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Get API credentials and provider info from a model name in model_list.
         Useful for passthrough endpoints (files, batches, etc.) that need credentials.
@@ -8922,6 +8933,9 @@ class Router:
 
         Args:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
+            team_id: Optional team id of the caller. When set, team-scoped
+                deployments (indexed by team public model name, including team
+                wildcard models like "openai/*") are also considered.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -8940,9 +8954,22 @@ class Router:
         if deployment is None:
             deployment = self.get_deployment_by_model_group_name(model_group_name=model_id)
 
-        # If still not found, check for wildcard pattern matches
+        # If not found, check team-scoped deployments whose team public model
+        # name exactly matches model_id (wildcard team names are matched via
+        # team_pattern_routers below).
+        if deployment is None and team_id is not None:
+            team_indices = self.team_model_to_deployment_indices.get((team_id, model_id), [])
+            if team_indices:
+                team_model = self.model_list[team_indices[0]]
+                deployment = Deployment(**team_model) if isinstance(team_model, dict) else team_model
+
+        # If still not found, check for wildcard pattern matches. Team wildcard
+        # matches take priority so a global pattern (e.g. "openai/*") doesn't
+        # shadow the team's own entry.
         if deployment is None:
-            potential_wildcard_models = self.pattern_router.route(model_id) or []
+            team_pattern_router = self.team_pattern_routers.get(team_id) if team_id is not None else None
+            team_wildcard_models = (team_pattern_router.route(model_id) or []) if team_pattern_router else []
+            potential_wildcard_models = team_wildcard_models or self.pattern_router.route(model_id) or []
             if potential_wildcard_models:
                 # Use the first matching wildcard deployment
                 deployment_dict = potential_wildcard_models[0]
@@ -10385,11 +10412,44 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, parent_otel_span=parent_otel_span)
                 return client
 
+    def _count_pre_call_check_tokens(
+        self,
+        messages: list[dict[str, str]] | None,
+        input: str | list | None,
+        instructions: str | None = None,
+    ) -> int:
+        """
+        Count input tokens for context-window pre-call checks.
+
+        Chat Completions send `messages`; the Responses API sends `input` (a string or
+        a list of Responses input items) plus an optional `instructions` system prompt.
+        The Responses payload is normalized to chat messages via the shared
+        LiteLLMCompletionResponsesConfig transform so the same token_counter path covers
+        both API surfaces and `instructions` tokens are included in the count.
+        """
+        if messages is not None:
+            return litellm.token_counter(messages=messages)
+        if input is not None:
+            from openai.types.responses.response_create_params import ResponseInputParam
+
+            from litellm.responses.litellm_completion_transformation.transformation import (
+                LiteLLMCompletionResponsesConfig,
+            )
+
+            typed_input = cast(str | ResponseInputParam, input)  # cast-ok: str | list matches transform input
+            input_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=typed_input,
+                responses_api_request={"instructions": instructions} if instructions is not None else {},
+            )
+            return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
+        raise ValueError("Either messages or input must be provided to count tokens")
+
     def _pre_call_checks(
         self,
         model: str,
         healthy_deployments: List,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
         request_kwargs: Optional[dict] = None,
     ):
         """
@@ -10419,6 +10479,10 @@ class Router:
         _rate_limit_error = False
         parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
 
+        raw_instructions = request_kwargs.get("instructions") if request_kwargs else None
+        instructions = raw_instructions if isinstance(raw_instructions, str) else None
+        has_countable_input = messages is not None or input is not None
+
         ## get model group RPM ##
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
@@ -10441,10 +10505,12 @@ class Router:
                 _deployment_model = base_model or _litellm_params.get("model", None)
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if isinstance(max_input_tokens, int):
+                if isinstance(max_input_tokens, int) and has_countable_input:
                     if input_tokens is None:
                         try:
-                            input_tokens = litellm.token_counter(messages=messages)
+                            input_tokens = self._count_pre_call_check_tokens(
+                                messages=messages, input=input, instructions=instructions
+                            )
                         except Exception as e:
                             verbose_router_logger.error(
                                 "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
@@ -10909,11 +10975,12 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
 
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=cast(List[Dict], healthy_deployments),
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
         # check if user wants to do tag based routing
@@ -11424,11 +11491,12 @@ class Router:
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         # filter pre-call checks
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             healthy_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=healthy_deployments,
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
 
@@ -11578,11 +11646,12 @@ class Router:
         pass_through_deployments = self._filter_blocked_deployments(pass_through_deployments)
 
         # 5. Apply pre-call checks (if enabled)
-        if self.enable_pre_call_checks and messages is not None:
+        if self.enable_pre_call_checks and (messages is not None or input is not None):
             pass_through_deployments = self._pre_call_checks(
                 model=model,
                 healthy_deployments=pass_through_deployments,
                 messages=messages,
+                input=input,
                 request_kwargs=request_kwargs,
             )
 

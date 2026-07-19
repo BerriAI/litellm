@@ -478,11 +478,12 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
 
 from typing import cast
 
+import litellm
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.utils import ModelInfo
 
 
-def _fake_model_info(**fields: int) -> ModelInfo:
+def _fake_model_info(**fields: object) -> ModelInfo:
     return cast(ModelInfo, dict(fields))
 
 
@@ -554,6 +555,92 @@ def test_create_model_info_response_deployment_limits_override_cost_map():
 
     assert response["max_input_tokens"] == 200000
     assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_survives_malformed_configured_limits():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-limit-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": "128,000"},
+            }
+        ]
+    )
+
+    response = create_model_info_response(
+        model_id="bad-limit-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["id"] == "bad-limit-model"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+@pytest.mark.parametrize("bad_value", ["128,000", "", "unlimited", [128000], {"max": 128000}, True])
+def test_create_model_info_response_survives_malformed_cost_map_limits(bad_value):
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=bad_value, max_output_tokens=bad_value
+        ),
+    )
+
+    assert response["id"] == "some-model"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_keeps_valid_cost_map_limit_beside_malformed_one():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens="128,000", max_output_tokens=16384
+        ),
+    )
+
+    assert "max_input_tokens" not in response
+    assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_survives_malformed_limits_registered_by_router():
+    """A deployment's model_info is registered into litellm.model_cost verbatim, so a
+    malformed configured limit reaches the listing through the real cost-map lookup and
+    not just the router index. Guarding only the index path still 500s the whole listing."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "openai/some-unmapped-model",
+                    "litellm_params": {"model": "openai/some-unmapped-model"},
+                    "model_info": {"max_input_tokens": "128,000"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="openai/some-unmapped-model",
+            provider="openai",
+            llm_router=router,
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["id"] == "openai/some-unmapped-model"
+    assert "max_input_tokens" not in response
 
 
 def test_create_model_info_response_emits_integer_token_counts():
