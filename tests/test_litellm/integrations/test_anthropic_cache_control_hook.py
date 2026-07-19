@@ -1265,8 +1265,11 @@ def test_cache_control_hook_reserves_slot_for_tool_config_point():
     )
 
     assert _count_cache_control(processed) == 3
-    # The tool_config point is passed through for the provider transform.
-    assert non_default_params["cache_control_injection_points"] == [{"location": "tool_config"}]
+    # The tool_config point is passed through for the provider transform,
+    # stamped so re-entries never re-judge it against litellm's own marks.
+    assert non_default_params["cache_control_injection_points"] == [
+        {"location": "tool_config", "_litellm_judged": True}
+    ]
 
 
 @pytest.mark.asyncio
@@ -1753,17 +1756,16 @@ class TestConfiguredInjectionPointsStandDown:
 
     V1_MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
 
-    def _seed(self, params, messages, tools=None, is_first_pass=True):
+    def _seed(self, params, messages, tools=None):
         AnthropicCacheControlHook.maybe_seed_default_injection_points(
             non_default_params=params,
             messages=messages,
             model="claude-sonnet-4-5",
             custom_llm_provider="anthropic",
             tools=tools,
-            is_first_pass=is_first_pass,
         )
 
-    def _inject(self, messages, kwargs, system="sys", tools=None, is_first_pass=True):
+    def _inject(self, messages, kwargs, system="sys", tools=None):
         return AnthropicCacheControlHook.maybe_inject_cache_control(
             messages,
             system,
@@ -1771,7 +1773,6 @@ class TestConfiguredInjectionPointsStandDown:
             model="claude-sonnet-4-5",
             custom_llm_provider="anthropic",
             tools=tools,
-            is_first_pass=is_first_pass,
         )
 
     def test_configured_points_dropped_when_messages_carry_cache_control(self):
@@ -1798,13 +1799,13 @@ class TestConfiguredInjectionPointsStandDown:
         self._seed(params, copy.deepcopy(self.CLEAN_MESSAGES))
         assert params["cache_control_injection_points"] is configured
 
-    def test_second_pass_keeps_points_despite_injected_marks(self):
+    def test_judged_remainder_survives_reentry_despite_injected_marks(self):
         """acompletion() re-enters completion() after injection ran, with only the
-        non-message points written back; the second pass must not misread litellm's
-        own marks as client ones and drop that remainder."""
-        remainder = [{"location": "tool_config"}]
+        stamped non-message points written back; the re-entry must not misread
+        litellm's own marks as client ones and drop that remainder."""
+        remainder = [{"location": "tool_config", "_litellm_judged": True}]
         params = {"cache_control_injection_points": remainder}
-        self._seed(params, copy.deepcopy(self.MARKED_MESSAGES), is_first_pass=False)
+        self._seed(params, copy.deepcopy(self.MARKED_MESSAGES))
         assert params["cache_control_injection_points"] is remainder
 
     def test_v1_messages_stand_down_when_content_block_marked(self):
@@ -1841,18 +1842,23 @@ class TestConfiguredInjectionPointsStandDown:
         _, result_sys = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs)
         assert result_sys == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
 
-    def test_v1_messages_second_pass_writes_back_remainder(self):
-        """The async entry re-dispatches into the sync handler after injecting; the
-        surviving tool_config remainder must survive that second pass even though
-        the messages now carry litellm's own marks."""
-        marked = [
-            {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}
-        ]
-        remainder = [{"location": "tool_config"}]
-        kwargs = {"cache_control_injection_points": remainder}
-        result_msgs, _ = self._inject(copy.deepcopy(marked), kwargs, is_first_pass=False)
-        assert result_msgs == marked
-        assert kwargs["cache_control_injection_points"] == remainder
+    def test_v1_messages_reentry_flow_preserves_tool_config_remainder(self):
+        """The advisor interceptor re-enters anthropic_messages() with the outer
+        request's kwargs and post-injection messages. The first pass applies the
+        message point and writes back a stamped tool_config remainder; the
+        re-entry must keep that remainder even though the messages and system
+        now carry litellm's own marks."""
+        points = [{"location": "message", "role": "system"}, {"location": "tool_config"}]
+        kwargs = {"cache_control_injection_points": copy.deepcopy(points)}
+        msgs1, sys1 = self._inject(copy.deepcopy(self.V1_MESSAGES), kwargs)
+        assert sys1[0]["cache_control"] == {"type": "ephemeral"}
+        expected_remainder = [{"location": "tool_config", "_litellm_judged": True}]
+        assert kwargs["cache_control_injection_points"] == expected_remainder
+
+        msgs2, sys2 = self._inject(msgs1, kwargs, system=sys1)
+        assert kwargs["cache_control_injection_points"] == expected_remainder
+        assert msgs2 == msgs1
+        assert sys2 == sys1
 
 
 class TestAnthropicPromptCachingEnvVars:
