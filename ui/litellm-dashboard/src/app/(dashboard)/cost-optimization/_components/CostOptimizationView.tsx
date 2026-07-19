@@ -2,7 +2,7 @@
 
 import React from "react";
 import { PiggyBank } from "lucide-react";
-import { Tabs } from "antd";
+import { Alert, Tabs } from "antd";
 
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
@@ -50,6 +50,25 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           Track and configure the mechanisms that save you money: prompt compression, prompt caching, and auto routing
         </p>
       </div>
+
+      <Alert
+        type="info"
+        showIcon
+        message="This is an experimental dashboard"
+        description={
+          <span>
+            Have feedback? Join the discussion{" "}
+            <a
+              href="https://github.com/BerriAI/litellm/discussions/32172"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 underline"
+            >
+              here
+            </a>
+          </span>
+        }
+      />
 
       <Tabs defaultActiveKey="usage" items={items} />
     </div>
