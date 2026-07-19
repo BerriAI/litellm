@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import ssl
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -147,6 +148,14 @@ from litellm.utils import (
     ProviderConfigManager,
     async_pre_call_deployment_hook,
 )
+
+
+def _rust_responses_websocket_enabled(
+    custom_llm_provider: str | None,
+    litellm_params: GenericLiteLLMParams,
+) -> bool:
+    return custom_llm_provider == "openai" and litellm_params.get("rust") is True
+
 
 from .http_handler import get_shared_realtime_ssl_context
 
@@ -6221,12 +6230,29 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            async with websockets.connect(  # type: ignore
-                ws_url,
-                additional_headers=headers,
-                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                ssl=ssl_context,
-            ) as backend_ws:
+            @asynccontextmanager
+            async def _backend_connection():
+                if _rust_responses_websocket_enabled(custom_llm_provider, litellm_params):
+                    from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+
+                    rust_backend = await rust_responses_websocket.connect(
+                        url=ws_url,
+                        headers={str(key): str(value) for key, value in headers.items()},
+                        timeout=timeout,
+                    )
+                    if rust_backend is not None:
+                        yield rust_backend
+                        return
+
+                async with websockets.connect(  # type: ignore
+                    ws_url,
+                    additional_headers=headers,
+                    max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                    ssl=ssl_context,
+                ) as backend:
+                    yield backend
+
+            async with _backend_connection() as backend_ws:
                 _request_data: Dict[str, Any] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
