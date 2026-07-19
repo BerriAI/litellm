@@ -75,9 +75,21 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
     <div className="w-full space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Compression guardrails</CardTitle>
+          <CardTitle>Headroom prompt compression</CardTitle>
         </CardHeader>
         <CardContent>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Headroom is a native LiteLLM guardrail that compresses your prompts before they reach the model, so you pay
+            for fewer input tokens. The tokens it removes are priced and shown on the Usage tab as compression savings.{" "}
+            <a
+              href="https://docs.litellm.ai/docs/proxy/headroom"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 underline"
+            >
+              Headroom setup docs
+            </a>
+          </p>
           {isLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
           {!isLoading && guardrails.length === 0 && (
             <p className="text-sm text-muted-foreground">
@@ -110,7 +122,7 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
 
       <Card>
         <CardHeader>
-          <CardTitle>Add compression guardrail</CardTitle>
+          <CardTitle>Add Headroom compression guardrail</CardTitle>
         </CardHeader>
         <CardContent>
           <Form
@@ -123,7 +135,13 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
             <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
               <Input placeholder="headroom-compression" />
             </Form.Item>
-            <Form.Item name="apiBase" label="API base" rules={[{ required: true, message: "API base is required" }]}>
+            <Form.Item
+              name="apiBase"
+              label="Headroom API base"
+              tooltip="Base URL of your Headroom compression service (LiteLLM calls its /v1/compress endpoint)"
+              extra="The URL where your Headroom compression service is hosted"
+              rules={[{ required: true, message: "API base is required" }]}
+            >
               <Input placeholder="https://your-headroom-endpoint" />
             </Form.Item>
             <Form.Item name="defaultOn" label="Apply to all requests" valuePropName="checked">
