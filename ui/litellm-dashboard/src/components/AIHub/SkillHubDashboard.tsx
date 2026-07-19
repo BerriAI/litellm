@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from "react";
-import { Text } from "@tremor/react";
 import { SearchOutlined } from "@ant-design/icons";
+import { SortingState } from "@tanstack/react-table";
 import { Input, Select } from "antd";
+import { Inbox } from "lucide-react";
 import { Plugin } from "@/components/claude_code_plugins/types";
-import { ModelDataTable } from "@/components/model_dashboard/table";
-import { skillHubColumns } from "@/components/skill_hub_table_columns";
+import { DataTable } from "@/components/shared/DataTable";
+import { getSkillHubTableColumns } from "@/components/AIHub/SkillHubTableColumns";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 
 interface SkillHubDashboardProps {
@@ -14,6 +15,22 @@ interface SkillHubDashboardProps {
   accessToken?: string | null;
   publicPage?: boolean;
   onPublishSuccess?: () => void;
+}
+
+function SkillsEmptyState({ filtered }: { filtered: boolean }) {
+  return (
+    <div className="flex flex-col items-center gap-1 py-6">
+      <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
+        <Inbox className="size-5 text-muted-foreground" />
+      </div>
+      <div className="text-sm font-medium text-foreground">{filtered ? "No matching skills" : "No skills yet"}</div>
+      <div className="text-sm text-muted-foreground">
+        {filtered
+          ? "Adjust the search or domain filter to see more skills."
+          : "Skills added here will appear for developers."}
+      </div>
+    </div>
+  );
 }
 
 const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
@@ -27,10 +44,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   const [search, setSearch] = useState("");
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-  };
+  const [sorting, setSorting] = useState<SortingState>([{ id: "name", desc: false }]);
 
   // Derived stats
   const totalSkills = skills.length;
@@ -51,11 +65,15 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           s.description?.toLowerCase().includes(q) ||
           s.domain?.toLowerCase().includes(q) ||
           s.namespace?.toLowerCase().includes(q) ||
-          s.keywords?.some((k) => k.toLowerCase().includes(q))
+          s.keywords?.some((k) => k.toLowerCase().includes(q)),
       );
     }
     return result;
   }, [skills, search, domainFilter]);
+
+  const columns = useMemo(() => getSkillHubTableColumns({ onSkillClick: setSelectedSkill }), []);
+
+  const hasActiveFilter = search.trim().length > 0 || domainFilter != null;
 
   if (selectedSkill) {
     return (
@@ -67,10 +85,6 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
         onPublishClick={onPublishSuccess}
       />
     );
-  }
-
-  if (isLoading) {
-    return <div className="text-center py-16 text-gray-400">Loading skills...</div>;
   }
 
   return (
@@ -94,9 +108,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
       {/* Search + filters + table */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">
-            All {publicPage ? "Public " : ""}Skills
-          </h3>
+          <h3 className="text-sm font-semibold text-gray-700">All {publicPage ? "Public " : ""}Skills</h3>
           <div className="flex items-center gap-2">
             <Select
               placeholder="All Domains"
@@ -116,20 +128,22 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
             />
           </div>
         </div>
-        <ModelDataTable
-          columns={skillHubColumns(
-            (skill) => setSelectedSkill(skill),
-            copyToClipboard,
-            publicPage
-          )}
+        <DataTable
           data={filteredSkills}
-          isLoading={false}
-          defaultSorting={[{ id: "name", desc: false }]}
+          columns={columns}
+          getRowId={(skill, index) => skill.id || String(index)}
+          sortingMode="client"
+          sorting={sorting}
+          onSortingChange={setSorting}
+          isLoading={isLoading}
+          loadingMessage="Loading skills…"
+          noDataMessage={<SkillsEmptyState filtered={hasActiveFilter} />}
+          size="compact"
         />
         <div className="mt-3 text-center">
-          <Text className="text-sm text-gray-500">
+          <p className="text-sm text-gray-500">
             Showing {filteredSkills.length} of {totalSkills} skill{totalSkills !== 1 ? "s" : ""}
-          </Text>
+          </p>
         </div>
       </div>
     </div>

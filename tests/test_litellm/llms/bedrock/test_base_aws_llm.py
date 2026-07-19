@@ -11,10 +11,11 @@ sys.path.insert(
 
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
+from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
 
 import litellm
@@ -161,6 +162,134 @@ def test_aws_profile_path_not_cached_in_iam_cache():
         base.get_credentials(aws_profile_name="my-profile")
         base.get_credentials(aws_profile_name="my-profile")
         assert mock_profile.call_count == 2
+
+
+def test_get_credentials_does_not_expand_request_env_reference():
+    """
+    A parameter of the form os.environ/<VAR> reaching get_credentials is left as-is
+    rather than expanded against the process environment, so the downstream auth
+    helper only ever receives the literal value.
+    """
+    env = _os_environ_without_aws_keys()
+    env["SERVER_ONLY_VALUE"] = "config-managed-value"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_profile",
+        return_value=(Credentials("ak", "sk", None), None),
+    ) as mock_profile:
+        base.get_credentials(aws_profile_name="os.environ/SERVER_ONLY_VALUE")
+
+    assert mock_profile.call_args.args[0] == "os.environ/SERVER_ONLY_VALUE"
+    assert "config-managed-value" not in str(mock_profile.call_args)
+
+
+def test_get_credentials_falls_back_to_ambient_aws_profile_name_env():
+    """
+    The fixed AWS_* ambient fallback keeps working: an unset aws_profile_name
+    resolves from the AWS_PROFILE_NAME environment variable.
+    """
+    env = _os_environ_without_aws_keys()
+    env["AWS_PROFILE_NAME"] = "ambient-profile"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_profile",
+        return_value=(Credentials("ak", "sk", None), None),
+    ) as mock_profile:
+        base.get_credentials(aws_profile_name=None)
+
+    assert mock_profile.call_args.args[0] == "ambient-profile"
+
+
+def test_get_credentials_ambient_fallback_resolves_aws_external_id():
+    """
+    Each unset param falls back to its own AWS_* env var. Regression for an index
+    misalignment between the value list and the env-name list, which left
+    AWS_EXTERNAL_ID unresolved.
+    """
+    env = _os_environ_without_aws_keys()
+    env["AWS_EXTERNAL_ID"] = "ext-from-env"
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch.object(
+        base,
+        "_auth_with_aws_role",
+        return_value=(Credentials("ak", "sk", "tok"), None),
+    ) as mock_role:
+        base.get_credentials(
+            aws_role_name="arn:aws:iam::123456789012:role/x",
+            aws_session_name="s",
+        )
+
+    assert mock_role.call_args.kwargs["aws_external_id"] == "ext-from-env"
+
+
+def _capturing_sts_client(captured: Dict[str, Any]) -> MagicMock:
+    sts = MagicMock()
+
+    def _assume(**params):
+        captured["WebIdentityToken"] = params.get("WebIdentityToken")
+        return {
+            "Credentials": {
+                "AccessKeyId": "AKIA",
+                "SecretAccessKey": "sk",
+                "SessionToken": "tok",
+            },
+            "PackedPolicySize": 10,
+        }
+
+    sts.assume_role_with_web_identity.side_effect = _assume
+    return sts
+
+
+@pytest.mark.parametrize(
+    "token_ref",
+    ["os.environ/SERVER_ONLY_VALUE", "SERVER_ONLY_VALUE"],
+    ids=["os_environ_prefix", "bare_env_name"],
+)
+def test_web_identity_token_env_reference_not_expanded(token_ref):
+    """
+    A web-identity token that is an environment-variable reference (an os.environ/
+    prefix, or a bare name matching an env var) is rejected rather than expanded, so
+    the process-environment value is never used as the token.
+    """
+    env = _os_environ_without_aws_keys()
+    env["SERVER_ONLY_VALUE"] = "server-only-value"
+    captured: Dict[str, Any] = {}
+    base = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True), patch(
+        "boto3.client", side_effect=lambda *a, **k: _capturing_sts_client(captured)
+    ), patch("boto3.Session", return_value=MagicMock()):
+        with pytest.raises(AwsAuthError):
+            base.get_credentials(
+                aws_web_identity_token=token_ref,
+                aws_role_name="arn:aws:iam::123456789012:role/x",
+                aws_session_name="s",
+                aws_sts_endpoint="https://custom-sts.example",
+            )
+
+    assert "server-only-value" not in str(captured)
+
+
+def test_web_identity_token_oidc_reference_still_resolved():
+    """
+    The env-reference guard does not over-reject: an oidc/ reference still flows to
+    get_secret (mocked to None here), surfacing the existing 401 rather than the 400
+    used for rejected env-var references.
+    """
+    base = BaseAWSLLM()
+    env = _os_environ_without_aws_keys()
+    with patch.dict(os.environ, env, clear=True), patch(
+        "litellm.llms.bedrock.base_aws_llm.get_secret", return_value=None
+    ):
+        with pytest.raises(AwsAuthError) as exc:
+            base.get_credentials(
+                aws_web_identity_token="oidc/circleci/",
+                aws_role_name="arn:aws:iam::123456789012:role/x",
+                aws_session_name="s",
+            )
+
+    assert exc.value.status_code == 401
 
 
 def test_web_identity_path_not_cached_in_iam_cache():
@@ -640,6 +769,30 @@ def test_get_request_headers_with_sigv4():
         assert result == mock_request.prepare.return_value
 
 
+def test_sigv4_matches_rust_golden_vector():
+    request = AWSRequest(
+        method="POST",
+        url="https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke",
+        data=b'{"input":"hello"}',
+        headers={"Content-Type": "application/json"},
+    )
+    credentials = Credentials(
+        "AKIDEXAMPLE",
+        "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+        "session-token",
+    )
+    with patch("botocore.auth.get_current_datetime", return_value=datetime(2024, 1, 2, 3, 4, 5)):
+        SigV4Auth(credentials, "bedrock", "us-east-1").add_auth(request)
+    assert request.headers["X-Amz-Date"] == "20240102T030405Z"
+    assert request.headers["X-Amz-Security-Token"] == "session-token"
+    assert (
+        request.headers["Authorization"]
+        == "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, "
+        "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, "
+        "Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
+    )
+
+
 def test_get_request_headers_with_api_key_bearer_token():
     """
     Test that get_request_headers uses the api_key parameter as a bearer token when provided
@@ -869,14 +1022,18 @@ def test_different_roles_without_session_names_should_not_share_cache():
         ({}, {"verify": True}),
         (
             {"aws_region_name": "us-east-1"},
-            {"region_name": "us-east-1", "verify": True},
+            {"verify": True},
         ),
         (
             {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
-            {"endpoint_url": "https://sts.eu-west-1.amazonaws.com", "verify": True},
+            {
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+                "verify": True,
+            },
         ),
     ],
-    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
 )
 def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
@@ -926,6 +1083,316 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
 
 
 @pytest.mark.parametrize(
+    "endpoint,expected_region",
+    [
+        ("https://sts.eu-west-1.amazonaws.com", "eu-west-1"),
+        ("https://sts.us-east-1.amazonaws.com", "us-east-1"),
+        ("https://sts-fips.us-east-1.amazonaws.com", "us-east-1"),
+        ("https://sts-fips.us-gov-west-1.amazonaws.com", "us-gov-west-1"),
+        ("https://sts.us-gov-west-1.amazonaws.com", "us-gov-west-1"),
+        ("https://sts.cn-north-1.amazonaws.com.cn", "cn-north-1"),
+        (
+            "https://vpce-abc123.sts.eu-west-1.vpce.amazonaws.com",
+            "eu-west-1",
+        ),
+        ("https://sts.amazonaws.com", None),
+        ("https://invalid.example.com", None),
+    ],
+)
+def test_parse_sts_region_from_endpoint(endpoint, expected_region):
+    assert BaseAWSLLM._parse_sts_region_from_endpoint(endpoint) == expected_region
+
+
+@pytest.mark.parametrize(
+    "env,aws_sts_endpoint,expected_region",
+    [
+        ({}, None, None),
+        ({"AWS_REGION": "us-east-1"}, None, "us-east-1"),
+        ({"AWS_DEFAULT_REGION": "ap-southeast-1"}, None, "ap-southeast-1"),
+        ({}, "https://sts.eu-west-1.amazonaws.com", "eu-west-1"),
+        (
+            {"AWS_REGION": "us-east-1"},
+            "https://sts.eu-west-1.amazonaws.com",
+            "eu-west-1",
+        ),
+        ({}, "https://sts.amazonaws.com", None),
+        (
+            {},
+            "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+            "eu-central-1",
+        ),
+    ],
+    ids=[
+        "no_env_no_endpoint",
+        "env_region",
+        "env_default_region",
+        "parsed_from_endpoint",
+        "parsed_endpoint_over_env",
+        "global_endpoint",
+        "vpce_endpoint",
+    ],
+)
+def test_resolve_sts_region(env, aws_sts_endpoint, expected_region):
+    with patch.dict(os.environ, env, clear=True):
+        assert (
+            BaseAWSLLM._resolve_sts_region(aws_sts_endpoint=aws_sts_endpoint)
+            == expected_region
+        )
+
+
+@pytest.mark.parametrize(
+    "env,aws_sts_endpoint,ssl_verify,expected",
+    [
+        ({}, None, None, {"verify": True}),
+        (
+            {"AWS_REGION": "us-east-1"},
+            None,
+            None,
+            {"verify": True, "region_name": "us-east-1"},
+        ),
+        (
+            {},
+            "https://sts.eu-west-1.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+            },
+        ),
+        (
+            {"AWS_REGION": "us-east-1"},
+            "https://sts.eu-west-1.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
+            },
+        ),
+        (
+            {},
+            "https://sts.amazonaws.com",
+            None,
+            {"verify": True, "endpoint_url": "https://sts.amazonaws.com"},
+        ),
+        (
+            {},
+            "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+            None,
+            {
+                "verify": True,
+                "endpoint_url": "https://vpce-abc.sts.eu-central-1.vpce.amazonaws.com",
+                "region_name": "eu-central-1",
+            },
+        ),
+        ({}, None, False, {"verify": False}),
+        (
+            {"AWS_DEFAULT_REGION": "ap-southeast-1"},
+            None,
+            None,
+            {"verify": True, "region_name": "ap-southeast-1"},
+        ),
+    ],
+    ids=[
+        "default_verify_only",
+        "env_region",
+        "endpoint_with_parsed_region",
+        "endpoint_parsed_over_env",
+        "global_endpoint_no_region",
+        "vpce_endpoint",
+        "ssl_verify_false",
+        "env_default_region",
+    ],
+)
+def test_build_sts_client_kwargs(env, aws_sts_endpoint, ssl_verify, expected):
+    base_aws_llm = BaseAWSLLM()
+    with patch.dict(os.environ, env, clear=True):
+        assert (
+            base_aws_llm._build_sts_client_kwargs(
+                aws_sts_endpoint=aws_sts_endpoint,
+                ssl_verify=ssl_verify,
+            )
+            == expected
+        )
+
+
+def test_irsa_cross_account_sts_client_uses_resolved_region():
+    """IRSA cross-account path must use _build_sts_client_kwargs (env region, not Bedrock)."""
+    base_aws_llm = BaseAWSLLM()
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+        f.write("test-web-identity-token")
+        token_file = f.name
+
+    try:
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_WEB_IDENTITY_TOKEN_FILE": token_file,
+                "AWS_ROLE_ARN": "arn:aws:iam::111111111111:role/eks-service-account-role",
+                "AWS_REGION": "eu-west-1",
+            },
+            clear=True,
+        ):
+            mock_sts_client = MagicMock()
+            mock_sts_client.assume_role_with_web_identity.return_value = {
+                "Credentials": {
+                    "AccessKeyId": "temp-key",
+                    "SecretAccessKey": "temp-secret",
+                    "SessionToken": "temp-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+                }
+            }
+            mock_sts_client.assume_role.return_value = {
+                "Credentials": {
+                    "AccessKeyId": "assumed-key",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+                }
+            }
+
+            with patch(
+                "boto3.client", return_value=mock_sts_client
+            ) as mock_boto3_client:
+                base_aws_llm._auth_with_aws_role(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_session_token=None,
+                    aws_role_name="arn:aws:iam::222222222222:role/target-role",
+                    aws_session_name="test-session",
+                    aws_region_name="eu-central-1",
+                )
+
+                for call in mock_boto3_client.call_args_list:
+                    assert call.args == ("sts",)
+                    assert call.kwargs["region_name"] == "eu-west-1"
+                    assert call.kwargs["verify"] is True
+    finally:
+        os.unlink(token_file)
+
+
+def test_web_identity_token_sts_client_uses_build_sts_client_kwargs():
+    base_aws_llm = BaseAWSLLM()
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "key",
+            "SecretAccessKey": "secret",
+            "SessionToken": "token",
+            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+        },
+        "PackedPolicySize": 0,
+    }
+
+    with patch.dict(os.environ, {"AWS_REGION": "eu-west-1"}, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            with patch(
+                "litellm.llms.bedrock.base_aws_llm.get_secret",
+                return_value="oidc-token",
+            ):
+                base_aws_llm._auth_with_web_identity_token(
+                    aws_web_identity_token="my-token",
+                    aws_role_name="arn:aws:iam::111111111111:role/target",
+                    aws_session_name="test-session",
+                    aws_region_name="eu-central-1",
+                    aws_sts_endpoint="https://sts.eu-west-1.amazonaws.com",
+                )
+
+                mock_boto3_client.assert_called_once_with(
+                    "sts",
+                    verify=True,
+                    endpoint_url="https://sts.eu-west-1.amazonaws.com",
+                    region_name="eu-west-1",
+                )
+
+
+def test_sts_uses_workload_region_not_bedrock_region():
+    """Air-gapped: Bedrock in eu-central-1, STS VPC endpoint in eu-west-1 via AWS_REGION."""
+    base_aws_llm = BaseAWSLLM()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+
+    with patch.dict(os.environ, {"AWS_REGION": "eu-west-1"}, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+                aws_region_name="eu-central-1",
+            )
+            mock_boto3_client.assert_called_with(
+                "sts",
+                region_name="eu-west-1",
+                verify=True,
+            )
+
+
+def test_sts_endpoint_region_matches_bedrock_region_param():
+    """aws_sts_endpoint signing region must not follow aws_region_name when they differ."""
+    base_aws_llm = BaseAWSLLM()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+
+    env_without_irsa = {
+        k: v
+        for k, v in os.environ.items()
+        if k
+        not in (
+            "AWS_ROLE_ARN",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+        )
+    }
+    with patch.dict(env_without_irsa, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+                aws_region_name="eu-central-1",
+                aws_sts_endpoint="https://sts.eu-west-1.amazonaws.com",
+            )
+            mock_boto3_client.assert_called_with(
+                "sts",
+                endpoint_url="https://sts.eu-west-1.amazonaws.com",
+                region_name="eu-west-1",
+                verify=True,
+            )
+
+
+@pytest.mark.parametrize(
     "role_kwargs,expected_client_kwargs",
     [
         (
@@ -940,7 +1407,6 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
         (
             {"aws_region_name": "us-east-1"},
             {
-                "region_name": "us-east-1",
                 "aws_access_key_id": "explicit-access-key",
                 "aws_secret_access_key": "explicit-secret-key",
                 "aws_session_token": "assumed-session-token",
@@ -951,6 +1417,7 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
             {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
             {
                 "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "region_name": "eu-west-1",
                 "aws_access_key_id": "explicit-access-key",
                 "aws_secret_access_key": "explicit-secret-key",
                 "aws_session_token": "assumed-session-token",
@@ -958,7 +1425,7 @@ def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
 )
 def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """
@@ -2112,3 +2579,283 @@ def test_is_already_running_as_role_ssl_verify_passed():
                 mock_boto3_client.assert_called_once_with(
                     "sts", verify="/path/to/ca-bundle.crt"
                 )
+
+
+# ---------------------------------------------------------------------------
+# LIT-3274: get_bedrock_model_id must strip "bedrock/" prefix and URL-encode
+# ARNs for the invoke path (invoke-with-response-stream).  Without this fix
+# the Bedrock API receives a malformed URL, returns a JSON error body, and
+# botocore's EventStreamBuffer raises ChecksumMismatch instead of the real
+# error.  0x223a7b22 == ':{\"' — the start of a JSON object.
+# ---------------------------------------------------------------------------
+
+
+class TestGetBedrockModelIdArnHandling:
+    """Unit tests for get_bedrock_model_id with inference-profile ARNs."""
+
+    ARN = "arn:aws:bedrock:us-east-1:086734376398:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    def _call(self, model: str, optional_params: dict | None = None) -> str:
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        return BaseAWSLLM.get_bedrock_model_id(
+            model=model,
+            provider=provider,
+            optional_params=optional_params or {},
+        )
+
+    def test_arn_with_bedrock_prefix_is_stripped_and_encoded(self):
+        """bedrock/arn:... must not appear verbatim in the model_id."""
+        model_id = self._call(f"bedrock/{self.ARN}")
+        assert (
+            "bedrock/arn" not in model_id
+        ), f"'bedrock/' prefix not stripped; got: {model_id}"
+        # Must be URL-encoded (colons → %3A)
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(
+        self,
+    ):
+        """bedrock/invoke/arn:... — compound prefix — must be fully stripped.
+
+        The old fix used ``break`` after the first matched prefix, so
+        ``bedrock/invoke/arn:...`` would only strip ``bedrock/``, leaving
+        ``invoke/arn:...``.  The subsequent ``.replace('invoke/', '')`` call
+        then returned the bare unencoded ARN, reproducing the same
+        malformed-URL bug the fix aimed to prevent.
+
+        strip_bedrock_routing_prefix() has no break and handles this correctly.
+        """
+        model_id = self._call(f"bedrock/invoke/{self.ARN}")
+        assert (
+            "invoke/" not in model_id
+        ), f"'invoke/' prefix not stripped; got: {model_id}"
+        assert (
+            "bedrock/" not in model_id
+        ), f"'bedrock/' prefix not stripped; got: {model_id}"
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_bare_arn_is_encoded(self):
+        """Direct ARN without routing prefix must also be URL-encoded."""
+        model_id = self._call(self.ARN)
+        assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
+        assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
+
+    def test_arn_url_matches_expected(self):
+        """Full URL built from messages config must match expected encoded form."""
+        import urllib.parse
+        from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeMessagesConfig,
+        )
+
+        config = AmazonAnthropicClaudeMessagesConfig()
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=f"bedrock/{self.ARN}",
+            optional_params={"aws_region_name": "us-east-1"},
+            litellm_params={},
+            stream=True,
+        )
+        encoded_arn = urllib.parse.quote(self.ARN, safe="")
+        expected = (
+            f"https://bedrock-runtime.us-east-1.amazonaws.com"
+            f"/model/{encoded_arn}/invoke-with-response-stream"
+        )
+        assert (
+            url == expected
+        ), f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
+
+    def test_regular_model_id_unaffected(self):
+        """Non-ARN model IDs must continue to work as before."""
+        model_id = self._call("anthropic.claude-3-sonnet-20240229-v1:0")
+        assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
+
+    def test_invoke_prefixed_model_unaffected(self):
+        """invoke/ prefix stripping still works after the fix."""
+        model_id = self._call("invoke/anthropic.claude-3-sonnet-20240229-v1:0")
+        assert model_id == "anthropic.claude-3-sonnet-20240229-v1:0"
+
+
+def _recomputed_sigv4_signature(url: str, secret_key: str, authorization: str, headers: Dict[str, Any], body) -> str:
+    import hashlib
+    import hmac
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    credential_scope = authorization.split("Credential=")[1].split(",")[0].split("/", 1)[1]
+    signed_header_names = authorization.split("SignedHeaders=")[1].split(",")[0].split(";")
+    header_lookup = {name.lower(): str(value) for name, value in headers.items()}
+    header_lookup["host"] = parsed.netloc
+    body_bytes = body if isinstance(body, bytes) else str(body).encode()
+    canonical_request = "\n".join(
+        [
+            "POST",
+            parsed.path or "/",
+            "",
+            "".join(f"{name}:{header_lookup[name]}\n" for name in signed_header_names),
+            ";".join(signed_header_names),
+            hashlib.sha256(body_bytes).hexdigest(),
+        ]
+    )
+    string_to_sign = "\n".join(
+        [
+            "AWS4-HMAC-SHA256",
+            header_lookup["x-amz-date"],
+            credential_scope,
+            hashlib.sha256(canonical_request.encode()).hexdigest(),
+        ]
+    )
+    key = f"AWS4{secret_key}".encode()
+    for scope_part in credential_scope.split("/"):
+        key = hmac.new(key, scope_part.encode(), hashlib.sha256).digest()
+    return hmac.new(key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+
+
+class TestSignRequestResign:
+    """Regression: retrying a Bedrock request with headers from a previous SigV4 sign
+    (e.g. the /v1/messages strip-thinking-and-retry path) must produce a fresh
+    Authorization / X-Amz-Date for the new body, not inherit the stale ones and 403."""
+
+    URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"
+    ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+    SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+    @pytest.fixture(autouse=True)
+    def _clean_aws_env(self, monkeypatch):
+        for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+            monkeypatch.delenv(env_var, raising=False)
+
+    def _optional_params(self) -> Dict[str, Any]:
+        return {
+            "aws_access_key_id": self.ACCESS_KEY,
+            "aws_secret_access_key": self.SECRET_KEY,
+            "aws_region_name": "us-east-1",
+        }
+
+    def _sign(self, headers: Dict[str, Any], request_data: Dict[str, Any]):
+        return BaseAWSLLM()._sign_request(
+            service_name="bedrock",
+            headers=headers,
+            optional_params=self._optional_params(),
+            request_data=request_data,
+            api_base=self.URL,
+        )
+
+    def test_resign_with_previously_signed_headers_replaces_stale_sigv4_headers(self):
+        original_body = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "thinking", "thinking": "x", "signature": ""}],
+                }
+            ]
+        }
+        first_headers, _ = self._sign(headers={"Content-Type": "application/json"}, request_data=original_body)
+        assert first_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+
+        stale_headers = {**first_headers, "X-Amz-Date": "20200101T000000Z"}
+        stripped_body = {"messages": [{"role": "user", "content": "hi"}]}
+        second_headers, second_signed_body = self._sign(headers=stale_headers, request_data=stripped_body)
+
+        assert second_headers["X-Amz-Date"] != "20200101T000000Z"
+        assert second_headers["Authorization"] != stale_headers["Authorization"]
+        assert second_headers["Authorization"].split("Signature=")[1] == _recomputed_sigv4_signature(
+            url=self.URL,
+            secret_key=self.SECRET_KEY,
+            authorization=second_headers["Authorization"],
+            headers=second_headers,
+            body=second_signed_body,
+        )
+
+    def test_forwarded_headers_still_added_back_after_signing(self):
+        signed_headers, _ = self._sign(
+            headers={"Content-Type": "application/json", "anthropic-version": "bedrock-2023-05-31"},
+            request_data={"messages": []},
+        )
+        assert signed_headers["anthropic-version"] == "bedrock-2023-05-31"
+        assert signed_headers["Content-Type"] == "application/json"
+
+    def test_caller_supplied_bearer_authorization_survives_signing(self):
+        signed_headers, _ = self._sign(
+            headers={"Content-Type": "application/json", "Authorization": "Bearer caller-token"},
+            request_data={"messages": []},
+        )
+        assert signed_headers["Authorization"] == "Bearer caller-token"
+
+
+class TestGetRequestHeadersResign:
+    """Regression: get_request_headers (invoke/converse/embed/image paths) must not let
+    stale SigV4 values present in the input headers clobber the freshly computed signature."""
+
+    URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/converse"
+    ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+    SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    SESSION_TOKEN = "fresh-session-token"
+
+    @pytest.fixture(autouse=True)
+    def _clean_aws_env(self, monkeypatch):
+        for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+            monkeypatch.delenv(env_var, raising=False)
+
+    def _prepare(self, headers: Dict[str, Any], data: str, extra_headers: Optional[Dict[str, str]] = None):
+        return BaseAWSLLM().get_request_headers(
+            credentials=Credentials(self.ACCESS_KEY, self.SECRET_KEY, self.SESSION_TOKEN),
+            aws_region_name="us-east-1",
+            extra_headers=extra_headers,
+            endpoint_url=self.URL,
+            data=data,
+            headers=headers,
+        )
+
+    def test_stale_sigv4_headers_in_input_replaced_by_fresh_signature(self):
+        first_prepped = self._prepare(
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"messages": [{"role": "user", "content": "original"}]}),
+        )
+        stale_authorization = first_prepped.headers["Authorization"]
+        assert stale_authorization.startswith("AWS4-HMAC-SHA256")
+
+        stale_headers = {
+            "Content-Type": "application/json",
+            "Authorization": stale_authorization,
+            "X-Amz-Date": "20200101T000000Z",
+            "X-Amz-Security-Token": "stale-session-token",
+        }
+        retry_data = json.dumps({"messages": [{"role": "user", "content": "retry"}]})
+        second_prepped = self._prepare(headers=stale_headers, data=retry_data)
+
+        assert second_prepped.headers["X-Amz-Date"] != "20200101T000000Z"
+        assert second_prepped.headers["X-Amz-Security-Token"] == self.SESSION_TOKEN
+        assert second_prepped.headers["Authorization"] != stale_authorization
+        assert second_prepped.headers["Authorization"].split("Signature=")[1] == _recomputed_sigv4_signature(
+            url=self.URL,
+            secret_key=self.SECRET_KEY,
+            authorization=second_prepped.headers["Authorization"],
+            headers=dict(second_prepped.headers),
+            body=retry_data,
+        )
+
+    def test_forwarded_headers_still_added_back_after_signing(self):
+        prepped = self._prepare(
+            headers={
+                "Content-Type": "application/json",
+                "anthropic-version": "bedrock-2023-05-31",
+                "user-agent": "litellm-test-client",
+            },
+            data=json.dumps({"messages": []}),
+        )
+        assert prepped.headers["anthropic-version"] == "bedrock-2023-05-31"
+        assert prepped.headers["user-agent"] == "litellm-test-client"
+        assert prepped.headers["Content-Type"] == "application/json"
+
+    def test_extra_headers_bearer_authorization_still_overrides_signature(self):
+        prepped = self._prepare(
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"messages": []}),
+            extra_headers={"Authorization": "Bearer foo"},
+        )
+        assert prepped.headers["Authorization"] == "Bearer foo"

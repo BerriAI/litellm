@@ -232,3 +232,355 @@ def test_combine_usage_handles_none_details():
     combined = llm_caching_handler.combine_usage(usage_a, usage_c)
     assert combined.prompt_tokens_details is not None
     assert combined.prompt_tokens_details.image_count == 1
+
+
+def test_is_chat_completion_cached_dict():
+    from litellm.caching.caching_handler import _is_chat_completion_cached_dict
+
+    assert _is_chat_completion_cached_dict(
+        {"id": "chatcmpl-abc", "object": "chat.completion", "choices": []}
+    )
+    assert _is_chat_completion_cached_dict(
+        {"id": "other", "object": "chat.completion.chunk", "choices": []}
+    )
+    assert _is_chat_completion_cached_dict(
+        {"id": "no-object", "choices": [{"index": 0}]}
+    )
+    assert not _is_chat_completion_cached_dict(
+        {"id": "resp_abc", "object": "response", "output": []}
+    )
+
+
+def _build_logging_obj(call_type: str, stream: bool):
+    import uuid as _uuid
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    return LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=call_type,
+        model="gpt-5.4",
+        messages=[],
+        function_id=str(_uuid.uuid4()),
+        stream=stream,
+        start_time=datetime.now(),
+    )
+
+
+def test_convert_cached_aresponses_bridge_chat_completion_stream():
+    """openai/responses chat-completions bridge: streaming cache hit replays as chat stream."""
+    from litellm import aresponses
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import CallTypes
+
+    caching_handler = LLMCachingHandler(
+        original_function=aresponses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "chatcmpl-bridge-cache-test",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "gpt-5.4",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18},
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.aresponses.value,
+        kwargs={
+            "model": "gpt-5.4",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        logging_obj=_build_logging_obj(CallTypes.aresponses.value, stream=True),
+        model="gpt-5.4",
+        args=(),
+    )
+
+    assert isinstance(result, CustomStreamWrapper)
+
+
+def test_convert_cached_responses_bridge_chat_completion_nonstream():
+    """openai/responses chat-completions bridge: non-streaming cache hit replays as ModelResponse."""
+    from litellm import responses
+    from litellm.types.utils import CallTypes, ModelResponse
+
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "chatcmpl-bridge-nonstream",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "gpt-5.4",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18},
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={
+            "model": "gpt-5.4",
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        logging_obj=_build_logging_obj(CallTypes.responses.value, stream=False),
+        model="gpt-5.4",
+        args=(),
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "Hi!"
+
+
+def test_convert_cached_responses_legacy_nonstream_path():
+    """Genuine ResponsesAPIResponse dict (no chatcmpl/choices) falls through legacy path."""
+    from litellm import responses
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import CallTypes
+
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "resp_legacy_nonstream",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-4o",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_legacy",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "legacy response",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={"model": "gpt-4o", "input": "hi", "stream": False},
+        logging_obj=_build_logging_obj(CallTypes.responses.value, stream=False),
+        model="gpt-4o",
+        args=(),
+    )
+
+    assert isinstance(result, ResponsesAPIResponse)
+    assert result.id == "resp_legacy_nonstream"
+
+
+def test_convert_cached_responses_legacy_stream_path():
+    """Genuine ResponsesAPIResponse dict (no chatcmpl/choices) on stream falls through legacy path."""
+    from litellm import responses
+    from litellm.responses.streaming_iterator import (
+        CachedResponsesAPIStreamingIterator,
+    )
+    from litellm.types.utils import CallTypes
+
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "resp_legacy_stream",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-4o",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_legacy_stream",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "legacy stream",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={"model": "gpt-4o", "input": "hi", "stream": True},
+        logging_obj=_build_logging_obj(CallTypes.responses.value, stream=True),
+        model="gpt-4o",
+        args=(),
+    )
+
+    assert isinstance(result, CachedResponsesAPIStreamingIterator)
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_restores_stored_prompt_tokens_for_image_input():
+    """Image-embedding cache hit restores prompt_tokens=0 from the stored value
+    instead of recomputing a bogus count by tokenizing the base64 input."""
+    llm_caching_handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+
+    # base64-like blob — token_counter over this would return a large nonzero count
+    image_input = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk" * 50
+
+    cached_result = [
+        {
+            "embedding": [-0.025, -0.019],
+            "index": 0,
+            "object": "embedding",
+            "model": "amazon.titan-embed-image-v1",
+            "prompt_tokens": 0,
+            "prompt_tokens_details": {"image_count": 1},
+        }
+    ]
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    response, cache_hit = llm_caching_handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=cached_result,
+        kwargs={"model": "amazon.titan-embed-image-v1", "input": image_input},
+        logging_obj=mock_logging_obj,
+        start_time=datetime.now(),
+        model="amazon.titan-embed-image-v1",
+    )
+
+    assert cache_hit
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.usage.prompt_tokens_details.image_count == 1
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_sums_stored_prompt_tokens_across_items():
+    """A multi-item cache hit sums the stored per-item prompt_tokens back to the total."""
+    llm_caching_handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+
+    cached_result = [
+        {
+            "embedding": [-0.01],
+            "index": 0,
+            "object": "embedding",
+            "model": "text-embedding-3-small",
+            "prompt_tokens": 5,
+        },
+        {
+            "embedding": [-0.02],
+            "index": 1,
+            "object": "embedding",
+            "model": "text-embedding-3-small",
+            "prompt_tokens": 4,
+        },
+    ]
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    response, cache_hit = llm_caching_handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=cached_result,
+        kwargs={"model": "text-embedding-3-small", "input": ["hello world", "foo bar"]},
+        logging_obj=mock_logging_obj,
+        start_time=datetime.now(),
+        model="text-embedding-3-small",
+    )
+
+    assert cache_hit
+    assert response.usage.prompt_tokens == 9
+    assert response.usage.total_tokens == 9
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_falls_back_to_token_counter_for_legacy_entries():
+    """Legacy cache entries with no stored prompt_tokens still recompute via token_counter
+    for str inputs (backward compatibility)."""
+    llm_caching_handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs={},
+        start_time=datetime.now(),
+    )
+
+    # No prompt_tokens key — pre-fix entry
+    cached_result = [
+        {
+            "embedding": [-0.025, -0.019],
+            "index": 0,
+            "object": "embedding",
+            "model": "text-embedding-ada-002",
+        },
+    ]
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    response, cache_hit = llm_caching_handler._process_async_embedding_cached_response(
+        final_embedding_cached_response=None,
+        cached_result=cached_result,
+        kwargs={"model": "text-embedding-ada-002", "input": "hello world"},
+        logging_obj=mock_logging_obj,
+        start_time=datetime.now(),
+        model="text-embedding-ada-002",
+    )
+
+    assert cache_hit
+    # token_counter over "hello world" yields a nonzero count — fallback path still runs
+    assert response.usage.prompt_tokens > 0
+
+
+def test_request_kwargs_does_not_retain_logging_obj():
+    """
+    The caching handler lives on logging_obj._llm_caching_handler, so keeping
+    litellm_logging_obj inside request_kwargs closes a reference cycle
+    (Logging -> LLMCachingHandler -> kwargs -> Logging). That cycle keeps the
+    full request payload alive until a generational GC pass instead of being
+    freed by refcount when the request finishes; under bursts of large-token
+    requests this presents as stepwise RSS growth that never returns to
+    baseline. Other kwargs (messages included) must be preserved.
+    """
+    logging_obj = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}],
+        "litellm_logging_obj": logging_obj,
+    }
+
+    handler = LLMCachingHandler(
+        original_function=MagicMock(),
+        request_kwargs=kwargs,
+        start_time=datetime.now(),
+    )
+
+    assert "litellm_logging_obj" not in handler.request_kwargs
+    assert handler.request_kwargs["messages"] == kwargs["messages"]
+    assert handler.request_kwargs["model"] == "gpt-4o"

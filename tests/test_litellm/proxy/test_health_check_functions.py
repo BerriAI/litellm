@@ -566,6 +566,7 @@ async def test_perform_health_check_and_save_passes_model_id_to_perform_health_c
         details=True,
         model_id=None,
         max_concurrency=None,
+        **kwargs,
     ):
         return healthy, unhealthy, {}
 
@@ -589,6 +590,40 @@ async def test_perform_health_check_and_save_passes_model_id_to_perform_health_c
     assert call_kwargs["model_id"] == "deployment-abc"
     assert result["healthy_count"] == 1
     assert result["unhealthy_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_perform_health_check_and_save_forwards_skip_disabled_background_flag():
+    """health_check_skip_disabled_background_models should reach perform_health_check."""
+    model_list = [
+        {
+            "model_name": "gpt-4",
+            "model_info": {"id": "deployment-abc"},
+            "litellm_params": {"model": "gpt-4"},
+        },
+    ]
+
+    async def mock_perform_health_check(**kwargs):
+        return [], [], {}
+
+    with patch(
+        "litellm.proxy.health_endpoints._health_endpoints.perform_health_check",
+        side_effect=mock_perform_health_check,
+    ) as mock_perform:
+        await _perform_health_check_and_save(
+            model_list=model_list,
+            target_model=None,
+            cli_model=None,
+            details=True,
+            prisma_client=None,
+            start_time=0.0,
+            user_id="user-1",
+            model_id=None,
+            health_check_skip_disabled_background_models=True,
+        )
+
+    call_kwargs = mock_perform.call_args[1]
+    assert call_kwargs["health_check_skip_disabled_background_models"] is True
 
 
 if __name__ == "__main__":

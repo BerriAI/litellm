@@ -16,6 +16,10 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         guardrailIdentifier=litellm_params.guardrailIdentifier,
         guardrailVersion=litellm_params.guardrailVersion,
+        checks=litellm_params.checks,
+        content_filter_threshold=litellm_params.content_filter_threshold,
+        prompt_attack_threshold=litellm_params.prompt_attack_threshold,
+        pii_confidence_threshold=litellm_params.pii_confidence_threshold,
         default_on=litellm_params.default_on,
         disable_exception_on_block=litellm_params.disable_exception_on_block,
         mask_request_content=litellm_params.mask_request_content,
@@ -130,10 +134,7 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
             _ENTERPRISE_SecretDetection,
         )
     except ImportError:
-        raise Exception(
-            "Trying to use Secret Detection"
-            + CommonProxyErrors.missing_enterprise_package.value
-        )
+        raise Exception("Trying to use Secret Detection" + CommonProxyErrors.missing_enterprise_package.value)
 
     _secret_detection_object = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.detect_secrets_config,
@@ -204,12 +205,9 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         raise ValueError("PANW Prisma AIRS: profile_name is required")
 
     _panw_callback = PanwPrismaAirsHandler(
-        guardrail_name=guardrail.get(
-            "guardrail_name", "panw_prisma_airs"
-        ),  # Use .get() with default
+        guardrail_name=guardrail.get("guardrail_name", "panw_prisma_airs"),  # Use .get() with default
         api_key=litellm_params.api_key,
-        api_base=litellm_params.api_base
-        or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
+        api_base=litellm_params.api_base or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
         profile_name=litellm_params.profile_name,
         default_on=litellm_params.default_on,
         mask_on_block=getattr(litellm_params, "mask_on_block", False),
@@ -217,7 +215,15 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         mask_response_content=getattr(litellm_params, "mask_response_content", False),
         app_name=getattr(litellm_params, "app_name", None),
         fallback_on_error=getattr(litellm_params, "fallback_on_error", "block"),
-        timeout=float(getattr(litellm_params, "timeout", 10.0)),
+        # `timeout` is now declared on BaseLitellmParams (Optional[float] = None),
+        # so the attribute always exists. The Pydantic validator on LitellmParams
+        # coerces strings to float, but None still means "use handler default" —
+        # guard against float(None) here.
+        timeout=(
+            float(getattr(litellm_params, "timeout", None))
+            if getattr(litellm_params, "timeout", None) is not None
+            else 10.0
+        ),
         violation_message_template=litellm_params.violation_message_template,
     )
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)

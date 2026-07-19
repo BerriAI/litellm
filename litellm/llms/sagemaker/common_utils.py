@@ -1,3 +1,4 @@
+import functools
 import json
 from typing import AsyncIterator, Iterator, List, Optional, Union
 
@@ -17,19 +18,25 @@ def _load_sagemaker_response_stream_shape():
 
         loader = Loader()
         service_dict = loader.load_service_model("sagemaker-runtime", "service-2")
-        return ServiceModel(service_dict).shape_for(
-            "InvokeEndpointWithResponseStreamOutput"
-        )
+        return ServiceModel(service_dict).shape_for("InvokeEndpointWithResponseStreamOutput")
     except Exception as e:
         verbose_logger.warning(
-            "litellm: could not pre-load sagemaker-runtime response stream shape "
+            "litellm: could not load sagemaker-runtime response stream shape "
             "— SageMaker event-stream decoding will be unavailable. Error: %s",
             e,
         )
         return None
 
 
-SAGEMAKER_RESPONSE_STREAM_SHAPE = _load_sagemaker_response_stream_shape()
+@functools.lru_cache(maxsize=1)
+def get_sagemaker_response_stream_shape():
+    """
+    Lazily load and cache the sagemaker-runtime stream shape for the process.
+
+    Avoids importing botocore (and logging warnings) unless SageMaker event-stream
+    decoding is actually needed.
+    """
+    return _load_sagemaker_response_stream_shape()
 
 
 class SagemakerError(BaseLLMException):
@@ -51,12 +58,8 @@ class AWSEventStreamDecoder:
         self.content_blocks: List = []
         self.is_messages_api = is_messages_api
 
-    def _chunk_parser_messages_api(
-        self, chunk_data: dict
-    ) -> StreamingChatCompletionChunk:
-        openai_chunk = StreamingChatCompletionChunk(
-            **{"model": self.model, **chunk_data}
-        )
+    def _chunk_parser_messages_api(self, chunk_data: dict) -> StreamingChatCompletionChunk:
+        openai_chunk = StreamingChatCompletionChunk(**{"model": self.model, **chunk_data})
 
         return openai_chunk
 
@@ -85,9 +88,7 @@ class AWSEventStreamDecoder:
             usage=None,
         )
 
-    def iter_bytes(
-        self, iterator: Iterator[bytes]
-    ) -> Iterator[Optional[Union[GChunk, StreamingChatCompletionChunk]]]:
+    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[Optional[Union[GChunk, StreamingChatCompletionChunk]]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -100,10 +101,7 @@ class AWSEventStreamDecoder:
                 message = self._parse_message_from_event(event)
                 if message:
                     # remove data: prefix and "\n\n" at the end
-                    message = (
-                        litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message)
-                        or ""
-                    )
+                    message = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message) or ""
                     message = message.replace("\n\n", "")
 
                     # Accumulate JSON data
@@ -132,9 +130,7 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
             except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
-                verbose_logger.error(
-                    f"Warning: Unparseable JSON data remained: {accumulated_json}"
-                )
+                verbose_logger.error(f"Warning: Unparseable JSON data remained: {accumulated_json}")
                 yield None
 
     async def aiter_bytes(
@@ -152,16 +148,9 @@ class AWSEventStreamDecoder:
                 try:
                     message = self._parse_message_from_event(event)
                     if message:
-                        verbose_logger.debug(
-                            "sagemaker  parsed chunk bytes %s", message
-                        )
+                        verbose_logger.debug("sagemaker  parsed chunk bytes %s", message)
                         # remove data: prefix and "\n\n" at the end
-                        message = (
-                            litellm.CustomStreamWrapper._strip_sse_data_from_chunk(
-                                message
-                            )
-                            or ""
-                        )
+                        message = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message) or ""
                         message = message.replace("\n\n", "")
 
                         # Accumulate JSON data
@@ -179,14 +168,10 @@ class AWSEventStreamDecoder:
                     # If it's not valid JSON yet, continue to the next event
                     continue
                 except UnicodeDecodeError as e:
-                    verbose_logger.warning(
-                        f"UnicodeDecodeError: {e}. Attempting to combine with next event."
-                    )
+                    verbose_logger.warning(f"UnicodeDecodeError: {e}. Attempting to combine with next event.")
                     continue
                 except Exception as e:
-                    verbose_logger.error(
-                        f"Error parsing message: {e}. Attempting to combine with next event."
-                    )
+                    verbose_logger.error(f"Error parsing message: {e}. Attempting to combine with next event.")
                     continue
 
         # Handle any remaining data after the iterator is exhausted
@@ -199,15 +184,14 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
             except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
-                verbose_logger.error(
-                    f"Warning: Unparseable JSON data remained: {accumulated_json}"
-                )
+                verbose_logger.error(f"Warning: Unparseable JSON data remained: {accumulated_json}")
                 yield None
             except Exception as e:
                 verbose_logger.error(f"Final error parsing accumulated JSON: {e}")
 
     def _parse_message_from_event(self, event) -> Optional[str]:
-        if SAGEMAKER_RESPONSE_STREAM_SHAPE is None:
+        response_stream_shape = get_sagemaker_response_stream_shape()
+        if response_stream_shape is None:
             raise SagemakerError(
                 status_code=500,
                 message=(
@@ -216,9 +200,7 @@ class AWSEventStreamDecoder:
                 ),
             )
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(
-            response_dict, SAGEMAKER_RESPONSE_STREAM_SHAPE
-        )
+        parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise ValueError(f"Bad response code, expected 200: {response_dict}")

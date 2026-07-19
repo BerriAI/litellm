@@ -13,7 +13,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
 from litellm._logging import verbose_logger
 
-
 # ---------------------------------------------------------------------------
 # SSE parsing helpers (module-level to keep the class lean)
 # ---------------------------------------------------------------------------
@@ -95,9 +94,7 @@ def _handle_content_block_delta(data: Dict, content_blocks: Dict[int, Dict]) -> 
     if delta_type == "text_delta":
         block["text"] = block.get("text", "") + delta.get("text", "")
     elif delta_type == "input_json_delta":
-        block["_partial_json"] = block.get("_partial_json", "") + delta.get(
-            "partial_json", ""
-        )
+        block["_partial_json"] = block.get("_partial_json", "") + delta.get("partial_json", "")
     elif delta_type == "thinking_delta":
         block["thinking"] = block.get("thinking", "") + delta.get("thinking", "")
     elif delta_type == "signature_delta":
@@ -164,9 +161,7 @@ class AgenticAnthropicStreamingIterator:
         self._model = model
         self._messages = messages
         self._anthropic_messages_provider_config = anthropic_messages_provider_config
-        self._anthropic_messages_optional_request_params = (
-            anthropic_messages_optional_request_params
-        )
+        self._anthropic_messages_optional_request_params = anthropic_messages_optional_request_params
         self._logging_obj = logging_obj
         self._custom_llm_provider = custom_llm_provider
         self._kwargs = kwargs
@@ -198,6 +193,14 @@ class AgenticAnthropicStreamingIterator:
 
         raise StopAsyncIteration
 
+    async def aclose(self) -> None:
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            aclose_if_supported,
+        )
+
+        await aclose_if_supported(self._inner)
+        await aclose_if_supported(self._follow_up_iterator)
+
     async def _process_agentic_hooks(self) -> None:
         """Rebuild the Anthropic response from collected SSE bytes and call hooks."""
         if self._hook_processing_done:
@@ -210,17 +213,11 @@ class AgenticAnthropicStreamingIterator:
         try:
             rebuilt = self._rebuild_anthropic_response_from_sse(self._collected_bytes)
             if rebuilt is None:
-                verbose_logger.debug(
-                    "AgenticStreamingIterator: Could not rebuild response from SSE bytes"
-                )
+                verbose_logger.debug("AgenticStreamingIterator: Could not rebuild response from SSE bytes")
                 return
 
             [
-                (
-                    f"{b.get('type')}({b.get('name', '')})"
-                    if b.get("type") == "tool_use"
-                    else b.get("type")
-                )
+                (f"{b.get('type')}({b.get('name', '')})" if b.get("type") == "tool_use" else b.get("type"))
                 for b in rebuilt.get("content", [])
             ]
 
@@ -249,9 +246,7 @@ class AgenticAnthropicStreamingIterator:
                     AnthropicMessagesResponse,
                 )
 
-                fake = FakeAnthropicMessagesStreamIterator(
-                    response=cast(AnthropicMessagesResponse, result)
-                )
+                fake = FakeAnthropicMessagesStreamIterator(response=cast(AnthropicMessagesResponse, result))
                 self._follow_up_iterator = fake.__aiter__()
             else:
                 verbose_logger.warning(
@@ -261,8 +256,7 @@ class AgenticAnthropicStreamingIterator:
         except Exception as e:
             _call_id = getattr(self._logging_obj, "litellm_call_id", "unknown")
             verbose_logger.exception(
-                "AgenticStreamingIterator: Error in agentic hook processing "
-                "[call_id=%s model=%s]: %s",
+                "AgenticStreamingIterator: Error in agentic hook processing [call_id=%s model=%s]: %s",
                 _call_id,
                 self._model,
                 str(e),

@@ -4,8 +4,9 @@ Gemini Image Edit Cost Calculator
 
 from typing import Any
 
-import litellm
-from litellm.types.utils import ImageResponse
+from litellm.llms.gemini.image_generation.cost_calculator import (
+    cost_calculator as image_generation_cost_calculator,
+)
 
 
 def cost_calculator(
@@ -15,20 +16,10 @@ def cost_calculator(
     """
     Gemini image edit cost calculator.
 
-    Mirrors image generation pricing: charge per returned image based on
-    model metadata (`output_cost_per_image`).
+    Gemini image edits and generations share image response billing behavior:
+    use provider token usage when present, otherwise fall back to per-image pricing.
     """
-    model_info = litellm.get_model_info(
+    return image_generation_cost_calculator(
         model=model,
-        custom_llm_provider="gemini",
+        image_response=image_response,
     )
-
-    output_cost_per_image: float = model_info.get("output_cost_per_image") or 0.0
-
-    if not isinstance(image_response, ImageResponse):
-        raise ValueError(
-            f"image_response must be of type ImageResponse got type={type(image_response)}"
-        )
-
-    num_images = len(image_response.data or [])
-    return output_cost_per_image * num_images

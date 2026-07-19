@@ -17,9 +17,9 @@ export default function UISettings() {
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
-  const forwardLLMProviderAuthHeadersProperty =
-    schema?.properties?.forward_llm_provider_auth_headers;
+  const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
+  const enableChatUIProperty = schema?.properties?.enable_chat_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
   const allowAgentsTeamAdminsProperty = schema?.properties?.allow_agents_for_team_admins;
@@ -103,6 +103,21 @@ export default function UISettings() {
   const handleToggleEnableProjectsUI = (checked: boolean) => {
     updateSettings(
       { enable_projects_ui: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully. Refreshing page...");
+          setTimeout(() => window.location.reload(), 1000);
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleEnableChatUI = (checked: boolean) => {
+    updateSettings(
+      { enable_chat_ui: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully. Refreshing page...");
@@ -306,10 +321,7 @@ export default function UISettings() {
               disabled={isUpdating}
               loading={isUpdating}
               onChange={handleToggleForwardLLMProviderAuthHeaders}
-              aria-label={
-                forwardLLMProviderAuthHeadersProperty?.description ??
-                "Forward LLM provider auth headers"
-              }
+              aria-label={forwardLLMProviderAuthHeadersProperty?.description ?? "Forward LLM provider auth headers"}
             />
             <Space direction="vertical" size={4}>
               <Typography.Text strong>Forward LLM provider auth headers</Typography.Text>
@@ -338,6 +350,23 @@ export default function UISettings() {
               </Space>
             </Space>
           )}
+
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.enable_chat_ui)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleEnableChatUI}
+              aria-label={enableChatUIProperty?.description ?? "Enable Chat page"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>[BETA] Enable Chat page (page will refresh)</Typography.Text>
+              <Typography.Text type="secondary">
+                {enableChatUIProperty?.description ??
+                  "If enabled, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth."}
+              </Typography.Text>
+            </Space>
+          </Space>
 
           <Divider />
 

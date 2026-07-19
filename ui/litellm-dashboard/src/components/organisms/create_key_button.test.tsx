@@ -1,35 +1,40 @@
-import { act, fireEvent } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { Team } from "../key_team_helpers/key_list";
+import { userFilterUICall } from "../networking";
 import CreateKey from "./create_key_button";
 
-const { formMock, setFieldsValueMock, radioGroupValueRef, formStateRef, mockKeyCreateCall } = vi.hoisted(() => {
-  const formStateRef = { current: {} as Record<string, any> };
-  const mockKeyCreateCall = vi.fn().mockResolvedValue({
-    key: "test-api-key",
-    soft_budget: null,
+const { formMock, setFieldsValueMock, radioGroupValueRef, formStateRef, mockKeyCreateCall, teamDropdownTeamsRef } =
+  vi.hoisted(() => {
+    const formStateRef = { current: {} as Record<string, any> };
+    const teamDropdownTeamsRef = { current: [] as Array<{ team_id: string; team_alias: string; models: string[] }> };
+    const mockKeyCreateCall = vi.fn().mockResolvedValue({
+      key: "test-api-key",
+      soft_budget: null,
+    });
+    const formMock = {
+      setFieldsValue: vi.fn((values: Record<string, any>) => {
+        Object.assign(formStateRef.current, values);
+      }),
+      setFieldValue: vi.fn((name: string, value: any) => {
+        formStateRef.current[name] = value;
+      }),
+      getFieldValue: vi.fn((name: string) => formStateRef.current[name]),
+      resetFields: vi.fn(() => {
+        formStateRef.current = {};
+      }),
+    };
+    const radioGroupValueRef = { current: null as string | null };
+    return {
+      formMock,
+      setFieldsValueMock: formMock.setFieldsValue,
+      radioGroupValueRef,
+      formStateRef,
+      mockKeyCreateCall,
+      teamDropdownTeamsRef,
+    };
   });
-  const formMock = {
-    setFieldsValue: vi.fn((values: Record<string, any>) => {
-      Object.assign(formStateRef.current, values);
-    }),
-    setFieldValue: vi.fn((name: string, value: any) => {
-      formStateRef.current[name] = value;
-    }),
-    getFieldValue: vi.fn((name: string) => formStateRef.current[name]),
-    resetFields: vi.fn(() => {
-      formStateRef.current = {};
-    }),
-  };
-  const radioGroupValueRef = { current: null as string | null };
-  return {
-    formMock,
-    setFieldsValueMock: formMock.setFieldsValue,
-    radioGroupValueRef,
-    formStateRef,
-    mockKeyCreateCall,
-  };
-});
 
 const defaultAuthorizedState = {
   accessToken: "test-token",
@@ -61,8 +66,7 @@ vi.mock("react-copy-to-clipboard", () => ({
 vi.mock("@tremor/react", () => {
   const React = require("react");
   const Stub = ({ children }: { children?: any }) => React.createElement("div", null, children);
-  const Button = ({ children, ...props }: { children?: any }) =>
-    React.createElement("button", props, children);
+  const Button = ({ children, ...props }: { children?: any }) => React.createElement("button", props, children);
   const TextInput = (props: any) => React.createElement("input", props);
 
   return {
@@ -91,7 +95,14 @@ vi.mock("antd", () => {
     return event;
   };
 
-  const Form = ({ children, onFinish, ...props }: { children?: any; onFinish?: (values: Record<string, any>) => void }) =>
+  const Form = ({
+    children,
+    onFinish,
+    ...props
+  }: {
+    children?: any;
+    onFinish?: (values: Record<string, any>) => void;
+  }) =>
     React.createElement(
       "form",
       {
@@ -119,8 +130,21 @@ vi.mock("antd", () => {
 
   Form.useForm = () => [formMock];
 
-  const Select = ({ children, onChange, options, ...props }: { children?: any; onChange?: (value: string) => void; options?: Array<{ value: string; label: string }> }) =>
-    React.createElement(
+  Form.useWatch = (name: string) => formStateRef.current[name];
+
+  const Select = ({
+    children,
+    onChange,
+    onSearch,
+    options,
+    ...props
+  }: {
+    children?: any;
+    onChange?: (value: string) => void;
+    onSearch?: (value: string) => void;
+    options?: Array<{ value: string; label: string }>;
+  }) => {
+    const select = React.createElement(
       "select",
       {
         ...props,
@@ -130,8 +154,22 @@ vi.mock("antd", () => {
       options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
     );
 
-  Select.Option = ({ children, ...props }: { children?: any }) =>
-    React.createElement("option", props, children);
+    if (!onSearch) {
+      return select;
+    }
+
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement("input", {
+        "data-testid": "select-search-input",
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => onSearch(event.target.value),
+      }),
+      select,
+    );
+  };
+
+  Select.Option = ({ children, ...props }: { children?: any }) => React.createElement("option", props, children);
 
   const Input = (props: any) => React.createElement("input", props);
   Input.Password = (props: any) => React.createElement("input", { ...props, type: "password" });
@@ -140,8 +178,7 @@ vi.mock("antd", () => {
   const Modal = ({ children, open }: { children?: any; open?: boolean }) =>
     open ? React.createElement("div", null, children) : null;
 
-  const Radio = ({ children, ...props }: { children?: any }) =>
-    React.createElement("div", props, children);
+  const Radio = ({ children, ...props }: { children?: any }) => React.createElement("div", props, children);
 
   Radio.Group = ({ children, value }: { children?: any; value?: string }) => {
     radioGroupValueRef.current = value ?? null;
@@ -154,6 +191,11 @@ vi.mock("antd", () => {
 
   const Button = ({ children, htmlType, ...props }: { children?: any; htmlType?: string }) =>
     React.createElement("button", { ...props, type: htmlType ?? props.type }, children);
+
+  const Typography = ({ children, ...props }: { children?: any }) => React.createElement("div", props, children);
+  Typography.Text = ({ children, ...props }: { children?: any }) => React.createElement("span", props, children);
+  Typography.Paragraph = ({ children, ...props }: { children?: any }) => React.createElement("p", props, children);
+  Typography.Title = ({ children, ...props }: { children?: any }) => React.createElement("h1", props, children);
 
   return {
     Button,
@@ -171,6 +213,7 @@ vi.mock("antd", () => {
     Switch,
     Tag,
     Tooltip,
+    Typography,
   };
 });
 
@@ -217,10 +260,18 @@ vi.mock("../common_components/RouterSettingsAccordion", () => ({ default: () => 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useInfiniteTeams: () => ({
     data: {
-      pages: [{ teams: [
-        { team_id: "team-1", team_alias: "Team One" },
-        { team_id: "team-2", team_alias: "Team Two" },
-      ], total: 2, page: 1, page_size: 50, total_pages: 1 }],
+      pages: [
+        {
+          teams: [
+            { team_id: "team-1", team_alias: "Team One" },
+            { team_id: "team-2", team_alias: "Team Two" },
+          ],
+          total: 2,
+          page: 1,
+          page_size: 50,
+          total_pages: 1,
+        },
+      ],
     },
     fetchNextPage: vi.fn(),
     hasNextPage: false,
@@ -229,15 +280,26 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   }),
 }));
 vi.mock("../common_components/team_dropdown", () => ({
-  default: ({ onChange, disabled }: { onChange?: (v: string) => void; disabled?: boolean }) => (
+  default: ({
+    onTeamSelect,
+    disabled,
+  }: {
+    onTeamSelect?: (team: { team_id: string; team_alias: string; models: string[] } | null) => void;
+    disabled?: boolean;
+  }) => (
     <select
       data-testid="team-dropdown"
       disabled={disabled}
-      onChange={(e) => onChange?.(e.target.value)}
+      onChange={(e) =>
+        onTeamSelect?.(teamDropdownTeamsRef.current.find((team) => team.team_id === e.target.value) ?? null)
+      }
     >
       <option value="">Select team</option>
-      <option value="team-1">Team One</option>
-      <option value="team-2">Team Two</option>
+      {teamDropdownTeamsRef.current.map((team) => (
+        <option key={team.team_id} value={team.team_id}>
+          {team.team_alias}
+        </option>
+      ))}
     </select>
   ),
 }));
@@ -246,9 +308,13 @@ vi.mock("../mcp_server_management/MCPServerSelector", () => ({ default: () => nu
 vi.mock("../mcp_server_management/MCPToolPermissions", () => ({ default: () => null }));
 vi.mock("../shared/numerical_input", () => ({ default: () => null }));
 vi.mock("../vector_store_management/VectorStoreSelector", () => ({ default: () => null }));
-vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
-  getModelDisplayName: (model: string) => model,
-}));
+vi.mock("../key_team_helpers/fetch_available_models_team_key", async () => {
+  const actual = await vi.importActual("../key_team_helpers/fetch_available_models_team_key");
+  return {
+    ...actual,
+    getModelDisplayName: (model: string) => model,
+  };
+});
 
 vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
   useTags: vi.fn().mockReturnValue({
@@ -291,11 +357,7 @@ vi.mock("../common_components/OrganizationDropdown", () => ({
 
 vi.mock("../common_components/ProjectDropdown", () => ({
   default: ({ value, onChange }: { value?: string; onChange?: (v: string) => void }) => (
-    <input
-      data-testid="project-dropdown"
-      value={value || ""}
-      onChange={(e) => onChange?.(e.target.value)}
-    />
+    <input data-testid="project-dropdown" value={value || ""} onChange={(e) => onChange?.(e.target.value)} />
   ),
 }));
 
@@ -325,6 +387,10 @@ describe("CreateKey", () => {
     authorizedState = { ...defaultAuthorizedState };
     radioGroupValueRef.current = null;
     formStateRef.current = {};
+    teamDropdownTeamsRef.current = [
+      { team_id: "team-1", team_alias: "Team One", models: [] },
+      { team_id: "team-2", team_alias: "Team Two", models: [] },
+    ];
     mockKeyCreateCall.mockResolvedValue({
       key: "test-api-key",
       soft_budget: null,
@@ -445,11 +511,7 @@ describe("CreateKey", () => {
 
   it("should apply owned_by another_user for admin", async () => {
     renderWithProviders(
-      <CreateKey
-        {...defaultProps}
-        autoOpenCreate={true}
-        prefillData={{ owned_by: "another_user" }}
-      />,
+      <CreateKey {...defaultProps} autoOpenCreate={true} prefillData={{ owned_by: "another_user" }} />,
     );
 
     await waitFor(() => {
@@ -458,13 +520,7 @@ describe("CreateKey", () => {
   });
 
   it("should prefill key_type when provided", async () => {
-    renderWithProviders(
-      <CreateKey
-        {...defaultProps}
-        autoOpenCreate={true}
-        prefillData={{ key_type: "management" }}
-      />,
-    );
+    renderWithProviders(<CreateKey {...defaultProps} autoOpenCreate={true} prefillData={{ key_type: "management" }} />);
 
     await waitFor(() => {
       expect(setFieldsValueMock).toHaveBeenCalledWith({ key_type: "management" });
@@ -513,9 +569,7 @@ describe("CreateKey", () => {
     });
 
     it("should render team dropdown alongside organization dropdown", async () => {
-      const teamsWithOrg = [
-        { team_id: "team-1", team_alias: "Team Alpha", organization_id: "org-1", models: [] },
-      ];
+      const teamsWithOrg = [{ team_id: "team-1", team_alias: "Team Alpha", organization_id: "org-1", models: [] }];
 
       renderWithProviders(<CreateKey {...defaultProps} teams={teamsWithOrg as any} />);
 
@@ -545,6 +599,137 @@ describe("CreateKey", () => {
       });
 
       expect(formStateRef.current["organization_id"]).toBe("org-1");
+    });
+  });
+
+  describe("models dropdown team gating", () => {
+    const getModelsSelect = async (): Promise<HTMLElement> => {
+      return waitFor(() => {
+        const element = document.querySelector('select[placeholder="Select models"]');
+        expect(element).toBeTruthy();
+        return element as HTMLElement;
+      });
+    };
+
+    it("should offer all-proxy-models but not all-team-models when no team is selected", async () => {
+      renderWithProviders(<CreateKey {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      const modelsSelect = await getModelsSelect();
+
+      await waitFor(() => {
+        expect(within(modelsSelect).getByText("gpt-4")).toBeInTheDocument();
+      });
+
+      expect(within(modelsSelect).getByText("All Proxy Models")).toBeInTheDocument();
+      expect(within(modelsSelect).queryByText("All Team Models")).not.toBeInTheDocument();
+    });
+
+    it("should offer all-team-models but hide all-proxy-models when a team is selected", async () => {
+      teamDropdownTeamsRef.current = [
+        { team_id: "team-1", team_alias: "Team One", models: ["all-proxy-models", "team-model-1"] },
+      ];
+
+      renderWithProviders(<CreateKey {...defaultProps} teams={teamDropdownTeamsRef.current as unknown as Team[]} />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("team-dropdown")).toBeInTheDocument();
+      });
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("team-dropdown"), { target: { value: "team-1" } });
+      });
+
+      const modelsSelect = await getModelsSelect();
+
+      await waitFor(() => {
+        expect(within(modelsSelect).getByText("team-model-1")).toBeInTheDocument();
+      });
+
+      expect(within(modelsSelect).getByText("All Team Models")).toBeInTheDocument();
+      expect(within(modelsSelect).queryByText("All Proxy Models")).not.toBeInTheDocument();
+      expect(within(modelsSelect).queryByText("all-proxy-models")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("user search debounce", () => {
+    const mockUserFilterUICall = vi.mocked(userFilterUICall);
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    });
+
+    const renderUserSearch = () => {
+      const view = renderWithProviders(
+        <CreateKey {...defaultProps} autoOpenCreate={true} prefillData={{ owned_by: "another_user" }} />,
+      );
+      return { input: screen.getByTestId("select-search-input"), unmount: view.unmount };
+    };
+
+    it("should not fire the search before the wait elapses", () => {
+      const { input } = renderUserSearch();
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "alice" } });
+      });
+
+      expect(mockUserFilterUICall).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(299);
+      });
+
+      expect(mockUserFilterUICall).not.toHaveBeenCalled();
+    });
+
+    it("should fire exactly one search carrying the last value after the wait", async () => {
+      const { input } = renderUserSearch();
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "a" } });
+        vi.advanceTimersByTime(100);
+        fireEvent.change(input, { target: { value: "al" } });
+        vi.advanceTimersByTime(100);
+        fireEvent.change(input, { target: { value: "alice" } });
+      });
+
+      expect(mockUserFilterUICall).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+
+      expect(mockUserFilterUICall).toHaveBeenCalledTimes(1);
+      const params = mockUserFilterUICall.mock.calls[0][1] as URLSearchParams;
+      expect(params.get("user_email")).toBe("alice");
+    });
+
+    it("should fire nothing when unmounted mid-wait", () => {
+      const { input, unmount } = renderUserSearch();
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "alice" } });
+      });
+
+      unmount();
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(mockUserFilterUICall).not.toHaveBeenCalled();
     });
   });
 

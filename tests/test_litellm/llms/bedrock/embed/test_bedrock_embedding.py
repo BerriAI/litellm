@@ -957,3 +957,50 @@ def test_titan_image_embedding_cost_uses_per_image_rate():
         assert response.usage is not None
         assert response.usage.prompt_tokens_details is not None
         assert response.usage.prompt_tokens_details.image_count == 1
+
+
+@pytest.mark.parametrize(
+    "encoding_format,expected_embedding_types",
+    [
+        ("float", ["float"]),
+        ("base64", ["base64"]),
+        (["float", "int8"], ["float", "int8"]),
+    ],
+)
+def test_bedrock_cohere_embedding_types_wrapped_as_list(
+    encoding_format, expected_embedding_types
+):
+    """
+    Bedrock Cohere expects `embedding_types` as a JSON array, not a raw string.
+
+    Regression test for: Bedrock returns
+        Malformed input request: #/embedding_types: expected type: JSONArray, found: String
+    when `encoding_format` is passed as a string.
+    """
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    model = "bedrock/cohere.embed-multilingual-v3"
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(cohere_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model=model,
+            input=test_input,
+            encoding_format=encoding_format,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key="test-bearer-token-12345",
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+
+        request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+        assert "embedding_types" in request_body
+        assert request_body["embedding_types"] == expected_embedding_types
+        assert isinstance(request_body["embedding_types"], list)

@@ -18,7 +18,14 @@ import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails"
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { isProxyAdminRole } from "@/utils/roles";
-import { EditOutlined, GlobalOutlined, InfoCircleOutlined, MinusCircleOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import {
+  EditOutlined,
+  GlobalOutlined,
+  InfoCircleOutlined,
+  MinusCircleOutlined,
+  PlusOutlined,
+  SaveOutlined,
+} from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Accordion, AccordionBody, AccordionHeader, Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
 import { Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Tag, Tooltip } from "antd";
@@ -27,6 +34,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
@@ -42,7 +50,7 @@ import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import SearchToolSelector from "../SearchTools/SearchToolSelector";
+import SearchToolSelector from "../search_tools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
@@ -99,7 +107,7 @@ export interface TeamData {
     budget_reset_at: string | null;
     model_id: string | null;
     litellm_model_table: {
-      model_aliases: Record<string, string>;
+      model_aliases: Record<string, string> | null;
     } | null;
     created_at: string;
     access_group_ids?: string[];
@@ -199,6 +207,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
+  const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
@@ -227,10 +236,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
-  const defaultTabKey = useMemo(
-    () => getTeamInfoDefaultTab(editTeam, canEditTeam),
-    [editTeam, canEditTeam]
-  );
+  const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 
   const fetchTeamInfo = async () => {
     try {
@@ -322,7 +328,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               console.error(`Failed to fetch guardrails for policy ${policyName}:`, error);
               guardrailsMap[policyName] = [];
             }
-          })
+          }),
         );
         setPolicyGuardrails(guardrailsMap);
       } catch (error) {
@@ -384,6 +390,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
+        budget_duration: values.budget_duration,
         allowed_models: values.allowed_models,
       };
       MessageManager.destroy(); // Remove all existing toasts
@@ -498,9 +505,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const killSwitchOnAtSave = values.disable_global_guardrails === true;
       const optedOutGlobalGuardrails = killSwitchOnAtSave
         ? Array.from(globalGuardrailNames)
-        : Array.from(globalGuardrailNames).filter(
-            (n) => !(values.guardrails || []).includes(n),
-          );
+        : Array.from(globalGuardrailNames).filter((n) => !(values.guardrails || []).includes(n));
+
+      // Non-proxy-admins can't set allowed_passthrough_routes; preserve the
+      // stored value so an unrelated save can't wipe it.
+      const passthroughRoutesMetadata = is_proxy_admin
+        ? { allowed_passthrough_routes: values.allowed_passthrough_routes || [] }
+        : info.metadata?.allowed_passthrough_routes
+          ? { allowed_passthrough_routes: info.metadata.allowed_passthrough_routes }
+          : {};
 
       const updateData: any = {
         team_id: teamId,
@@ -515,6 +528,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
+          ...passthroughRoutesMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
@@ -522,16 +536,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           soft_budget_alerting_emails:
             typeof values.soft_budget_alerting_emails === "string"
               ? values.soft_budget_alerting_emails
-                .split(",")
-                .map((email: string) => email.trim())
-                .filter((email: string) => email.length > 0)
+                  .split(",")
+                  .map((email: string) => email.trim())
+                  .filter((email: string) => email.length > 0)
               : values.soft_budget_alerting_emails || [],
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
-        ...(values.organization_id !== info.organization_id
-          ? { organization_id: values.organization_id ?? null }
-          : {}),
+        ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
@@ -609,6 +621,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.default_team_member_models = values.default_team_member_models;
       }
 
+      const previousModelAliases = info.litellm_model_table?.model_aliases ?? {};
+      if (Object.keys(teamModelAliases).length > 0 || Object.keys(previousModelAliases).length > 0) {
+        updateData.model_aliases = teamModelAliases;
+      }
+
       // Handle router_settings - read fresh values from DOM at save time.
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
@@ -620,8 +637,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           !(Array.isArray(value) && value.length === 0);
 
         const hasNewValues = Object.values(currentRouterSettings.router_settings).some(isMeaningfulValue);
-        const hadExistingSettings = info.router_settings &&
-          Object.values(info.router_settings).some(isMeaningfulValue);
+        const hadExistingSettings = info.router_settings && Object.values(info.router_settings).some(isMeaningfulValue);
 
         // Send if there are new values OR if the user is clearing existing ones
         if (hasNewValues || hadExistingSettings) {
@@ -656,15 +672,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const optedOutGlobals = new Set<string>(
     Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : [],
   );
-  const nonGlobalOptIns: string[] = (
-    Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []
-  ).filter((n: string) => !globalGuardrailNames.has(n));
+  const nonGlobalOptIns: string[] = (Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []).filter(
+    (n: string) => !globalGuardrailNames.has(n),
+  );
   const effectiveGuardrails: string[] = initialKillSwitchOn
     ? nonGlobalOptIns
-    : [
-        ...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)),
-        ...nonGlobalOptIns,
-      ];
+    : [...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)), ...nonGlobalOptIns];
 
   const preventTagMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -701,12 +714,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button
-            type="text"
-            icon={<ArrowLeftIcon className="h-4 w-4" />}
-            onClick={onClose}
-            className="mb-4"
-          >
+          <Button type="text" icon={<ArrowLeftIcon className="h-4 w-4" />} onClick={onClose} className="mb-4">
             Back to Teams
           </Button>
           <Title>{info.team_alias}</Title>
@@ -717,10 +725,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               size="small"
               icon={copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(info.team_id, "team-id")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["team-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["team-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
         </div>
@@ -818,7 +827,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <GuardrailSettingsView
                     globalGuardrailNames={globalGuardrailNames}
                     teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
-                    optedOutGlobalGuardrails={Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : []}
+                    optedOutGlobalGuardrails={
+                      Array.isArray(info.metadata?.opted_out_global_guardrails)
+                        ? info.metadata.opted_out_global_guardrails
+                        : []
+                    }
                     killSwitchOn={initialKillSwitchOn}
                     variant="inline"
                   />
@@ -870,13 +883,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           {
             key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
             label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS],
-            children: (
-              <TeamVirtualKeysTable
-                teamId={teamId}
-                teamAlias={info.team_alias}
-                organization={organization}
-              />
-            ),
+            children: <TeamVirtualKeysTable teamId={teamId} teamAlias={info.team_alias} organization={organization} />,
           },
           {
             key: TEAM_INFO_TAB_KEYS.MEMBERS,
@@ -895,9 +902,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           {
             key: TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
             label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS],
-            children: (
-              <MemberPermissions teamId={teamId} accessToken={accessToken} canEditTeam={canEditTeam} />
-            ),
+            children: <MemberPermissions teamId={teamId} accessToken={accessToken} canEditTeam={canEditTeam} />,
           },
           {
             key: TEAM_INFO_TAB_KEYS.SETTINGS,
@@ -907,7 +912,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div className="flex justify-between items-center mb-4">
                   <Title>Team Settings</Title>
                   {canEditTeam && !isEditing && (
-                    <Button icon={<EditOutlined className="h-4 w-4" />} onClick={() => setIsEditing(true)}>Edit Settings</Button>
+                    <Button
+                      icon={<EditOutlined className="h-4 w-4" />}
+                      onClick={() => {
+                        setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
+                        setIsEditing(true);
+                      }}
+                    >
+                      Edit Settings
+                    </Button>
                   )}
                 </div>
 
@@ -955,16 +968,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       guardrails: effectiveGuardrails,
                       policies: info.policies || [],
                       disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
-                      soft_budget_alerting_emails:
-                        Array.isArray(info.metadata?.soft_budget_alerting_emails)
-                          ? info.metadata.soft_budget_alerting_emails.join(", ")
-                          : "",
+                      soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
+                        ? info.metadata.soft_budget_alerting_emails.join(", ")
+                        : "",
                       metadata: info.metadata
                         ? JSON.stringify(
-                          (({ logging, secret_manager_settings, soft_budget_alerting_emails, model_tpm_limit, model_rpm_limit, ...rest }) => rest)(info.metadata),
-                          null,
-                          2,
-                        )
+                            (({
+                              logging,
+                              secret_manager_settings,
+                              soft_budget_alerting_emails,
+                              model_tpm_limit,
+                              model_rpm_limit,
+                              allowed_passthrough_routes,
+                              ...rest
+                            }) => rest)(info.metadata),
+                            null,
+                            2,
+                          )
                         : "",
                       logging_settings: info.metadata?.logging || [],
                       secret_manager_settings: info.metadata?.secret_manager_settings
@@ -986,6 +1006,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       },
                       access_group_ids: info.access_group_ids || [],
                       default_team_member_models: info.default_team_member_models || [],
+                      allowed_passthrough_routes: info.metadata?.allowed_passthrough_routes || [],
                     }}
                     layout="vertical"
                   >
@@ -1010,10 +1031,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         options={{
                           includeSpecialOptions: true,
                           includeUserModels: !teamData?.team_info?.organization_id,
-                          showAllProxyModelsOverride: isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
+                          showAllProxyModelsOverride:
+                            isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
                         }}
                         context="team"
                         dataTestId="models-select"
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span>
+                          Model Aliases{" "}
+                          <Tooltip title="Map a custom alias to an underlying model. Team members can call the alias in API requests instead of the real model name.">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                    >
+                      <ModelAliasManager
+                        accessToken={accessToken || ""}
+                        initialModelAliases={teamModelAliases}
+                        onAliasUpdate={setTeamModelAliases}
+                        showExampleConfig={false}
                       />
                     </Form.Item>
 
@@ -1039,7 +1079,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </AccordionHeader>
                       <AccordionBody>
                         <Text className="text-xs text-gray-500 mb-4">
-                          Optional defaults applied when members join this team. All fields can be overridden per member.
+                          Optional defaults applied when members join this team. All fields can be overridden per
+                          member.
                         </Text>
                         <Form.Item
                           label={
@@ -1128,11 +1169,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         {(fields, { add, remove }) => (
                           <>
                             {fields.map(({ key, name, ...restField }) => (
-                              <Space
-                                key={key}
-                                style={{ display: "flex", marginBottom: 8 }}
-                                align="baseline"
-                              >
+                              <Space key={key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
                                 <Form.Item
                                   {...restField}
                                   name={[name, "model"]}
@@ -1142,9 +1179,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                       validator: (_, value) => {
                                         if (!value) return Promise.resolve();
                                         const all = form.getFieldValue("modelLimits") ?? [];
-                                        const dupes = all.filter(
-                                          (entry: { model?: string }) => entry?.model === value,
-                                        );
+                                        const dupes = all.filter((entry: { model?: string }) => entry?.model === value);
                                         if (dupes.length > 1) {
                                           return Promise.reject(new Error("Duplicate model"));
                                         }
@@ -1184,19 +1219,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                 <Form.Item {...restField} name={[name, "rpm"]}>
                                   <InputNumber placeholder="RPM Limit" min={0} />
                                 </Form.Item>
-                                <MinusCircleOutlined
-                                  onClick={() => remove(name)}
-                                  style={{ color: "#ef4444" }}
-                                />
+                                <MinusCircleOutlined onClick={() => remove(name)} style={{ color: "#ef4444" }} />
                               </Space>
                             ))}
                             <Form.Item>
-                              <Button
-                                type="dashed"
-                                onClick={() => add()}
-                                block
-                                icon={<PlusOutlined />}
-                              >
+                              <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
                                 Add Model Limit
                               </Button>
                             </Form.Item>
@@ -1262,11 +1289,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           {(guardrailsData?.guardrails ?? [])
                             .filter((g) => !g.litellm_params?.default_on)
                             .map((g) => (
-                              <Select.Option
-                                key={g.guardrail_name}
-                                value={g.guardrail_name}
-                                label={g.guardrail_name}
-                              >
+                              <Select.Option key={g.guardrail_name} value={g.guardrail_name} label={g.guardrail_name}>
                                 {g.guardrail_name}
                               </Select.Option>
                             ))}
@@ -1338,12 +1361,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-                      <PassThroughRoutesSelector
-                        onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-                        value={form.getFieldValue("allowed_passthrough_routes")}
-                        accessToken={accessToken || ""}
-                        placeholder="Select pass through routes"
-                      />
+                      <Tooltip
+                        title={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set allowed pass through routes"
+                            : !is_proxy_admin
+                              ? "Only proxy admins can set allowed pass through routes"
+                              : ""
+                        }
+                        placement="top"
+                      >
+                        <PassThroughRoutesSelector
+                          onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                          value={form.getFieldValue("allowed_passthrough_routes")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select pass through routes"
+                          disabled={!premiumUser || !is_proxy_admin}
+                        />
+                      </Tooltip>
                     </Form.Item>
 
                     <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
@@ -1352,6 +1387,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         value={form.getFieldValue("mcp_servers_and_groups")}
                         accessToken={accessToken || ""}
                         placeholder="Select MCP servers or access groups (optional)"
+                        allowAllProxyMcpServers={is_proxy_admin}
                       />
                     </Form.Item>
 
@@ -1463,12 +1499,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Input.TextArea rows={10} />
                     </Form.Item>
 
-                    <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 -bottom-6 -inset-x-6">
                       <div className="flex justify-end items-center gap-2">
                         <Button onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                           Cancel
                         </Button>
-                        <Button icon={<SaveOutlined className="h-4 w-4" />} type="primary" htmlType="submit" loading={isTeamSaving}>
+                        <Button
+                          icon={<SaveOutlined className="h-4 w-4" />}
+                          type="primary"
+                          htmlType="submit"
+                          loading={isTeamSaving}
+                        >
                           Save Changes
                         </Button>
                       </div>
@@ -1511,6 +1552,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </div>
                     )}
                     <div>
+                      <Text className="font-medium">Model Aliases</Text>
+                      {(() => {
+                        const aliasEntries = Object.entries(info.litellm_model_table?.model_aliases ?? {});
+                        if (aliasEntries.length === 0) {
+                          return <div className="text-gray-400">No model aliases configured</div>;
+                        }
+                        return (
+                          <div className="mt-1 space-y-1">
+                            {aliasEntries.map(([alias, target]) => (
+                              <div key={alias} className="text-sm">
+                                <span className="font-mono">{alias}</span>
+                                <span className="text-gray-400">{" -> "}</span>
+                                <span className="font-mono">{target}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    <div>
                       <Text className="font-medium">Rate Limits</Text>
                       <div>TPM: {info.tpm_limit || "Unlimited"}</div>
                       <div>RPM: {info.rpm_limit || "Unlimited"}</div>
@@ -1547,9 +1608,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       {info.metadata?.soft_budget_alerting_emails &&
                         Array.isArray(info.metadata.soft_budget_alerting_emails) &&
                         info.metadata.soft_budget_alerting_emails.length > 0 && (
-                          <div>
-                            Soft Budget Alerting Emails: {info.metadata.soft_budget_alerting_emails.join(", ")}
-                          </div>
+                          <div>Soft Budget Alerting Emails: {info.metadata.soft_budget_alerting_emails.join(", ")}</div>
                         )}
                     </div>
                     <div>
@@ -1567,14 +1626,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </div>
                     <div>
                       <Text className="font-medium">Router Settings</Text>
-                      {info.router_settings && Object.values(info.router_settings).some(
-                        (v) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0)
+                      {info.router_settings &&
+                      Object.values(info.router_settings).some(
+                        (v) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0),
                       ) ? (
                         <div className="mt-1 space-y-1">
                           {info.router_settings.routing_strategy && (
                             <div>
-                              Routing Strategy:{" "}
-                              <Badge color="blue">{info.router_settings.routing_strategy}</Badge>
+                              Routing Strategy: <Badge color="blue">{info.router_settings.routing_strategy}</Badge>
                             </div>
                           )}
                           {info.router_settings.num_retries != null && (
@@ -1586,18 +1645,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           {info.router_settings.cooldown_time != null && (
                             <div>Cooldown Time: {info.router_settings.cooldown_time}s</div>
                           )}
-                          {info.router_settings.timeout != null && (
-                            <div>Timeout: {info.router_settings.timeout}s</div>
-                          )}
+                          {info.router_settings.timeout != null && <div>Timeout: {info.router_settings.timeout}s</div>}
                           {info.router_settings.retry_after != null && (
                             <div>Retry After: {info.router_settings.retry_after}s</div>
                           )}
-                          {info.router_settings.fallbacks && Array.isArray(info.router_settings.fallbacks) && info.router_settings.fallbacks.length > 0 && (
-                            <div>Fallbacks: {info.router_settings.fallbacks.length} configured</div>
-                          )}
-                          {info.router_settings.enable_tag_filtering && (
-                            <div>Tag Filtering: Enabled</div>
-                          )}
+                          {info.router_settings.fallbacks &&
+                            Array.isArray(info.router_settings.fallbacks) &&
+                            info.router_settings.fallbacks.length > 0 && (
+                              <div>Fallbacks: {info.router_settings.fallbacks.length} configured</div>
+                            )}
+                          {info.router_settings.enable_tag_filtering && <div>Tag Filtering: Enabled</div>}
                         </div>
                       ) : (
                         <div className="text-gray-400">No router settings configured</div>
@@ -1622,7 +1679,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <GuardrailSettingsView
                       globalGuardrailNames={globalGuardrailNames}
                       teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
-                      optedOutGlobalGuardrails={Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : []}
+                      optedOutGlobalGuardrails={
+                        Array.isArray(info.metadata?.opted_out_global_guardrails)
+                          ? info.metadata.opted_out_global_guardrails
+                          : []
+                      }
                       killSwitchOn={initialKillSwitchOn}
                       variant="inline"
                       className="pt-4 border-t border-gray-200"
@@ -1638,18 +1699,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {info.metadata?.secret_manager_settings && (
                       <div className="pt-4 border-t border-gray-200">
                         <Text className="font-medium">Secret Manager Settings</Text>
-                        <pre className="mt-2 bg-gray-50 p-3 rounded text-xs overflow-x-auto">
+                        <pre className="mt-2 bg-gray-50 p-3 rounded-sm text-xs overflow-x-auto">
                           {JSON.stringify(info.metadata.secret_manager_settings, null, 2)}
                         </pre>
                       </div>
                     )}
-
                   </div>
                 )}
               </Card>
             ),
           },
-        ].filter(tab => visibleTabs.includes(tab.key))}
+        ].filter((tab) => visibleTabs.includes(tab.key))}
       />
 
       <MemberModal
@@ -1681,6 +1741,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               step: 0.01,
               min: 0,
               placeholder: "Budget limit for this member within this team",
+            },
+            {
+              name: "budget_duration",
+              label: (
+                <span>
+                  Budget Reset Period{" "}
+                  <Tooltip title="How often this member's budget resets within the team. Leave unset and the budget never resets.">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "budget-duration" as const,
             },
             {
               name: "tpm_limit",

@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
 import { FallbackSelectionForm } from "../Settings/RouterSettings/Fallbacks/FallbackSelectionForm";
 import { FallbackGroup } from "../Settings/RouterSettings/Fallbacks/FallbackGroupConfig";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 export interface RouterSettingsAccordionValue {
   router_settings: {
@@ -34,6 +35,8 @@ interface RouterSettingsAccordionProps {
 export interface RouterSettingsAccordionRef {
   getValue: () => RouterSettingsAccordionValue;
 }
+
+const PROPAGATE_WAIT_MS = 100;
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
   ({ accessToken, value, onChange, modelData }, ref) => {
@@ -86,10 +89,10 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       // Create a stable key from the value to detect actual external changes
       const valueKey = value?.router_settings
         ? JSON.stringify({
-          routing_strategy: value.router_settings.routing_strategy,
-          fallbacks: value.router_settings.fallbacks,
-          enable_tag_filtering: value.router_settings.enable_tag_filtering,
-        })
+            routing_strategy: value.router_settings.routing_strategy,
+            fallbacks: value.router_settings.fallbacks,
+            enable_tag_filtering: value.router_settings.enable_tag_filtering,
+          })
         : null;
 
       // Skip if this is an internal update (from our own onChange) and the value hasn't actually changed
@@ -269,7 +272,10 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
               if (ttlElement?.value) {
                 routingStrategyArgs["ttl"] = Number(ttlElement.value);
               }
-              return ["routing_strategy_args", Object.keys(routingStrategyArgs).length > 0 ? routingStrategyArgs : null];
+              return [
+                "routing_strategy_args",
+                Object.keys(routingStrategyArgs).length > 0 ? routingStrategyArgs : null,
+              ];
             }
             return [key, value];
           })
@@ -301,21 +307,26 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       };
     };
 
-    // Update parent when form values change (with debounce to avoid infinite loops)
-    useEffect(() => {
-      if (!onChange) {
-        return;
-      }
-
-      const timeoutId = setTimeout(() => {
+    const debouncedPropagate = useDebouncedCallback(
+      () => {
+        if (!onChange) {
+          return;
+        }
         isInternalUpdateRef.current = true;
         const finalRouterSettings = buildRouterSettings();
         onChange({
           router_settings: finalRouterSettings,
         });
-      }, 100);
+      },
+      { wait: PROPAGATE_WAIT_MS },
+    );
 
-      return () => clearTimeout(timeoutId);
+    // Update parent when form values change (with debounce to avoid infinite loops)
+    useEffect(() => {
+      if (!onChange) {
+        return;
+      }
+      debouncedPropagate();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [formValue, fallbacks]);
 
@@ -369,7 +380,8 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         </TabGroup>
       </div>
     );
-  });
+  },
+);
 
 RouterSettingsAccordion.displayName = "RouterSettingsAccordion";
 

@@ -30,9 +30,7 @@ def set_global_gitlab_config(config: dict) -> None:
     litellm.global_gitlab_config = config  # type: ignore
 
 
-def prompt_initializer(
-    litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec"
-) -> "CustomPromptManagement":
+def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
     """
     Initialize a prompt from a Gitlab repository.
     """

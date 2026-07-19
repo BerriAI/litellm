@@ -38,8 +38,12 @@ from litellm.proxy.utils import CallInfo
 @pytest.mark.asyncio
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
-    Scenario 1: normal
-    Scenario 2: user over budget
+    Scenario 1: normal - get_end_user_object returns the cached user
+    Scenario 2: user over budget - NOTE: budget enforcement now happens in 
+                common_checks() via _check_end_user_budget(), not in get_end_user_object()
+    
+    This test verifies that get_end_user_object correctly retrieves the end user
+    from cache. Budget enforcement is tested separately in test_check_end_user_budget().
     """
     end_user_id = "my-test-customer"
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
@@ -58,31 +62,62 @@ async def test_get_end_user_object(customer_spend, customer_budget):
         value=end_user_obj,
         model_type=LiteLLM_EndUserTable,
     )
+    # get_end_user_object only fetches data - it no longer enforces budget
+    # Budget enforcement happens in common_checks() via _check_end_user_budget()
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client="RANDOM VALUE",  # type: ignore
+        user_api_key_cache=_cache,
+        route="/v1/chat/completions",
+    )
+    assert result is not None
+    assert result.user_id == end_user_id
+
+
+@pytest.mark.parametrize("customer_spend, customer_budget", [(0, 10), (10, 0)])
+@pytest.mark.asyncio
+async def test_check_end_user_budget(customer_spend, customer_budget):
+    """
+    Test _check_end_user_budget enforcement:
+    - Scenario 1: customer_spend=0, customer_budget=10 - should pass (under budget)
+    - Scenario 2: customer_spend=10, customer_budget=0 - should fail (over budget)
+    
+    Note: Budget enforcement for end users happens in common_checks() via 
+    _check_end_user_budget(), not in get_end_user_object().
+    """
+    from litellm.proxy.auth.auth_checks import _check_end_user_budget
+    
+    _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
+    end_user_obj = LiteLLM_EndUserTable(
+        user_id="my-test-customer",
+        spend=customer_spend,
+        litellm_budget_table=_budget,
+        blocked=False,
+    )
+    
+    should_exceed = customer_spend > customer_budget
+    
     try:
-        await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client="RANDOM VALUE",  # type: ignore
-            user_api_key_cache=_cache,
+        await _check_end_user_budget(
+            end_user_obj=end_user_obj,
             route="/v1/chat/completions",
         )
-        if customer_spend > customer_budget:
+        if should_exceed:
             pytest.fail(
-                "Expected call to fail. Customer Spend={}, Customer Budget={}".format(
+                "Expected BudgetExceededError. Customer Spend={}, Customer Budget={}".format(
                     customer_spend, customer_budget
                 )
             )
-    except Exception as e:
-        if (
-            isinstance(e, litellm.BudgetExceededError)
-            and customer_spend > customer_budget
-        ):
-            pass
-        else:
+    except litellm.BudgetExceededError as e:
+        if not should_exceed:
             pytest.fail(
-                "Expected call to work. Customer Spend={}, Customer Budget={}, Error={}".format(
+                "Unexpected BudgetExceededError. Customer Spend={}, Customer Budget={}, Error={}".format(
                     customer_spend, customer_budget, str(e)
                 )
             )
+        # Verify the error has correct info
+        assert e.current_cost == customer_spend
+        assert e.max_budget == customer_budget
 
 
 @pytest.mark.parametrize(
@@ -201,6 +236,8 @@ async def test_can_team_call_model(model, expect_to_work):
         (["bedrock/*"], "bedrock/anthropic.claude-3-5-sonnet-20240620", True),
         (["bedrock/*"], "bedrockz/anthropic.claude-3-5-sonnet-20240620", False),
         (["bedrock/us.*"], "bedrock/us.amazon.nova-micro-v1:0", True),
+        (["openai/*"], "ft:gpt-4-0613", True),
+        (["openai/*"], "bedrockz/ft:gpt-4-0613", False),
     ],
 )
 @pytest.mark.asyncio

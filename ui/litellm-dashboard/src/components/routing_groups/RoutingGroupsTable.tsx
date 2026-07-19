@@ -110,7 +110,7 @@ const RoutingGroupSnippet: React.FC<RoutingGroupSnippetProps> = ({ group, baseUr
     key,
     label,
     children: (
-      <Paragraph code className="!mb-0" style={SNIPPET_BLOCK_STYLE}>
+      <Paragraph code className="mb-0!" style={SNIPPET_BLOCK_STYLE}>
         {snippets[key as SnippetKey]}
       </Paragraph>
     ),
@@ -123,22 +123,13 @@ const RoutingGroupSnippet: React.FC<RoutingGroupSnippetProps> = ({ group, baseUr
       onChange={(k) => setActiveKey(k as SnippetKey)}
       items={items}
       tabBarExtraContent={
-        <Paragraph
-          copyable={{ text: snippets[activeKey], tooltips: ["Copy", "Copied"] }}
-          className="!mb-0"
-        />
+        <Paragraph copyable={{ text: snippets[activeKey], tooltips: ["Copy", "Copied"] }} className="mb-0!" />
       }
     />
   );
 };
 
-const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({
-  groups,
-  loading,
-  onEdit,
-  onDelete,
-  proxyBaseUrl,
-}) => {
+const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({ groups, loading, onEdit, onDelete, proxyBaseUrl }) => {
   const [expandedRowKeys, setExpandedRowKeys] = useState<React.Key[]>([]);
   const baseUrl = resolveBaseUrl(proxyBaseUrl);
 
@@ -226,8 +217,7 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({
               <Text strong>How routing works for this group</Text>
             </Flex>
             <Paragraph className="text-sm text-gray-600 mb-3">
-              Callers request any model in the group by name — LiteLLM picks a deployment behind the
-              scenes using the{" "}
+              Callers request any model in the group by name — LiteLLM picks a deployment behind the scenes using the{" "}
               <Text strong>{formatStrategyLabel(group.routing_strategy)}</Text> strategy.
             </Paragraph>
             <RoutingGroupSnippet group={group} baseUrl={baseUrl} />

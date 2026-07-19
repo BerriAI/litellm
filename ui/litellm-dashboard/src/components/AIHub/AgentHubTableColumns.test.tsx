@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
-import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { describe, expect, it, vi } from "vitest";
+import { DataTable } from "@/components/shared/DataTable";
 import { getAgentHubTableColumns, AgentHubData } from "./AgentHubTableColumns";
 
 const mockAgent: AgentHubData = {
@@ -22,125 +22,106 @@ const mockAgent: AgentHubData = {
   is_public: true,
 };
 
-function TestTable({
-  data,
-  publicPage = false,
-  showModal = vi.fn(),
-  copyToClipboard = vi.fn(),
-}: {
-  data: AgentHubData[];
-  publicPage?: boolean;
-  showModal?: ReturnType<typeof vi.fn>;
-  copyToClipboard?: ReturnType<typeof vi.fn>;
-}) {
-  const columns = getAgentHubTableColumns(showModal, copyToClipboard, publicPage);
-  const table = useReactTable({ data, columns, getCoreRowModel: getCoreRowModel() });
-
-  return (
-    <table>
-      <thead>
-        {table.getHeaderGroups().map((hg) => (
-          <tr key={hg.id}>
-            {hg.headers.map((h) => (
-              <th key={h.id}>{flexRender(h.column.columnDef.header, h.getContext())}</th>
-            ))}
-          </tr>
-        ))}
-      </thead>
-      <tbody>
-        {table.getRowModel().rows.map((row) => (
-          <tr key={row.id}>
-            {row.getVisibleCells().map((cell) => (
-              <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+function renderTable(data: AgentHubData[], onAgentClick = vi.fn()) {
+  render(
+    <DataTable
+      data={data}
+      columns={getAgentHubTableColumns({ onAgentClick })}
+      getRowId={(agent, index) => agent.agent_id || String(index)}
+      sortingMode="client"
+      size="compact"
+    />,
   );
+  return onAgentClick;
 }
 
-describe("AgentHubTableColumns", () => {
+describe("getAgentHubTableColumns", () => {
   it("should render", () => {
-    render(<TestTable data={[mockAgent]} />);
+    renderTable([mockAgent]);
     expect(screen.getByText("Test Agent")).toBeInTheDocument();
   });
 
   it("should display the agent description", () => {
-    render(<TestTable data={[mockAgent]} />);
-    // Description appears in both the description column and the mobile view within agent name column
-    expect(screen.getAllByText("A test agent for unit testing").length).toBeGreaterThanOrEqual(1);
+    renderTable([mockAgent]);
+    expect(screen.getByText("A test agent for unit testing")).toBeInTheDocument();
   });
 
   it("should display the version with a 'v' prefix", () => {
-    render(<TestTable data={[mockAgent]} />);
+    renderTable([mockAgent]);
     expect(screen.getByText("v2.0")).toBeInTheDocument();
   });
 
   it("should display the protocol version", () => {
-    render(<TestTable data={[mockAgent]} />);
+    renderTable([mockAgent]);
     expect(screen.getByText("1.0")).toBeInTheDocument();
   });
 
   it("should show skill count with correct pluralization", () => {
-    render(<TestTable data={[mockAgent]} />);
+    renderTable([mockAgent]);
     expect(screen.getByText("3 skills")).toBeInTheDocument();
   });
 
   it("should show first two skills and '+1' for overflow", () => {
-    render(<TestTable data={[mockAgent]} />);
+    renderTable([mockAgent]);
     expect(screen.getByText("Skill One")).toBeInTheDocument();
     expect(screen.getByText("Skill Two")).toBeInTheDocument();
     expect(screen.getByText("+1")).toBeInTheDocument();
   });
 
   it("should show only true capabilities as badges", () => {
-    render(<TestTable data={[mockAgent]} />);
+    renderTable([mockAgent]);
     expect(screen.getByText("streaming")).toBeInTheDocument();
     expect(screen.queryByText("caching")).not.toBeInTheDocument();
   });
 
   it("should display I/O modes", () => {
-    render(<TestTable data={[mockAgent]} />);
-    // "In:" and "Out:" are in <span> children; getByText with exact:false
-    // matches against the element's full textContent across child nodes
-    expect(screen.getByText((_, el) =>
-      el?.tagName === "P" && el.textContent === "In: text"
-    )).toBeInTheDocument();
-    expect(screen.getByText((_, el) =>
-      el?.tagName === "P" && el.textContent === "Out: text, image"
-    )).toBeInTheDocument();
+    renderTable([mockAgent]);
+    const inLabel = screen.getByText("In:");
+    expect(inLabel.parentElement?.textContent).toBe("In: text");
+    const outLabel = screen.getByText("Out:");
+    expect(outLabel.parentElement?.textContent).toBe("Out: text, image");
   });
 
   it("should display 'Yes' badge for public agents", () => {
-    render(<TestTable data={[mockAgent]} />);
+    renderTable([mockAgent]);
     expect(screen.getByText("Yes")).toBeInTheDocument();
   });
 
   it("should display 'No' badge for non-public agents", () => {
-    const privateAgent = { ...mockAgent, is_public: false };
-    render(<TestTable data={[privateAgent]} />);
+    renderTable([{ ...mockAgent, is_public: false }]);
     expect(screen.getByText("No")).toBeInTheDocument();
   });
 
-  it("should display a Details button", () => {
-    render(<TestTable data={[mockAgent]} />);
-    expect(screen.getByRole("button", { name: /details|info/i })).toBeInTheDocument();
+  it("should open the agent details when the name is clicked", async () => {
+    const user = userEvent.setup();
+    const onAgentClick = renderTable([mockAgent]);
+    await user.click(screen.getByRole("button", { name: "Test Agent" }));
+    expect(onAgentClick).toHaveBeenCalledWith(mockAgent);
+  });
+
+  it("should open the agent details from the actions menu", async () => {
+    const user = userEvent.setup();
+    const onAgentClick = renderTable([mockAgent]);
+    await user.click(screen.getByTestId("agent-hub-actions-agent-1"));
+    await user.click(await screen.findByTestId("agent-hub-action-details"));
+    expect(onAgentClick).toHaveBeenCalledWith(mockAgent);
+  });
+
+  it("should copy the agent name from the actions menu", async () => {
+    const user = userEvent.setup();
+    renderTable([mockAgent]);
+    await user.click(screen.getByTestId("agent-hub-actions-agent-1"));
+    await user.click(await screen.findByTestId("agent-hub-action-copy"));
+    expect(await window.navigator.clipboard.readText()).toBe("Test Agent");
   });
 
   it("should show '-' when agent has no capabilities", () => {
-    const noCapAgent = { ...mockAgent, capabilities: {} };
-    render(<TestTable data={[noCapAgent]} />);
-    // The dash is rendered in the capabilities column
-    expect(screen.getByText("-")).toBeInTheDocument();
+    renderTable([{ ...mockAgent, capabilities: {} }]);
+    expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(1);
   });
 
   it("should show singular 'skill' for one skill", () => {
-    const oneSkillAgent = {
-      ...mockAgent,
-      skills: [{ id: "s1", name: "Only Skill", description: "One" }],
-    };
-    render(<TestTable data={[oneSkillAgent]} />);
+    renderTable([{ ...mockAgent, skills: [{ id: "s1", name: "Only Skill", description: "One" }] }]);
     expect(screen.getByText("1 skill")).toBeInTheDocument();
   });
 });

@@ -7,7 +7,36 @@ different managed resource types (files, vector stores, etc.).
 
 import base64
 import re
-from typing import List, Optional, Union, Literal
+from typing import Any, List, Literal, Optional, Union
+
+PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS = ("azure", "azure_ai")
+
+
+def resolve_passthrough_managed_id_provider(
+    custom_llm_provider: Any,
+) -> Optional[str]:
+    """Map a pass-through ``custom_llm_provider`` to the provider scope that
+    namespaces passthrough managed object IDs, or ``None`` when the route is not
+    an OpenAI/Azure pass-through and managed IDs must not apply.
+
+    Scoping is keyed on the explicit provider that the pass-through route
+    forwards (``openai``, ``azure``, ``azure_ai``), not on the upstream URL, so
+    a third-party OpenAI-compatible endpoint never triggers managed-ID minting.
+
+    ``azure`` and ``azure_ai`` deliberately collapse to one ``"azure"`` scope:
+    they expose the same Azure OpenAI files/batches surface, so an ID minted
+    while routing as one must still resolve while routing as the other.
+    Splitting them would make a managed ID minted on ``azure`` fail to resolve
+    when replayed on ``azure_ai`` and vice versa.
+    """
+    provider = str(getattr(custom_llm_provider, "value", custom_llm_provider) or "").lower()
+    if not provider:
+        return None
+    if provider in PASSTHROUGH_MANAGED_ID_AZURE_PROVIDERS or provider.endswith((".azure", ".azure_ai")):
+        return "azure"
+    if provider == "openai" or provider.endswith(".openai"):
+        return "openai"
+    return None
 
 
 def is_base64_encoded_unified_id(
@@ -177,8 +206,14 @@ def extract_model_id_from_unified_id(
         if decoded_id:
             unified_id = decoded_id
 
-        # Extract model ID
-        match = re.search(r"model_id,([^;]+)", unified_id)
+        # Extract model ID. Anchor to a field boundary (start of string or
+        # after `;`) so this regex doesn't substring-match the `model_id,`
+        # inside file_id encodings' `llm_output_file_model_id,<deployment_uuid>`
+        # field — that would feed the deployment UUID as a model candidate
+        # into the team-access check and 403 every team-BYOK file attach
+        # with `Tried to access <uuid>` (LIT-3244 patch/1.86.0 second-order
+        # finding).
+        match = re.search(r"(?:^|;)model_id,([^;]+)", unified_id)
         if match:
             return match.group(1).strip()
 
@@ -352,12 +387,8 @@ def parse_unified_id(
         return {
             "resource_type": extract_resource_type_from_unified_id(decoded_id),
             "unified_uuid": extract_unified_uuid_from_unified_id(decoded_id),
-            "target_model_names": extract_target_model_names_from_unified_id(
-                decoded_id
-            ),
-            "provider_resource_id": extract_provider_resource_id_from_unified_id(
-                decoded_id
-            ),
+            "target_model_names": extract_target_model_names_from_unified_id(decoded_id),
+            "provider_resource_id": extract_provider_resource_id_from_unified_id(decoded_id),
             "model_id": extract_model_id_from_unified_id(decoded_id),
         }
     except Exception:

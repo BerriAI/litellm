@@ -6,13 +6,16 @@ Why separate file? Make it easy to see how transformation works
 
 import json
 import os
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
+import re
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
@@ -57,6 +60,45 @@ from ..common_utils import (
     get_supports_system_message,
 )
 
+# Typed as Any to avoid introducing a module-load-time cyclic import to
+# vertex_llm_base. The instance is lazily constructed by _get_vertex_base()
+# the first time GCS metadata needs to be fetched.
+_GCS_METADATA_VERTEX_BASE: Optional[Any] = None
+# Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
+# from litellm's HTTP stack apply (see Greptile review on PR #27278).
+_GCS_METADATA_HTTP_HANDLER: Optional[HTTPHandler] = None
+_GEMINI_MIME_TYPE_ALIASES: Dict[str, str] = {
+    "image/jpg": "image/jpeg",
+}
+
+
+def _apply_gemini_mime_type_aliases(mime_type: str) -> str:
+    """Normalize known MIME aliases only; does not consult the file-type registry.
+
+    Also strips MIME parameters (e.g. ``; charset=utf-8``) so that values
+    sourced from GCS object metadata (``contentType``) validate correctly.
+    """
+    normalized = mime_type.split(";", 1)[0].strip().lower()
+    return _GEMINI_MIME_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _get_vertex_base() -> Any:
+    """Lazily return the shared VertexBase instance to avoid a module-load-time cyclic import."""
+    global _GCS_METADATA_VERTEX_BASE
+    if _GCS_METADATA_VERTEX_BASE is None:
+        from ..vertex_llm_base import VertexBase
+
+        _GCS_METADATA_VERTEX_BASE = VertexBase()
+    return _GCS_METADATA_VERTEX_BASE
+
+
+def _get_gcs_metadata_http_handler() -> HTTPHandler:
+    global _GCS_METADATA_HTTP_HANDLER
+    if _GCS_METADATA_HTTP_HANDLER is None:
+        _GCS_METADATA_HTTP_HANDLER = HTTPHandler(timeout=5.0)
+    return _GCS_METADATA_HTTP_HANDLER
+
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -79,9 +121,7 @@ def _convert_detail_to_media_resolution_enum(
     return None
 
 
-def _get_highest_media_resolution(
-    current: Optional[str], new_detail: Optional[str]
-) -> Optional[str]:
+def _get_highest_media_resolution(current: Optional[str], new_detail: Optional[str]) -> Optional[str]:
     """
     Compare two media resolution values and return the highest one.
     Resolution hierarchy: ultra_high > high > medium > low > None
@@ -127,9 +167,7 @@ def _extract_max_media_resolution_from_messages(
                     if isinstance(file_obj, dict):
                         detail = file_obj.get("detail")
                 if detail:
-                    max_resolution = _get_highest_media_resolution(
-                        max_resolution, detail
-                    )
+                    max_resolution = _get_highest_media_resolution(max_resolution, detail)
     return max_resolution
 
 
@@ -152,9 +190,7 @@ def _apply_gemini_metadata(
 
     part_dict = dict(part)
 
-    if media_resolution_enum is not None and VertexGeminiConfig._is_gemini_3_or_newer(
-        model
-    ):
+    if media_resolution_enum is not None and VertexGeminiConfig._is_gemini_3_or_newer(model):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -171,12 +207,280 @@ def _apply_gemini_metadata(
     return cast(PartType, part_dict)
 
 
+def _parse_gs_uri(gs_uri: str) -> Tuple[str, str]:
+    if not gs_uri.startswith("gs://"):
+        raise ValueError(f"Invalid gs URI: {gs_uri}")
+    uri_without_scheme = gs_uri[5:]  # drop gs://
+    uri_parts = uri_without_scheme.split("/", 1)
+    if len(uri_parts) != 2 or not uri_parts[0] or not uri_parts[1]:
+        raise ValueError(f"Invalid gs URI: {gs_uri}")
+    return uri_parts[0], uri_parts[1]
+
+
+def _is_valid_gcs_bucket_name(bucket: str) -> bool:
+    """
+    Validate bucket name against core GCS naming constraints.
+    """
+    bucket_length = len(bucket)
+    max_bucket_length = 222 if "." in bucket else 63
+    if bucket_length < 3 or bucket_length > max_bucket_length:
+        return False
+    if "." in bucket and any(len(label) == 0 or len(label) > 63 for label in bucket.split(".")):
+        return False
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*[a-z0-9]", bucket):
+        return False
+    if ".." in bucket:
+        return False
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", bucket):
+        return False
+    return True
+
+
+def _gs_uri_requires_content_type_metadata(url: str) -> bool:
+    """
+    True when _process_gemini_media would call _get_gcs_object_content_type
+    (extension-less gs:// and no explicit format passed into that helper).
+    """
+    if "gs://" not in url:
+        return False
+    extension_with_dot = os.path.splitext(url)[-1]
+    extension = extension_with_dot[1:] if extension_with_dot else ""
+    return len(extension) == 0
+
+
+def _image_url_payload_may_need_sync_gcs_metadata_fetch(
+    raw_image_url: Any,
+) -> bool:
+    """
+    True when this image_url value (content-part image_url or assistant ``images[]``
+    entry) can trigger a blocking GCS metadata read for MIME resolution.
+    """
+    fmt: Optional[str] = None
+    url: Optional[str] = None
+    if isinstance(raw_image_url, dict):
+        url = raw_image_url.get("url")  # type: ignore[assignment]
+        if not isinstance(url, str):
+            return False
+        fmt = raw_image_url.get("format") or raw_image_url.get("mime_type") or raw_image_url.get("content_type")
+    elif isinstance(raw_image_url, str):
+        url = raw_image_url
+    else:
+        return False
+    if "gs://" not in url or fmt:
+        return False
+    return _gs_uri_requires_content_type_metadata(url)
+
+
+def _openai_messages_may_need_sync_gcs_metadata_fetch(
+    messages: List[AllMessageValues],
+) -> bool:
+    """
+    Heuristic: True if any message part can trigger a blocking GCS JSON
+    metadata read inside _transform_request_body (extension-less gs:// without
+    explicit MIME hints). Covers user/system ``content`` parts and assistant
+    ``images`` (same paths as ``_gemini_convert_messages_with_history``). Used
+    to decide whether ``async_transform_request_body`` should offload the sync
+    transform via ``asyncify``.
+    """
+    for raw in messages:
+        msg: Any = raw
+        if not isinstance(msg, dict) and hasattr(msg, "model_dump"):
+            msg = msg.model_dump(exclude_none=False)
+        if not isinstance(msg, dict):
+            continue
+        images_field = msg.get("images")
+        if isinstance(images_field, list):
+            for image_item in images_field:
+                if not isinstance(image_item, dict):
+                    continue
+                if _image_url_payload_may_need_sync_gcs_metadata_fetch(image_item.get("image_url")):
+                    return True
+
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            itype = item.get("type")
+            if itype == "image_url":
+                if _image_url_payload_may_need_sync_gcs_metadata_fetch(item.get("image_url")):
+                    return True
+            elif itype == "file":
+                file_obj = item.get("file")
+                if not isinstance(file_obj, dict):
+                    continue
+                fmt = file_obj.get("format") or file_obj.get("mime_type") or file_obj.get("content_type")
+                passed = file_obj.get("file_id") or file_obj.get("file_data")
+                if (
+                    isinstance(passed, str)
+                    and "gs://" in passed
+                    and not fmt
+                    and _gs_uri_requires_content_type_metadata(passed)
+                ):
+                    return True
+    return False
+
+
+def _get_gcs_object_content_type(
+    image_url: str,
+    vertex_project: Optional[str] = None,
+    vertex_credentials: Optional[Any] = None,
+) -> Optional[str]:
+    """
+    Resolve content type from GCS object metadata.
+
+    Only attaches a Bearer token when the caller explicitly supplies Vertex
+    credentials, to avoid using the server's default Google credentials on
+    the Gemini API-key (Google AI Studio) path and being used as an oracle
+    for private GCS object metadata. Without explicit credentials we only
+    issue an anonymous request, which only succeeds for publicly-readable
+    objects.
+    """
+    try:
+        bucket, object_name = _parse_gs_uri(image_url)
+    except ValueError:
+        return None
+    if not _is_valid_gcs_bucket_name(bucket):
+        return None
+
+    headers: Dict[str, str] = {}
+    explicit_vertex_auth_provided = vertex_project is not None or vertex_credentials is not None
+    if explicit_vertex_auth_provided:
+        try:
+            access_token, _ = _get_vertex_base().get_access_token(
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+            )
+            headers["Authorization"] = f"Bearer {access_token}"
+        except Exception as e:
+            raise litellm.BadRequestError(
+                message=(
+                    f"Unable to fetch GCS metadata with provided Vertex credentials/project. Original error: {str(e)}"
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            )
+
+    # Build the URL via httpx.URL with a fixed scheme/host and URL-encode both
+    # bucket and object so CodeQL does not flag the interpolation as a
+    # potential SSRF that could resolve to an arbitrary host.
+    encoded_bucket = quote(bucket, safe="")
+    encoded_object = quote(object_name, safe="")
+    metadata_url = httpx.URL(
+        scheme="https",
+        host="storage.googleapis.com",
+        path=f"/storage/v1/b/{encoded_bucket}/o/{encoded_object}",
+        params={"fields": "contentType"},
+    )
+    try:
+        response = _get_gcs_metadata_http_handler().get(
+            url=str(metadata_url),
+            headers=headers or None,
+        )
+    except httpx.RequestError as e:
+        if explicit_vertex_auth_provided:
+            raise litellm.BadRequestError(
+                message=(
+                    "Unable to reach GCS JSON API for object metadata with provided "
+                    f"Vertex credentials. {type(e).__name__}: {e}"
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            ) from e
+        return None
+
+    if response.is_error:
+        if explicit_vertex_auth_provided:
+            preview = (response.text or "")[:1024]
+            raise litellm.BadRequestError(
+                message=(
+                    "Unable to read GCS object metadata with provided Vertex credentials. "
+                    f"HTTP {response.status_code}. Response body (truncated): {preview!r}"
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            )
+        return None
+
+    try:
+        payload = response.json()
+    except ValueError as e:
+        if explicit_vertex_auth_provided:
+            raise litellm.BadRequestError(
+                message=(
+                    "GCS metadata response was not valid JSON when using provided "
+                    f"Vertex credentials (HTTP {response.status_code}). Error: {e}"
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            ) from e
+        return None
+
+    if not isinstance(payload, dict):
+        if explicit_vertex_auth_provided:
+            raise litellm.BadRequestError(
+                message=(
+                    "GCS metadata response was not a JSON object when using provided "
+                    f"Vertex credentials (HTTP {response.status_code})."
+                ),
+                model=None,
+                llm_provider="vertex_ai",
+            )
+        return None
+
+    content_type = payload.get("contentType")
+    if isinstance(content_type, str) and len(content_type) > 0:
+        return content_type
+
+    if explicit_vertex_auth_provided:
+        preview = (response.text or "")[:1024]
+        raise litellm.BadRequestError(
+            message=(
+                "GCS metadata JSON did not include a non-empty contentType field when "
+                f"using provided Vertex credentials (HTTP {response.status_code}). "
+                f"Body (truncated): {preview!r}"
+            ),
+            model=None,
+            llm_provider="vertex_ai",
+        )
+    return None
+
+
+def _normalize_and_validate_gemini_mime_type(mime_type: str, model: Optional[str]) -> str:
+    # Import lazily to avoid a module-level cyclic-import alert with
+    # litellm.types.files.
+    from litellm.types.files import get_file_extension_from_mime_type
+
+    normalized_mime_type = _apply_gemini_mime_type_aliases(mime_type)
+    try:
+        file_extension = get_file_extension_from_mime_type(normalized_mime_type)
+        file_type = get_file_type_from_extension(file_extension)
+    except ValueError:
+        raise litellm.BadRequestError(
+            message=f"File type not supported by gemini - {normalized_mime_type}",
+            model=model,
+            llm_provider="vertex_ai",
+        )
+
+    if not is_gemini_1_5_accepted_file_type(file_type):
+        raise litellm.BadRequestError(
+            message=f"File type not supported by gemini - {file_type}",
+            model=model,
+            llm_provider="vertex_ai",
+        )
+
+    return get_file_mime_type_for_file_type(file_type)
+
+
 def _process_gemini_media(
     image_url: str,
     format: Optional[str] = None,
     media_resolution_enum: Optional[Dict[str, str]] = None,
     model: Optional[str] = None,
     video_metadata: Optional[Dict[str, Any]] = None,
+    vertex_project: Optional[str] = None,
+    vertex_credentials: Optional[Any] = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -193,28 +497,67 @@ def _process_gemini_media(
     try:
         # GCS URIs
         if "gs://" in image_url:
-            # Figure out file type
             extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
             extension = extension_with_dot[1:]  # Ex: "png"
 
+            explicit_gcs_format = False
             if not format:
-                file_type = get_file_type_from_extension(extension)
+                mime_type: Optional[str] = None
+                # For extension-less gs:// URIs, we cannot infer from path.
+                # If callers pass `format`/`mime_type`, this branch is skipped.
+                if extension:
+                    file_type = get_file_type_from_extension(extension)
 
-                # Validate the file type is supported by Gemini
-                if not is_gemini_1_5_accepted_file_type(file_type):
-                    raise Exception(f"File type not supported by gemini - {file_type}")
+                    # Validate the file type is supported by Gemini
+                    if not is_gemini_1_5_accepted_file_type(file_type):
+                        raise litellm.BadRequestError(
+                            message=f"File type not supported by gemini - {file_type}",
+                            model=model,
+                            llm_provider="vertex_ai",
+                        )
 
-                mime_type = get_file_mime_type_for_file_type(file_type)
+                    mime_type = get_file_mime_type_for_file_type(file_type)
+                else:
+                    mime_type = _get_gcs_object_content_type(
+                        image_url=image_url,
+                        vertex_project=vertex_project,
+                        vertex_credentials=vertex_credentials,
+                    )
+                    if mime_type is None:
+                        raise litellm.BadRequestError(
+                            message=(
+                                f"Unable to determine mime type for gs URI: {image_url}. "
+                                "This gs:// URI has no file extension and GCS metadata "
+                                "lookup failed. Set it explicitly using image_url.format "
+                                "(or image_url.mime_type/content_type) or "
+                                "message.content[].file.format."
+                            ),
+                            model=model,
+                            llm_provider="vertex_ai",
+                        )
             else:
                 mime_type = format
+                explicit_gcs_format = True
+            if mime_type is None:
+                raise litellm.BadRequestError(
+                    message=f"File type not supported by gemini - {image_url}",
+                    model=model,
+                    llm_provider="vertex_ai",
+                )
+            if explicit_gcs_format:
+                # Callers who pass format/mime_type explicitly for gs:// URIs
+                # rely on pass-through to Gemini (pre-PR behavior). Only apply
+                # known MIME aliases; skip litellm's file-type registry.
+                mime_type = _apply_gemini_mime_type_aliases(mime_type)
+            else:
+                mime_type = _normalize_and_validate_gemini_mime_type(
+                    mime_type=mime_type,
+                    model=model,
+                )
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            return _apply_gemini_metadata(
-                part, model, media_resolution_enum, video_metadata
-            )
-        elif image_url.startswith(
-            "https://generativelanguage.googleapis.com/v1beta/files/"
-        ):
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+        elif image_url.startswith("https://generativelanguage.googleapis.com/v1beta/files/"):
             # Gemini Files API URIs — the file is already uploaded to Google's
             # servers; pass the URI through as file_data without fetching it.
             # These URLs return 403 when accessed directly, so we must not try
@@ -225,26 +568,16 @@ def _process_gemini_media(
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(
-                part, model, media_resolution_enum, video_metadata
-            )
-        elif (
-            "https://" in image_url
-            and (image_type := format or _get_image_mime_type_from_url(image_url))
-            is not None
-        ):
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+        elif "https://" in image_url and (image_type := format or _get_image_mime_type_from_url(image_url)) is not None:
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(
-                part, model, media_resolution_enum, video_metadata
-            )
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
-            return _apply_gemini_metadata(
-                part, model, media_resolution_enum, video_metadata
-            )
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
@@ -258,8 +591,6 @@ def _snake_to_camel(snake_str: str) -> str:
 
 def _camel_to_snake(camel_str: str) -> str:
     """Convert camelCase to snake_case"""
-    import re
-
     return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
 
 
@@ -283,9 +614,7 @@ def _get_equivalent_key(key: str, available_keys: set) -> Optional[str]:
     return None
 
 
-def check_if_part_exists_in_parts(
-    parts: List[PartType], part: PartType, excluded_keys: List[str] = []
-) -> bool:
+def check_if_part_exists_in_parts(parts: List[PartType], part: PartType, excluded_keys: List[str] = []) -> bool:
     """
     Check if a part exists in a list of parts
     Handles both camelCase and snake_case key variations (e.g., function_call vs functionCall)
@@ -297,9 +626,7 @@ def check_if_part_exists_in_parts(
         match_found = True
         for key in keys_to_compare:
             equivalent_key = _get_equivalent_key(key, p_keys)
-            if equivalent_key is None or p.get(equivalent_key, None) != part.get(
-                key, None
-            ):
+            if equivalent_key is None or p.get(equivalent_key, None) != part.get(key, None):
                 match_found = False
                 break
 
@@ -308,9 +635,11 @@ def check_if_part_exists_in_parts(
     return False
 
 
-def _gemini_convert_messages_with_history(  # noqa: PLR0915
+def _gemini_convert_messages_with_history(
     messages: List[AllMessageValues],
     model: Optional[str] = None,
+    litellm_params: Optional[dict] = None,
+    custom_llm_provider: Optional[str] = None,
 ) -> List[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -326,23 +655,23 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
 
     msg_i = 0
     tool_call_responses = []
+    vertex_project = None
+    vertex_credentials = None
+    if litellm_params:
+        vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
+        vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
+
     try:
         while msg_i < len(messages):
             user_content: List[PartType] = []
             init_msg_i = msg_i
             ## MERGE CONSECUTIVE USER CONTENT ##
-            while (
-                msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
-            ):
+            while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
                 _message_content = messages[msg_i].get("content")
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts: List[PartType] = []
                     for element_idx, element in enumerate(_message_content):
-                        if (
-                            element["type"] == "text"
-                            and "text" in element
-                            and len(element["text"]) > 0
-                        ):
+                        if element["type"] == "text" and "text" in element and len(element["text"]) > 0:
                             element = cast(ChatCompletionTextObject, element)
                             _part = PartType(text=element["text"])
                             _parts.append(_part)
@@ -351,20 +680,40 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             img_element = element
                             format: Optional[str] = None
                             media_resolution_enum: Optional[Dict[str, str]] = None
-                            if isinstance(img_element["image_url"], dict):
-                                image_url = img_element["image_url"]["url"]
-                                format = img_element["image_url"].get("format")
-                                detail = img_element["image_url"].get("detail")
-                                media_resolution_enum = (
-                                    _convert_detail_to_media_resolution_enum(detail)
+                            raw_image_url = img_element.get("image_url")
+                            if raw_image_url is None:
+                                raise litellm.BadRequestError(
+                                    message="Invalid message content: element type is 'image_url' but 'image_url' field is missing ",
+                                    model=model,
+                                    llm_provider="vertex_ai",
                                 )
+                            if isinstance(raw_image_url, dict):
+                                image_url = raw_image_url.get("url")
+                                if image_url is None:
+                                    raise litellm.BadRequestError(
+                                        message="Invalid message content: element type is 'image_url' but 'url' field is missing inside 'image_url' ",
+                                        model=model,
+                                        llm_provider="vertex_ai",
+                                    )
+                                # TypedDict does not declare mime_type/content_type;
+                                # read via Dict[str, Any] for caller-provided MIME fields.
+                                image_url_dict = cast(Dict[str, Any], raw_image_url)
+                                format = (
+                                    image_url_dict.get("format")
+                                    or image_url_dict.get("mime_type")
+                                    or image_url_dict.get("content_type")
+                                )
+                                detail = image_url_dict.get("detail")
+                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
                             else:
-                                image_url = img_element["image_url"]
+                                image_url = raw_image_url
                             _part = _process_gemini_media(
                                 image_url=image_url,
                                 format=format,
                                 media_resolution_enum=media_resolution_enum,
                                 model=model,
+                                vertex_project=vertex_project,
+                                vertex_credentials=vertex_credentials,
                             )
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
@@ -377,38 +726,46 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     if audio_format.startswith("audio/") is False
                                     else audio_format
                                 )  # Gemini expects audio/wav, audio/mp3, etc.
-                                openai_image_str = (
-                                    convert_generic_image_chunk_to_openai_image_obj(
-                                        image_chunk=GenericImageParsingChunk(
-                                            type="base64",
-                                            media_type=audio_format_modified,
-                                            data=audio_data,
-                                        )
+                                openai_image_str = convert_generic_image_chunk_to_openai_image_obj(
+                                    image_chunk=GenericImageParsingChunk(
+                                        type="base64",
+                                        media_type=audio_format_modified,
+                                        data=audio_data,
                                     )
                                 )
                                 _part = _process_gemini_media(
                                     image_url=openai_image_str,
                                     format=audio_format_modified,
                                     model=model,
+                                    vertex_project=vertex_project,
+                                    vertex_credentials=vertex_credentials,
                                 )
                                 _parts.append(_part)
                         elif element["type"] == "file":
                             file_element = cast(ChatCompletionFileObject, element)
-                            file_id = file_element["file"].get("file_id")
-                            format = file_element["file"].get("format")
-                            file_data = file_element["file"].get("file_data")
-                            detail = file_element["file"].get("detail")
-                            video_metadata = file_element["file"].get("video_metadata")
+                            _file_field = file_element.get("file")
+                            if _file_field is None:
+                                raise litellm.BadRequestError(
+                                    message="Content block has type='file' but is missing the required 'file' field",
+                                    model=model,
+                                    llm_provider="vertex_ai",
+                                )
+                            # TypedDict does not declare mime_type/content_type;
+                            # read via Dict[str, Any] for caller-provided MIME fields.
+                            file_dict = cast(Dict[str, Any], _file_field)
+                            file_id = file_dict.get("file_id")
+                            format = (
+                                file_dict.get("format") or file_dict.get("mime_type") or file_dict.get("content_type")
+                            )
+                            file_data = file_dict.get("file_data")
+                            detail = file_dict.get("detail")
+                            video_metadata = file_dict.get("video_metadata")
                             passed_file = file_id or file_data
                             if passed_file is None:
-                                raise Exception(
-                                    "Unknown file type. Please pass in a file_id or file_data"
-                                )
+                                raise Exception("Unknown file type. Please pass in a file_id or file_data")
 
                             # Convert detail to media_resolution_enum
-                            media_resolution_enum = (
-                                _convert_detail_to_media_resolution_enum(detail)
-                            )
+                            media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
 
                             try:
                                 _part = _process_gemini_media(
@@ -417,13 +774,23 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     model=model,
                                     media_resolution_enum=media_resolution_enum,
                                     video_metadata=video_metadata,
+                                    vertex_project=vertex_project,
+                                    vertex_credentials=vertex_credentials,
                                 )
                                 _parts.append(_part)
-                            except Exception:
-                                raise Exception(
-                                    "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
-                                        file_id, msg_i, element_idx
-                                    )
+                            except litellm.BadRequestError:
+                                raise
+                            except Exception as e:
+                                raise litellm.BadRequestError(
+                                    message=(
+                                        f"Unable to determine mime type for file: "
+                                        f"{file_id or 'provided data'}, set this explicitly "
+                                        f"using message[{msg_i}].content[{element_idx}].file.format "
+                                        f"(or file.mime_type/content_type). "
+                                        f"Original error: {str(e)}"
+                                    ),
+                                    model=model,
+                                    llm_provider="vertex_ai",
                                 )
                     user_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
@@ -459,18 +826,13 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 reasoning_content = assistant_msg.get("reasoning_content", None)
                 thinking_blocks = assistant_msg.get("thinking_blocks")
                 if reasoning_content is not None:
-                    assistant_content.append(
-                        PartType(thought=True, text=reasoning_content)
-                    )
+                    assistant_content.append(PartType(thought=True, text=reasoning_content))
                 if thinking_blocks is not None:
                     for block in thinking_blocks:
                         if block["type"] == "thinking":
                             block_thinking_str = block.get("thinking")
                             block_signature = block.get("signature")
-                            if (
-                                block_thinking_str is not None
-                                and block_signature is not None
-                            ):
+                            if block_thinking_str is not None and block_signature is not None:
                                 try:
                                     assistant_content.append(
                                         PartType(
@@ -497,25 +859,20 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif _message_content is not None and isinstance(_message_content, str):
                     assistant_text = _message_content
                     # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get(
-                        "provider_specific_fields"
-                    )
+                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
                     thought_signatures = None
-                    if provider_specific_fields and isinstance(
-                        provider_specific_fields, dict
-                    ):
-                        thought_signatures = provider_specific_fields.get(
-                            "thought_signatures"
-                        )
+                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
+                        thought_signatures = provider_specific_fields.get("thought_signatures")
 
                     # If we have thought signatures, add them to the part
-                    if (
-                        thought_signatures
-                        and isinstance(thought_signatures, list)
-                        and len(thought_signatures) > 0
-                    ):
+                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
                         # Use the first signature for the text part (Gemini expects one signature per part)
-                        assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
+                        assistant_content.append(
+                            PartType(
+                                text=assistant_text,
+                                thoughtSignature=thought_signatures[0],
+                            )
+                        )  # type: ignore
                     else:
                         assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
@@ -528,27 +885,32 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             image_url_obj = image_item.get("image_url")
                             if isinstance(image_url_obj, dict):
                                 assistant_image_url = image_url_obj.get("url")
-                                format = image_url_obj.get("format")
-                                detail = image_url_obj.get("detail")
-                                media_resolution_enum = (
-                                    _convert_detail_to_media_resolution_enum(detail)
+                                format = (
+                                    image_url_obj.get("format")
+                                    or image_url_obj.get("mime_type")
+                                    or image_url_obj.get("content_type")
                                 )
+                                detail = image_url_obj.get("detail")
+                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
                                 if assistant_image_url:
                                     _part = _process_gemini_media(
                                         image_url=assistant_image_url,
                                         format=format,
                                         media_resolution_enum=media_resolution_enum,
                                         model=model,
+                                        vertex_project=vertex_project,
+                                        vertex_credentials=vertex_credentials,
                                     )
                                     assistant_content.append(_part)
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
-                    assistant_msg.get("tool_calls", []) is not None
-                    or assistant_msg.get("function_call") is not None
+                    assistant_msg.get("tool_calls", []) is not None or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
-                        assistant_msg, model=model
+                        assistant_msg,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:
@@ -558,7 +920,16 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             excluded_keys=["thoughtSignature"],
                         ):
                             assistant_content.append(gemini_tool_call_part)
-                    last_message_with_tool_calls = assistant_msg
+                    # Only record this as the active tool-call message when it actually
+                    # carries tool calls. The `if` guard above is also entered for a
+                    # text-only assistant message (`assistant_msg.get("tool_calls", [])
+                    # is not None` is True for an empty list), so without this check a
+                    # later assistant message with no tool calls would clobber the
+                    # reference. The following tool result would then be matched against
+                    # an assistant message that has no tool_calls, raising "Missing
+                    # corresponding tool call for tool response message".
+                    if assistant_msg.get("tool_calls") or assistant_msg.get("function_call") is not None:
+                        last_message_with_tool_calls = assistant_msg
 
                 ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
                 _psf = assistant_msg.get("provider_specific_fields")
@@ -575,9 +946,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 }
                             }
                             if "thought_signature" in invocation:
-                                tc_part["thoughtSignature"] = invocation[
-                                    "thought_signature"
-                                ]
+                                tc_part["thoughtSignature"] = invocation["thought_signature"]
                             assistant_content.append(tc_part)  # type: ignore
 
                             # Re-inject toolResponse part if response is present
@@ -589,10 +958,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 if invocation.get("tool_type"):
                                     tr_dict["toolType"] = invocation["tool_type"]
                                 tr_part: Dict[str, Any] = {"toolResponse": tr_dict}
-                                if "thought_signature" in invocation:
-                                    tr_part["thoughtSignature"] = invocation[
-                                        "thought_signature"
-                                    ]
+                                if "response_thought_signature" in invocation:
+                                    tr_part["thoughtSignature"] = invocation["response_thought_signature"]
                                 assistant_content.append(tr_part)  # type: ignore
 
                 msg_i += 1
@@ -602,12 +969,12 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
 
             ## APPEND TOOL CALL MESSAGES ##
             tool_call_message_roles = ["tool", "function"]
-            if (
-                msg_i < len(messages)
-                and messages[msg_i]["role"] in tool_call_message_roles
-            ):
+            if msg_i < len(messages) and messages[msg_i]["role"] in tool_call_message_roles:
                 _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
+                    messages[msg_i],  # type: ignore
+                    last_message_with_tool_calls,  # type: ignore
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -615,9 +982,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     tool_call_responses.extend(_part)
                 else:
                     tool_call_responses.append(_part)
-            if msg_i < len(messages) and (
-                messages[msg_i]["role"] not in tool_call_message_roles
-            ):
+            if msg_i < len(messages) and (messages[msg_i]["role"] not in tool_call_message_roles):
                 if len(tool_call_responses) > 0:
                     contents.append(ContentType(role="user", parts=tool_call_responses))
                     tool_call_responses = []
@@ -632,16 +997,14 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
             contents.append(ContentType(role="user", parts=tool_call_responses))
 
         if len(contents) == 0:
-            verbose_logger.warning(
-                """
+            verbose_logger.warning("""
                 No contents in messages. Contents are required. See
                 https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.publishers.models/generateContent#request-body.
                 If the original request did not comply to OpenAI API requirements it should have failed by now,
                 but LiteLLM does not check for missing messages.
                 Setting an empty content to prevent an 400 error.
                 Relevant Issue - https://github.com/BerriAI/litellm/issues/9733
-                """
-            )
+                """)
             contents.append(ContentType(role="user", parts=[PartType(text=" ")]))
         return contents
     except Exception as e:
@@ -660,17 +1023,66 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
         for k, v in extra_body.items():
             if k in _LITELLM_INTERNAL_EXTRA_BODY_KEYS:
                 continue
-            if (
-                k in data_dict
-                and isinstance(data_dict[k], dict)
-                and isinstance(v, dict)
-            ):
+            if k in data_dict and isinstance(data_dict[k], dict) and isinstance(v, dict):
                 data_dict[k].update(v)
             else:
                 data_dict[k] = v
 
 
-def _transform_request_body(  # noqa: PLR0915
+def _has_google_maps_tool(tools: Optional[Any]) -> bool:
+    """Return True if any tool object in the list has a 'googleMaps' key."""
+    if not isinstance(tools, list):
+        return False
+    return any(isinstance(t, dict) and VertexToolName.GOOGLE_MAPS.value in t for t in tools)
+
+
+def _rewrite_mime_type_to_response_format(generation_config: GenerationConfig) -> None:
+    """
+    Convert response_mime_type + response_json_schema/response_schema to the newer
+    responseFormat structure when googleMaps is present in tools.
+
+    The Gemini API rejects the combination of googleMaps + response_mime_type:
+    'application/json' with the error:
+        "Google Maps tool with a response mime type: 'application/json' is unsupported"
+
+    The newer responseFormat field supports this combination on both the Gemini API
+    (generativelanguage.googleapis.com) and Vertex AI endpoints.
+
+    Before:
+        generationConfig: {
+            response_mime_type: "application/json",
+            response_json_schema: {...}
+        }
+
+    After:
+        generationConfig: {
+            responseFormat: {
+                "text": {"mimeType": "APPLICATION_JSON", "schema": {...}}
+            }
+        }
+    """
+    schema = generation_config.pop("response_json_schema", None)  # type: ignore[misc]
+    if schema is None:
+        schema = generation_config.pop("response_schema", None)  # type: ignore[misc]
+    generation_config.pop("response_mime_type", None)  # type: ignore[misc]
+
+    response_format: Dict[str, Any] = {"text": {"mimeType": "APPLICATION_JSON"}}
+    if schema is not None:
+        response_format["text"]["schema"] = schema
+    generation_config["responseFormat"] = response_format  # type: ignore[typeddict-unknown-key]
+
+
+def _rewrite_google_maps_response_format(data: RequestBody) -> None:
+    generation_config = cast(Optional[GenerationConfig], data.get("generationConfig"))
+    if (
+        isinstance(generation_config, dict)
+        and _has_google_maps_tool(data.get("tools"))
+        and generation_config.get("response_mime_type") == "application/json"
+    ):
+        _rewrite_mime_type_to_response_format(generation_config)
+
+
+def _transform_request_body(
     messages: List[AllMessageValues],
     model: str,
     optional_params: dict,
@@ -682,20 +1094,17 @@ def _transform_request_body(  # noqa: PLR0915
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
     # Separate system prompt from rest of message
-    supports_system_message = get_supports_system_message(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    supports_system_message = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     system_instructions, messages = _transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
-        supports_response_schema = get_supports_response_schema(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
+        supports_response_schema = get_supports_response_schema(model=model, custom_llm_provider=custom_llm_provider)
         if supports_response_schema is False:
             user_response_schema_message = response_schema_prompt(
-                model=model, response_schema=optional_params.get("response_schema")  # type: ignore
+                model=model,
+                response_schema=optional_params.get("response_schema"),  # type: ignore
             )
             messages.append({"role": "user", "content": user_response_schema_message})
             optional_params.pop("response_schema")
@@ -713,20 +1122,16 @@ def _transform_request_body(  # noqa: PLR0915
     try:
         if custom_llm_provider == "gemini":
             content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
-                messages=messages, model=model
+                messages=messages, model=model, litellm_params=litellm_params
             )
         else:
             content = litellm.VertexGeminiConfig()._transform_messages(
-                messages=messages, model=model
+                messages=messages, model=model, litellm_params=litellm_params
             )
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
-        include_server_side_tool_invocations: bool = optional_params.pop(
-            "include_server_side_tool_invocations", False
-        )
-        safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
-            "safety_settings", None
-        )  # type: ignore
+        include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
+        safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop("safety_settings", None)  # type: ignore
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
         config_fields = GenerationConfig.__annotations__.keys()
@@ -734,15 +1139,9 @@ def _transform_request_body(  # noqa: PLR0915
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
         labels = pop_vertex_request_labels(optional_params, litellm_params)
 
-        filtered_params = {
-            k: v
-            for k, v in optional_params.items()
-            if _get_equivalent_key(k, set(config_fields))
-        }
+        filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
 
-        generation_config: Optional[GenerationConfig] = GenerationConfig(
-            **filtered_params
-        )
+        generation_config: Optional[GenerationConfig] = GenerationConfig(**filtered_params)
 
         # For Gemini 2.x models, also add media_resolution to generation_config (global)
         # as a fallback, since some 2.x versions may not support per-part media_resolution.
@@ -750,20 +1149,14 @@ def _transform_request_body(  # noqa: PLR0915
         if "gemini-2" in model:
             max_media_resolution = _extract_max_media_resolution_from_messages(messages)
             if max_media_resolution:
-                media_resolution_value = _convert_detail_to_media_resolution_enum(
-                    max_media_resolution
-                )
+                media_resolution_value = _convert_detail_to_media_resolution_enum(max_media_resolution)
                 if media_resolution_value and generation_config is not None:
-                    generation_config["mediaResolution"] = media_resolution_value[
-                        "level"
-                    ]
+                    generation_config["mediaResolution"] = media_resolution_value["level"]
 
         data = RequestBody(contents=content)
         # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
         # Treat dropping these fields as a request mutation guarded by modify_params.
-        can_send_cache_incompatible_fields = (
-            cached_content is None or litellm.modify_params is False
-        )
+        can_send_cache_incompatible_fields = cached_content is None or litellm.modify_params is False
         if can_send_cache_incompatible_fields:
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
@@ -795,6 +1188,7 @@ def _transform_request_body(  # noqa: PLR0915
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
         _pop_and_merge_extra_body(data, optional_params)
+        _rewrite_google_maps_response_format(data)
     except Exception as e:
         raise e
 
@@ -892,6 +1286,20 @@ async def async_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
     )
+
+    if _openai_messages_may_need_sync_gcs_metadata_fetch(messages):
+        # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
+        # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
+        # whole sync transformation on a worker thread so it does not block the
+        # async event loop.
+        return await asyncify(_transform_request_body)(
+            messages=messages,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            cached_content=cached_content,
+            optional_params=optional_params,
+        )
 
     return _transform_request_body(
         messages=messages,

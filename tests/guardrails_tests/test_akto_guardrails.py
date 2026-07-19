@@ -62,7 +62,7 @@ def akto_ingest():
 def sample_inputs() -> GenericGuardrailAPIInputs:
     return GenericGuardrailAPIInputs(
         texts=["Hello, how are you?"],
-        model="gpt-4",
+        model="gpt-5.5",
     )
 
 
@@ -200,7 +200,7 @@ def test_build_akto_payload_format(akto_validate, sample_inputs, sample_request_
 
     req_wrapper = json.loads(payload["requestPayload"])
     req_body = json.loads(req_wrapper["body"])
-    assert req_body["model"] == "gpt-4"
+    assert req_body["model"] == "gpt-5.5"
     assert req_body["messages"][0]["content"] == "Hello, how are you?"
 
     tag = json.loads(payload["tag"])
@@ -486,7 +486,7 @@ async def test_fail_open_on_unreachable():
         side_effect=httpx.ConnectError("Connection refused")
     )
 
-    inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
+    inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-5.5")
     result = await g.apply_guardrail(
         inputs=inputs, request_data={}, input_type="request"
     )
@@ -507,7 +507,7 @@ async def test_fail_closed_on_unreachable():
         side_effect=httpx.ConnectError("Connection refused")
     )
 
-    inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-4")
+    inputs = GenericGuardrailAPIInputs(texts=["test"], model="gpt-5.5")
     with pytest.raises(HTTPException) as exc_info:
         await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert exc_info.value.status_code == 503
@@ -523,7 +523,7 @@ def test_fail_closed_generic_message():
     )
     with pytest.raises(HTTPException) as exc_info:
         g.handle_unreachable(
-            inputs=GenericGuardrailAPIInputs(texts=["test"], model="gpt-4"),
+            inputs=GenericGuardrailAPIInputs(texts=["test"], model="gpt-5.5"),
             error=Exception("http://internal-host:9090/secret-path"),
         )
     assert "internal-host" not in exc_info.value.detail

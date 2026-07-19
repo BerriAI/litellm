@@ -47,6 +47,24 @@ def test_audit_log_masking():
     assert json_before_value["key"] == "sk-1*****7890"
 
 
+def test_team_membership_null_budget_table():
+    """
+    Regression test for: LiteLLM_TeamMembership.litellm_budget_table missing = None.
+    In Pydantic v2, Optional[T] without a default is required; rows with budget_id=null
+    raised a validation error and returned 401.
+    Related: https://github.com/BerriAI/litellm/issues/28689
+    """
+    from litellm.proxy._types import LiteLLM_TeamMembership
+
+    membership = LiteLLM_TeamMembership(user_id="u1", team_id="t1")
+    assert membership.litellm_budget_table is None
+
+    membership_explicit = LiteLLM_TeamMembership(
+        user_id="u1", team_id="t1", litellm_budget_table=None
+    )
+    assert membership_explicit.litellm_budget_table is None
+
+
 def test_internal_jobs_user_has_proxy_admin_role():
     """
     Test that the internal jobs system user has PROXY_ADMIN role.
@@ -69,3 +87,55 @@ def test_internal_jobs_user_has_proxy_admin_role():
     assert system_user.user_id == "system"
     assert system_user.team_id == "system"
     assert system_user.team_alias == "system"
+
+
+def test_user_api_key_auth_hashes_authorization_header_form_of_key():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    raw_key = "sk-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+    baseline = UserAPIKeyAuth(api_key=raw_key)
+
+    for header_form in (
+        f"Bearer {raw_key}",
+        f"bearer {raw_key}",
+        f"BEARER {raw_key}",
+        f"BeArEr {raw_key}",
+    ):
+        from_header = UserAPIKeyAuth(api_key=header_form)
+        assert from_header.api_key == baseline.api_key
+        assert from_header.token == baseline.token
+        assert not from_header.api_key.lower().startswith("bearer")
+
+
+def test_proxy_exception_str_returns_message():
+    """ProxyException must stringify to its message: OTEL's
+    ``span.record_exception`` and ``str(exc)``-based logging read the string
+    form, which was empty pre-fix. The OpenAI-mapped fields must stay intact."""
+    from litellm.proxy._types import ProxyException
+
+    msg = "Authentication Error, Invalid proxy server token passed."
+    exc = ProxyException(message=msg, type="auth_error", param="key", code=401)
+
+    assert str(exc) == msg
+    assert exc.message == msg
+    assert exc.to_dict() == {
+        "message": msg,
+        "type": "auth_error",
+        "param": "key",
+        "code": "401",
+    }
+
+
+def test_key_request_router_settings_keeps_enable_tag_filtering():
+    """``router_settings`` on key requests validates through
+    ``UpdateRouterConfig``; a field missing from that model is silently
+    dropped at parse time, so a key's "Enable Tag Filtering" toggle would
+    never reach the DB even though the team path (plain dict) kept it."""
+    from litellm.proxy._types import GenerateKeyRequest
+
+    req = GenerateKeyRequest(router_settings={"enable_tag_filtering": True, "num_retries": 2})
+
+    assert req.router_settings is not None
+    dumped = req.router_settings.model_dump(exclude_none=True)
+    assert dumped["enable_tag_filtering"] is True
+    assert dumped["num_retries"] == 2

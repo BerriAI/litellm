@@ -1,0 +1,368 @@
+{
+  "ANN001": {
+    "limit": 3152
+  },
+  "ANN002": {
+    "limit": 69
+  },
+  "ANN003": {
+    "limit": 835
+  },
+  "ANN201": {
+    "limit": 2138
+  },
+  "ANN202": {
+    "limit": 944
+  },
+  "ANN204": {
+    "limit": 724
+  },
+  "ANN205": {
+    "limit": 127
+  },
+  "ANN206": {
+    "limit": 130
+  },
+  "ANN401": {
+    "limit": 2075
+  },
+  "ASYNC230": {
+    "limit": 14
+  },
+  "B004": {
+    "limit": 4
+  },
+  "B006": {
+    "limit": 190
+  },
+  "B008": {
+    "limit": 505
+  },
+  "B009": {
+    "limit": 84
+  },
+  "B010": {
+    "limit": 197
+  },
+  "B018": {
+    "limit": 5
+  },
+  "B019": {
+    "limit": 4
+  },
+  "B021": {
+    "limit": 4
+  },
+  "B026": {
+    "limit": 6
+  },
+  "B033": {
+    "limit": 4
+  },
+  "BLE001": {
+    "limit": 2903
+  },
+  "C401": {
+    "limit": 11
+  },
+  "C404": {
+    "limit": 4
+  },
+  "C405": {
+    "limit": 23
+  },
+  "C408": {
+    "limit": 14
+  },
+  "C414": {
+    "limit": 7
+  },
+  "C419": {
+    "limit": 4
+  },
+  "C901": {
+    "limit": 316
+  },
+  "D419": {
+    "limit": 9
+  },
+  "DTZ001": {
+    "limit": 5
+  },
+  "DTZ003": {
+    "limit": 33
+  },
+  "DTZ005": {
+    "limit": 244
+  },
+  "DTZ006": {
+    "limit": 13
+  },
+  "DTZ007": {
+    "limit": 23
+  },
+  "DTZ011": {
+    "limit": 6
+  },
+  "EXE001": {
+    "limit": 7
+  },
+  "EXE002": {
+    "limit": 6
+  },
+  "F401": {
+    "limit": 23
+  },
+  "FURB136": {
+    "limit": 4
+  },
+  "FURB168": {
+    "limit": 4
+  },
+  "FURB188": {
+    "limit": 52
+  },
+  "I001": {
+    "limit": 273
+  },
+  "LOG015": {
+    "limit": 8
+  },
+  "N999": {
+    "limit": 4
+  },
+  "PERF102": {
+    "limit": 30
+  },
+  "PERF401": {
+    "limit": 146
+  },
+  "PERF402": {
+    "limit": 9
+  },
+  "PERF403": {
+    "limit": 74
+  },
+  "PIE790": {
+    "limit": 278
+  },
+  "PIE800": {
+    "limit": 4
+  },
+  "PIE804": {
+    "limit": 24
+  },
+  "PIE810": {
+    "limit": 44
+  },
+  "PLC0206": {
+    "limit": 31
+  },
+  "PLC0208": {
+    "limit": 4
+  },
+  "PLC0414": {
+    "limit": 38
+  },
+  "PLR0124": {
+    "limit": 4
+  },
+  "PLR0206": {
+    "limit": 4
+  },
+  "PLR0402": {
+    "limit": 9
+  },
+  "PLR1704": {
+    "limit": 6
+  },
+  "PLR1711": {
+    "limit": 34
+  },
+  "PLR1714": {
+    "limit": 265
+  },
+  "PLR1730": {
+    "limit": 10
+  },
+  "PLR2044": {
+    "limit": 4
+  },
+  "PLW0127": {
+    "limit": 44
+  },
+  "PLW0133": {
+    "limit": 4
+  },
+  "PLW0602": {
+    "limit": 230
+  },
+  "PLW0603": {
+    "limit": 193
+  },
+  "PLW1508": {
+    "limit": 198
+  },
+  "PLW1510": {
+    "limit": 5
+  },
+  "PYI030": {
+    "limit": 5
+  },
+  "PYI036": {
+    "limit": 5
+  },
+  "PYI041": {
+    "limit": 12
+  },
+  "PYI064": {
+    "limit": 5
+  },
+  "RET501": {
+    "limit": 38
+  },
+  "RET504": {
+    "limit": 721
+  },
+  "RUF010": {
+    "limit": 874
+  },
+  "RUF012": {
+    "limit": 168
+  },
+  "RUF015": {
+    "limit": 11
+  },
+  "RUF019": {
+    "limit": 41
+  },
+  "RUF022": {
+    "limit": 85
+  },
+  "RUF023": {
+    "limit": 5
+  },
+  "RUF046": {
+    "limit": 8
+  },
+  "RUF051": {
+    "limit": 6
+  },
+  "RUF059": {
+    "limit": 73
+  },
+  "RUF100": {
+    "limit": 480
+  },
+  "S110": {
+    "limit": 236
+  },
+  "S112": {
+    "limit": 24
+  },
+  "SIM101": {
+    "limit": 63
+  },
+  "SIM102": {
+    "limit": 324
+  },
+  "SIM103": {
+    "limit": 129
+  },
+  "SIM113": {
+    "limit": 6
+  },
+  "SIM114": {
+    "limit": 113
+  },
+  "SIM115": {
+    "limit": 5
+  },
+  "SIM117": {
+    "limit": 10
+  },
+  "SIM118": {
+    "limit": 114
+  },
+  "SIM201": {
+    "limit": 4
+  },
+  "SIM210": {
+    "limit": 12
+  },
+  "SIM211": {
+    "limit": 4
+  },
+  "SIM222": {
+    "limit": 4
+  },
+  "SIM401": {
+    "limit": 12
+  },
+  "TC004": {
+    "limit": 8
+  },
+  "TC005": {
+    "limit": 9
+  },
+  "TID251": {
+    "limit": 2701
+  },
+  "TRY002": {
+    "limit": 548
+  },
+  "TRY004": {
+    "limit": 98
+  },
+  "TRY201": {
+    "limit": 424
+  },
+  "TRY203": {
+    "limit": 123
+  },
+  "TRY300": {
+    "limit": 883
+  },
+  "UP006": {
+    "limit": 12792
+  },
+  "UP007": {
+    "limit": 2570
+  },
+  "UP008": {
+    "limit": 5
+  },
+  "UP012": {
+    "limit": 7
+  },
+  "UP018": {
+    "limit": 21
+  },
+  "UP024": {
+    "limit": 15
+  },
+  "UP028": {
+    "limit": 5
+  },
+  "UP031": {
+    "limit": 5
+  },
+  "UP032": {
+    "limit": 629
+  },
+  "UP034": {
+    "limit": 4
+  },
+  "UP035": {
+    "limit": 2284
+  },
+  "UP036": {
+    "limit": 4
+  },
+  "UP037": {
+    "limit": 105
+  },
+  "UP045": {
+    "limit": 18462
+  }
+}

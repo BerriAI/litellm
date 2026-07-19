@@ -215,7 +215,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
 
     # Create logging object
     logging_obj = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "test"}],
         stream=False,
         call_type=CallTypes.aretrieve_batch.value,
@@ -233,7 +233,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
         completion_tokens=50,
         total_tokens=150,
     )
-    expected_models = ["gpt-4o-mini"]
+    expected_models = ["gpt-5-mini"]
 
     with patch(
         "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
@@ -253,6 +253,55 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
         assert mock_batch._hidden_params["response_cost"] == expected_cost
         assert mock_batch._hidden_params["batch_models"] == expected_models
         assert mock_batch.usage == expected_usage
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_batch_computes_real_cost_from_output_file(
+    sample_file_content_dict,
+):
+    """Integration: a completed batch's cost and usage are computed from its output
+    file via the real cost-calc chain (only the file download is stubbed). This is
+    the function the retrieve handler invokes on completion; a dropped output line, a
+    wrong token sum, or mispriced model fails this test.
+    """
+    from litellm.batches.batch_utils import _handle_completed_batch
+    from litellm.types.utils import LiteLLMBatch
+
+    batch = LiteLLMBatch(
+        id="batch-real-cost-123",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-input-123",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-123",
+        created_at=1234567890,
+    )
+
+    with patch(
+        "litellm.batches.batch_utils._get_batch_output_file_content_as_dictionary",
+        new=AsyncMock(return_value=sample_file_content_dict),
+    ):
+        cost, usage, models = await _handle_completed_batch(
+            batch=batch, custom_llm_provider="openai"
+        )
+
+    pricing = litellm.model_cost["gpt-4o-mini-2024-07-18"]
+    expected_cost = (
+        42 * pricing["input_cost_per_token_batches"]
+        + 20 * pricing["output_cost_per_token_batches"]
+    )
+
+    assert cost == pytest.approx(expected_cost)
+    assert cost > 0
+    assert (
+        cost
+        < 42 * pricing["input_cost_per_token"] + 20 * pricing["output_cost_per_token"]
+    )
+    assert usage.prompt_tokens == 42
+    assert usage.completion_tokens == 20
+    assert usage.total_tokens == 62
+    assert models == ["gpt-4o-mini-2024-07-18", "gpt-4o-mini-2024-07-18"]
 
 
 @pytest.mark.asyncio
@@ -299,7 +348,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
 
     # Create logging object
     logging_obj = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "test"}],
         stream=False,
         call_type=CallTypes.aretrieve_batch.value,
@@ -317,7 +366,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
         completion_tokens=100,
         total_tokens=300,
     )
-    explicit_models = ["gpt-4o-mini", "gpt-3.5-turbo"]
+    explicit_models = ["gpt-5-mini", "gpt-5.5"]
 
     with patch(
         "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",
@@ -393,7 +442,7 @@ async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batc
 
     # Create logging object
     logging_obj = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "test"}],
         stream=False,
         call_type=CallTypes.aretrieve_batch.value,
@@ -468,7 +517,7 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
 
     # Create logging object
     logging_obj = Logging(
-        model="gpt-4o-mini",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "test"}],
         stream=False,
         call_type=CallTypes.aretrieve_batch.value,
@@ -489,7 +538,7 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
         completion_tokens=75,
         total_tokens=225,
     )
-    expected_models = ["gpt-4o-mini"]
+    expected_models = ["gpt-5-mini"]
 
     with patch(
         "litellm.litellm_core_utils.litellm_logging._handle_completed_batch",

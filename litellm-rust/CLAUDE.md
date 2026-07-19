@@ -1,0 +1,153 @@
+# CLAUDE.md
+
+This file defines the rules for Rust work in LiteLLM.
+
+## Provider Coding Standards
+
+Before writing new logic, look for an existing base to extend. When a change is
+“the same behavior for one more provider/endpoint/integration”, the codebase
+almost always already has a shared abstraction for it (for example, provider
+`BaseConfig` transformation classes in `litellm/llms/base_llm/`, shared
+helpers in `litellm_core_utils/`, typed request/response models, or factory
+functions). Find it first with a search, then add the new variant by inheriting
+from or composing that base, overriding only what genuinely differs (model
+name, parameter mapping, or auth).
+
+Never copy an existing implementation and edit it in place, and never hand-roll
+a parallel version of logic a base already provides. If you catch yourself
+writing a second copy of a pattern that exists twice already, stop and extract a
+base instead: put the shared shape in one place and make both call sites thin
+variants of it. The test for a good abstraction is that adding the next provider
+is a few declarative lines, not a new file of duplicated flow. Only diverge from
+the base when behavior is genuinely different, and say so explicitly in the PR.
+
+## Crates (exactly three — see AGENTS.md)
+
+`litellm-core` describes work; `litellm-ai-gateway` executes it; `litellm-python-bridge`
+exposes it to the Python SDK. A crate is a **layer**, not a route — add modules, not crates.
+
+## Core Boundary
+
+`litellm-core` is the pure translation layer; the `litellm-ai-gateway` host executes work.
+
+Route-level Rust structure mirrors LiteLLM's Python responsibilities:
+- `core/src/<route>/` owns the route contract, shared types, and provider
+  template traits. For OCR, this means `core/src/ocr`.
+- `core/src/providers/<provider>/<route>/transformation.rs` owns the
+  provider-specific transform. For Mistral OCR, this means
+  `core/src/providers/mistral/ocr/transformation.rs`.
+- Network execution lives in the host crate `ai-gateway` (`ai-gateway/src/io/`),
+  never inside `core`.
+
+Call-hook and lifecycle instrumentation, including phase timing, usage
+accumulation, and callback payload construction, always lives in `core`.
+Hosts feed observed events into core and dispatch the completed payloads through
+their I/O logger; hosts must not own callback orchestration.
+
+Allowed in `core`:
+- Pure request transforms
+- Pure response transforms
+- Pure stream chunk normalization
+- Shared data types and validation errors
+- Deterministic token/cost helper logic
+
+Not allowed in `core`:
+- Network calls
+- Environment variable or secret reads
+- Filesystem access
+- Database or cache access
+- Provider SDK signing or auth flows
+- Logging callbacks, spend writes, or custom callbacks
+- Global mutable runtime state
+
+Python owns rollout state and fallback while Rust is being introduced. Rust
+paths must be off by default until parity tests prove equivalence with Python.
+
+## Production Bar
+
+Rust code in this workspace is held to a strict parity and robustness bar from
+the first PR:
+
+- Correctness parity is proven with tests. Do not rely on README claims or
+  manual inspection for a port that mirrors Python behavior.
+- Every provider transform must have unit tests for supported-parameter
+  filtering, request body shape, response normalization, missing/null fields,
+  and bad-input errors.
+- When Rust is exposed through Python, add Python tests that prove disabled,
+  enabled, and unavailable-bridge fallback behavior.
+- Avoid panics on user/provider input. Return typed errors and let the host map
+  them to Python exceptions or HTTP responses.
+- OCR handles documents that often contain personal data. Do not log document
+  contents, base64 payloads, provider response bodies, or secrets.
+- Error messages must be useful but data-minimized. Truncate or sanitize any
+  upstream body before it crosses a host boundary.
+- Treat empty or whitespace-only credentials, URLs, and config values as absent
+  at the host/config resolution layer.
+- Preserve Python output shape intentionally. If a field is always serialized as
+  `null` for Python parity, leave a short comment explaining that parity choice.
+
+## Host I/O Rules
+
+These rules apply when adding future crates or modules that execute network I/O,
+such as `ai-gateway`, router hosts, or standalone servers:
+
+- Set connect and full-request timeouts. No unbounded waits.
+- Reuse HTTP clients; do not construct clients per request.
+- Prefer rustls TLS for portable Python wheels and Linux images unless there is
+  a documented reason not to.
+- Add request IDs and structured tracing at the host layer, without logging OCR
+  document contents or secrets.
+- Do not echo raw upstream response bodies to callers. Sanitize and bound them.
+- Avoid `expect`/`unwrap` in server startup and request paths unless the panic is
+  impossible by construction and documented.
+
+## Rust Style Guide
+
+All Rust in `litellm-rust/` follows the official Rust Style Guide:
+https://doc.rust-lang.org/style-guide/
+
+`rustfmt` implements the guide's formatting rules by default, so the mechanical
+side is enforced for you: run `cargo fmt` before committing and CI gates every
+PR on `cargo fmt --check` (see Checks). Do not hand-format against rustfmt or add
+a `rustfmt.toml` that diverges from the default style; the default style *is* the
+guide.
+
+The guide also covers conventions rustfmt cannot auto-apply; follow these too:
+- Naming: `snake_case` for items, functions, and modules; `UpperCamelCase` for
+  types, traits, and enum variants; `SCREAMING_SNAKE_CASE` for constants and
+  statics; acronyms count as one word (`HttpClient`, not `HTTPClient`).
+- Ordering and grouping the guide prescribes: imports grouped std / external /
+  crate-local, derives before other attributes, and consistent item order.
+- Idioms the guide recommends over the formatter fighting you (e.g. prefer
+  restructuring an over-long expression rather than forcing an awkward wrap).
+
+## Constants
+
+Magic numbers and fixed strings go in a crate-level `constants.rs`, never
+hardcoded inline — the Rust mirror of Python's `litellm/constants.py`.
+
+- Each crate that needs them has `src/constants.rs` (declared `mod constants;`);
+  import from it (`use crate::constants::...`). Don't scatter `const` values at
+  the top of feature modules.
+- An env-overridable tunable still lives in `constants.rs` as its `DEFAULT_*`
+  value; the env read (with fallback to that default) happens at the host/config
+  resolution layer, not in `core`/`providers`.
+- Exception: a value that is purely local to one function and has no meaning
+  elsewhere may stay inline, but prefer `constants.rs` when in doubt.
+
+## Checks
+
+Run these before pushing Rust changes. The same checks run in GitHub Actions
+for changes under `litellm-rust/`.
+
+```bash
+cd litellm-rust
+cargo fmt --check
+# the ai-gateway binary + server code is behind the `server` feature
+cargo clippy -p litellm-ai-gateway --all-targets --features server -- -D warnings
+cargo clippy -p litellm-core -p litellm-python-bridge --all-targets -- -D warnings
+cargo test --workspace
+```
+
+When a Rust path is exposed through Python, add Python parity tests that compare
+the existing Python output with the Rust-backed output.

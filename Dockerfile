@@ -1,11 +1,32 @@
+# syntax=docker/dockerfile:1.7
+
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:3258be472764337fd13095bcbb3182da170243b5819fd67ad4c0754590588b31
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:3258be472764337fd13095bcbb3182da170243b5819fd67ad4c0754590588b31
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+# Pinned by digest like the other base images; bump explicitly on Node upgrades.
+ARG UI_BUILD_IMAGE=node:20.18-alpine3.20@sha256:3488b10bf958af7125a176419d2d8a9937d895bf124012aae811651988d2ffe6
 
 FROM $UV_IMAGE AS uvbin
+
+# Admin UI builder. Pinned to the build platform so the architecture-independent
+# Next.js static export compiles once natively even in a multi-arch build,
+# instead of once per target arch under QEMU.
+FROM --platform=$BUILDPLATFORM $UI_BUILD_IMAGE AS ui-builder
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    npm_config_fund=false \
+    npm_config_audit=false
+
+WORKDIR /ui
+
+COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
+
+COPY ui/litellm-dashboard/ ./
+RUN npm run build
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
@@ -21,6 +42,7 @@ RUN apk add --no-cache \
     gcc \
     python3 \
     python3-dev \
+    rust \
     openssl \
     openssl-dev \
     nodejs \
@@ -47,7 +69,13 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 # Copy full source tree
 COPY . .
 
-# Build Admin UI before final sync
+# Replace the committed UI bundle with the one built from this exact source.
+# Clearing first drops the committed bundle's content-hashed chunks that COPY
+# would otherwise leave behind alongside the fresh ones.
+RUN rm -rf litellm/proxy/_experimental/out
+COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
+
+# Build Admin UI before final sync (applies the enterprise color override when present)
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Install project and workspace packages (fast - deps already cached)
@@ -58,7 +86,9 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra semantic-router \
     --python python3
 
-RUN prisma generate --schema=./schema.prisma
+RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
+    npm_config_cache=/root/.npm \
+    prisma generate --schema=./schema.prisma
 
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
@@ -68,34 +98,43 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 USER root
 
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile supervisor && \
-    npm install -g npm@11.12.1 tar@7.5.11 glob@13.0.6 @isaacs/brace-expansion@5.0.1 brace-expansion@5.0.5 minimatch@10.2.4 diff@8.0.3 picomatch@4.0.4 && \
-    GLOBAL="$(npm root -g)" && \
-    for pkg in tar glob @isaacs/brace-expansion brace-expansion minimatch diff picomatch; do \
-        name="${pkg##*/}"; \
-        find "$GLOBAL/npm" -type d -name "$name" -path "*/node_modules/$pkg" | while read d; do \
-            rm -rf "$d" && cp -rL "$GLOBAL/$pkg" "$d"; \
-        done; \
-    done && \
-    npm cache clean --force && \
-    { apk del --no-cache npm 2>/dev/null || true; }
+# node (without npm) is required by the prisma CLI at runtime
+RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile
 
 WORKDIR /app
-ENV PATH="/app/.venv/bin:${PATH}"
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
+    PRISMA_CLI_PATH=/opt/prisma/binaries/node_modules/.bin/prisma \
+    PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
+    PRISMA_OFFLINE_MODE=true
 
-COPY --from=builder /app /app
-# Prisma binaries live in $HOME/.cache (default prisma-python location),
-# which is /root/.cache here. Copy them from the builder so they survive
-# deployments that volume-mount /app/.cache (e.g. readOnlyRootFilesystem
-# + emptyDir) — otherwise the mount would shadow the baked-in query engine.
-COPY --from=builder /root/.cache /root/.cache
+# Copy only what runtime needs. The application is installed inside the venv;
+# the rest of the builder's /app is source and build metadata that must not
+# ship (manifest-scanning tools attribute everything in it to this image).
+# entrypoint.sh invokes litellm/proxy/prisma_migration.py by source path.
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/docker /app/docker
+COPY --from=builder /app/schema.prisma /app/schema.prisma
+COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
+# enterprise/ is imported by source path at runtime (proxy_cli puts the
+# working directory on sys.path; litellm/proxy/hooks resolves
+# enterprise.enterprise_hooks from it)
+COPY --from=builder /app/enterprise /app/enterprise
+COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
+# Prisma CLI + engines are baked under /opt/prisma, a fixed path every
+# runtime uid can read and that no cache volume mount shadows. The paths are
+# pinned via PRISMA_BINARY_CACHE_DIR / PRISMA_CLI_PATH and recorded into the
+# generated client at build time, so `prisma migrate deploy` on a fresh
+# database needs no npm and no network access (#33650, #24554).
+COPY --from=builder /opt/prisma /opt/prisma
 
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
-    find /app/.venv -type d -path "*/tornado/test" -delete
+    find /app/.venv -type d -path "*/tornado/test" -delete && \
+    chmod -R a+rX /opt/prisma && \
+    test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
+    test -f /opt/prisma/binaries/node_modules/prisma/build/index.js
 
 EXPOSE 4000/tcp
-
-COPY docker/supervisord.conf /etc/supervisord.conf
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]

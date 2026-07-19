@@ -55,6 +55,13 @@ _request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.Contex
     "_request_auth_header", default=None
 )
 
+# Per-request extra headers forwarded from the client request.
+# Populated from MCPServer.extra_headers names matched against raw request
+# headers in server.py before dispatching to a local/OpenAPI tool handler.
+_request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = contextvars.ContextVar(
+    "_request_extra_headers", default=None
+)
+
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
@@ -67,14 +74,10 @@ def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
 
     normalized_value = value_str.replace("\\", "/")
     if "/" in normalized_value:
-        raise ValueError(
-            f"Path parameter '{param_name}' must not contain path separators"
-        )
+        raise ValueError(f"Path parameter '{param_name}' must not contain path separators")
 
     if any(part in {".", ".."} for part in PurePosixPath(normalized_value).parts):
-        raise ValueError(
-            f"Path parameter '{param_name}' cannot include '.' or '..' segments"
-        )
+        raise ValueError(f"Path parameter '{param_name}' cannot include '.' or '..' segments")
 
     return quote(value_str, safe="")
 
@@ -142,9 +145,7 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
         return f"{scheme}://{spec['host']}{base_path}"
 
     # Fallback: derive base URL from spec_path if it's a URL
-    if spec_path and (
-        spec_path.startswith("http://") or spec_path.startswith("https://")
-    ):
+    if spec_path and (spec_path.startswith("http://") or spec_path.startswith("https://")):
         for suffix in [
             "/openapi.json",
             "/openapi.yaml",
@@ -153,24 +154,18 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
         ]:
             if spec_path.endswith(suffix):
                 base_url = spec_path[: -len(suffix)]
-                verbose_logger.info(
-                    f"No server info in OpenAPI spec. Using derived base URL: {base_url}"
-                )
+                verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
                 return base_url
 
         if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
             base_url = "/".join(spec_path.split("/")[:-1])
-            verbose_logger.info(
-                f"No server info in OpenAPI spec. Using derived base URL: {base_url}"
-            )
+            verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
             return base_url
 
     return ""
 
 
-def _resolve_ref(
-    param: Dict[str, Any], component_params: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
+def _resolve_ref(param: Dict[str, Any], component_params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Resolve a single parameter, following a $ref if present.
 
     Returns the resolved param dict, or None if the $ref target is absent from
@@ -183,9 +178,7 @@ def _resolve_ref(
     return component_params.get(ref.split("/")[-1])
 
 
-def _resolve_param_list(
-    raw: List[Dict[str, Any]], component_params: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+def _resolve_param_list(raw: List[Dict[str, Any]], component_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Resolve $refs in a parameter list, dropping any unresolvable entries."""
     result = []
     for p in raw:
@@ -218,9 +211,7 @@ def resolve_operation_params(
     path_level = _resolve_param_list(path_item.get("parameters", []), component_params)
     op_level = _resolve_param_list(operation.get("parameters", []), component_params)
     op_keys = {(p["name"], p.get("in")) for p in op_level}
-    merged = [
-        p for p in path_level if (p["name"], p.get("in")) not in op_keys
-    ] + op_level
+    merged = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
     result = dict(operation)
     result["parameters"] = merged
     return result
@@ -297,6 +288,44 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _merge_openapi_tool_request_headers(
+    static_headers: Dict[str, str],
+) -> Dict[str, str]:
+    """Merge static closure headers with per-request ContextVar overrides.
+
+    Precedence (highest to lowest):
+        1. ``_request_auth_header`` — BYOK override of ``Authorization``
+        2. ``static_headers`` — operator-configured headers baked into the
+           tool closure at registration time
+        3. ``_request_extra_headers`` — per-request headers forwarded from
+           the MCP caller (allowlisted by ``MCPServer.extra_headers``)
+
+    This matches the existing MCP invariant in
+    :func:`litellm.proxy._experimental.mcp_server.utils.merge_mcp_headers`
+    and the managed MCP path, where ``static_headers`` always wins over
+    caller-forwarded headers. Keeping the same precedence here prevents an
+    authenticated caller from overriding an operator-configured value
+    (e.g. a tenant id or upstream API key) by sending the same header name.
+
+    Header names are compared case-insensitively so different casing cannot
+    bypass the precedence rules.
+    """
+    request_extra = _request_extra_headers.get() or {}
+    static = static_headers or {}
+
+    static_lower_names = {k.lower() for k in static}
+    effective_headers: Dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
+    effective_headers.update(static)
+
+    override_auth = _request_auth_header.get()
+    if override_auth:
+        for existing in [k for k in effective_headers if k.lower() == "authorization"]:
+            del effective_headers[existing]
+        effective_headers["Authorization"] = override_auth
+
+    return effective_headers
+
+
 def create_tool_function(
     path: str,
     method: str,
@@ -334,14 +363,7 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
-        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
-        # The ContextVar holds the full Authorization header value, including the
-        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
-        # server.py based on the server's configured auth_type.
-        effective_headers = dict(headers)
-        override_auth = _request_auth_header.get()
-        if override_auth:
-            effective_headers["Authorization"] = override_auth
+        effective_headers = _merge_openapi_tool_request_headers(headers)
 
         # Build URL from base_url and path
         url = base_url + path
@@ -384,11 +406,7 @@ def create_tool_function(
             elif body_value:
                 # If it's a string, try to parse as JSON
                 try:
-                    json_body = (
-                        json.loads(body_value)
-                        if isinstance(body_value, str)
-                        else {"data": body_value}
-                    )
+                    json_body = json.loads(body_value) if isinstance(body_value, str) else {"data": body_value}
                 except (json.JSONDecodeError, TypeError):
                     json_body = {"data": body_value}
 
@@ -397,21 +415,13 @@ def create_tool_function(
         if original_method == "get":
             response = await client.get(url, params=params, headers=effective_headers)
         elif original_method == "post":
-            response = await client.post(
-                url, params=params, json=json_body, headers=effective_headers
-            )
+            response = await client.post(url, params=params, json=json_body, headers=effective_headers)
         elif original_method == "put":
-            response = await client.put(
-                url, params=params, json=json_body, headers=effective_headers
-            )
+            response = await client.put(url, params=params, json=json_body, headers=effective_headers)
         elif original_method == "delete":
-            response = await client.delete(
-                url, params=params, headers=effective_headers
-            )
+            response = await client.delete(url, params=params, headers=effective_headers)
         elif original_method == "patch":
-            response = await client.patch(
-                url, params=params, json=json_body, headers=effective_headers
-            )
+            response = await client.patch(url, params=params, json=json_body, headers=effective_headers)
         else:
             return f"Unsupported HTTP method: {original_method}"
 
@@ -448,16 +458,12 @@ def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
                 while unique in used_names:
                     n += 1
                     suffix = f"_{n}"
-                    unique = (
-                        tool_name[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
-                    )
+                    unique = tool_name[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
                 tool_name = unique
                 used_names.add(tool_name)
 
                 # Get description
-                description = operation.get(
-                    "summary", operation.get("description", f"{method.upper()} {path}")
-                )
+                description = operation.get("summary", operation.get("description", f"{method.upper()} {path}"))
 
                 # Build input schema
                 input_schema = build_input_schema(operation)

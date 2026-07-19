@@ -1,21 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence, cast
+from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
+    Litellm_EntityType,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import get_model_from_request
+from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -31,6 +35,17 @@ class _BudgetCounter:
     source_cache_key: Optional[str] = None
     spend_log_entity_id: Optional[str] = None
     window_start: Optional[datetime] = None
+
+
+_COUNTER_ENTITY_TYPES: Mapping[str, str] = {
+    "Key": Litellm_EntityType.KEY.value,
+    "Team": Litellm_EntityType.TEAM.value,
+    "TeamMember": Litellm_EntityType.TEAM_MEMBER.value,
+    "User": Litellm_EntityType.USER.value,
+    "EndUser": Litellm_EntityType.END_USER.value,
+    "Tag": Litellm_EntityType.TAG.value,
+    "Organization": Litellm_EntityType.ORGANIZATION.value,
+}
 
 
 class _CounterReservationUnavailable(Exception):
@@ -49,10 +64,65 @@ def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
         return set()
     entries = budget_reservation.get("entries") or []
     return {
-        entry["counter_key"]
-        for entry in entries
-        if isinstance(entry, dict) and entry.get("counter_key") is not None
+        entry["counter_key"] for entry in entries if isinstance(entry, dict) and entry.get("counter_key") is not None
     }
+
+
+def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: Optional[UserAPIKeyAuth]) -> bool:
+    """
+    Whether an over-budget key's own ``max_budget`` reservation should be
+    released rather than blocked, because the key opted into throttling: the
+    rate limiter slows it instead. Only the key's own ``max_budget`` counter is
+    exempt; team/user/window counters still enforce normally, and under-budget
+    requests never reach this branch so their concurrent-overspend protection is
+    untouched.
+    """
+    if valid_token is None:
+        return False
+    return counter_key == f"spend:key:{valid_token.token}" and should_throttle_budget_exceeded(valid_token)
+
+
+async def _apply_over_budget_reservation_policy(
+    counter: _BudgetCounter,
+    valid_token: Optional[UserAPIKeyAuth],
+    entry: dict[str, Any],
+    applied_entries: list[dict[str, Any]],
+    reservation_cost: float,
+    current_spend: float,
+) -> float:
+    """
+    Decide what to do when a counter is over budget, and return the reservation
+    cost to carry into the next counter. Three outcomes: an over-budget key that
+    opted into throttling releases its own reservation (the rate limiter slows
+    it) and keeps the cost; a partially-remaining budget resizes the reservation
+    down to what is left; anything else hard-blocks by raising.
+    """
+    if _key_reservation_should_release_for_throttle(counter.counter_key, valid_token):
+        await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
+        applied_entries.remove(entry)
+        return reservation_cost
+
+    remaining_before_reservation = counter.max_budget - (current_spend - reservation_cost)
+    if remaining_before_reservation > 1e-12:
+        await _resize_applied_reservation(
+            entries=applied_entries,
+            current_reserved_cost=reservation_cost,
+            new_reserved_cost=remaining_before_reservation,
+        )
+        return remaining_before_reservation
+
+    raise litellm.BudgetExceededError(
+        current_cost=current_spend,
+        max_budget=counter.max_budget,
+        message=(
+            "Budget has been exceeded! "
+            f"{counter.entity_type}={counter.entity_id} "
+            f"Current cost: {current_spend}, "
+            f"Max budget: {counter.max_budget}"
+        ),
+        entity_type=_COUNTER_ENTITY_TYPES.get(counter.entity_type),
+        entity_id=counter.spend_log_entity_id or counter.entity_id,
+    )
 
 
 async def reserve_budget_for_request(
@@ -67,12 +137,13 @@ async def reserve_budget_for_request(
     proxy_logging_obj: ProxyLogging,
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
+    skip_user_budget_on_team_key: bool = False,
 ) -> Optional[dict]:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
     if route in {"/models", "/v1/models", "/utils/token_counter"}:
         return None
-    if get_model_from_request(request_body, route) is None:
+    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
 
     counters = await _get_budget_counters(
@@ -85,6 +156,7 @@ async def reserve_budget_for_request(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
+        skip_user_budget_on_team_key=skip_user_budget_on_team_key,
     )
     if not counters:
         return None
@@ -95,11 +167,9 @@ async def reserve_budget_for_request(
         route=route,
         llm_router=llm_router,
     )
-    if reservation_cost is None:
-        reservation_cost = await _get_smallest_remaining_budget(
-            counters=counters,
-            current_spend_by_counter_key=current_spend_by_counter_key,
-        )
+    # estimate_request_max_cost still returns None when the model is unknown
+    # to the cost map (no token-priced cost fields, e.g. image/audio routes).
+    # In that case we fall back to read-time enforcement only.
     if reservation_cost is None or reservation_cost <= 0:
         return None
 
@@ -133,27 +203,15 @@ async def reserve_budget_for_request(
                     cached_spend = await _get_current_counter_value(counter=counter)
                 current_spend = cached_spend + reservation_cost
             if current_spend > counter.max_budget:
-                remaining_before_reservation = counter.max_budget - (
-                    current_spend - reservation_cost
+                reservation_cost = await _apply_over_budget_reservation_policy(
+                    counter=counter,
+                    valid_token=valid_token,
+                    entry=entry,
+                    applied_entries=applied_entries,
+                    reservation_cost=reservation_cost,
+                    current_spend=current_spend,
                 )
-                if remaining_before_reservation > 1e-12:
-                    await _resize_applied_reservation(
-                        entries=applied_entries,
-                        current_reserved_cost=reservation_cost,
-                        new_reserved_cost=remaining_before_reservation,
-                    )
-                    reservation_cost = remaining_before_reservation
-                    continue
-                raise litellm.BudgetExceededError(
-                    current_cost=current_spend,
-                    max_budget=counter.max_budget,
-                    message=(
-                        "Budget has been exceeded! "
-                        f"{counter.entity_type}={counter.entity_id} "
-                        f"Current cost: {current_spend}, "
-                        f"Max budget: {counter.max_budget}"
-                    ),
-                )
+                continue
     except Exception:
         await _release_applied_entries_best_effort(
             entries=applied_entries,
@@ -164,10 +222,12 @@ async def reserve_budget_for_request(
     if not applied_entries:
         return None
 
+    input_cost = estimate_request_input_cost(request_body=request_body, route=route, llm_router=llm_router)
     return {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
+        "input_cost": min(float(input_cost or 0.0), reservation_cost),
     }
 
 
@@ -197,6 +257,39 @@ async def release_budget_reservation(budget_reservation: Optional[dict]) -> None
     )
 
 
+async def release_budget_reservation_on_cancel(
+    budget_reservation: dict | None,
+) -> None:
+    """Reconcile a still-open reservation when the request is cancelled mid-flight.
+
+    A client disconnect or timeout cancels the request task, which surfaces as
+    CancelledError / GeneratorExit rather than a normal exception, so neither the
+    success cost callback nor the failure hook runs and the pre-call reservation
+    is never reconciled. Left alone it pins the spend counter above real spend
+    and 429s subsequent requests until the counter's TTL expires.
+
+    Reconcile to the request's input-token cost rather than refunding to zero:
+    by the time a request is cancelled in-flight the provider call was already
+    dispatched, so the input tokens were billed even if no chunk reached the
+    client. Refunding to zero would let a caller abort pre-token to dodge that
+    charge; the worst-case output portion of the reservation is still released.
+
+    asyncio.shield keeps the reconcile running to completion even though the
+    surrounding task is being cancelled. The `finalized` guard makes this a no-op
+    when success/failure handling already reconciled, so calling it on every
+    cancellation path is safe.
+    """
+    if not budget_reservation or budget_reservation.get("finalized") is True:
+        return
+    incurred_cost = float(budget_reservation.get("input_cost") or 0.0)
+    try:
+        await asyncio.shield(
+            reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
+        )
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 async def invalidate_budget_reservation_counters(
     budget_reservation: Optional[dict],
 ) -> None:
@@ -219,6 +312,7 @@ async def _get_budget_counters(
     proxy_logging_obj: ProxyLogging,
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
+    skip_user_budget_on_team_key: bool = False,
 ) -> List[_BudgetCounter]:
     counters: List[_BudgetCounter] = []
 
@@ -267,8 +361,9 @@ async def _get_budget_counters(
             )
         )
 
+    is_team_key = team_object is not None and team_object.team_id is not None
     if (
-        (team_object is None or team_object.team_id is None)
+        not (is_team_key and skip_user_budget_on_team_key)
         and user_object is not None
         and user_object.user_id is not None
         and user_object.max_budget is not None
@@ -412,20 +507,11 @@ async def _get_team_member_budget_counter(
     user_object: Optional[LiteLLM_UserTable],
     user_api_key_cache: DualCache,
 ) -> Optional[_BudgetCounter]:
-    if (
-        team_object is None
-        or team_object.team_id is None
-        or user_object is None
-        or valid_token.user_id is None
-    ):
+    if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
 
-    membership_cache_key = (
-        f"team_membership:{valid_token.user_id}:{team_object.team_id}"
-    )
-    cached_team_membership = await user_api_key_cache.async_get_cache(
-        key=membership_cache_key
-    )
+    membership_cache_key = f"team_membership:{valid_token.user_id}:{team_object.team_id}"
+    cached_team_membership = await user_api_key_cache.async_get_cache(key=membership_cache_key)
     team_membership: Optional[LiteLLM_TeamMembership] = None
     if isinstance(cached_team_membership, LiteLLM_TeamMembership):
         team_membership = cached_team_membership
@@ -446,11 +532,7 @@ async def _get_team_member_budget_counter(
     if team_member_budget is None or team_member_budget <= 0:
         return None
 
-    team_member_spend = (
-        cast(LiteLLM_TeamMembership, team_membership).spend
-        if team_membership is not None
-        else 0.0
-    )
+    team_member_spend = cast(LiteLLM_TeamMembership, team_membership).spend if team_membership is not None else 0.0
     return _BudgetCounter(
         counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
         source_cache_key=membership_cache_key,
@@ -553,32 +635,6 @@ def _coerce_window(window: Any) -> dict:
     return {}
 
 
-async def _get_smallest_remaining_budget(
-    counters: List[_BudgetCounter],
-    current_spend_by_counter_key: Dict[str, float],
-) -> Optional[float]:
-    remaining_budget: Optional[float] = None
-    for counter in counters:
-        current_spend = await _get_current_counter_value(counter=counter)
-        current_spend_by_counter_key[counter.counter_key] = current_spend
-        remaining = counter.max_budget - current_spend
-        if remaining <= 0:
-            raise litellm.BudgetExceededError(
-                current_cost=current_spend,
-                max_budget=counter.max_budget,
-                message=(
-                    "Budget has been exceeded! "
-                    f"{counter.entity_type}={counter.entity_id} "
-                    f"Current cost: {current_spend}, "
-                    f"Max budget: {counter.max_budget}"
-                ),
-            )
-        remaining_budget = (
-            remaining if remaining_budget is None else min(remaining_budget, remaining)
-        )
-    return remaining_budget
-
-
 async def _reserve_counter(
     counter: _BudgetCounter,
     reservation_cost: float,
@@ -597,9 +653,7 @@ async def _reserve_counter(
                 counter_key=counter.counter_key,
                 source_cache_key=counter.source_cache_key,
             )
-        elif (
-            counter.spend_log_entity_id is not None and counter.window_start is not None
-        ):
+        elif counter.spend_log_entity_id is not None and counter.window_start is not None:
             initialized = await _ensure_window_spend_counter_initialized(
                 counter_key=counter.counter_key,
                 entity_type=counter.entity_type,
@@ -656,12 +710,14 @@ async def _set_reserved_entries_actual_cost(
     entries: List[dict],
     actual_cost: float,
     default_reserved_cost: float,
+    reseed_on_inconsistent: bool = True,
 ) -> None:
     for entry in entries:
         await _set_reserved_entry_actual_cost(
             entry=entry,
             actual_cost=actual_cost,
             default_reserved_cost=default_reserved_cost,
+            reseed_on_inconsistent=reseed_on_inconsistent,
         )
 
 
@@ -669,8 +725,12 @@ async def _set_reserved_entry_actual_cost(
     entry: dict,
     actual_cost: float,
     default_reserved_cost: float,
+    reseed_on_inconsistent: bool = True,
 ) -> None:
-    from litellm.proxy.proxy_server import _increment_spend_counter_cache
+    from litellm.proxy.proxy_server import (
+        _increment_spend_counter_cache,
+        reseed_spend_counter_from_db,
+    )
 
     counter_key = entry.get("counter_key")
     if counter_key is None:
@@ -684,46 +744,47 @@ async def _set_reserved_entry_actual_cost(
     adjustment = target_adjustment - applied_adjustment
     if adjustment == 0:
         return
-    await _ensure_counter_can_apply_adjustment(
+    if await _counter_can_apply_adjustment(
         counter_key=counter_key,
         adjustment=adjustment,
-    )
-    await _increment_spend_counter_cache(
-        counter_key=counter_key,
-        increment=adjustment,
-    )
+    ):
+        await _increment_spend_counter_cache(
+            counter_key=counter_key,
+            increment=adjustment,
+        )
+    elif reseed_on_inconsistent:
+        # Post-call reconcile / release: the counter was flushed or reseeded
+        # between reservation and reconcile (Redis restart / cross-pod reset),
+        # so the optimistic delta no longer applies. Recover by reseeding from
+        # the DB's lagging authoritative floor rather than deleting the counter
+        # and failing open — deleting it is what left budgets unenforced after a
+        # Redis reload.
+        await reseed_spend_counter_from_db(counter_key=counter_key)
+    else:
+        # Pre-call admission resize: the in-flight reservation cost is not yet
+        # persisted, so the DB floor would discard it. Keep the original
+        # fail-closed behavior (raise -> reserve_budget_for_request releases and
+        # denies) rather than admitting against an inconsistent counter.
+        raise RuntimeError(f"Cannot resize budget reservation against inconsistent counter {counter_key}")
     entry["applied_adjustment"] = target_adjustment
 
 
-async def _ensure_counter_can_apply_adjustment(
+async def _counter_can_apply_adjustment(
     counter_key: str,
     adjustment: float,
-) -> None:
-    from litellm.proxy.proxy_server import (
-        _invalidate_spend_counter,
-        spend_counter_cache,
-    )
+) -> bool:
+    from litellm.proxy.proxy_server import spend_counter_cache
 
     current_value = await spend_counter_cache.async_get_cache(key=counter_key)
     if current_value is None:
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Cannot apply budget reservation adjustment to missing counter {counter_key}"
-        )
+        return False
 
     try:
         current_float = float(current_value)
     except (TypeError, ValueError):
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Cannot apply budget reservation adjustment to non-numeric counter {counter_key}"
-        )
+        return False
 
-    if adjustment < 0 and current_float + adjustment < -1e-12:
-        await _invalidate_spend_counter(counter_key=counter_key)
-        raise RuntimeError(
-            f"Budget reservation adjustment would make counter negative {counter_key}"
-        )
+    return not (adjustment < 0 and current_float + adjustment < -1e-12)
 
 
 async def _release_applied_entries_best_effort(
@@ -739,9 +800,7 @@ async def _release_applied_entries_best_effort(
             )
         except Exception:
             counter_key = entry.get("counter_key")
-            verbose_proxy_logger.exception(
-                "Failed to release partial budget reservation during exception cleanup"
-            )
+            verbose_proxy_logger.exception("Failed to release partial budget reservation during exception cleanup")
             if counter_key is None:
                 continue
             try:
@@ -763,6 +822,7 @@ async def _resize_applied_reservation(
         entries=entries,
         actual_cost=new_reserved_cost,
         default_reserved_cost=current_reserved_cost,
+        reseed_on_inconsistent=False,
     )
     for entry in entries:
         entry["reserved_cost"] = new_reserved_cost
@@ -825,7 +885,7 @@ def estimate_request_max_cost(
     route: str,
     llm_router: Optional[Router],
 ) -> Optional[float]:
-    model = get_model_from_request(request_body, route)
+    model = get_model_from_request(request_body, route, llm_router=llm_router)
     if model is None:
         return None
 
@@ -845,18 +905,114 @@ def estimate_request_max_cost(
     return max(cast(List[float], estimates))
 
 
+def estimate_request_input_cost(
+    request_body: dict,
+    route: str,
+    llm_router: Router | None,
+) -> float | None:
+    """Cost of the request's input tokens alone.
+
+    Once the provider request is dispatched the input tokens are billed even if
+    the client disconnects before the first chunk, so this is the cost floor a
+    cancelled in-flight request has already incurred. A cancelled reservation is
+    reconciled to this instead of being refunded to zero.
+    """
+    model = get_model_from_request(request_body, route, llm_router=llm_router)
+    if model is None:
+        return None
+
+    models = [model] if isinstance(model, str) else model
+    estimates = [
+        _estimate_request_input_cost_for_model(
+            request_body=request_body,
+            route=route,
+            model=model_name,
+            llm_router=llm_router,
+        )
+        for model_name in models
+    ]
+    estimates = [estimate for estimate in estimates if estimate is not None]
+    if not estimates:
+        return None
+    return max(cast("list[float]", estimates))
+
+
+def _estimate_request_input_cost_for_model(
+    request_body: dict,
+    route: str,
+    model: str,
+    llm_router: Router | None,
+) -> float | None:
+    estimates = [
+        _input_cost_for_cost_info(
+            request_body=request_body,
+            route=route,
+            model=model,
+            model_info=model_info,
+        )
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+    ]
+    valid_estimates = [estimate for estimate in estimates if estimate is not None]
+    return max(valid_estimates) if valid_estimates else None
+
+
+def _input_cost_for_cost_info(
+    request_body: dict,
+    route: str,
+    model: str,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
+    input_tokens = _estimate_input_tokens(
+        request_body=request_body,
+        route=route,
+        model=model,
+        model_info=model_info,
+    )
+    if input_tokens is None:
+        return None
+    tiered_pricing = model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        tier = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        if tier is not None:
+            return input_tokens * tier_rate(tier, "input_cost_per_token")
+    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
+    if input_cost_per_token is None:
+        return None
+    return input_tokens * input_cost_per_token
+
+
 def _estimate_request_max_cost_for_model(
     request_body: dict,
     route: str,
     model: str,
     llm_router: Optional[Router],
 ) -> Optional[float]:
-    model_info = _get_model_cost_info(model=model, llm_router=llm_router)
-    if model_info is None:
-        return None
+    estimates = [
+        _max_cost_for_cost_info(
+            request_body=request_body,
+            route=route,
+            model=model,
+            model_info=model_info,
+        )
+        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+    ]
+    valid_estimates = [estimate for estimate in estimates if estimate is not None]
+    return max(valid_estimates) if valid_estimates else None
 
-    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
-    output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
+
+def _max_cost_for_cost_info(
+    request_body: dict,
+    route: str,
+    model: str,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
+    image_cost = _estimate_image_generation_cost(
+        request_body=request_body,
+        model_info=model_info,
+    )
+    if image_cost is not None:
+        return image_cost
+
     input_tokens = _estimate_input_tokens(
         request_body=request_body,
         route=route,
@@ -871,19 +1027,76 @@ def _estimate_request_max_cost_for_model(
     if input_tokens is None or output_tokens is None:
         return None
 
+    output_multiplier = _get_output_multiplier(request_body=request_body)
+    tiered_pricing = model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        tier = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        if tier is not None:
+            output_rate = max(
+                tier_rate(tier, "output_cost_per_token"),
+                tier_rate(tier, "output_cost_per_reasoning_token"),
+            )
+            return (input_tokens * tier_rate(tier, "input_cost_per_token")) + (
+                output_tokens * output_multiplier * output_rate
+            )
+
+    input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
+    output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
+    output_cost_per_reasoning_token = _to_float(model_info.get("output_cost_per_reasoning_token"))
     cost = 0.0
     if input_cost_per_token is not None:
         cost += input_tokens * input_cost_per_token
     elif input_tokens > 0:
         return None
 
-    output_multiplier = _get_output_multiplier(request_body=request_body)
-    if output_cost_per_token is not None:
-        cost += output_tokens * output_multiplier * output_cost_per_token
+    # The reasoning-token share is unknown before the request runs, so reserve every
+    # output token at the higher of the standard and reasoning rates to avoid
+    # under-reserving reasoning-heavy requests.
+    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
+    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
+        cost += output_tokens * output_multiplier * output_rate
     elif output_tokens > 0:
         return None
 
     return cost
+
+
+def _estimate_image_generation_cost(
+    request_body: dict,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
+    """
+    Reserve `n × per-image cost` for image-generation requests so concurrent
+    requests against a depleted budget cannot all slip past the admission gate
+    onto the provider. Token-based pricing (e.g. gpt-image-1) is handled by
+    the chat-route token path; per-pixel and size/quality-tiered pricing
+    (DALL-E 2 size variants, premium tiers) are not handled here and fall
+    through to read-time enforcement.
+
+    The "output" vs "input" cost-per-image naming is inconsistent across
+    providers — OpenAI's dall-e-3 entry uses ``input_cost_per_image`` while
+    aiml/dall-e-3 uses ``output_cost_per_image`` — so both are summed.
+    """
+    # Gate strictly on `mode`. Several chat and embedding models carry
+    # ``input_cost_per_image`` / ``output_cost_per_image`` to price multimodal
+    # *vision input* (e.g. ``gemini-3.1-pro-preview``, ``azure/gpt-realtime-*``,
+    # ``amazon.titan-embed-image-v1``). Falling back to "treat as image-gen if
+    # an image cost field is present" would short-circuit the token-priced
+    # path for those models and reserve a fraction of a cent instead of the
+    # true per-token cost. All real image-generation entries in
+    # ``model_prices_and_context_window.json`` carry ``mode: image_generation``
+    # or ``mode: image_edit``, so the field-presence fallback is unnecessary.
+    if model_info.get("mode") not in ("image_generation", "image_edit"):
+        return None
+
+    output_cost_per_image = _to_float(model_info.get("output_cost_per_image"))
+    input_cost_per_image = _to_float(model_info.get("input_cost_per_image"))
+    cost_per_image = (output_cost_per_image or 0.0) + (input_cost_per_image or 0.0)
+    if cost_per_image <= 0:
+        return None
+
+    n = _to_int(request_body.get("n")) or 1
+    return cost_per_image * max(n, 1)
 
 
 def _get_model_cost_info(
@@ -891,20 +1104,69 @@ def _get_model_cost_info(
     llm_router: Optional[Router],
 ) -> Optional[Dict[str, Any]]:
     if llm_router is not None:
-        try:
-            model_group_info = llm_router.get_model_group_info(model_group=model)
-            if model_group_info is not None:
-                return model_group_info.model_dump()
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Unable to load router model group info for budget reservation",
-                exc_info=True,
-            )
+        model_group_info = llm_router.get_model_group_info(model_group=model)
+        if model_group_info is not None:
+            return model_group_info.model_dump()
+    return dict(litellm.get_model_info(model=model))
 
+
+def _get_model_cost_infos(
+    model: str,
+    llm_router: Optional[Router],
+) -> List[Dict[str, Any]]:
+    """Cost-info candidates to estimate a request against for one model group.
+
+    Reservation runs before routing, so the deployment that will serve the request
+    is unknown. Rather than guess, we estimate the cost against every eligible
+    pricing shape in the group (the group's flat rates plus each deployment's
+    tiered table) and let the caller reserve the maximum, so a cheaper sibling
+    deployment can never leave the request under-reserved.
+    """
     try:
-        return dict(litellm.get_model_info(model=model))
+        base = _get_model_cost_info(model=model, llm_router=llm_router)
+        if base is None:
+            return []
+        tiered_tables = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
     except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to load model cost info for budget reservation",
+            exc_info=True,
+        )
+        return []
+    if not tiered_tables:
+        return [base]
+    return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
+
+
+def _deployment_tiered_pricing_table(
+    deployment: Dict[str, Any],
+    llm_router: Router,
+) -> Optional[List[dict]]:
+    model_id = deployment.get("model_info", {}).get("id")
+    backend_model = deployment.get("litellm_params", {}).get("model")
+    if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
+    deployment_model_info = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
+    if deployment_model_info is None:
+        return None
+    tiered_pricing = deployment_model_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        return tiered_pricing
+    return None
+
+
+def _get_deployment_tiered_pricing_tables(
+    model: str,
+    llm_router: Optional[Router],
+) -> List[List[dict]]:
+    if llm_router is None:
+        return []
+    deployments = llm_router.get_model_list(model_name=model) or []
+    return [
+        table
+        for deployment in deployments
+        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
+    ]
 
 
 def _estimate_input_tokens(
@@ -926,24 +1188,23 @@ def _estimate_input_tokens(
         if "input" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("input"))
         if "query" in request_body or "documents" in request_body:
-            query_tokens = _count_text_tokens(
-                model=model, text=request_body.get("query")
-            )
+            query_tokens = _count_text_tokens(model=model, text=request_body.get("query"))
             document_tokens = _count_text_tokens(
                 model=model,
                 text=request_body.get("documents"),
             )
             return query_tokens + document_tokens
     except Exception:
-        verbose_proxy_logger.debug(
-            "Unable to count input tokens for budget reservation", exc_info=True
-        )
+        verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
 
     max_input_tokens = _to_int(model_info.get("max_input_tokens"))
     if max_input_tokens is not None:
         return max_input_tokens
 
     return None
+
+
+DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK = 16384
 
 
 def _estimate_output_tokens(
@@ -954,15 +1215,24 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
+    requested: Optional[int] = None
     for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
-        max_tokens = _to_int(request_body.get(key))
-        if max_tokens is not None:
-            return max_tokens
+        requested = _to_int(request_body.get(key))
+        if requested is not None:
+            break
 
-    # If the caller did not cap output tokens, avoid reserving a model's
-    # theoretical maximum context. The caller can still admit one request by
-    # reserving the smallest remaining budget in reserve_budget_for_request().
-    return None
+    # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
+    # (1) Without an explicit cap we still need a finite reservation so the
+    #     atomic admission counter actually bounds concurrent in-flight cost
+    #     (mirrors parallel_request_limiter_v3's DEFAULT_MAX_TOKENS_ESTIMATE).
+    # (2) An adversarial caller cannot send max_tokens=999999999 to inflate
+    #     the reservation up to remaining team headroom and pin the counter
+    #     at the cap — the model can only physically emit max_output_tokens
+    #     anyway, so reserving more is both wasteful and a DoS surface.
+    model_ceiling = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    if requested is None:
+        requested = DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    return min(requested, model_ceiling)
 
 
 def _count_text_tokens(model: str, text: Any) -> int:

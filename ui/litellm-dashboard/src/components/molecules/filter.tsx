@@ -1,6 +1,7 @@
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { FilterIcon } from "@heroicons/react/outline";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { Button, Input, Select } from "antd";
-import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 
 export interface FilterOptionCustomComponentProps {
@@ -17,6 +18,7 @@ export interface FilterOption {
   searchFn?: (searchText: string) => Promise<Array<{ label: string; value: string }>>;
   options?: Array<{ label: string; value: string }>;
   customComponent?: React.ComponentType<FilterOptionCustomComponentProps>;
+  loading?: boolean;
 }
 
 interface FilterValues {
@@ -53,8 +55,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     [key: string]: boolean;
   }>({});
 
-  const debouncedSearch = useCallback(
-    debounce(async (value: string, option: FilterOption) => {
+  const debouncedSearch = useDebouncedCallback(
+    async (value: string, option: FilterOption) => {
       if (!option.isSearchable || !option.searchFn) return;
 
       setSearchLoadingMap((prev) => ({ ...prev, [option.name]: true }));
@@ -67,14 +69,14 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       } finally {
         setSearchLoadingMap((prev) => ({ ...prev, [option.name]: false }));
       }
-    }, 300),
-    [],
+    },
+    { wait: DEBOUNCE_WAIT_MS },
   );
 
   // Load initial options for searchable filters
   const loadInitialOptions = useCallback(
     async (option: FilterOption) => {
-      if (!option.isSearchable || !option.searchFn || initialOptionsLoaded[option.name]) return;
+      if (!option.isSearchable || !option.searchFn || option.loading || initialOptionsLoaded[option.name]) return;
 
       setSearchLoadingMap((prev) => ({ ...prev, [option.name]: true }));
       setInitialOptionsLoaded((prev) => ({ ...prev, [option.name]: true }));
@@ -129,21 +131,6 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     }
   };
 
-  // Define the order of filters
-  const orderedFilters = [
-    "Team ID",
-    "Status",
-    "Organization ID",
-    "Key Alias",
-    "User ID",
-    "End User",
-    "Error Code",
-    "Error Message",
-    "Key Hash",
-    "Model",
-    "Public model / search tool",
-  ];
-
   return (
     <div className="w-full">
       <div className="flex items-center gap-2 mb-6">
@@ -159,10 +146,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
 
       {showFilters && (
         <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
-          {orderedFilters.map((filterName) => {
-            const option = options.find((opt) => opt.label === filterName || opt.name === filterName);
-            if (!option) return null;
-
+          {options.map((option) => {
+            const isOptionLoading = searchLoadingMap[option.name] || option.loading;
             return (
               <div key={option.name} className="flex flex-col gap-2">
                 <label className="text-sm text-gray-600">{option.label || option.name}</label>
@@ -184,10 +169,10 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                       }
                     }}
                     filterOption={false}
-                    loading={searchLoadingMap[option.name]}
+                    loading={isOptionLoading}
                     options={searchOptionsMap[option.name] || []}
                     allowClear
-                    notFoundContent={searchLoadingMap[option.name] ? "Loading..." : "No results found"}
+                    notFoundContent={isOptionLoading ? "Loading..." : "No results found"}
                   />
                 ) : option.options ? (
                   <Select

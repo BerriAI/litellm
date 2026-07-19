@@ -64,9 +64,7 @@ describe("CreateUserButton", () => {
 
   describe("rendering and visibility", () => {
     it("should render the create user form when embedded", () => {
-      renderWithProviders(
-        <CreateUserButton {...defaultProps} isEmbedded />,
-      );
+      renderWithProviders(<CreateUserButton {...defaultProps} isEmbedded />);
       expect(screen.getByRole("button", { name: /create user/i })).toBeInTheDocument();
     });
 
@@ -99,9 +97,7 @@ describe("CreateUserButton", () => {
         proxy_admin: { ui_label: "Admin", description: "Full access" },
         proxy_user: { ui_label: "User", description: "Limited access" },
       };
-      renderWithProviders(
-        <CreateUserButton {...defaultProps} possibleUIRoles={possibleUIRoles} isEmbedded />,
-      );
+      renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={possibleUIRoles} isEmbedded />);
       await userEvent.click(screen.getByRole("combobox", { name: /user role/i }));
       expect(screen.getByText("Admin")).toBeInTheDocument();
       expect(screen.getByText("User")).toBeInTheDocument();
@@ -134,7 +130,11 @@ describe("CreateUserButton", () => {
       } as any);
 
       renderWithProviders(
-        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+        <CreateUserButton
+          {...defaultProps}
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+          isEmbedded
+        />,
       );
 
       await user.type(screen.getByLabelText(/user email/i), "test@example.com");
@@ -143,10 +143,14 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
-        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
-          user_email: "test@example.com",
-          user_role: "proxy_user",
-        }));
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            user_email: "test@example.com",
+            user_role: "proxy_user",
+          }),
+        );
       });
     });
 
@@ -156,7 +160,12 @@ describe("CreateUserButton", () => {
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "new-user-456" } });
 
       renderWithProviders(
-        <CreateUserButton {...defaultProps} onUserCreated={onUserCreated} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+        <CreateUserButton
+          {...defaultProps}
+          onUserCreated={onUserCreated}
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+          isEmbedded
+        />,
       );
 
       await user.type(screen.getByLabelText(/user email/i), "embedded@example.com");
@@ -174,7 +183,11 @@ describe("CreateUserButton", () => {
       mockUserCreateCall.mockRejectedValue({ response: { data: { detail: "Email already exists" } } });
 
       renderWithProviders(
-        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+        <CreateUserButton
+          {...defaultProps}
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+          isEmbedded
+        />,
       );
 
       await user.type(screen.getByLabelText(/user email/i), "duplicate@example.com");
@@ -197,7 +210,11 @@ describe("CreateUserButton", () => {
       } as any);
 
       renderWithProviders(
-        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+        <CreateUserButton
+          {...defaultProps}
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+          isEmbedded
+        />,
       );
 
       await user.type(screen.getByLabelText(/user email/i), "info@example.com");
@@ -312,9 +329,13 @@ describe("CreateUserButton", () => {
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
-        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
-          organizations: ["org-1"],
-        }));
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            organizations: ["org-1"],
+          }),
+        );
       });
     });
 
@@ -361,7 +382,11 @@ describe("CreateUserButton", () => {
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "default-on-user" } });
 
       renderWithProviders(
-        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+        <CreateUserButton
+          {...defaultProps}
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+          isEmbedded
+        />,
       );
 
       await user.type(screen.getByLabelText(/user email/i), "default@example.com");
@@ -370,9 +395,13 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
-        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
-          send_invite_email: true,
-        }));
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            send_invite_email: true,
+          }),
+        );
       });
     });
 
@@ -381,7 +410,11 @@ describe("CreateUserButton", () => {
       mockUserCreateCall.mockResolvedValue({ data: { user_id: "unchecked-user" } });
 
       renderWithProviders(
-        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} isEmbedded />,
+        <CreateUserButton
+          {...defaultProps}
+          possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }}
+          isEmbedded
+        />,
       );
 
       await user.type(screen.getByLabelText(/user email/i), "off@example.com");
@@ -391,9 +424,13 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
-        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
-          send_invite_email: false,
-        }));
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            send_invite_email: false,
+          }),
+        );
       });
     });
 
@@ -422,9 +459,13 @@ describe("CreateUserButton", () => {
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
-        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
-          send_invite_email: true,
-        }));
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            send_invite_email: true,
+          }),
+        );
       });
     });
 
@@ -454,9 +495,13 @@ describe("CreateUserButton", () => {
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
-        expect(mockUserCreateCall).toHaveBeenCalledWith("token", null, expect.objectContaining({
-          send_invite_email: false,
-        }));
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({
+            send_invite_email: false,
+          }),
+        );
       });
     });
 

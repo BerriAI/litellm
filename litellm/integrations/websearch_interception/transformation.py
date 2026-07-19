@@ -53,16 +53,78 @@ class WebSearchTransformation:
         if stream:
             # This should not happen in practice since we convert streaming to non-streaming
             # in async_log_pre_api_call, but keep this check for safety
-            verbose_logger.warning(
-                "WebSearchInterception: Unexpected streaming response, skipping interception"
-            )
+            verbose_logger.warning("WebSearchInterception: Unexpected streaming response, skipping interception")
             return False, []
 
         # Parse non-streaming response based on format
         if response_format == "openai":
             return WebSearchTransformation._detect_from_openai_response(response)
+        elif response_format == "responses":
+            return WebSearchTransformation._detect_from_responses_response(response)
         else:
             return WebSearchTransformation._detect_from_non_streaming_response(response)
+
+    @staticmethod
+    def _detect_from_responses_response(
+        response: Any,
+    ) -> tuple[bool, list[dict]]:
+        """Parse a Responses API response for ``litellm_web_search`` function calls.
+
+        After pre-request conversion the native web search tool is replaced by a
+        ``litellm_web_search`` function tool, so the model emits ``function_call``
+        items in ``response.output`` instead of a native ``web_search_call``.
+        """
+        if isinstance(response, dict):
+            output = response.get("output", [])
+        else:
+            output = getattr(response, "output", None) or []
+
+        if not isinstance(output, list):
+            return False, []
+
+        tool_calls: list[dict] = []
+        for item in output:
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                item_name = item.get("name")
+                call_id = item.get("call_id")
+                arguments = item.get("arguments", "")
+            else:
+                item_type = getattr(item, "type", None)
+                item_name = getattr(item, "name", None)
+                call_id = getattr(item, "call_id", None)
+                arguments = getattr(item, "arguments", "")
+
+            if item_type != "function_call" or item_name != LITELLM_WEB_SEARCH_TOOL_NAME:
+                continue
+
+            if isinstance(arguments, str):
+                try:
+                    parsed_input = json.loads(arguments) if arguments else {}
+                except json.JSONDecodeError:
+                    verbose_logger.warning(
+                        f"WebSearchInterception: Failed to parse function_call arguments: {arguments}"
+                    )
+                    parsed_input = {}
+            elif isinstance(arguments, dict):
+                parsed_input = arguments
+            else:
+                parsed_input = {}
+
+            arguments_str = arguments if isinstance(arguments, str) else json.dumps(parsed_input)
+            tool_calls.append(
+                {
+                    "id": call_id,
+                    "call_id": call_id,
+                    "type": "function_call",
+                    "name": item_name,
+                    "arguments": arguments_str,
+                    "input": parsed_input,
+                }
+            )
+            verbose_logger.debug(f"WebSearchInterception: Found {item_name} function_call with call_id={call_id}")
+
+        return len(tool_calls) > 0, tool_calls
 
     @staticmethod
     def _detect_from_non_streaming_response(
@@ -75,9 +137,7 @@ class WebSearchTransformation:
             content = response.get("content", [])
         else:
             if not hasattr(response, "content"):
-                verbose_logger.debug(
-                    "WebSearchInterception: Response has no content attribute"
-                )
+                verbose_logger.debug("WebSearchInterception: Response has no content attribute")
                 return False, []
             content = response.content or []
 
@@ -100,11 +160,14 @@ class WebSearchTransformation:
                 block_id = getattr(block, "id", None)
                 block_input = getattr(block, "input", {})
 
-            # Check for LiteLLM standard or legacy web search tools
-            # Handles: litellm_web_search, WebSearch, web_search
+            # Detect tool_use blocks that came from interception. After
+            # pre-request conversion the model always sees
+            # ``litellm_web_search``; the bare ``web_search`` entry handles
+            # callers that bypass our pre-request hooks (e.g. direct
+            # litellm.acompletion). "WebSearch" is intentionally omitted —
+            # see is_web_search_tool for the Cowork rationale.
             if block_type == "tool_use" and block_name in (
                 LITELLM_WEB_SEARCH_TOOL_NAME,
-                "WebSearch",
                 "web_search",
             ):
                 # Convert to dict for easier handling
@@ -115,9 +178,7 @@ class WebSearchTransformation:
                     "input": block_input,
                 }
                 tool_calls.append(tool_call)
-                verbose_logger.debug(
-                    f"WebSearchInterception: Found {block_name} tool_use with id={tool_call['id']}"
-                )
+                verbose_logger.debug(f"WebSearchInterception: Found {block_name} tool_use with id={tool_call['id']}")
 
         return len(tool_calls) > 0, tool_calls
 
@@ -132,9 +193,7 @@ class WebSearchTransformation:
             choices = response.get("choices", [])
         else:
             if not hasattr(response, "choices"):
-                verbose_logger.debug(
-                    "WebSearchInterception: Response has no choices attribute"
-                )
+                verbose_logger.debug("WebSearchInterception: Response has no choices attribute")
                 return False, []
             choices = response.choices or []
 
@@ -171,29 +230,23 @@ class WebSearchTransformation:
                 tool_id = tool_call.get("id")
                 tool_type = tool_call.get("type")
                 function = tool_call.get("function", {})
-                function_name = (
-                    function.get("name")
-                    if isinstance(function, dict)
-                    else getattr(function, "name", None)
-                )
+                function_name = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
                 function_arguments = (
-                    function.get("arguments")
-                    if isinstance(function, dict)
-                    else getattr(function, "arguments", None)
+                    function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
                 )
             else:
                 tool_id = getattr(tool_call, "id", None)
                 tool_type = getattr(tool_call, "type", None)
                 function = getattr(tool_call, "function", None)
                 function_name = getattr(function, "name", None) if function else None
-                function_arguments = (
-                    getattr(function, "arguments", None) if function else None
-                )
+                function_arguments = getattr(function, "arguments", None) if function else None
 
-            # Check for LiteLLM standard or legacy web search tools
+            # Detect function-style web search tool_calls. ``WebSearch`` is
+            # intentionally omitted — see is_web_search_tool for the Cowork
+            # rationale (clients ship their own client-side ``WebSearch`` and
+            # we must not hijack it).
             if tool_type == "function" and function_name in (
                 LITELLM_WEB_SEARCH_TOOL_NAME,
-                "WebSearch",
                 "web_search",
             ):
                 # Parse arguments (might be JSON string)
@@ -220,9 +273,7 @@ class WebSearchTransformation:
                     "input": arguments,  # For compatibility with Anthropic format
                 }
                 tool_calls.append(tool_call_dict)
-                verbose_logger.debug(
-                    f"WebSearchInterception: Found {function_name} tool_call with id={tool_id}"
-                )
+                verbose_logger.debug(f"WebSearchInterception: Found {function_name} tool_call with id={tool_id}")
 
         return len(tool_calls) > 0, tool_calls
 
@@ -254,9 +305,7 @@ class WebSearchTransformation:
                 For OpenAI: assistant_message with tool_calls, tool_messages list with tool results
         """
         if response_format == "openai":
-            return WebSearchTransformation._transform_response_openai(
-                tool_calls, search_results
-            )
+            return WebSearchTransformation._transform_response_openai(tool_calls, search_results)
         else:
             return WebSearchTransformation._transform_response_anthropic(
                 tool_calls, search_results, thinking_blocks=thinking_blocks
@@ -327,11 +376,7 @@ class WebSearchTransformation:
                     "type": "function",
                     "function": {
                         "name": tc["name"],
-                        "arguments": (
-                            json.dumps(tc["input"])
-                            if isinstance(tc["input"], dict)
-                            else str(tc["input"])
-                        ),
+                        "arguments": (json.dumps(tc["input"]) if isinstance(tc["input"], dict) else str(tc["input"])),
                     },
                 }
                 for tc in tool_calls
@@ -351,6 +396,57 @@ class WebSearchTransformation:
         return assistant_message, tool_messages
 
     @staticmethod
+    def build_web_search_tool_result_block(
+        tool_use_id: str,
+        search_response: Optional[SearchResponse],
+    ) -> Dict[str, Any]:
+        """
+        Build an Anthropic-native ``web_search_tool_result`` content block.
+
+        Native Anthropic clients (Claude Desktop, the Anthropic SDK, the
+        Anthropic Console) expect search-tool results to be returned as
+        structured ``web_search_tool_result`` blocks so that citations and
+        source links can be rendered. The agentic loop currently feeds the
+        model a flat text blob in the follow-up call (which is correct — the
+        model needs readable evidence). This helper produces the *additional*
+        block that should accompany the model's text reply when the original
+        request used a native ``web_search_*`` tool.
+
+        Spec reference:
+        https://docs.anthropic.com/en/api/web-search-tool
+
+        Args:
+            tool_use_id: The ``tool_use_id`` the model emitted on the first
+                turn. Must match exactly so the client can pair the result
+                with its tool_use block.
+            search_response: Structured ``SearchResponse`` from
+                ``litellm.asearch()``. If None or empty, the block is still
+                emitted with an empty result list (signals "search ran, no
+                results" rather than "search did not run").
+        """
+        items: List[Dict[str, Any]] = []
+        if search_response is not None:
+            results = getattr(search_response, "results", None) or []
+            for r in results:
+                url = getattr(r, "url", "") or ""
+                title = getattr(r, "title", "") or ""
+                page_age = getattr(r, "date", None) or getattr(r, "last_updated", None)
+                items.append(
+                    {
+                        "type": "web_search_result",
+                        "url": url,
+                        "title": title,
+                        "page_age": page_age,
+                        "encrypted_content": "",
+                    }
+                )
+        return {
+            "type": "web_search_tool_result",
+            "tool_use_id": tool_use_id,
+            "content": items,
+        }
+
+    @staticmethod
     def format_search_response(result: SearchResponse) -> str:
         """
         Format SearchResponse as text for tool_result content.
@@ -365,10 +461,7 @@ class WebSearchTransformation:
         if hasattr(result, "results") and result.results:
             # Format results as text
             search_result_text = "\n\n".join(
-                [
-                    f"Title: {r.title}\nURL: {r.url}\nSnippet: {r.snippet}"
-                    for r in result.results
-                ]
+                [f"Title: {r.title}\nURL: {r.url}\nSnippet: {r.snippet}" for r in result.results]
             )
         else:
             search_result_text = str(result)

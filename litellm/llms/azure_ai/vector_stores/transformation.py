@@ -42,9 +42,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
             "write": [("PUT", "/docs")],
         }
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         api_key = litellm_params.get("api_key")
         if api_key is None:
             raise ValueError("api_key is required")
@@ -55,9 +53,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
             }
         }
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         basic_headers = self._base_validate_azure_environment(headers, litellm_params)
         basic_headers.update({"Content-Type": "application/json"})
         return basic_headers
@@ -252,7 +248,5 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
     ) -> Tuple[str, Dict]:
         raise NotImplementedError
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         raise NotImplementedError

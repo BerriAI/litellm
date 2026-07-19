@@ -125,3 +125,40 @@ class TestGetLitellmParamsExplicitFields:
     def test_no_log_from_explicit_param(self):
         result = get_litellm_params(no_log=True)
         assert result["no-log"] is True
+
+
+class TestGetLitellmParamsDataResidency:
+    """Verify that data_residency is inferred from OpenAI regional api_base."""
+
+    def test_eu_host_resolves_to_eu(self):
+        result = get_litellm_params(
+            custom_llm_provider="openai",
+            api_base="https://eu.api.openai.com/v1",
+        )
+        assert result["data_residency"] == "eu"
+
+    def test_us_host_resolves_to_us(self):
+        result = get_litellm_params(
+            custom_llm_provider="openai",
+            api_base="https://us.api.openai.com/v1",
+        )
+        assert result["data_residency"] == "us"
+
+    def test_global_host_resolves_to_none(self):
+        result = get_litellm_params(
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com/v1",
+        )
+        assert result["data_residency"] is None
+
+    def test_no_api_base_is_none(self):
+        result = get_litellm_params(custom_llm_provider="openai")
+        assert result["data_residency"] is None
+
+    def test_non_openai_provider_does_not_resolve(self):
+        """Regional OpenAI host doesn't apply to other providers."""
+        result = get_litellm_params(
+            custom_llm_provider="anthropic",
+            api_base="https://eu.api.openai.com/v1",
+        )
+        assert result["data_residency"] is None

@@ -10,7 +10,6 @@ every text fragment.
 
 from typing import Any, Callable, Dict, FrozenSet, Iterator, List
 
-
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
 # detection, …) should inspect. The proxy ingress passes ``route_type``
@@ -24,15 +23,22 @@ from typing import Any, Callable, Dict, FrozenSet, Iterator, List
 # ``pre_call_hook`` directly with the sync name. Embedding, moderation,
 # audio, and transcription endpoints are deliberately excluded — text
 # guardrails on those paths are a separate scope.
-TEXT_CONTENT_CALL_TYPES: FrozenSet[str] = frozenset(
-    {"completion", "acompletion", "aresponses"}
-)
+TEXT_CONTENT_CALL_TYPES: FrozenSet[str] = frozenset({"completion", "acompletion", "aresponses"})
 
 
 def is_text_content_call_type(call_type: str) -> bool:
     """Return True if ``call_type`` carries free-form text that text
     guardrails should inspect (Chat Completions or Responses API)."""
     return call_type in TEXT_CONTENT_CALL_TYPES
+
+
+TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"})
+
+# Responses-API item types whose ``output`` field carries user/tool text
+# that guardrails should inspect.  ``function_call_output`` is the
+# built-in shape; ``custom_tool_call_output`` is the custom-tool
+# counterpart (see ``ChatCompletionCustomToolCallOutput``).
+_OUTPUT_ITEM_TYPES: frozenset[str] = frozenset({"function_call_output", "custom_tool_call_output"})
 
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
@@ -51,7 +57,7 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
                 continue
             if not isinstance(part, dict):
                 continue
-            if part.get("type") == "text":
+            if part.get("type") in TEXT_PART_TYPES:
                 text = part.get("text")
                 if isinstance(text, str) and text:
                     yield text
@@ -61,16 +67,20 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
     """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
-    if isinstance(input_value, list):
-        if input_value and all(
-            isinstance(item, dict) and "role" in item for item in input_value
-        ):
-            return list(input_value)
-        # Mixed lists (content-part dicts + bare strings) and pure
-        # string/dict lists all become a single user message; the content
-        # iterator below handles each element type uniformly.
-        return [{"role": "user", "content": input_value}]
-    return []
+    if not isinstance(input_value, list):
+        return []
+    messages: List[Dict[str, Any]] = []
+    for item in input_value:
+        if isinstance(item, str):
+            messages.append({"role": "user", "content": item})
+        elif isinstance(item, dict):
+            if item.get("type") in TEXT_PART_TYPES:
+                messages.append({"role": item.get("role") or "user", "content": [item]})
+            elif "content" in item:
+                messages.append({"role": item.get("role") or "user", "content": item["content"]})
+            elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
+                messages.append({"role": item.get("role") or "tool", "content": item["output"]})
+    return messages
 
 
 def _iter_inspection_messages(data: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
@@ -117,7 +127,7 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                     new_parts.append(visit(part))
                 elif (
                     isinstance(part, dict)
-                    and part.get("type") == "text"
+                    and part.get("type") in TEXT_PART_TYPES
                     and isinstance(part.get("text"), str)
                     and part["text"]
                 ):
@@ -141,35 +151,26 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
             data["input"] = visit(input_value)
         return visited
     if isinstance(input_value, list):
-        # List of full messages: rewrite each message's content.
-        if input_value and all(
-            isinstance(item, dict) and "role" in item for item in input_value
-        ):
-            for item in input_value:
-                if "content" in item:
-                    item["content"] = _rewrite_content(item["content"])
-            return visited
-        # List of content parts and/or bare strings: rewrite in place.
         for idx, item in enumerate(input_value):
-            if isinstance(item, str) and item:
-                visited += 1
-                input_value[idx] = visit(item)
-            elif (
-                isinstance(item, dict)
-                and item.get("type") == "text"
-                and isinstance(item.get("text"), str)
-                and item["text"]
-            ):
-                visited += 1
-                input_value[idx] = {**item, "text": visit(item["text"])}
+            if isinstance(item, str):
+                if item:
+                    visited += 1
+                    input_value[idx] = visit(item)
+            elif isinstance(item, dict):
+                if item.get("type") in TEXT_PART_TYPES:
+                    if isinstance(item.get("text"), str) and item["text"]:
+                        visited += 1
+                        input_value[idx] = {**item, "text": visit(item["text"])}
+                elif "content" in item:
+                    item["content"] = _rewrite_content(item["content"])
+                elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
+                    item["output"] = _rewrite_content(item["output"])
         return visited
 
     return visited
 
 
-def apply_redacted_messages_back(
-    data: Dict[str, Any], redacted_messages: List[Dict[str, Any]]
-) -> None:
+def apply_redacted_messages_back(data: Dict[str, Any], redacted_messages: List[Dict[str, Any]]) -> None:
     """Write redacted messages back to whichever field(s) the caller used.
 
     Mask/anonymize paths take a synthesised messages list (from
@@ -202,9 +203,7 @@ def has_non_string_content(data: Dict[str, Any]) -> bool:
     messages = data.get("messages")
     if isinstance(messages, list):
         for message in messages:
-            if isinstance(message, dict) and not isinstance(
-                message.get("content"), str
-            ):
+            if isinstance(message, dict) and not isinstance(message.get("content"), str):
                 if message.get("content") is not None:
                     return True
     input_value = data.get("input")

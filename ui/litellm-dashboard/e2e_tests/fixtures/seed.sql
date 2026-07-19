@@ -33,6 +33,8 @@ VALUES
   ('e2e-internal-viewer',  'viewer@test.local',       'internal_user_viewer', '{"e2e-team-crud"}',                  'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
   ('e2e-team-admin',       'teamadmin@test.local',    'internal_user',        '{"e2e-team-crud","e2e-team-delete"}', 'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
   ('e2e-invitable-user',   'invitable@test.local',    'internal_user',        '{}',                                 'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
+  ('e2e-internal-noteam',  'noteam@test.local',       'internal_user',        '{}',                                 'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
+  ('e2e-invitable-by-team-admin', 'invitable-team@test.local', 'internal_user', '{}',                                'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
   ('e2e-removable-member', 'removable@test.local',    'internal_user',        '{"e2e-team-crud"}',                  'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr');
 
 -- 5. Teams (members_with_roles is required JSON)

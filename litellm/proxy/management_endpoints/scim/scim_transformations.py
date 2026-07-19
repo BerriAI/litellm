@@ -1,12 +1,18 @@
-from typing import List, Union
+from typing import Callable, List, TypeVar, Union
 
+from pydantic import ValidationError
+
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     Member,
     NewUserResponse,
 )
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.scim_v2 import *
+
+T = TypeVar("T")
 
 
 class ScimTransformations:
@@ -22,16 +28,12 @@ class ScimTransformations:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            raise HTTPException(
-                status_code=500, detail={"error": "No database connected"}
-            )
+            raise HTTPException(status_code=500, detail={"error": "No database connected"})
 
         # Get user's teams/groups
         groups = []
         for team_id in user.teams or []:
-            team = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
-            )
+            team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if team:
                 team_alias = getattr(team, "team_alias", team.team_id)
                 groups.append(SCIMUserGroup(value=team.team_id, display=team_alias))
@@ -49,8 +51,22 @@ class ScimTransformations:
         scim_active = metadata.get("scim_active")
         active = True if scim_active is None else bool(scim_active)
 
+        schemas = ["urn:ietf:params:scim:schemas:core:2.0:User"]
+        enterprise_user = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ENTERPRISE_METADATA_KEY, SCIMEnterpriseUser.model_validate
+        )
+        if enterprise_user is not None:
+            schemas.append(SCIM_ENTERPRISE_USER_SCHEMA)
+
+        entitlements = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
+        )
+        roles = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ROLES_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
+        )
+
         return SCIMUser(
-            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            schemas=schemas,
             id=user.user_id,
             userName=ScimTransformations._get_scim_user_name(user),
             displayName=ScimTransformations._get_scim_user_name(user),
@@ -61,12 +77,40 @@ class ScimTransformations:
             emails=emails,
             groups=groups,
             active=active,
+            entitlements=entitlements,
+            roles=roles,
+            enterprise_user=enterprise_user,
             meta={
                 "resourceType": "User",
                 "created": user_created_at,
                 "lastModified": user_updated_at,
             },
         )
+
+    @staticmethod
+    def _parse_directory_metadata(
+        user: Union[LiteLLM_UserTable, NewUserResponse],
+        key: str,
+        validate: Callable[[object], T],
+    ) -> T | None:
+        """A SCIM directory attribute parsed from user metadata, or None when absent or malformed.
+
+        Metadata is writable outside the SCIM surface, so a malformed value on one user must not
+        fail the whole directory response; the attribute is omitted and the corruption logged.
+        """
+        metadata = user.metadata or {}
+        raw = metadata.get(key)
+        if not raw:
+            return None
+        try:
+            return validate(raw)
+        except ValidationError:
+            verbose_proxy_logger.warning(
+                "Skipping malformed %s metadata on user %s in SCIM response",
+                key,
+                user.user_id,
+            )
+            return None
 
     @staticmethod
     def _get_scim_user_name(user: Union[LiteLLM_UserTable, NewUserResponse]) -> str:
@@ -86,9 +130,7 @@ class ScimTransformations:
         """
         metadata = user.metadata or {}
         if "scim_metadata" in metadata:
-            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(
-                **metadata["scim_metadata"]
-            )
+            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
             if scim_metadata.familyName and len(scim_metadata.familyName) > 0:
                 return scim_metadata.familyName
 
@@ -103,9 +145,7 @@ class ScimTransformations:
         """
         metadata = user.metadata or {}
         if "scim_metadata" in metadata:
-            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(
-                **metadata["scim_metadata"]
-            )
+            scim_metadata: LiteLLM_UserScimMetadata = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
             if scim_metadata.givenName and len(scim_metadata.givenName) > 0:
                 return scim_metadata.givenName
 
@@ -120,9 +160,7 @@ class ScimTransformations:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            raise HTTPException(
-                status_code=500, detail={"error": "No database connected"}
-            )
+            raise HTTPException(status_code=500, detail={"error": "No database connected"})
 
         if isinstance(team, dict):
             team = LiteLLM_TeamTable(**team)

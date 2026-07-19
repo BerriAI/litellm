@@ -21,6 +21,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     _get_metadata_variable_name,
     _resolve_credential_from_model_config,
+    _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
@@ -94,6 +95,20 @@ class TestGetMetadataVariableName:
     def test_returns_metadata_for_embeddings(self):
         request = self._make_request("/v1/embeddings")
         assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_litellm_metadata_for_bedrock_invoke(self):
+        # GH#30629: bedrock passthrough must use litellm_metadata
+        # to prevent key-level tags from leaking into provider body
+        request = self._make_request(
+            "/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke"
+        )
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_bedrock_converse(self):
+        request = self._make_request(
+            "/bedrock/model/us.anthropic.claude-sonnet-4-6/converse"
+        )
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -515,6 +530,59 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields(
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_request():
+    """Regression: the body snapshot used to include the proxy_server_request
+    key itself, producing the path
+    ``proxy_server_request.body.proxy_server_request.body == body``. Custom
+    loggers and audit consumers must not see the self-referencing structure
+    (independent of redaction — fires on every successful call).
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="test-user",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    snapshot_body = updated["proxy_server_request"]["body"]
+    assert "proxy_server_request" not in snapshot_body, (
+        "proxy_server_request must be excluded from its own body snapshot "
+        "to prevent the body from self-referencing"
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
     """Regression: metadata arriving as a JSON string (multipart/form-data or
     extra_body) must not bypass the admin-injection strip. The parse happens
@@ -664,7 +732,18 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "control_field",
-    ["callbacks", "service_callback", "logger_fn", "litellm_disabled_callbacks"],
+    [
+        "callbacks",
+        "service_callback",
+        "logger_fn",
+        "litellm_disabled_callbacks",
+        "_agentic_loop_depth",
+        "_agentic_loop_fingerprints",
+        "_code_interpreter_interception_active",
+        "_code_interpreter_interception_converted_stream",
+        "_code_interpreter_interception_sandbox_key",
+        "max_agentic_loops",
+    ],
 )
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
     control_field,
@@ -687,12 +766,19 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
 
-    sample_value = (
-        ["langfuse"]
-        if control_field
-        in ("callbacks", "service_callback", "litellm_disabled_callbacks")
-        else "module.func"
-    )
+    sample_values = {
+        "callbacks": ["langfuse"],
+        "service_callback": ["langfuse"],
+        "litellm_disabled_callbacks": ["langfuse"],
+        "logger_fn": "module.func",
+        "_agentic_loop_depth": 5,
+        "_agentic_loop_fingerprints": ["forged"],
+        "_code_interpreter_interception_active": True,
+        "_code_interpreter_interception_converted_stream": True,
+        "_code_interpreter_interception_sandbox_key": "forged-key",
+        "max_agentic_loops": 9999,
+    }
+    sample_value = sample_values[control_field]
 
     updated = await add_litellm_data_to_request(
         data={
@@ -770,10 +856,19 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
                 "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "hello"}],
                 "turn_off_message_logging": False,
-                "metadata": {"headers": {"litellm-disable-message-redaction": "true"}},
+                "metadata": {
+                    "headers": {"litellm-disable-message-redaction": "true"},
+                    "turn_off_message_logging": False,
+                },
                 "litellm_metadata": json.dumps(
-                    {"headers": {"LiteLLM-Disable-Message-Redaction": "true"}}
+                    {
+                        "headers": {"LiteLLM-Disable-Message-Redaction": "true"},
+                        "turn_off_message_logging": "false",
+                    }
                 ),
+                "litellm_params": {
+                    "metadata": {"turn_off_message_logging": False},
+                },
             },
             request=request_mock,
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
@@ -785,6 +880,9 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
         litellm.turn_off_message_logging = original_turn_off_message_logging
 
     assert "turn_off_message_logging" not in updated
+    assert "turn_off_message_logging" not in (updated.get("litellm_params") or {}).get("metadata", {})
+    assert "turn_off_message_logging" not in updated["metadata"]
+    assert "turn_off_message_logging" not in (updated.get("litellm_metadata") or {})
     assert "litellm-disable-message-redaction" not in {
         header.lower() for header in updated["metadata"]["headers"]
     }
@@ -803,6 +901,158 @@ async def test_add_litellm_data_to_request_strips_client_redaction_bypass_contro
         header.lower()
         for header in (updated.get("litellm_metadata") or {}).get("headers", {})
     }
+
+
+@pytest.mark.parametrize(
+    "admin_metadata_kwargs",
+    [
+        {
+            "metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": False},
+                    }
+                ]
+            }
+        },
+        {
+            "team_metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": False},
+                    }
+                ]
+            }
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_admin_callback_vars_turn_off_message_logging_overrides_global(
+    admin_metadata_kwargs,
+):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    original_turn_off_message_logging = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = True
+    try:
+        updated = await add_litellm_data_to_request(
+            data={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **admin_metadata_kwargs),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert updated.get("turn_off_message_logging") == "False"
+
+        dynamic_params = initialize_standard_callback_dynamic_params(updated)
+        assert dynamic_params.get("turn_off_message_logging") == "False"
+
+        assert (
+            should_redact_message_logging(
+                {"standard_callback_dynamic_params": dynamic_params}
+            )
+            is False
+        )
+    finally:
+        litellm.turn_off_message_logging = original_turn_off_message_logging
+
+
+@pytest.mark.parametrize(
+    "admin_metadata_kwargs",
+    [
+        {
+            "metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": True},
+                    }
+                ]
+            }
+        },
+        {
+            "team_metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": True},
+                    }
+                ]
+            }
+        },
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_admin_callback_vars_turn_off_message_logging_enables_redaction_when_global_off(
+    admin_metadata_kwargs,
+):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    original_turn_off_message_logging = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = False
+    try:
+        updated = await add_litellm_data_to_request(
+            data={
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **admin_metadata_kwargs),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert updated.get("turn_off_message_logging") == "True"
+
+        dynamic_params = initialize_standard_callback_dynamic_params(updated)
+        assert dynamic_params.get("turn_off_message_logging") == "True"
+
+        assert (
+            should_redact_message_logging(
+                {"standard_callback_dynamic_params": dynamic_params}
+            )
+            is True
+        )
+    finally:
+        litellm.turn_off_message_logging = original_turn_off_message_logging
 
 
 @pytest.mark.parametrize(
@@ -837,7 +1087,10 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
                 "model": "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "hello"}],
                 "turn_off_message_logging": False,
-                "metadata": {"headers": {"litellm-disable-message-redaction": "true"}},
+                "metadata": {
+                    "headers": {"litellm-disable-message-redaction": "true"},
+                    "turn_off_message_logging": False,
+                },
                 "litellm_metadata": json.dumps(
                     {"headers": {"LiteLLM-Disable-Message-Redaction": "true"}}
                 ),
@@ -852,6 +1105,7 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
         litellm.turn_off_message_logging = original_turn_off_message_logging
 
     assert updated["turn_off_message_logging"] is False
+    assert updated["metadata"]["turn_off_message_logging"] is False
     assert "litellm-disable-message-redaction" in {
         header.lower() for header in updated["metadata"]["headers"]
     }
@@ -873,101 +1127,8 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_ignores_x_litellm_tags_header_without_permission():
-    """Regression: the `x-litellm-tags` header bypassed the body-metadata
-    tag strip. Header tags must also be gated by `allow_client_tags`."""
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {
-        "Content-Type": "application/json",
-        "x-litellm-tags": "restricted-tier,victim-team",
-    }
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    data = {"model": "gpt-3.5-turbo"}
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="hashed-key",
-        metadata={},
-        team_metadata={},
-        spend=0.0,
-        max_budget=100.0,
-        model_max_budget={},
-        team_spend=0.0,
-        team_max_budget=200.0,
-    )
-
-    updated = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert "tags" not in (updated.get("metadata") or {})
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_ignores_root_level_tags_without_permission():
-    """Regression: root-level `data["tags"]` bypassed the body-metadata
-    tag strip. Root-level tags must also be gated by `allow_client_tags`."""
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "tags": ["restricted-tier", "victim-team"],
-    }
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="hashed-key",
-        metadata={},
-        team_metadata={},
-        spend=0.0,
-        max_budget=100.0,
-        model_max_budget={},
-        team_spend=0.0,
-        team_max_budget=200.0,
-    )
-
-    updated = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert "tags" not in (updated.get("metadata") or {})
-    # Also ensure the root-level tags are removed. get_tags_from_request_body
-    # reads request_body["tags"] directly, so leaving it in place would let
-    # the policy engine see caller-supplied tags even after the metadata
-    # strip.
-    assert "tags" not in updated
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_honors_header_tags_when_opted_in():
-    """When allow_client_tags=True, header-supplied tags flow through."""
+async def test_add_litellm_data_to_request_honors_header_tags():
+    """Header-supplied tags flow through to request metadata."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     request_mock = MagicMock(spec=Request)
@@ -987,7 +1148,7 @@ async def test_add_litellm_data_to_request_honors_header_tags_when_opted_in():
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={"allow_client_tags": True},
+        metadata={},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -1009,11 +1170,8 @@ async def test_add_litellm_data_to_request_honors_header_tags_when_opted_in():
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_strips_user_tags_without_permission():
-    """Caller-supplied metadata.tags must be stripped when the key/team
-    metadata does not opt in via allow_client_tags=True. Otherwise an
-    attacker can reach restricted tag-routed deployments or attribute
-    spend to a victim team's tag."""
+async def test_add_litellm_data_to_request_preserves_caller_metadata_tags():
+    """Caller-supplied metadata.tags are preserved and reach the router."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     request_mock = MagicMock(spec=Request)
@@ -1028,8 +1186,7 @@ async def test_add_litellm_data_to_request_strips_user_tags_without_permission()
 
     data = {
         "model": "gpt-3.5-turbo",
-        "metadata": {"tags": ["restricted-tier", "victim-team"]},
-        "litellm_metadata": {"tags": ["also-stripped"]},
+        "metadata": {"tags": ["caller-tag"]},
     }
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -1052,101 +1209,13 @@ async def test_add_litellm_data_to_request_strips_user_tags_without_permission()
         version="test-version",
     )
 
-    assert "tags" not in (updated.get("metadata") or {})
-    assert "tags" not in (updated.get("litellm_metadata") or {})
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_preserves_user_tags_when_key_opts_in():
-    """When key.metadata.allow_client_tags=True, caller-supplied tags are
-    preserved and reach the router."""
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "metadata": {"tags": ["opted-in-tag"]},
-    }
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="hashed-key",
-        metadata={"allow_client_tags": True},
-        team_metadata={},
-        spend=0.0,
-        max_budget=100.0,
-        model_max_budget={},
-        team_spend=0.0,
-        team_max_budget=200.0,
-    )
-
-    updated = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert updated["metadata"].get("tags") == ["opted-in-tag"]
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_preserves_user_tags_when_team_opts_in():
-    """Team-level allow_client_tags is also honored (not just key-level)."""
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "metadata": {"tags": ["team-allowed"]},
-    }
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="hashed-key",
-        metadata={},
-        team_metadata={"allow_client_tags": True},
-        spend=0.0,
-        max_budget=100.0,
-        model_max_budget={},
-        team_spend=0.0,
-        team_max_budget=200.0,
-    )
-
-    updated = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert updated["metadata"].get("tags") == ["team-allowed"]
+    assert updated["metadata"].get("tags") == ["caller-tag"]
 
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_unions_caller_header_tags_with_static_key_tags():
     """Caller-supplied `x-litellm-tags` must union with static key-level
-    tags, not overwrite them, when `allow_client_tags=True`."""
+    tags, not overwrite them."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     request_mock = MagicMock(spec=Request)
@@ -1166,10 +1235,7 @@ async def test_add_litellm_data_to_request_unions_caller_header_tags_with_static
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={
-            "allow_client_tags": True,
-            "tags": ["team:platform", "env:prod"],
-        },
+        metadata={"tags": ["team:platform", "env:prod"]},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -1216,10 +1282,7 @@ async def test_add_litellm_data_to_request_unions_caller_header_tags_with_static
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
         metadata={},
-        team_metadata={
-            "allow_client_tags": True,
-            "tags": ["team:eng", "owner:platform"],
-        },
+        team_metadata={"tags": ["team:eng", "owner:platform"]},
         spend=0.0,
         max_budget=100.0,
         model_max_budget={},
@@ -1265,10 +1328,7 @@ async def test_add_litellm_data_to_request_unions_dedups_overlapping_caller_and_
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={
-            "allow_client_tags": True,
-            "tags": ["env:prod", "team:platform"],
-        },
+        metadata={"tags": ["env:prod", "team:platform"]},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -1363,11 +1423,9 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
         "file": b"Fake audio bytes",
     }
 
-    # Opt the key in to client-supplied tags so the parsed tags from the
-    # JSON-string multipart body aren't stripped by the admin-injection strip.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={"allow_client_tags": True},
+        metadata={},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -1742,6 +1800,57 @@ def test_team_dynamic_logging_settings():
         key_without_team_logging
     )
     assert result is None
+
+
+def test_key_dynamic_logging_settings_decrypts_callback_vars(monkeypatch):
+    """Encrypted callback_vars on the key are decrypted before downstream use."""
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    encrypted_metadata = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk-real",
+                        "langfuse_secret_key": "sk-real",
+                    },
+                }
+            ]
+        }
+    )
+    cv_on_disk = encrypted_metadata["logging"][0]["callback_vars"]
+    assert cv_on_disk["langfuse_secret_key"] != "sk-real"  # sanity: stored encrypted
+
+    key = UserAPIKeyAuth(api_key="t", metadata=encrypted_metadata, team_metadata={})
+    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key)
+    cv = result[0]["callback_vars"]
+    assert cv["langfuse_secret_key"] == "sk-real"
+    assert cv["langfuse_public_key"] == "pk-real"
+
+
+def test_team_dynamic_logging_settings_decrypts_callback_vars(monkeypatch):
+    """Encrypted callback_vars on the team are decrypted before downstream use."""
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    encrypted_team = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "failure",
+                    "callback_vars": {"langfuse_secret_key": "team-sk-real"},
+                }
+            ]
+        }
+    )
+
+    key = UserAPIKeyAuth(api_key="t", metadata={}, team_metadata=encrypted_team)
+    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key)
+    assert result[0]["callback_vars"]["langfuse_secret_key"] == "team-sk-real"
 
 
 def test_get_dynamic_logging_metadata_with_arize_team_logging():
@@ -2451,6 +2560,108 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
+def test_add_litellm_metadata_from_anthropic_user_id_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_anthropic_user_id_dict_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": {
+                "device_id": "device",
+                "account_uuid": "account",
+                "session_id": "sess_4f8c1d2a-1234",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["user_id"] == "sess_4f8c1d2a-1234"
+    assert data["metadata"]["session_id"] == "sess_4f8c1d2a-1234"
+    assert data["litellm_session_id"] == "sess_4f8c1d2a-1234"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id():
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_body-session-id",
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id_dict():
+    data = {
+        "metadata": {
+            "user_id": {
+                "session_id": "body-session-id",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        "user_abc123_account__session_",
+        "user_abc123_account_",
+        "user_abc123_account__session_invalid!",
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_ignores_invalid_session_id(user_id: str):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        {},
+        {"session_id": 123},
+        {"session_id": "invalid session id"},
+        {"session_id": ""},
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_dict_ignores_invalid_session_id(
+    user_id: object,
+):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
 def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
     headers = {
@@ -2577,6 +2788,70 @@ def test_get_sanitized_user_information_from_key_includes_guardrails_metadata():
     assert "guardrails" in result["user_api_key_auth_metadata"]
     assert result["user_api_key_auth_metadata"]["guardrails"] == ["presidio", "aporia"]
     assert result["user_api_key_auth_metadata"]["other_field"] == "value"
+
+
+def test_user_and_team_spend_and_budget_flow_to_standard_logging_metadata():
+    """
+    Full flow: UserAPIKeyAuth -> get_sanitized_user_information_from_key ->
+    get_standard_logging_metadata. User-level and team-level spend + max budget
+    must reach the StandardLoggingPayload metadata that custom loggers receive,
+    alongside the key-level values
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-hash",
+        spend=1.5,
+        max_budget=10.0,
+        user_id="test-user",
+        user_spend=25.5,
+        user_max_budget=100.0,
+        team_id="test-team",
+        team_spend=250.75,
+        team_max_budget=1000.0,
+    )
+
+    sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    assert sanitized["user_api_key_spend"] == 1.5
+    assert sanitized["user_api_key_max_budget"] == 10.0
+    assert sanitized["user_api_key_user_spend"] == 25.5
+    assert sanitized["user_api_key_user_max_budget"] == 100.0
+    assert sanitized["user_api_key_team_spend"] == 250.75
+    assert sanitized["user_api_key_team_max_budget"] == 1000.0
+
+    logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        dict(sanitized)
+    )
+
+    assert logging_metadata["user_api_key_user_spend"] == 25.5
+    assert logging_metadata["user_api_key_user_max_budget"] == 100.0
+    assert logging_metadata["user_api_key_team_spend"] == 250.75
+    assert logging_metadata["user_api_key_team_max_budget"] == 1000.0
+
+
+def test_user_and_team_spend_and_budget_default_to_none_in_standard_logging_metadata():
+    """
+    Keys with no user or team level budgets report None for the new fields in the
+    StandardLoggingPayload metadata instead of raising
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key-hash")
+
+    sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+    logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        dict(sanitized)
+    )
+
+    assert logging_metadata["user_api_key_user_spend"] is None
+    assert logging_metadata["user_api_key_user_max_budget"] is None
+    assert logging_metadata["user_api_key_team_spend"] is None
+    assert logging_metadata["user_api_key_team_max_budget"] is None
 
 
 @pytest.mark.asyncio
@@ -4043,3 +4318,905 @@ def test_get_guardrail_from_metadata_reads_litellm_metadata_when_no_metadata():
     assert result == [
         "my-guardrail"
     ], f"Expected guardrails from litellm_metadata fallback, got: {result}"
+
+
+def _build_request_mock_with_headers(headers: dict) -> Request:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = headers
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+    request_mock.state._cached_headers = None
+    return request_mock
+
+
+class TestApplyClientTagPolicyPreAuth:
+    """Tests for ``LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth``.
+
+    Regression coverage for the bug where ``x-litellm-tags`` header was
+    invisible to ``_tag_max_budget_check`` because the merge happened
+    post-auth in ``add_litellm_data_to_request``.
+    """
+
+    def test_merges_header_tags_into_metadata(self):
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme,env:prod"}
+        )
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert data["metadata"]["tags"] == ["tenant:acme", "env:prod"]
+
+    def test_unions_header_tags_with_existing_metadata_tags(self):
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme,env:prod"}
+        )
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": {"tags": ["env:prod", "team:platform"]},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Existing tags first, dedupe header tags
+        assert data["metadata"]["tags"] == ["env:prod", "team:platform", "tenant:acme"]
+
+    def test_preserves_body_tags(self):
+        # Pre-auth must NOT touch body-supplied tags. _tag_max_budget_check
+        # (inside common_checks) enforces per-tag budgets on whatever tags
+        # it sees in request_data, including body tags. The helper only
+        # adds header tags to metadata.tags.
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme"}
+        )
+        data = {
+            "model": "gpt-3.5-turbo",
+            "tags": ["root-tag"],
+            "litellm_metadata": {"tags": ["litellm-meta-tag"]},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert data["tags"] == ["root-tag"]
+        # litellm_metadata is the active metadata key (it's present), so
+        # header tags merge into it and union with existing tags there.
+        assert data["litellm_metadata"]["tags"] == [
+            "litellm-meta-tag",
+            "tenant:acme",
+        ]
+
+    def test_uses_litellm_metadata_when_present(self):
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme"}
+        )
+        data = {
+            "model": "gpt-3.5-turbo",
+            "litellm_metadata": {"foo": "bar"},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # get_metadata_variable_name_from_kwargs returns "litellm_metadata"
+        # when present, so header tags should land there to be visible to
+        # _tag_max_budget_check.
+        assert data["litellm_metadata"]["tags"] == ["tenant:acme"]
+        assert "tags" not in data.get("metadata", {})
+
+    def test_no_header_no_mutation(self):
+        request_mock = _build_request_mock_with_headers({})
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert "metadata" not in data or "tags" not in data["metadata"]
+
+    def test_string_metadata_tags_survive_header_merge(self):
+        # metadata can arrive as a JSON string (multipart/form-data, extra_body).
+        # The pre-auth merge must parse it so an over-budget body tag isn't
+        # silently dropped when a within-budget header tag is also present.
+        request_mock = _build_request_mock_with_headers({"x-litellm-tags": "free"})
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"tags": ["paid"]}',
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert isinstance(data["metadata"], dict)
+        assert data["metadata"]["tags"] == ["paid", "free"]
+
+    @pytest.mark.asyncio
+    async def test_string_metadata_does_not_bypass_tag_max_budget_check(self):
+        """Regression: string metadata containing an over-budget tag must not
+        be silently overwritten when an x-litellm-tags header is present."""
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers({"x-litellm-tags": "free"})
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"tags": ["paid"]}',
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        paid_tag = LiteLLM_TagTable(
+            tag_name="paid",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
+            if counter_key == "spend:tag:paid":
+                return 0.50
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"paid": paid_tag},
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _tag_max_budget_check(
+                    request_body=data,
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=UserAPIKeyAuth(token="test-token"),
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+
+    @pytest.mark.asyncio
+    async def test_header_tags_visible_to_tag_max_budget_check(self):
+        """End-to-end: helper + ``_tag_max_budget_check`` enforces budget on
+        header-supplied tags. Without the helper, this would silently pass."""
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme"}
+        )
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="tenant:acme",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
+            if counter_key == "spend:tag:tenant:acme":
+                return 0.50
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:acme": tag_object},
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _tag_max_budget_check(
+                    request_body=data,
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=UserAPIKeyAuth(token="test-token"),
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+            "/v1/messages",
+        ],
+    )
+    async def test_header_tags_visible_to_tag_max_budget_check_on_metadata_route(
+        self, route
+    ):
+        """Regression: on LITELLM_METADATA_ROUTES (bedrock, /v1/messages, ...),
+        common_checks pre-seeds ``litellm_metadata`` and writes key tags there
+        before ``_tag_max_budget_check`` reads from the same key. The auth wrapper
+        calls ``apply_client_tag_policy_pre_auth`` first, so without an earlier
+        pre-seed header tags land in ``metadata`` and the budget check (now
+        resolving to ``litellm_metadata``) silently ignores them. This test mirrors
+        the actual auth-time call order and verifies that an over-budget
+        header-supplied tag still trips ``_tag_max_budget_check``.
+        """
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import common_checks
+        from litellm.proxy.utils import ProxyLogging
+
+        request_mock = _build_request_mock_with_headers(
+            {"x-litellm-tags": "tenant:acme"}
+        )
+        data = {"model": "us.anthropic.claude-sonnet-4-6"}
+        valid_token = UserAPIKeyAuth(
+            token="test-token",
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+            request_data=data,
+            route=route,
+        )
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request_mock,
+            request_data=data,
+            user_api_key_dict=valid_token,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="tenant:acme",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
+            if counter_key == "spend:tag:tenant:acme":
+                return 0.50
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"tenant:acme": tag_object},
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await common_checks(
+                    request_body=data,
+                    team_object=None,
+                    user_object=None,
+                    end_user_object=None,
+                    global_proxy_spend=None,
+                    general_settings={},
+                    route=route,
+                    llm_router=None,
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=valid_token,
+                    request=request_mock,
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+
+        assert "metadata" not in data
+        assert data["litellm_metadata"]["tags"] == ["tenant:acme"]
+
+
+class TestApplyKeyTagsPreAuth:
+    def test_merges_key_tags_into_metadata(self):
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["engineering", "production"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert data["metadata"]["tags"] == ["engineering", "production"]
+
+    def test_unions_key_tags_with_existing_request_tags(self):
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": {"tags": ["request-tag"]},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["key-tag", "request-tag"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # request-tag deduplicated; key-tag appended
+        assert data["metadata"]["tags"] == ["request-tag", "key-tag"]
+
+    def test_no_key_tags_no_mutation(self):
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert "metadata" not in data or "tags" not in data.get("metadata", {})
+
+    def test_empty_key_metadata_no_mutation(self):
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert "metadata" not in data
+
+    def test_uses_litellm_metadata_when_present(self):
+        data = {
+            "model": "gpt-3.5-turbo",
+            "litellm_metadata": {"foo": "bar"},
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["key-tag"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert data["litellm_metadata"]["tags"] == ["key-tag"]
+        assert "tags" not in data.get("metadata", {})
+
+    def test_string_metadata_parsed_before_merge(self):
+        data = {
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"tags": ["existing"]}',
+        }
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["key-tag"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert isinstance(data["metadata"], dict)
+        assert data["metadata"]["tags"] == ["existing", "key-tag"]
+
+    @pytest.mark.asyncio
+    async def test_key_tags_visible_to_tag_max_budget_check(self):
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.proxy.utils import ProxyLogging
+
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["engineering"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="engineering",
+            spend=0.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
+            if counter_key == "spend:tag:engineering":
+                return 0.50
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"engineering": tag_object},
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _tag_max_budget_check(
+                    request_body=data,
+                    prisma_client=MagicMock(),
+                    user_api_key_cache=MagicMock(),
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                    valid_token=UserAPIKeyAuth(token="test-token"),
+                )
+            assert exc_info.value.current_cost == 0.50
+            assert exc_info.value.max_budget == 0.10
+
+    @pytest.mark.asyncio
+    async def test_key_tags_within_budget_passes_check(self):
+        from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
+        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.proxy.utils import ProxyLogging
+
+        data = {"model": "gpt-3.5-turbo"}
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={"tags": ["engineering"]},
+            team_metadata={},
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        tag_object = LiteLLM_TagTable(
+            tag_name="engineering",
+            spend=0.05,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+        )
+
+        async def mock_get_current_spend(
+            counter_key, fallback_spend, max_budget=None, **kwargs
+        ):
+            if counter_key == "spend:tag:engineering":
+                return 0.05
+            return fallback_spend
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                mock_get_current_spend,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+                new_callable=AsyncMock,
+                return_value={"engineering": tag_object},
+            ),
+        ):
+            await _tag_max_budget_check(
+                request_body=data,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+
+
+# ============================================================================
+# Tests for #27516: provider hint resolution from deployment when the
+# user-facing model name has no provider prefix.
+# ============================================================================
+
+
+def test_resolve_provider_from_deployment_uses_litellm_params_model():
+    """When custom_llm_provider is unset, fall back to the prefix of model."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "bedrock/us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = None
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
+
+
+def test_resolve_provider_from_deployment_prefers_custom_llm_provider():
+    """Explicit custom_llm_provider on the deployment wins over model prefix."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = "bedrock"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") == "bedrock"
+
+
+def test_resolve_provider_from_deployment_no_match():
+    """No deployment for the model group -> None."""
+    router = MagicMock()
+    router.get_deployment_by_model_group_name.return_value = None
+    assert _resolve_provider_from_deployment(router, "unknown-model") is None
+
+
+def test_resolve_provider_from_deployment_router_raises():
+    """Router exceptions must not propagate — fall back to None."""
+    router = MagicMock()
+    router.get_deployment_by_model_group_name.side_effect = RuntimeError("boom")
+    assert _resolve_provider_from_deployment(router, "claude-sonnet-4.6") is None
+
+
+def test_resolve_provider_from_deployment_falls_back_to_pre_alias():
+    """If post-alias lookup fails, the pre-alias name is also tried."""
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "bedrock/anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = None
+
+    def lookup(model_group_name):
+        if model_group_name == "pre-alias-name":
+            return deployment
+        return None
+
+    router.get_deployment_by_model_group_name.side_effect = lookup
+
+    result = _resolve_provider_from_deployment(
+        router, "post-alias-name", pre_alias_model_name="pre-alias-name"
+    )
+    assert result == "bedrock"
+
+
+def test_apply_overrides_multi_provider_default_picks_correct_provider(
+    setup_test_credentials,
+):
+    """
+    Regression for #27516: when defaultconfig has multiple providers and the
+    request model has no '/' prefix, the deployment's custom_llm_provider must
+    drive provider matching instead of falling through to dict insertion order.
+    """
+    litellm.credential_list.append(
+        CredentialItem(
+            credential_name="bedrock-team-1",
+            credential_info={},
+            credential_values={"api_key": "ABSK-bedrock-key-for-team-1"},
+        )
+    )
+    litellm.credential_list.append(
+        CredentialItem(
+            credential_name="gemini-team-1",
+            credential_info={},
+            credential_values={"api_key": "gemini-key-for-team-1"},
+        )
+    )
+
+    data = {"model": "claude-sonnet-4.6"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    # gemini comes first in insertion order — the bug picked it.
+                    "gemini": {"litellm_credentials": "gemini-team-1"},
+                    "bedrock": {"litellm_credentials": "bedrock-team-1"},
+                }
+            }
+        },
+    )
+
+    router = MagicMock()
+    deployment = MagicMock()
+    deployment.litellm_params.model = "us.anthropic.claude-sonnet-4-6"
+    deployment.litellm_params.custom_llm_provider = "bedrock"
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=router,
+    )
+    assert data["api_key"] == "ABSK-bedrock-key-for-team-1"
+
+
+def test_apply_overrides_no_router_keeps_legacy_behaviour(setup_test_credentials):
+    """
+    Without a router, the function still works for the single-provider case
+    (the historical behaviour). Multi-provider configs with no '/' prefix
+    keep the legacy first-entry behaviour because there is no way to
+    disambiguate — this preserves backwards compatibility.
+    """
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict, llm_router=None
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+
+
+def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
+    setup_test_credentials,
+):
+    """
+    When the request model already has a 'provider/...' prefix, the router
+    lookup must be skipped — the explicit prefix is authoritative.
+    """
+    data = {"model": "azure/gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"},
+                    "bedrock": {"litellm_credentials": "hotel-rec-azure"},
+                }
+            }
+        },
+    )
+
+    router = MagicMock()
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict, llm_router=router
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+    router.get_deployment_by_model_group_name.assert_not_called()
+
+
+def _make_request_mock(path: str, headers: dict) -> MagicMock:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = path
+    request_mock.url.__str__.return_value = f"http://localhost{path}"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = headers
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_agent, request_drop_params, operator_drop_params, expected_drop_params",
+    [
+        ("claude-cli/2.0.69 (external, cli)", None, None, True),
+        ("claude-cli/1.0.44 (external, sdk-py)", None, None, True),
+        ("claude-cli/2.0.69 (external, cli)", False, None, False),
+        ("claude-cli/2.0.69 (external, cli)", None, False, None),
+        ("claude-cli/2.0.69 (external, cli)", None, True, None),
+        ("PostmanRuntime/7.53.0", None, None, None),
+        (None, None, None, None),
+    ],
+)
+async def test_add_litellm_data_to_request_claude_code_drop_params(
+    user_agent, request_drop_params, operator_drop_params, expected_drop_params
+):
+    """Claude Code sends Anthropic-specific params that fail on non-Anthropic
+    providers, so its user agent must turn on drop_params automatically,
+    without overriding an explicit caller value, an explicit operator-level
+    litellm_settings value, or affecting other clients.
+    """
+    headers = {"Content-Type": "application/json"}
+    if user_agent is not None:
+        headers["user-agent"] = user_agent
+    request_mock = _make_request_mock("/v1/messages", headers)
+
+    data = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+    if request_drop_params is not None:
+        data["drop_params"] = request_drop_params
+
+    proxy_config = MagicMock()
+    proxy_config.config = (
+        {"litellm_settings": {"drop_params": operator_drop_params}}
+        if operator_drop_params is not None
+        else {"litellm_settings": {}}
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=proxy_config,
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated.get("drop_params") == expected_drop_params
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_merges_metadata_tags_on_responses_route():
+    """Regression for #31584: user-supplied metadata.tags must be merged into
+    litellm_metadata.tags on /v1/responses so they reach SpendLogs.request_tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+
+    data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "metadata": {"tags": ["cost-center-1", "team-alpha"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "cost-center-1" in updated["litellm_metadata"]["tags"]
+    assert "team-alpha" in updated["litellm_metadata"]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_metadata_tags_with_header_tags_on_responses_route():
+    """On /v1/responses, tags from metadata.tags AND x-litellm-tags header
+    must both appear in litellm_metadata.tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "header-tag",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+
+    data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "metadata": {"tags": ["body-tag"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    tags = updated["litellm_metadata"]["tags"]
+    assert "header-tag" in tags
+    assert "body-tag" in tags

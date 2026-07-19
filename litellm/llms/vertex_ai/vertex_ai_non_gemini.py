@@ -17,13 +17,9 @@ class VertexAIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url=" https://cloud.google.com/vertex-ai/"
-        )
+        self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class TextStreamer:
@@ -58,9 +54,7 @@ class TextStreamer:
             raise StopAsyncIteration  # once we run out of data to stream, we raise this error
 
 
-def _get_client_cache_key(
-    model: str, vertex_project: Optional[str], vertex_location: Optional[str]
-):
+def _get_client_cache_key(model: str, vertex_project: Optional[str], vertex_location: Optional[str]):
     _cache_key = f"{model}-{vertex_project}-{vertex_location}"
     return _cache_key
 
@@ -77,7 +71,7 @@ def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
     )
 
 
-def completion(  # noqa: PLR0915
+def completion(
     model: str,
     messages: list,
     model_response: ModelResponse,
@@ -108,9 +102,7 @@ def completion(  # noqa: PLR0915
             message="vertexai import failed please run `pip install google-cloud-aiplatform`. This is required for the 'vertex_ai/' route on LiteLLM",
         )
 
-    if not (
-        hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-    ):
+    if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
         raise VertexAIError(
             status_code=400,
             message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
@@ -128,13 +120,9 @@ def completion(  # noqa: PLR0915
         from vertexai.preview.language_models import ChatModel, CodeChatModel
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
-        print_verbose(
-            f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
-        )
+        print_verbose(f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}")
 
-        _cache_key = _get_client_cache_key(
-            model=model, vertex_project=vertex_project, vertex_location=vertex_location
-        )
+        _cache_key = _get_client_cache_key(model=model, vertex_project=vertex_project, vertex_location=vertex_location)
         _vertex_llm_model_object = _get_client_from_cache(client_cache_key=_cache_key)
 
         # Load credentials - needed for both vertexai.init() and PredictionServiceClient
@@ -176,18 +164,12 @@ def completion(  # noqa: PLR0915
                 raise ValueError("safety_settings must be a list")
             if len(safety_settings) > 0 and not isinstance(safety_settings[0], dict):
                 raise ValueError("safety_settings must be a list of dicts")
-            safety_settings = [
-                gapic_content_types.SafetySetting(x) for x in safety_settings
-            ]
+            safety_settings = [gapic_content_types.SafetySetting(x) for x in safety_settings]
 
         # vertexai does not use an API key, it looks for credentials.json in the environment
 
         prompt = " ".join(
-            [
-                message.get("content")
-                for message in messages
-                if isinstance(message.get("content", None), str)
-            ]
+            [message.get("content") for message in messages if isinstance(message.get("content", None), str)]
         )
 
         mode = ""
@@ -195,14 +177,9 @@ def completion(  # noqa: PLR0915
         request_str = ""
         response_obj = None
         instances = None
-        client_options = {
-            "api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"
-        }
+        client_options = {"api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"}
         fake_stream = False
-        if (
-            model in litellm.vertex_language_models
-            or model in litellm.vertex_vision_models
-        ):
+        if model in litellm.vertex_language_models or model in litellm.vertex_vision_models:
             llm_model: Any = _vertex_llm_model_object or GenerativeModel(model)
             mode = "vision"
             request_str += f"llm_model = GenerativeModel({model})\n"
@@ -211,15 +188,11 @@ def completion(  # noqa: PLR0915
             mode = "chat"
             request_str += f"llm_model = ChatModel.from_pretrained({model})\n"
         elif model in litellm.vertex_text_models:
-            llm_model = _vertex_llm_model_object or TextGenerationModel.from_pretrained(
-                model
-            )
+            llm_model = _vertex_llm_model_object or TextGenerationModel.from_pretrained(model)
             mode = "text"
             request_str += f"llm_model = TextGenerationModel.from_pretrained({model})\n"
         elif model in litellm.vertex_code_text_models:
-            llm_model = _vertex_llm_model_object or CodeGenerationModel.from_pretrained(
-                model
-            )
+            llm_model = _vertex_llm_model_object or CodeGenerationModel.from_pretrained(model)
             mode = "text"
             request_str += f"llm_model = CodeGenerationModel.from_pretrained({model})\n"
             fake_stream = True
@@ -280,9 +253,7 @@ def completion(  # noqa: PLR0915
 
         completion_response = None
 
-        stream = optional_params.pop(
-            "stream", None
-        )  # See note above on handling streaming for vertex ai
+        stream = optional_params.pop("stream", None)  # See note above on handling streaming for vertex ai
         if mode == "chat":
             chat = llm_model.start_chat()
             request_str += "chat = llm_model.start_chat()\n"
@@ -291,13 +262,9 @@ def completion(  # noqa: PLR0915
                 # NOTE: VertexAI does not accept stream=True as a param and raises an error,
                 # we handle this by removing 'stream' from optional params and sending the request
                 # after we get the response we add optional_params["stream"] = True, since main.py needs to know it's a streaming response to then transform it for the OpenAI format
-                optional_params.pop(
-                    "stream", None
-                )  # vertex ai raises an error when passing stream in optional params
+                optional_params.pop("stream", None)  # vertex ai raises an error when passing stream in optional params
 
-                request_str += (
-                    f"chat.send_message_streaming({prompt}, **{optional_params})\n"
-                )
+                request_str += f"chat.send_message_streaming({prompt}, **{optional_params})\n"
                 ## LOGGING
                 logging_obj.pre_call(
                     input=prompt,
@@ -325,9 +292,7 @@ def completion(  # noqa: PLR0915
             completion_response = chat.send_message(prompt, **optional_params).text
         elif mode == "text":
             if fake_stream is not True and stream is True:
-                request_str += (
-                    f"llm_model.predict_streaming({prompt}, **{optional_params})\n"
-                )
+                request_str += f"llm_model.predict_streaming({prompt}, **{optional_params})\n"
                 ## LOGGING
                 logging_obj.pre_call(
                     input=prompt,
@@ -358,9 +323,7 @@ def completion(  # noqa: PLR0915
             """
 
             if vertex_project is None or vertex_location is None:
-                raise ValueError(
-                    "Vertex project and location are required for custom endpoint"
-                )
+                raise ValueError("Vertex project and location are required for custom endpoint")
 
             ## LOGGING
             logging_obj.pre_call(
@@ -376,21 +339,12 @@ def completion(  # noqa: PLR0915
                 credentials=creds,  # type: ignore[arg-type]
             )
             request_str += f"llm_model = aiplatform.gapic.PredictionServiceClient(client_options={client_options}, credentials=...)\n"
-            endpoint_path = llm_model.endpoint_path(
-                project=vertex_project, location=vertex_location, endpoint=model
-            )
-            request_str += (
-                f"llm_model.predict(endpoint={endpoint_path}, instances={instances})\n"
-            )
-            response = llm_model.predict(
-                endpoint=endpoint_path, instances=instances
-            ).predictions
+            endpoint_path = llm_model.endpoint_path(project=vertex_project, location=vertex_location, endpoint=model)
+            request_str += f"llm_model.predict(endpoint={endpoint_path}, instances={instances})\n"
+            response = llm_model.predict(endpoint=endpoint_path, instances=instances).predictions
 
             completion_response = response[0]
-            if (
-                isinstance(completion_response, str)
-                and "\nOutput:\n" in completion_response
-            ):
+            if isinstance(completion_response, str) and "\nOutput:\n" in completion_response:
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
             if stream is True:
                 response = TextStreamer(completion_response)
@@ -416,19 +370,14 @@ def completion(  # noqa: PLR0915
             response = llm_model.predict(instances=instances).predictions
 
             completion_response = response[0]
-            if (
-                isinstance(completion_response, str)
-                and "\nOutput:\n" in completion_response
-            ):
+            if isinstance(completion_response, str) and "\nOutput:\n" in completion_response:
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
             if stream is True:
                 response = TextStreamer(completion_response)
                 return response
 
         ## LOGGING
-        logging_obj.post_call(
-            input=prompt, api_key=None, original_response=completion_response
-        )
+        logging_obj.post_call(input=prompt, api_key=None, original_response=completion_response)
 
         ## RESPONSE OBJECT
         if isinstance(completion_response, litellm.Message):
@@ -456,16 +405,10 @@ def completion(  # noqa: PLR0915
                     response_obj.usage_metadata, "prompt_token_count"
                 ):
                     prompt_tokens = response_obj.usage_metadata.prompt_token_count
-                    completion_tokens = (
-                        response_obj.usage_metadata.candidates_token_count
-                    )
+                    completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(
-                    encoding.encode(
-                        model_response["choices"][0]["message"].get("content", "")
-                    )
-                )
+                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
 
             usage = Usage(
                 prompt_tokens=prompt_tokens,
@@ -480,12 +423,10 @@ def completion(  # noqa: PLR0915
     except Exception as e:
         if isinstance(e, VertexAIError):
             raise e
-        raise litellm.APIConnectionError(
-            message=str(e), llm_provider="vertex_ai", model=model
-        )
+        raise litellm.APIConnectionError(message=str(e), llm_provider="vertex_ai", model=model)
 
 
-async def async_completion(  # noqa: PLR0915
+async def async_completion(
     llm_model,
     mode: str,
     prompt: str,
@@ -545,9 +486,7 @@ async def async_completion(  # noqa: PLR0915
             from google.cloud import aiplatform  # type: ignore
 
             if vertex_project is None or vertex_location is None:
-                raise ValueError(
-                    "Vertex project and location are required for custom endpoint"
-                )
+                raise ValueError("Vertex project and location are required for custom endpoint")
 
             ## LOGGING
             logging_obj.pre_call(
@@ -564,22 +503,15 @@ async def async_completion(  # noqa: PLR0915
                 credentials=vertex_credentials,
             )
             request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options}, credentials=...)\n"
-            endpoint_path = llm_model.endpoint_path(
-                project=vertex_project, location=vertex_location, endpoint=model
-            )
-            request_str += (
-                f"llm_model.predict(endpoint={endpoint_path}, instances={instances})\n"
-            )
+            endpoint_path = llm_model.endpoint_path(project=vertex_project, location=vertex_location, endpoint=model)
+            request_str += f"llm_model.predict(endpoint={endpoint_path}, instances={instances})\n"
             response_obj = await llm_model.predict(
                 endpoint=endpoint_path,
                 instances=instances,
             )
             response = response_obj.predictions
             completion_response = response[0]
-            if (
-                isinstance(completion_response, str)
-                and "\nOutput:\n" in completion_response
-            ):
+            if isinstance(completion_response, str) and "\nOutput:\n" in completion_response:
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
 
         elif mode == "private":
@@ -590,16 +522,11 @@ async def async_completion(  # noqa: PLR0915
 
             response = response_obj.predictions
             completion_response = response[0]
-            if (
-                isinstance(completion_response, str)
-                and "\nOutput:\n" in completion_response
-            ):
+            if isinstance(completion_response, str) and "\nOutput:\n" in completion_response:
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
 
         ## LOGGING
-        logging_obj.post_call(
-            input=prompt, api_key=None, original_response=completion_response
-        )
+        logging_obj.post_call(input=prompt, api_key=None, original_response=completion_response)
 
         ## RESPONSE OBJECT
         if isinstance(completion_response, litellm.Message):
@@ -625,18 +552,13 @@ async def async_completion(  # noqa: PLR0915
             # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
             prompt_tokens, completion_tokens, _ = 0, 0, 0
             if response_obj is not None and (
-                hasattr(response_obj, "usage_metadata")
-                and hasattr(response_obj.usage_metadata, "prompt_token_count")
+                hasattr(response_obj, "usage_metadata") and hasattr(response_obj.usage_metadata, "prompt_token_count")
             ):
                 prompt_tokens = response_obj.usage_metadata.prompt_token_count
                 completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(
-                    encoding.encode(
-                        model_response["choices"][0]["message"].get("content", "")
-                    )
-                )
+                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
 
             # set usage
             usage = Usage(
@@ -650,7 +572,7 @@ async def async_completion(  # noqa: PLR0915
         raise VertexAIError(status_code=500, message=str(e))
 
 
-async def async_streaming(  # noqa: PLR0915
+async def async_streaming(
     llm_model,
     mode: str,
     prompt: str,
@@ -675,12 +597,8 @@ async def async_streaming(  # noqa: PLR0915
     response: Any = None
     if mode == "chat":
         chat = llm_model.start_chat()
-        optional_params.pop(
-            "stream", None
-        )  # vertex ai raises an error when passing stream in optional params
-        request_str += (
-            f"chat.send_message_streaming_async({prompt}, **{optional_params})\n"
-        )
+        optional_params.pop("stream", None)  # vertex ai raises an error when passing stream in optional params
+        request_str += f"chat.send_message_streaming_async({prompt}, **{optional_params})\n"
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -693,12 +611,8 @@ async def async_streaming(  # noqa: PLR0915
         response = chat.send_message_streaming_async(prompt, **optional_params)
 
     elif mode == "text":
-        optional_params.pop(
-            "stream", None
-        )  # See note above on handling streaming for vertex ai
-        request_str += (
-            f"llm_model.predict_streaming_async({prompt}, **{optional_params})\n"
-        )
+        optional_params.pop("stream", None)  # See note above on handling streaming for vertex ai
+        request_str += f"llm_model.predict_streaming_async({prompt}, **{optional_params})\n"
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -713,9 +627,7 @@ async def async_streaming(  # noqa: PLR0915
         from google.cloud import aiplatform  # type: ignore
 
         if vertex_project is None or vertex_location is None:
-            raise ValueError(
-                "Vertex project and location are required for custom endpoint"
-            )
+            raise ValueError("Vertex project and location are required for custom endpoint")
 
         stream = optional_params.pop("stream", None)
 
@@ -733,12 +645,8 @@ async def async_streaming(  # noqa: PLR0915
             credentials=vertex_credentials,
         )
         request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options}, credentials=...)\n"
-        endpoint_path = llm_model.endpoint_path(
-            project=vertex_project, location=vertex_location, endpoint=model
-        )
-        request_str += (
-            f"client.predict(endpoint={endpoint_path}, instances={instances})\n"
-        )
+        endpoint_path = llm_model.endpoint_path(project=vertex_project, location=vertex_location, endpoint=model)
+        request_str += f"client.predict(endpoint={endpoint_path}, instances={instances})\n"
         response_obj = await llm_model.predict(
             endpoint=endpoint_path,
             instances=instances,
@@ -746,10 +654,7 @@ async def async_streaming(  # noqa: PLR0915
 
         response = response_obj.predictions
         completion_response = response[0]
-        if (
-            isinstance(completion_response, str)
-            and "\nOutput:\n" in completion_response
-        ):
+        if isinstance(completion_response, str) and "\nOutput:\n" in completion_response:
             completion_response = completion_response.split("\nOutput:\n", 1)[1]
         if stream:
             response = TextStreamer(completion_response)
@@ -765,10 +670,7 @@ async def async_streaming(  # noqa: PLR0915
         )
         response = response_obj.predictions
         completion_response = response[0]
-        if (
-            isinstance(completion_response, str)
-            and "\nOutput:\n" in completion_response
-        ):
+        if isinstance(completion_response, str) and "\nOutput:\n" in completion_response:
             completion_response = completion_response.split("\nOutput:\n", 1)[1]
         if stream:
             response = TextStreamer(completion_response)

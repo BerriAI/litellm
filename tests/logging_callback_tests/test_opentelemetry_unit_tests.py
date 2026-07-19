@@ -53,7 +53,7 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         litellm.callbacks = ["otel"]
 
         await litellm.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_response="Hey!",
             metadata={"litellm_parent_otel_span": parent_otel_span},

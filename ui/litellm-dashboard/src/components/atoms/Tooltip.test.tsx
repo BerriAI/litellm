@@ -14,7 +14,11 @@ describe("Tooltip", () => {
   });
 
   it("should render children instead of the default icon when provided", () => {
-    render(<Tooltip content="Help text"><button>Info</button></Tooltip>);
+    render(
+      <Tooltip content="Help text">
+        <button>Info</button>
+      </Tooltip>,
+    );
     expect(screen.getByRole("button", { name: /info/i })).toBeInTheDocument();
     expect(screen.queryByTestId("question-icon")).not.toBeInTheDocument();
   });

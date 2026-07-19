@@ -14,6 +14,7 @@ from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
+    CompressionSavingsMetadata,
 )
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
@@ -23,6 +24,41 @@ from litellm.types.utils import CallTypes
 
 LITELLM_CONTENT_RETRIEVE_TOOL_NAME = "litellm_content_retrieve"
 _CACHE_TTL_SECONDS = 15 * 60
+
+
+def _compression_savings_from_counts(
+    original_tokens: object, compressed_tokens: object
+) -> CompressionSavingsMetadata | None:
+    if isinstance(original_tokens, bool) or not isinstance(original_tokens, int):
+        return None
+    if isinstance(compressed_tokens, bool) or not isinstance(compressed_tokens, int):
+        return None
+    if compressed_tokens < 0 or original_tokens < compressed_tokens:
+        return None
+    return CompressionSavingsMetadata(
+        tokens_before=original_tokens,
+        tokens_after=compressed_tokens,
+        tokens_saved=original_tokens - compressed_tokens,
+        source="compression_interception",
+    )
+
+
+def _record_compression_savings(kwargs: dict[str, object], savings: CompressionSavingsMetadata) -> None:
+    """
+    Attach savings to the request's litellm metadata so they land in the
+    SpendLog row's metadata JSON under ``compression_savings``.
+
+    ``/v1/messages`` requests carry proxy metadata under ``litellm_metadata``
+    (the ``metadata`` key is Anthropic's own API field). The existing dict is
+    updated in place because the proxy and the logging object hold references
+    to the same object; replacing it would orphan writes made through those
+    references.
+    """
+    existing = kwargs.get("litellm_metadata")
+    if isinstance(existing, dict):
+        existing["compression_savings"] = savings
+        return
+    kwargs["litellm_metadata"] = {"compression_savings": savings}
 
 
 class CompressionInterceptionLogger(CustomLogger):
@@ -53,9 +89,7 @@ class CompressionInterceptionLogger(CustomLogger):
         self._compression_cache_by_call_id: Dict[str, Tuple[Dict[str, str], float]] = {}
 
     @classmethod
-    def from_config_yaml(
-        cls, config: CompressionInterceptionConfig
-    ) -> "CompressionInterceptionLogger":
+    def from_config_yaml(cls, config: CompressionInterceptionConfig) -> "CompressionInterceptionLogger":
         return cls(
             enabled=bool(config.get("enabled", True)),
             compression_trigger=int(config.get("compression_trigger", 200_000)),
@@ -72,8 +106,13 @@ class CompressionInterceptionLogger(CustomLogger):
         compression_params: CompressionInterceptionConfig = {}
         if "compression_interception_params" in litellm_settings:
             compression_params = litellm_settings["compression_interception_params"]
-        elif "compression_interception" in callback_specific_params:
-            compression_params = callback_specific_params["compression_interception"]
+        elif "compression_interception" in callback_specific_params and isinstance(
+            callback_specific_params["compression_interception"], dict
+        ):
+            compression_params = cast(
+                CompressionInterceptionConfig,
+                callback_specific_params["compression_interception"],
+            )
         return CompressionInterceptionLogger.from_config_yaml(compression_params)
 
     async def async_pre_call_deployment_hook(
@@ -119,9 +158,7 @@ class CompressionInterceptionLogger(CustomLogger):
             kwargs["messages"] = compressed["messages"]
             if compressed_tools:
                 kwargs["tools"] = self._merge_tools(
-                    existing_tools=cast(
-                        Optional[List[Dict[str, Any]]], kwargs.get("tools")
-                    ),
+                    existing_tools=cast(Optional[List[Dict[str, Any]]], kwargs.get("tools")),
                     compressed_tools=compressed_tools,
                 )
             call_id = cast(Optional[str], kwargs.get("litellm_call_id"))
@@ -129,6 +166,12 @@ class CompressionInterceptionLogger(CustomLogger):
                 call_id = str(uuid.uuid4())
                 kwargs["litellm_call_id"] = call_id
             self._compression_cache_by_call_id[call_id] = (cache, time.time())
+            savings = _compression_savings_from_counts(
+                original_tokens=compressed.get("original_tokens"),
+                compressed_tokens=compressed.get("compressed_tokens"),
+            )
+            if savings is not None:
+                _record_compression_savings(kwargs=kwargs, savings=savings)
             verbose_logger.debug(
                 "CompressionInterception: compressed request [call_id=%s original=%d compressed=%d cached_keys=%d]",
                 call_id,
@@ -161,9 +204,7 @@ class CompressionInterceptionLogger(CustomLogger):
         if not self._has_retrieval_tool(tools):
             return False, {}
 
-        tool_calls, thinking_blocks = self._extract_retrieval_tool_calls(
-            response=response
-        )
+        tool_calls, thinking_blocks = self._extract_retrieval_tool_calls(response=response)
         if not tool_calls:
             return False, {}
 
@@ -191,9 +232,7 @@ class CompressionInterceptionLogger(CustomLogger):
 
         call_id = self._resolve_call_id(logging_obj=logging_obj, kwargs=kwargs)
         cache = self._get_cache(call_id=call_id)
-        retrieval_results = [
-            self._resolve_retrieval_content(tc, cache) for tc in tool_calls
-        ]
+        retrieval_results = [self._resolve_retrieval_content(tc, cache) for tc in tool_calls]
 
         assistant_message = {
             "role": "assistant",
@@ -223,20 +262,15 @@ class CompressionInterceptionLogger(CustomLogger):
 
         max_tokens = cast(
             Optional[int],
-            anthropic_messages_optional_request_params.get("max_tokens")
-            or kwargs.get("max_tokens"),
+            anthropic_messages_optional_request_params.get("max_tokens") or kwargs.get("max_tokens"),
         )
         optional_params_without_max_tokens = {
-            k: v
-            for k, v in anthropic_messages_optional_request_params.items()
-            if k != "max_tokens"
+            k: v for k, v in anthropic_messages_optional_request_params.items() if k != "max_tokens"
         }
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params = logging_obj.model_call_details.get(
-                "agentic_loop_params", {}
-            )
+            agentic_params = logging_obj.model_call_details.get("agentic_loop_params", {})
             full_model_name = cast(str, agentic_params.get("model", model))
 
         request_patch = AgenticLoopRequestPatch(
@@ -272,21 +306,15 @@ class CompressionInterceptionLogger(CustomLogger):
             return {}
         return cache_entry[0]
 
-    def _resolve_call_id(
-        self, logging_obj: Any, kwargs: Dict[str, Any]
-    ) -> Optional[str]:
+    def _resolve_call_id(self, logging_obj: Any, kwargs: Dict[str, Any]) -> Optional[str]:
         if logging_obj is not None:
             logging_call_id = getattr(logging_obj, "litellm_call_id", None)
             if isinstance(logging_call_id, str) and logging_call_id:
                 return logging_call_id
         kwargs_call_id = kwargs.get("litellm_call_id")
-        return cast(
-            Optional[str], kwargs_call_id if isinstance(kwargs_call_id, str) else None
-        )
+        return cast(Optional[str], kwargs_call_id if isinstance(kwargs_call_id, str) else None)
 
-    def _resolve_retrieval_content(
-        self, tool_call: Dict[str, Any], cache: Dict[str, str]
-    ) -> str:
+    def _resolve_retrieval_content(self, tool_call: Dict[str, Any], cache: Dict[str, str]) -> str:
         raw_input = tool_call.get("input", {})
         key = ""
         if isinstance(raw_input, dict):
@@ -297,9 +325,7 @@ class CompressionInterceptionLogger(CustomLogger):
             return cache[key]
         return f"[compressed content key '{key}' not found]"
 
-    def _extract_retrieval_tool_calls(
-        self, response: Any
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def _extract_retrieval_tool_calls(self, response: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         if isinstance(response, dict):
             content = response.get("content", [])
         else:
@@ -317,10 +343,7 @@ class CompressionInterceptionLogger(CustomLogger):
                 block_name = block.get("name")
                 if block_type in ("thinking", "redacted_thinking"):
                     thinking_blocks.append(block)
-                if (
-                    block_type == "tool_use"
-                    and block_name == LITELLM_CONTENT_RETRIEVE_TOOL_NAME
-                ):
+                if block_type == "tool_use" and block_name == LITELLM_CONTENT_RETRIEVE_TOOL_NAME:
                     tool_calls.append(
                         {
                             "id": block.get("id"),
@@ -347,10 +370,7 @@ class CompressionInterceptionLogger(CustomLogger):
                             "data": getattr(block, "data", ""),
                         }
                     )
-                if (
-                    block_type == "tool_use"
-                    and block_name == LITELLM_CONTENT_RETRIEVE_TOOL_NAME
-                ):
+                if block_type == "tool_use" and block_name == LITELLM_CONTENT_RETRIEVE_TOOL_NAME:
                     tool_calls.append(
                         {
                             "id": getattr(block, "id", None),
@@ -365,9 +385,7 @@ class CompressionInterceptionLogger(CustomLogger):
     def _prepare_followup_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         internal_keys = {"litellm_logging_obj"}
         return {
-            k: v
-            for k, v in kwargs.items()
-            if not k.startswith("_compression_interception") and k not in internal_keys
+            k: v for k, v in kwargs.items() if not k.startswith("_compression_interception") and k not in internal_keys
         }
 
     def _has_retrieval_tool(self, tools: Any) -> bool:
@@ -380,10 +398,7 @@ class CompressionInterceptionLogger(CustomLogger):
             if tool.get("type") == "function" and isinstance(function, dict):
                 if function.get("name") == LITELLM_CONTENT_RETRIEVE_TOOL_NAME:
                     return True
-            if (
-                tool.get("type") == "custom"
-                and tool.get("name") == LITELLM_CONTENT_RETRIEVE_TOOL_NAME
-            ):
+            if tool.get("type") == "custom" and tool.get("name") == LITELLM_CONTENT_RETRIEVE_TOOL_NAME:
                 return True
         return False
 

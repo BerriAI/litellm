@@ -231,7 +231,7 @@ class TestGetLoggingPayloadOCR:
     def test_non_ocr_call_uses_token_based_usage(self, mock_datetime):
         """Test that non-OCR calls still use token-based usage"""
         kwargs = {
-            "model": "gpt-4",
+            "model": "gpt-5.5",
             "call_type": "completion",
             "litellm_params": {},
             "response_cost": 0.02,
@@ -240,7 +240,7 @@ class TestGetLoggingPayloadOCR:
         response_obj = {
             "id": "completion-test-123",
             "object": "chat.completion",
-            "model": "gpt-4",
+            "model": "gpt-5.5",
             "usage": {
                 "prompt_tokens": 50,
                 "completion_tokens": 100,

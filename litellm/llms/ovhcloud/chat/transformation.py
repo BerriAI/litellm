@@ -13,6 +13,7 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -30,11 +31,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = (
-            "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
-            if api_base is None
-            else api_base.rstrip("/")
-        )
+        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
         complete_url = f"{api_base}/chat/completions"
         return complete_url
 
@@ -54,9 +51,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         return mapped_openai_params
 
     def transform_request(
@@ -68,9 +63,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
         return response
 
@@ -87,9 +80,7 @@ class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
         try:
             if "error" in chunk:
                 error_chunk = chunk["error"]
-                error_message = "OVHCloud Error: {}".format(
-                    error_chunk.get("message", "Unknown error")
-                )
+                error_message = "OVHCloud Error: {}".format(error_chunk.get("message", "Unknown error"))
                 raise OVHCloudException(
                     message=error_message,
                     status_code=error_chunk.get("code", 400),
@@ -98,10 +89,16 @@ class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
 
             new_choices = []
             for choice in chunk["choices"]:
-                if "delta" in choice and "reasoning" in choice["delta"]:
-                    choice["delta"]["reasoning_content"] = choice["delta"].get(
-                        "reasoning"
-                    )
+                if "delta" in choice:
+                    delta = choice["delta"]
+                    # OVHCloud field migration (deadline: 2026-05-11):
+                    # `reasoning_content` is replaced by `reasoning`.
+                    # Normalise to `reasoning_content` so downstream consumers
+                    # see a consistent key during the transition window.
+                    reasoning_new = delta.get("reasoning")
+                    reasoning_legacy = delta.get("reasoning_content")
+                    if reasoning_new is not None and reasoning_legacy is None:
+                        delta["reasoning_content"] = reasoning_new
                 new_choices.append(choice)
 
             return ModelResponseStream(

@@ -1,18 +1,11 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
+import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import {
-  Badge,
-  Card,
-  Grid,
-  Text,
-  TextInput,
-  Title,
-  Button as TremorButton,
-} from "@tremor/react";
+import { Badge, Card, Grid, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
 import { Button, Form, Input, Select, Tabs, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -203,14 +196,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       key: "spend",
       render: (_: unknown, record: Member) => {
         const orgMember =
-          record.user_id != null
-            ? (orgData.members || []).find((m) => m.user_id === record.user_id)
-            : undefined;
-        return (
-          <Typography.Text>
-            ${formatNumberWithCommas(orgMember?.spend ?? 0, 4)}
-          </Typography.Text>
-        );
+          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
+        return <MoneyCell value={orgMember?.spend} decimals={4} />;
       },
     },
     {
@@ -218,14 +205,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       key: "created_at",
       render: (_: unknown, record: Member) => {
         const orgMember =
-          record.user_id != null
-            ? (orgData.members || []).find((m) => m.user_id === record.user_id)
-            : undefined;
+          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
         return (
           <Typography.Text>
-            {orgMember?.created_at
-              ? new Date(orgMember.created_at).toLocaleString()
-              : "-"}
+            {orgMember?.created_at ? new Date(orgMember.created_at).toLocaleString() : "-"}
           </Typography.Text>
         );
       },
@@ -247,10 +230,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               size="small"
               icon={copiedStates["org-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(orgData.organization_id, "org-id")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["org-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["org-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
         </div>
@@ -458,7 +442,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                       <Input.TextArea rows={4} />
                     </Form.Item>
 
-                    <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                    <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6">
                       <div className="flex justify-end items-center gap-2">
                         <TremorButton variant="secondary" onClick={() => setIsEditing(false)} disabled={isOrgSaving}>
                           Cancel

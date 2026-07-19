@@ -1,6 +1,26 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+import math
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import HTTPException, status
+from pydantic import BaseModel
+
+
+# Defined above the `litellm.proxy.*` imports so the name is bound even when
+# this module is imported first through the proxy import cycle (CodeQL:
+# module-level cyclic import). Depends only on `math` + `HTTPException`.
+def validate_finite_spend(spend: float | None) -> None:
+    """Reject NaN/±inf spend before it reaches the DB / spend counter.
+
+    A non-finite spend would otherwise slip past `spend >= max_budget`
+    enforcement, since any comparison with NaN (and `-inf >= max_budget`)
+    is False, letting the entity keep spending past its configured budget.
+    """
+    if spend is not None and not math.isfinite(spend):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"spend must be a finite number. Received: {spend}"},
+        )
+
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -16,9 +36,13 @@ from litellm.proxy._types import (
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
-    user_api_key_has_admin_view as _user_has_admin_view,  # noqa: F401  re-exported
 )
+from litellm.proxy._types import (  # noqa: F401  re-exported
+    user_api_key_has_admin_view as _user_has_admin_view,
+)
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import _premium_user_check
+from litellm.repositories.team_repository import TeamRepository
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
@@ -45,29 +69,49 @@ def require_caller_user_id_for_non_admin(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "error": (
-                    "Service-account keys cannot query user analytics. "
-                    "Use a user-bound key, or call as a proxy admin."
+                    "Service-account keys cannot query user analytics. Use a user-bound key, or call as a proxy admin."
                 )
             },
         )
     return user_api_key_dict.user_id
 
 
-def _is_user_team_admin(
-    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
-) -> bool:
+def _check_passthrough_routes_caller_permission(
+    data: BaseModel,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+) -> None:
+    """
+    Only proxy admins may set `allowed_passthrough_routes` (top-level or under
+    `metadata`) — it short-circuits the role-based route gate, so keys and teams
+    must be gated identically.
+    """
+    # view-only admins excluded by design; blocked upstream from writes anyway
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if getattr(data, "allowed_passthrough_routes", None):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
+        )
+    metadata = getattr(data, "metadata", None)
+    if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},
+        )
+
+
+def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
     for member in team_obj.members_with_roles:
-        if (
-            member.user_id is not None and member.user_id == user_api_key_dict.user_id
-        ) and member.role == "admin":
+        if (member.user_id is not None and member.user_id == user_api_key_dict.user_id) and member.role == "admin":
             return True
 
     return False
 
 
-async def _is_user_org_admin_for_team(
-    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
-) -> bool:
+async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
     """
     Check if user is an org admin for the team's organization.
 
@@ -96,10 +140,7 @@ async def _is_user_org_admin_for_team(
         return False
 
     for m in caller_user.organization_memberships or []:
-        if (
-            m.organization_id == team_obj.organization_id
-            and m.user_role == LitellmUserRoles.ORG_ADMIN.value
-        ):
+        if m.organization_id == team_obj.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value:
             return True
 
     return False
@@ -172,22 +213,16 @@ async def _user_has_admin_privileges(
         # Check if user is team admin for any team
         if user_obj.teams is not None and len(user_obj.teams) > 0:
             # Get all teams user is in
-            teams = await prisma_client.db.litellm_teamtable.find_many(
-                where={"team_id": {"in": user_obj.teams}}
-            )
+            teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_obj.teams}})
 
             for team in teams:
                 team_obj = LiteLLM_TeamTable(**team.model_dump())
-                if _is_user_team_admin(
-                    user_api_key_dict=user_api_key_dict, team_obj=team_obj
-                ):
+                if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     return True
 
     except Exception as e:
         # If there's an error checking, default to False for security
-        verbose_proxy_logger.debug(
-            f"Error checking admin privileges for user {user_api_key_dict.user_id}: {e}"
-        )
+        verbose_proxy_logger.debug(f"Error checking admin privileges for user {user_api_key_dict.user_id}: {e}")
         return False
 
     return False
@@ -219,9 +254,7 @@ def _org_admin_can_invite_user(
         return False
     if target_user_obj.organization_memberships is None:
         return False
-    target_org_ids = {
-        m.organization_id for m in target_user_obj.organization_memberships
-    }
+    target_org_ids = {m.organization_id for m in target_user_obj.organization_memberships}
     return bool(admin_org_ids & target_org_ids)
 
 
@@ -249,9 +282,7 @@ async def _team_admin_can_invite_user(
     if not target_user_obj.teams or len(target_user_obj.teams) == 0:
         return False
 
-    teams = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_id": {"in": admin_user_obj.teams}}
-    )
+    teams = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": admin_user_obj.teams}})
     admin_team_ids = [
         team.team_id
         for team in teams
@@ -335,9 +366,7 @@ async def admin_can_invite_user(
 
         return False
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Error checking invite permission for user {user_api_key_dict.user_id}: {e}"
-        )
+        verbose_proxy_logger.debug(f"Error checking invite permission for user {user_api_key_dict.user_id}: {e}")
         return False
 
 
@@ -361,11 +390,37 @@ def _set_object_metadata_field(
         field_name: Name of the metadata field to set
         value: Value to set for the field
     """
-    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium and value:
         _premium_user_check(field_name)
 
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
+
+
+_TEAM_MEMBER_BUDGET_LIMIT_FIELDS = (
+    "max_budget",
+    "soft_budget",
+    "max_parallel_requests",
+    "tpm_limit",
+    "rpm_limit",
+    "model_max_budget",
+    "budget_duration",
+    "allowed_models",
+)
+
+
+def _is_set_budget_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, list) and len(value) == 0:
+        return False
+    return True
+
+
+def _has_meaningful_budget_limit(budget_values: Dict[str, Any]) -> bool:
+    """A budget is meaningful if at least one limit is actually set; an empty
+    list (no model restriction) and None both count as unset."""
+    return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
 
 
 async def _upsert_budget_and_membership(
@@ -373,47 +428,34 @@ async def _upsert_budget_and_membership(
     *,
     team_id: str,
     user_id: str,
-    max_budget: Optional[float],
     existing_budget_id: Optional[str],
     user_api_key_dict: UserAPIKeyAuth,
-    tpm_limit: Optional[int] = None,
-    rpm_limit: Optional[int] = None,
-    allowed_models: Optional[List[str]] = None,
+    budget_patch: Dict[str, Any],
     team_default_budget_id: Optional[str] = None,
 ):
     """
-    Helper function to Create/Update or Delete the budget within the team membership
-    Args:
-        tx: The transaction object
-        team_id: The ID of the team
-        user_id: The ID of the user
-        max_budget: The maximum budget for the team
-        existing_budget_id: The ID of the existing budget, if any
-        user_api_key_dict: User API Key dictionary containing user information
-        tpm_limit: Tokens per minute limit for the team member
-        rpm_limit: Requests per minute limit for the team member
-        allowed_models: Per-member model scope. None = don't change. [] = remove restrictions. Non-empty list = enforce.
-        team_default_budget_id: The team's shared default member budget id (from
-            team metadata.team_member_budget_id), if any. When the membership's
-            existing_budget_id matches this, we clone-on-write so editing one
-            member's budget does not mutate the shared default (and therefore
-            every other member who still points at it).
+    Apply a merge-patch of per-member budget fields to a team membership.
 
-    If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, the user's budget is removed from the team membership.
-    If any of these values exist, a budget is updated or created and linked to the team membership.
+    ``budget_patch`` holds only the budget columns the caller explicitly sent
+    (RFC 7396 semantics): a value sets the column, ``None`` clears it, and a
+    column that is absent from the dict is left untouched. Once the patch is
+    applied, if the budget has no meaningful limit left the member's private
+    budget is disconnected so they fall back to the team default.
+
+    ``team_default_budget_id`` is the team's shared default member budget id
+    (from team metadata.team_member_budget_id). When the membership still
+    points at it, we clone-on-write so editing one member's budget does not
+    mutate the shared default that every other member points at.
     """
-    if (
-        max_budget is None
-        and tpm_limit is None
-        and rpm_limit is None
-        and allowed_models is None
-    ):
-        # disconnect the budget since all limits are None
-        await tx.litellm_teammembership.update(
-            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data={"litellm_budget_table": {"disconnect": True}},
-        )
+    if not budget_patch:
         return
+
+    write_data = dict(budget_patch)
+    if "budget_duration" in write_data:
+        duration = write_data["budget_duration"]
+        write_data["budget_reset_at"] = (
+            get_budget_reset_time(budget_duration=duration) if duration is not None else None
+        )
 
     is_shared_default = (
         existing_budget_id is not None
@@ -421,68 +463,50 @@ async def _upsert_budget_and_membership(
         and existing_budget_id == team_default_budget_id
     )
 
+    async def _disconnect():
+        await tx.litellm_teammembership.update(
+            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+            data={"litellm_budget_table": {"disconnect": True}},
+        )
+
     if existing_budget_id is not None and not is_shared_default:
-        # Update the existing budget in-place to preserve fields not being changed.
-        # Only write fields that the caller explicitly provided (non-None).
-        update_data: Dict[str, Any] = {
-            "updated_by": user_api_key_dict.user_id or "",
-        }
-        if max_budget is not None:
-            update_data["max_budget"] = max_budget
-        if tpm_limit is not None:
-            update_data["tpm_limit"] = tpm_limit
-        if rpm_limit is not None:
-            update_data["rpm_limit"] = rpm_limit
-        if allowed_models is not None:
-            update_data["allowed_models"] = allowed_models
+        existing_budget = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        merged = existing_budget.model_dump() if existing_budget is not None else {}
+        merged.update(write_data)
+        if not _has_meaningful_budget_limit(merged):
+            await _disconnect()
+            return
         await tx.litellm_budgettable.update(
             where={"budget_id": existing_budget_id},
-            data=update_data,
+            data={"updated_by": user_api_key_dict.user_id or "", **write_data},
         )
         return
 
-    # Either there is no existing budget, OR the membership is still pointing
-    # at the team's shared default member budget. In both cases we create a
-    # NEW private budget for this user and (re)link the membership to it.
     create_data: Dict[str, Any] = {
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
     }
 
-    # If we're forking off the shared default, seed the new row with the
-    # default's values so fields the caller did not change carry over.
     if is_shared_default:
-        default_budget_row = await tx.litellm_budgettable.find_unique(
-            where={"budget_id": existing_budget_id}
-        )
+        default_budget_row = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
         if default_budget_row is not None:
             default_budget_dict = default_budget_row.model_dump()
-            for field in (
-                "max_budget",
-                "soft_budget",
-                "max_parallel_requests",
-                "tpm_limit",
-                "rpm_limit",
-                "model_max_budget",
-                "budget_duration",
-                "allowed_models",
-            ):
+            for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
                 value = default_budget_dict.get(field)
-                if value is None:
-                    continue
-                if isinstance(value, list) and len(value) == 0:
-                    continue
-                create_data[field] = value
+                if _is_set_budget_value(value):
+                    create_data[field] = value
 
-    # Caller-provided values take precedence over the cloned defaults.
-    if max_budget is not None:
-        create_data["max_budget"] = max_budget
-    if tpm_limit is not None:
-        create_data["tpm_limit"] = tpm_limit
-    if rpm_limit is not None:
-        create_data["rpm_limit"] = rpm_limit
-    if allowed_models is not None:
-        create_data["allowed_models"] = allowed_models
+    create_data.update(write_data)
+
+    if create_data.get("budget_duration") is not None:
+        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
+    else:
+        create_data.pop("budget_reset_at", None)
+
+    if not _has_meaningful_budget_limit(create_data):
+        if existing_budget_id is not None:
+            await _disconnect()
+        return
 
     new_budget = await tx.litellm_budgettable.create(
         data=create_data,
@@ -521,13 +545,11 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         field_name: Name of the metadata field being updated
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        value = updated_kv.get(field_name)
-        # Skip the premium check for empty collections ([] or {}).
-        # The UI sends these as defaults even when the user hasn't configured
-        # any enterprise features (see issue #20304).  However, we still
-        # proceed with the update so that users can intentionally clear a
-        # previously-set field by sending an empty list/dict.
-        if value is not None and value != [] and value != {}:
+        # The UI sends falsy defaults (False, [], {}) even when the user has not
+        # enabled any enterprise feature (see #20304, #30285); require a license
+        # only for a truthy value. The falsy value is still persisted below so a
+        # previously-set field can be cleared.
+        if updated_kv.get(field_name):
             _premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:

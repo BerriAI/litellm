@@ -5,13 +5,13 @@ import time
 from pathlib import Path
 from unittest.mock import Mock, mock_open, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
+import pytest
 from click.testing import CliRunner
 
+from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.proxy.client.cli.commands.auth import (
     clear_token,
     get_stored_api_key,
@@ -19,6 +19,7 @@ from litellm.proxy.client.cli.commands.auth import (
     load_token,
     login,
     logout,
+    print_token,
     save_token,
     whoami,
 )
@@ -38,6 +39,138 @@ def _mock_cli_sso_start_response(
     }
     mock_response.raise_for_status = Mock()
     return mock_response
+
+
+class TestPollingErrorSurfacing:
+    def test_client_error_raises_with_server_detail_and_stops_polling(self):
+        from litellm.proxy.client.cli.commands.auth import _poll_for_ready_data
+
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {
+            "detail": "Your litellm CLI is out of date and uses a login flow this proxy no longer supports."
+        }
+
+        with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
+            with pytest.raises(ValueError) as exc_info:
+                _poll_for_ready_data("http://test/sso/cli/poll/sk-legacy")
+
+        assert mock_get.call_count == 1
+        assert (
+            "The proxy rejected the login session with HTTP 400: Your litellm CLI is out of date "
+            "and uses a login flow this proxy no longer supports." in str(exc_info.value)
+        )
+
+    def test_login_command_shows_server_rejection_to_user(self):
+        mock_context = Mock()
+        mock_context.obj = {"base_url": "https://test.example.com"}
+
+        mock_poll_response = Mock()
+        mock_poll_response.status_code = 400
+        mock_poll_response.json.return_value = {"detail": "CLI login session not found or expired."}
+
+        with (
+            patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
+            patch("requests.get", return_value=mock_poll_response),
+            patch("time.sleep"),
+        ):
+            result = CliRunner().invoke(login, obj=mock_context.obj)
+
+        assert result.exit_code == 0
+        assert "Authentication failed:" in result.output
+        assert "CLI login session not found or expired." in result.output
+        assert "Authentication timed out" not in result.output
+
+    def test_server_error_without_json_body_retries_until_timeout(self, capsys):
+        from litellm.proxy.client.cli.commands.auth import _poll_for_ready_data
+
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.json.side_effect = ValueError("no json")
+
+        with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
+            result = _poll_for_ready_data("http://test/sso/cli/poll/cli-abc", total_timeout=6, poll_interval=2)
+
+        assert result is None
+        assert mock_get.call_count == 3
+        assert "Polling error: HTTP 500" in capsys.readouterr().out
+
+    def test_rate_limit_is_retried_not_aborted(self, capsys):
+        from litellm.proxy.client.cli.commands.auth import _poll_for_ready_data
+
+        mock_response = Mock()
+        mock_response.status_code = 429
+        mock_response.json.return_value = {"detail": "Too many CLI login attempts. Try again later."}
+
+        with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
+            result = _poll_for_ready_data("http://test/sso/cli/poll/cli-abc", total_timeout=4, poll_interval=2)
+
+        assert result is None
+        assert mock_get.call_count == 2
+        assert "Polling error: HTTP 429: Too many CLI login attempts. Try again later." in capsys.readouterr().out
+
+
+class TestStartCliSsoFlowErrors:
+    def test_endpoint_not_found_explains_version_or_base_url(self):
+        from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
+
+        mock_response = Mock()
+        mock_response.status_code = 404
+
+        with patch("requests.post", return_value=mock_response):
+            with pytest.raises(ValueError) as exc_info:
+                _start_cli_sso_flow("https://old-proxy.example.com")
+
+        message = str(exc_info.value)
+        assert "HTTP 404" in message
+        assert "--base-url" in message
+        assert "older than this CLI" in message
+
+    def test_http_error_includes_server_detail(self):
+        from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
+
+        mock_response = Mock()
+        mock_response.status_code = 429
+        mock_response.json.return_value = {"detail": "Too many CLI login attempts. Try again later."}
+
+        with patch("requests.post", return_value=mock_response):
+            with pytest.raises(ValueError) as exc_info:
+                _start_cli_sso_flow("https://test.example.com")
+
+        assert "HTTP 429" in str(exc_info.value)
+        assert "Too many CLI login attempts. Try again later." in str(exc_info.value)
+
+    def test_non_json_response_names_interception(self):
+        from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.side_effect = ValueError("no json")
+        mock_response.headers = {"content-type": "text/html"}
+        mock_response.text = "<html>Sign in to corporate VPN</html>"
+
+        with patch("requests.post", return_value=mock_response):
+            with pytest.raises(ValueError) as exc_info:
+                _start_cli_sso_flow("https://test.example.com")
+
+        message = str(exc_info.value)
+        assert "non-JSON response" in message
+        assert "text/html" in message
+        assert "Sign in to corporate VPN" in message
+
+    def test_connection_error_points_at_base_url(self):
+        import requests
+
+        from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
+
+        with patch("requests.post", side_effect=requests.ConnectionError("Connection refused")):
+            with pytest.raises(ValueError) as exc_info:
+                _start_cli_sso_flow("https://unreachable.example.com")
+
+        message = str(exc_info.value)
+        assert "Could not reach the proxy" in message
+        assert "https://unreachable.example.com/sso/cli/start" in message
 
 
 class TestTokenUtilities:
@@ -78,12 +211,9 @@ class TestTokenUtilities:
 
         with (
             patch("builtins.open", mock_open()) as mock_file,
-            patch(
-                "litellm.proxy.client.cli.commands.auth.get_token_file_path"
-            ) as mock_path,
+            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
             patch("os.chmod") as mock_chmod,
         ):
-
             mock_path.return_value = "/test/path/token.json"
 
             save_token(token_data)
@@ -93,9 +223,7 @@ class TestTokenUtilities:
             mock_chmod.assert_called_once_with("/test/path/token.json", 0o600)
 
             # Verify JSON content was written correctly
-            written_content = "".join(
-                call[0][0] for call in mock_file().write.call_args_list
-            )
+            written_content = "".join(call[0][0] for call in mock_file().write.call_args_list)
             parsed_content = json.loads(written_content)
             assert parsed_content == token_data
 
@@ -109,12 +237,9 @@ class TestTokenUtilities:
 
         with (
             patch("builtins.open", mock_open(read_data=json.dumps(token_data))),
-            patch(
-                "litellm.proxy.client.cli.commands.auth.get_token_file_path"
-            ) as mock_path,
+            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
             patch("os.path.exists", return_value=True),
         ):
-
             mock_path.return_value = "/test/path/token.json"
 
             result = load_token()
@@ -124,12 +249,9 @@ class TestTokenUtilities:
     def test_load_token_file_not_exists(self):
         """Test loading token when file doesn't exist"""
         with (
-            patch(
-                "litellm.proxy.client.cli.commands.auth.get_token_file_path"
-            ) as mock_path,
+            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
             patch("os.path.exists", return_value=False),
         ):
-
             mock_path.return_value = "/test/path/token.json"
 
             result = load_token()
@@ -140,12 +262,9 @@ class TestTokenUtilities:
         """Test loading token with invalid JSON"""
         with (
             patch("builtins.open", mock_open(read_data="invalid json")),
-            patch(
-                "litellm.proxy.client.cli.commands.auth.get_token_file_path"
-            ) as mock_path,
+            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
             patch("os.path.exists", return_value=True),
         ):
-
             mock_path.return_value = "/test/path/token.json"
 
             result = load_token()
@@ -156,12 +275,9 @@ class TestTokenUtilities:
         """Test loading token with IO error"""
         with (
             patch("builtins.open", side_effect=IOError("Permission denied")),
-            patch(
-                "litellm.proxy.client.cli.commands.auth.get_token_file_path"
-            ) as mock_path,
+            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
             patch("os.path.exists", return_value=True),
         ):
-
             mock_path.return_value = "/test/path/token.json"
 
             result = load_token()
@@ -171,13 +287,10 @@ class TestTokenUtilities:
     def test_clear_token_file_exists(self):
         """Test clearing token when file exists"""
         with (
-            patch(
-                "litellm.proxy.client.cli.commands.auth.get_token_file_path"
-            ) as mock_path,
+            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
             patch("os.path.exists", return_value=True),
             patch("os.remove") as mock_remove,
         ):
-
             mock_path.return_value = "/test/path/token.json"
 
             clear_token()
@@ -187,13 +300,10 @@ class TestTokenUtilities:
     def test_clear_token_file_not_exists(self):
         """Test clearing token when file doesn't exist"""
         with (
-            patch(
-                "litellm.proxy.client.cli.commands.auth.get_token_file_path"
-            ) as mock_path,
+            patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
             patch("os.path.exists", return_value=False),
             patch("os.remove") as mock_remove,
         ):
-
             mock_path.return_value = "/test/path/token.json"
 
             clear_token()
@@ -238,10 +348,7 @@ class TestTokenUtilities:
             "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
             return_value=token_data,
         ):
-            assert (
-                get_stored_api_key(expected_base_url="https://real-proxy.com")
-                == "sk-prod"
-            )
+            assert get_stored_api_key(expected_base_url="https://real-proxy.com") == "sk-prod"
 
     def test_get_stored_api_key_base_url_match_trailing_slash(self):
         """Trailing slash on expected_base_url is normalised before comparison"""
@@ -250,10 +357,7 @@ class TestTokenUtilities:
             "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
             return_value=token_data,
         ):
-            assert (
-                get_stored_api_key(expected_base_url="https://real-proxy.com/")
-                == "sk-prod"
-            )
+            assert get_stored_api_key(expected_base_url="https://real-proxy.com/") == "sk-prod"
 
     def test_get_stored_api_key_base_url_mismatch(self):
         """Stored key is NOT returned when expected_base_url differs from stored origin"""
@@ -271,9 +375,7 @@ class TestTokenUtilities:
             "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
             return_value=token_data,
         ):
-            assert (
-                get_stored_api_key(expected_base_url="https://real-proxy.com") is None
-            )
+            assert get_stored_api_key(expected_base_url="https://real-proxy.com") is None
 
 
 class TestLoginCommand:
@@ -307,15 +409,12 @@ class TestLoginCommand:
             ) as mock_post,
             patch("requests.get", return_value=mock_response) as mock_get,
             patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
-            patch(
-                "litellm.proxy.client.cli.interface.show_commands"
-            ) as mock_show_commands,
+            patch("litellm.proxy.client.cli.interface.show_commands") as mock_show_commands,
         ):
-
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "✅ Login successful!" in result.output
+            assert "Login successful!" in result.output
             assert "Automatically assigned to team: team-1" in result.output
 
             # Verify browser was opened with correct URL
@@ -326,9 +425,7 @@ class TestLoginCommand:
             assert "Verification code: ABCD-EFGH" in result.output
             mock_post.assert_called_once()
             mock_get.assert_called()
-            assert mock_get.call_args.kwargs["headers"] == {
-                "x-litellm-cli-poll-secret": "poll-secret"
-            }
+            assert mock_get.call_args.kwargs["headers"] == {"x-litellm-cli-poll-secret": "poll-secret"}
 
             # Verify JWT was saved
             mock_save.assert_called_once()
@@ -355,12 +452,11 @@ class TestLoginCommand:
             patch("requests.get", return_value=mock_response),
             patch("time.sleep"),
         ):
-
             # Mock time.sleep to avoid actual delays in tests
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication timed out" in result.output
+            assert "Authentication timed out" in result.output
 
     def test_login_http_error(self):
         """Test login with HTTP error"""
@@ -377,11 +473,10 @@ class TestLoginCommand:
             patch("requests.get", return_value=mock_response),
             patch("time.sleep"),
         ):
-
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication timed out" in result.output
+            assert "Authentication timed out" in result.output
 
     def test_login_request_exception(self):
         """Test login with request exception"""
@@ -399,11 +494,10 @@ class TestLoginCommand:
             ),
             patch("time.sleep"),
         ):
-
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication timed out" in result.output
+            assert "Authentication timed out" in result.output
 
     def test_login_keyboard_interrupt(self):
         """Test login cancelled by user"""
@@ -415,11 +509,10 @@ class TestLoginCommand:
             patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", side_effect=KeyboardInterrupt),
         ):
-
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication cancelled by user" in result.output
+            assert "Authentication cancelled by user" in result.output
 
     def test_login_no_api_key_in_response(self):
         """Test login when response doesn't contain API key"""
@@ -440,11 +533,10 @@ class TestLoginCommand:
             patch("requests.get", return_value=mock_response),
             patch("time.sleep"),
         ):
-
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication timed out" in result.output
+            assert "Authentication timed out" in result.output
 
     def test_login_general_exception(self):
         """Test login with general exception (not requests exception)"""
@@ -456,11 +548,10 @@ class TestLoginCommand:
             patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", side_effect=ValueError("Invalid value")),
         ):
-
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "❌ Authentication failed: Invalid value" in result.output
+            assert "Authentication failed: Invalid value" in result.output
 
 
 class TestLogoutCommand:
@@ -476,7 +567,7 @@ class TestLogoutCommand:
             result = self.runner.invoke(logout)
 
             assert result.exit_code == 0
-            assert "✅ Logged out successfully" in result.output
+            assert "Logged out successfully" in result.output
             mock_clear.assert_called_once()
 
 
@@ -496,13 +587,11 @@ class TestWhoamiCommand:
             "timestamp": time.time() - 3600,  # 1 hour ago
         }
 
-        with patch(
-            "litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data
-        ):
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "✅ Authenticated" in result.output
+            assert "Authenticated" in result.output
             assert "test@example.com" in result.output
             assert "test-user-123" in result.output
             assert "admin" in result.output
@@ -510,14 +599,12 @@ class TestWhoamiCommand:
 
     def test_whoami_not_authenticated(self):
         """Test whoami when user is not authenticated"""
-        with patch(
-            "litellm.proxy.client.cli.commands.auth.load_token", return_value=None
-        ):
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "❌ Not authenticated" in result.output
-            assert "Run 'litellm-proxy login'" in result.output
+            assert "Not authenticated" in result.output
+            assert "Run 'lite login'" in result.output
 
     def test_whoami_old_token(self):
         """Test whoami with old token showing warning"""
@@ -528,33 +615,26 @@ class TestWhoamiCommand:
             "timestamp": time.time() - (25 * 3600),  # 25 hours ago
         }
 
-        with patch(
-            "litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data
-        ):
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "✅ Authenticated" in result.output
-            assert "⚠️ Warning: Token is more than 24 hours old" in result.output
+            assert "Authenticated" in result.output
+            assert "Warning: Token is more than 24 hours old" in result.output
 
     def test_whoami_missing_fields(self):
         """Test whoami with token missing some fields"""
         token_data = {
-            "timestamp": time.time()
-            - 3600
+            "timestamp": time.time() - 3600
             # Missing user_email, user_id, user_role
         }
 
-        with patch(
-            "litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data
-        ):
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "✅ Authenticated" in result.output
-            assert (
-                "Unknown" in result.output
-            )  # Should show "Unknown" for missing fields
+            assert "Authenticated" in result.output
+            assert "Unknown" in result.output  # Should show "Unknown" for missing fields
 
     def test_whoami_no_timestamp(self):
         """Test whoami with token missing timestamp"""
@@ -572,11 +652,10 @@ class TestWhoamiCommand:
             ),
             patch("time.time", return_value=1000),
         ):
-
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
-            assert "✅ Authenticated" in result.output
+            assert "Authenticated" in result.output
             # Should calculate age based on timestamp=0
             assert "Token age:" in result.output
 
@@ -625,24 +704,17 @@ class TestCLIKeyRegenerationFlow:
             patch("webbrowser.open") as mock_browser,
             patch(
                 "requests.post",
-                return_value=_mock_cli_sso_start_response(
-                    login_id="cli-session-uuid-456"
-                ),
+                return_value=_mock_cli_sso_start_response(login_id="cli-session-uuid-456"),
             ),
-            patch(
-                "requests.get", side_effect=[mock_first_response, mock_second_response]
-            ) as mock_get,
+            patch("requests.get", side_effect=[mock_first_response, mock_second_response]) as mock_get,
             patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
-            patch(
-                "litellm.proxy.client.cli.interface.show_commands"
-            ) as mock_show_commands,
+            patch("litellm.proxy.client.cli.interface.show_commands") as mock_show_commands,
             patch("click.prompt", return_value="2"),
         ):  # User selects index 2
-
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "✅ Login successful!" in result.output
+            assert "Login successful!" in result.output
             assert "team-beta" in result.output
             # Ensure we surface the human-readable team alias to the user
             assert "Beta Team" in result.output
@@ -659,9 +731,7 @@ class TestCLIKeyRegenerationFlow:
             first_poll_url = mock_get.call_args_list[0][0][0]
             assert "cli-session-uuid-456" in first_poll_url
             assert "team_id=" not in first_poll_url
-            assert mock_get.call_args_list[0].kwargs["headers"] == {
-                "x-litellm-cli-poll-secret": "poll-secret"
-            }
+            assert mock_get.call_args_list[0].kwargs["headers"] == {"x-litellm-cli-poll-secret": "poll-secret"}
 
             # Second poll should include team_id=team-beta
             second_poll_url = mock_get.call_args_list[1][0][0]
@@ -670,10 +740,7 @@ class TestCLIKeyRegenerationFlow:
             # Verify JWT was saved
             mock_save.assert_called_once()
             saved_data = mock_save.call_args[0][0]
-            assert (
-                saved_data["key"]
-                == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-beta.jwt"
-            )
+            assert saved_data["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.team-beta.jwt"
             assert saved_data["user_id"] == "test-user-456"
 
             mock_show_commands.assert_called_once()
@@ -698,19 +765,16 @@ class TestCLIKeyRegenerationFlow:
             patch("webbrowser.open") as mock_browser,
             patch(
                 "requests.post",
-                return_value=_mock_cli_sso_start_response(
-                    login_id="cli-session-uuid-solo"
-                ),
+                return_value=_mock_cli_sso_start_response(login_id="cli-session-uuid-solo"),
             ),
             patch("requests.get", return_value=mock_response),
             patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
             patch("litellm.proxy.client.cli.interface.show_commands"),
         ):
-
             result = self.runner.invoke(login, obj=mock_context.obj)
 
             assert result.exit_code == 0
-            assert "✅ Login successful!" in result.output
+            assert "Login successful!" in result.output
 
             # Verify browser was opened
             mock_browser.assert_called_once()
@@ -722,7 +786,145 @@ class TestCLIKeyRegenerationFlow:
             # Verify JWT was saved
             mock_save.assert_called_once()
             saved_data = mock_save.call_args[0][0]
-            assert (
-                saved_data["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.no-team.jwt"
-            )
+            assert saved_data["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.no-team.jwt"
             assert saved_data["user_id"] == "test-user-solo"
+
+
+class TestPrintTokenCommand:
+    """Test `lite auth print-token`, used as Claude Code's apiKeyHelper.
+
+    stdout must contain *only* the token -- Claude Code treats stdout
+    verbatim as the bearer token, so any diagnostic text on stdout would
+    corrupt authentication.
+
+    `lite up` now writes `apiKeyHelper` with an explicit `--base-url` bound
+    to whatever proxy it was pointed at (resolve_api_key_helper), so
+    print-token enforces that the cached token was actually issued for that
+    server -- a token minted for a different, previously-logged-into proxy
+    must never be handed to whichever server the helper is invoked for.
+    Settings patched by an older `lite up`, or a manually-configured
+    apiKeyHelper, can still invoke this bare (no --base-url at all); that
+    case falls back to trusting whatever `lite login` stored in token.json,
+    since there is no explicit target to check it against. `--base-url`/
+    `LITELLM_PROXY_URL` only enforces the match when a caller explicitly
+    passes it (tracked via ctx.obj["base_url_explicit"], set by the `cli`
+    group from click's ParameterSource).
+    """
+
+    def setup_method(self):
+        self.runner = CliRunner()
+
+    def test_no_stored_token_fails_cleanly(self):
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code != 0
+        assert "Not authenticated" in result.output
+
+    def test_bare_invocation_resolves_server_from_stored_token(self):
+        """The legacy/manual invocation shape: no --base-url given at all
+        (e.g. settings patched before resolve_api_key_helper started binding
+        one). Must use token.json's own base_url, not a hardcoded default."""
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={
+                    "base_url": "https://litellm-proxy.corp.com",
+                    "key": "sk-prod-fresh",
+                    "timestamp": time.time(),
+                },
+            ),
+            patch("requests.post") as mock_post,
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 0
+        assert result.output.strip() == "sk-prod-fresh"
+        mock_post.assert_not_called()
+
+    def test_explicit_base_url_mismatch_fails_cleanly(self):
+        """When the caller *does* explicitly pass --base-url, a token issued
+        for a different server must never be printed. This is the exact
+        scenario `lite up`'s own bound --base-url now guards against: a
+        token minted for proxy A must not reach a helper invocation aimed
+        at proxy B, even though the token itself is otherwise fresh."""
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_token",
+            return_value={
+                "base_url": "https://other-server.com",
+                "key": "sk-should-not-print",
+                "timestamp": time.time(),
+            },
+        ):
+            result = self.runner.invoke(
+                print_token,
+                obj={"base_url": "http://localhost:4000", "base_url_explicit": True},
+            )
+
+        assert result.exit_code != 0
+        assert "sk-should-not-print" not in result.output
+
+    def test_explicit_base_url_match_prints_token(self):
+        """`lite up`'s own bound invocation shape: --base-url matching the token's origin
+        must succeed exactly like the bare/legacy invocation does."""
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_token",
+            return_value={
+                "base_url": "http://localhost:4000",
+                "key": "sk-matches",
+                "timestamp": time.time(),
+            },
+        ):
+            result = self.runner.invoke(
+                print_token,
+                obj={"base_url": "http://localhost:4000", "base_url_explicit": True},
+            )
+
+        assert result.exit_code == 0
+        assert result.output.strip() == "sk-matches"
+
+    def test_fresh_cached_key_printed_without_network_call(self):
+        """A recently-issued key should be printed straight from cache -- no
+        refresh call on every single invocation (apiKeyHelper gets called
+        frequently)."""
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={
+                    "base_url": "http://localhost:4000",
+                    "key": "sk-cached-fresh",
+                    "timestamp": time.time(),
+                },
+            ),
+            patch("requests.post") as mock_post,
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 0
+        assert result.output.strip() == "sk-cached-fresh"
+        mock_post.assert_not_called()
+
+    def test_stale_key_fails_fast_without_network_call(self):
+        """There is no silent refresh: an expired cached key must fail
+        loudly (stderr, nonzero exit) telling the user to `lite login`
+        again, rather than making a network call or printing a dead key
+        that will just 401 Claude Code."""
+        old_timestamp = time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={
+                    "base_url": "http://localhost:4000",
+                    "key": "sk-stale-key",
+                    "timestamp": old_timestamp,
+                },
+            ),
+            patch("requests.post") as mock_post,
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code != 0
+        assert "sk-stale-key" not in result.output
+        assert "lite login" in result.output
+        mock_post.assert_not_called()

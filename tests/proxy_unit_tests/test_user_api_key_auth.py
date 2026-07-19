@@ -219,8 +219,8 @@ async def test_aaauser_personal_budgets(key_ownership):
     """
     Set a personal budget on a user
 
-    - have it only apply when key belongs to user -> raises BudgetExceededError
-    - if key belongs to team, have key respect team budget -> allows call to go through
+    User budget is enforced regardless of key ownership (personal or team).
+    Both cases should raise BudgetExceededError when the user is over budget.
     """
     import asyncio
     import time
@@ -229,7 +229,12 @@ async def test_aaauser_personal_budgets(key_ownership):
     from starlette.datastructures import URL
     import litellm
 
-    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        ProxyErrorTypes,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
@@ -273,14 +278,9 @@ async def test_aaauser_personal_budgets(key_ownership):
         == valid_token
     )
 
-    try:
+    with pytest.raises(ProxyException) as exc_info:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-
-        if key_ownership == "user_key":
-            pytest.fail("Expected this call to fail. User is over limit.")
-    except Exception:
-        if key_ownership == "team_key":
-            pytest.fail("Expected this call to work. Key is below team budget.")
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
 
 
 @pytest.mark.asyncio
@@ -913,6 +913,36 @@ async def test_user_api_key_auth_websocket():
         assert (
             mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
         )
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_carries_asgi_path():
+    """
+    The synthetic Request must carry the ASGI scope's ``path`` so
+    ``get_request_route`` returns the real WebSocket path, not a value
+    reconstructed from the (Host-poisonable) ``websocket.url``.
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer some_api_key"}
+    mock_websocket.scope = {
+        "type": "websocket",
+        "path": "/v1/realtime",
+        "root_path": "",
+        "headers": [(b"authorization", b"Bearer some_api_key")],
+    }
+    mock_websocket.url = URL(url="/v1/realtime")
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_user_api_key_auth:
+        await user_api_key_auth_websocket(mock_websocket)
+
+        request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
+        assert request_arg.scope.get("path") == "/v1/realtime"
+        assert request_arg.scope.get("root_path") == ""
 
 
 @pytest.mark.parametrize("enforce_rbac", [True, False])

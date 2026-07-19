@@ -1,12 +1,12 @@
 """
-Transformation logic from Cohere's /v1/rerank format to Jina AI's  `/v1/rerank` format. 
+Transformation logic from Cohere's /v1/rerank format to Jina AI's  `/v1/rerank` format.
 
 Why separate file? Make it easy to see how transformation works
 
 Docs - https://jina.ai/reranker
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 from httpx import URL, Response
 
@@ -39,12 +39,13 @@ class JinaAIRerankConfig(BaseRerankConfig):
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         optional_params = {}
         supported_params = self.get_supported_cohere_rerank_params(model)
@@ -59,9 +60,9 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         base_path = "/v1/rerank"
 
@@ -78,7 +79,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: Dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> Dict:
         return {"model": model, **optional_rerank_params}
 
@@ -88,7 +89,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         raw_response: Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: Dict = {},
         optional_params: Dict = {},
         litellm_params: Dict = {},
@@ -104,7 +105,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         _tokens = RerankTokens(**_json_response.get("usage", {}))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        _results: Optional[List[dict]] = _json_response.get("results")
+        _results: List[dict] | None = _json_response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
@@ -136,13 +137,11 @@ class JinaAIRerankConfig(BaseRerankConfig):
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> Dict:
         if api_key is None:
-            raise ValueError(
-                "api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable."
-            )
+            raise ValueError("api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable.")
         return {
             "accept": "application/json",
             "content-type": "application/json",
@@ -152,9 +151,9 @@ class JinaAIRerankConfig(BaseRerankConfig):
     def calculate_rerank_cost(
         self,
         model: str,
-        custom_llm_provider: Optional[str] = None,
-        billed_units: Optional[RerankBilledUnits] = None,
-        model_info: Optional[ModelInfo] = None,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
     ) -> Tuple[float, float]:
         """
         Jina AI reranker is priced at $0.000000018 per token.

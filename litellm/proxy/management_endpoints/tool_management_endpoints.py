@@ -21,6 +21,15 @@ if TYPE_CHECKING:
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.table_repositories import (
+    SpendLogsRepository,
+    SpendLogToolIndexRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
     ToolDetailResponse,
@@ -105,14 +114,10 @@ async def list_tools(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        tools = await db_list_tools(
-            prisma_client=prisma_client, input_policy=input_policy
-        )
+        tools = await db_list_tools(prisma_client=prisma_client, input_policy=input_policy)
         return ToolListResponse(tools=tools, total=len(tools))
     except Exception as e:
         verbose_proxy_logger.exception("Error listing tools: %s", e)
@@ -137,17 +142,13 @@ async def get_tool_detail(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         tool = await db_get_tool(prisma_client=prisma_client, tool_name=tool_name)
         if tool is None:
             raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
-        overrides = await list_overrides_for_tool(
-            prisma_client=prisma_client, tool_name=tool_name
-        )
+        overrides = await list_overrides_for_tool(prisma_client=prisma_client, tool_name=tool_name)
         return ToolDetailResponse(tool=tool, overrides=overrides)
     except HTTPException:
         raise
@@ -226,9 +227,7 @@ async def get_tool_usage_logs(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         where: dict = {"tool_name": tool_name}
@@ -237,16 +236,16 @@ async def get_tool_usage_logs(
             end_time_filter: Optional[datetime] = None
             if start_date:
                 try:
-                    start_time_filter = datetime.strptime(
-                        start_date + "T00:00:00", "%Y-%m-%dT%H:%M:%S"
-                    ).replace(tzinfo=timezone.utc)
+                    start_time_filter = datetime.strptime(start_date + "T00:00:00", "%Y-%m-%dT%H:%M:%S").replace(
+                        tzinfo=timezone.utc
+                    )
                 except ValueError:
                     pass
             if end_date:
                 try:
-                    end_time_filter = datetime.strptime(
-                        end_date + "T23:59:59", "%Y-%m-%dT%H:%M:%S"
-                    ).replace(tzinfo=timezone.utc)
+                    end_time_filter = datetime.strptime(end_date + "T23:59:59", "%Y-%m-%dT%H:%M:%S").replace(
+                        tzinfo=timezone.utc
+                    )
                 except ValueError:
                     pass
             if start_time_filter is not None or end_time_filter is not None:
@@ -256,8 +255,8 @@ async def get_tool_usage_logs(
                 if end_time_filter is not None:
                     where["start_time"]["lte"] = end_time_filter
 
-        total = await prisma_client.db.litellm_spendlogtoolindex.count(where=where)
-        index_rows = await prisma_client.db.litellm_spendlogtoolindex.find_many(
+        total = await SpendLogToolIndexRepository(prisma_client).table.count(where=where)
+        index_rows = await SpendLogToolIndexRepository(prisma_client).table.find_many(
             where=where,
             order={"start_time": "desc"},
             skip=(page - 1) * page_size,
@@ -265,13 +264,9 @@ async def get_tool_usage_logs(
         )
         request_ids = [r.request_id for r in index_rows]
         if not request_ids:
-            return ToolUsageLogsResponse(
-                logs=[], total=total, page=page, page_size=page_size
-            )
+            return ToolUsageLogsResponse(logs=[], total=total, page=page, page_size=page_size)
 
-        spend_logs = await prisma_client.db.litellm_spendlogs.find_many(
-            where={"request_id": {"in": request_ids}}
-        )
+        spend_logs = await SpendLogsRepository(prisma_client).table.find_many(where={"request_id": {"in": request_ids}})
         log_by_id = {s.request_id: s for s in spend_logs}
 
         logs_out: List[ToolUsageLogEntry] = []
@@ -279,11 +274,7 @@ async def get_tool_usage_logs(
             sl = log_by_id.get(r.request_id)
             if not sl:
                 continue
-            ts = (
-                sl.startTime.isoformat()
-                if hasattr(sl.startTime, "isoformat")
-                else str(sl.startTime)
-            )
+            ts = sl.startTime.isoformat() if hasattr(sl.startTime, "isoformat") else str(sl.startTime)
             logs_out.append(
                 ToolUsageLogEntry(
                     id=sl.request_id,
@@ -295,9 +286,7 @@ async def get_tool_usage_logs(
                 )
             )
 
-        return ToolUsageLogsResponse(
-            logs=logs_out, total=total, page=page, page_size=page_size
-        )
+        return ToolUsageLogsResponse(logs=logs_out, total=total, page=page, page_size=page_size)
     except HTTPException:
         raise
     except Exception as e:
@@ -322,9 +311,7 @@ async def get_tool(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         tool = await db_get_tool(prisma_client=prisma_client, tool_name=tool_name)
@@ -348,29 +335,23 @@ async def _resolve_key_hash_to_object_permission_id(
     hashed = key_hash if "sk-" not in (key_hash or "") else hash_token(key_hash)
     if not hashed:
         return None
-    row = await prisma_client.db.litellm_verificationtoken.find_unique(
-        where={"token": hashed}
-    )
+    row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed})
     if row is None:
         return None
     op_id = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
     new_id = str(uuid.uuid4())
-    await prisma_client.db.litellm_objectpermissiontable.create(
+    await ObjectPermissionRepository(prisma_client).table.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    updated_count = await prisma_client.db.litellm_verificationtoken.update_many(
+    updated_count = await VerificationTokenRepository(prisma_client).table.update_many(
         where={"token": hashed, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        await prisma_client.db.litellm_objectpermissiontable.delete(
-            where={"object_permission_id": new_id}
-        )
-        row = await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={"token": hashed}
-        )
+        await ObjectPermissionRepository(prisma_client).table.delete(where={"object_permission_id": new_id})
+        row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed})
         return getattr(row, "object_permission_id", None) if row else None
     return new_id
 
@@ -383,7 +364,7 @@ async def _resolve_team_id_to_object_permission_id(
     if not team_id or not team_id.strip():
         return None
     team_id_clean = team_id.strip()
-    row = await prisma_client.db.litellm_teamtable.find_unique(
+    row = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id_clean},
         select={"object_permission_id": True},
     )
@@ -393,18 +374,16 @@ async def _resolve_team_id_to_object_permission_id(
     if op_id:
         return op_id
     new_id = str(uuid.uuid4())
-    await prisma_client.db.litellm_objectpermissiontable.create(
+    await ObjectPermissionRepository(prisma_client).table.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    updated_count = await prisma_client.db.litellm_teamtable.update_many(
+    updated_count = await TeamRepository(prisma_client).table.update_many(
         where={"team_id": team_id_clean, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        await prisma_client.db.litellm_objectpermissiontable.delete(
-            where={"object_permission_id": new_id}
-        )
-        row = await prisma_client.db.litellm_teamtable.find_unique(
+        await ObjectPermissionRepository(prisma_client).table.delete(where={"object_permission_id": new_id})
+        row = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": team_id_clean},
             select={"object_permission_id": True},
         )
@@ -443,9 +422,7 @@ async def update_tool_policy(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         if data.team_id is not None or data.key_hash is not None:
@@ -455,13 +432,9 @@ async def update_tool_policy(
                     detail="Provide either team_id or key_hash, not both",
                 )
             if data.key_hash is not None:
-                op_id = await _resolve_key_hash_to_object_permission_id(
-                    prisma_client, data.key_hash
-                )
+                op_id = await _resolve_key_hash_to_object_permission_id(prisma_client, data.key_hash)
             else:
-                op_id = await _resolve_team_id_to_object_permission_id(
-                    prisma_client, data.team_id or ""
-                )
+                op_id = await _resolve_team_id_to_object_permission_id(prisma_client, data.team_id or "")
             if op_id is None:
                 raise HTTPException(
                     status_code=404,
@@ -538,12 +511,8 @@ async def update_tool_policy(
 )
 async def delete_tool_policy_override(
     tool_name: str,
-    team_id: Optional[str] = Query(
-        None, description="Team ID of the override to remove"
-    ),
-    key_hash: Optional[str] = Query(
-        None, description="Key hash of the override to remove"
-    ),
+    team_id: Optional[str] = Query(None, description="Team ID of the override to remove"),
+    key_hash: Optional[str] = Query(None, description="Key hash of the override to remove"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -557,9 +526,7 @@ async def delete_tool_policy_override(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     if team_id is None and key_hash is None:
         raise HTTPException(
             status_code=400,
@@ -572,13 +539,9 @@ async def delete_tool_policy_override(
         )
     try:
         if key_hash is not None:
-            op_id = await _resolve_key_hash_to_object_permission_id(
-                prisma_client, key_hash
-            )
+            op_id = await _resolve_key_hash_to_object_permission_id(prisma_client, key_hash)
         else:
-            op_id = await _resolve_team_id_to_object_permission_id(
-                prisma_client, team_id or ""
-            )
+            op_id = await _resolve_team_id_to_object_permission_id(prisma_client, team_id or "")
         if op_id is None:
             raise HTTPException(
                 status_code=404,

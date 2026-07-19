@@ -37,13 +37,21 @@ class MCPAuth(str, enum.Enum):
     oauth2 = "oauth2"
     aws_sigv4 = "aws_sigv4"
     token = "token"
+    oauth2_token_exchange = "oauth2_token_exchange"
+    oauth2_id_jag = "oauth2_id_jag"
+    true_passthrough = "true_passthrough"
+    oauth_delegate = "oauth_delegate"
 
+
+# RFC 8693 default subject_token_type. A NULL column / omitted config key means
+# "use this default"; it is applied at every egress build site via this single
+# constant rather than a DB-level DEFAULT (Prisma writes explicit values on
+# insert, so a column default would rarely apply anyway).
+DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
-MCPSpecVersionType = Literal[
-    MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025
-]
+MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
 MCPAuthType = Optional[
     Literal[
         MCPAuth.none,
@@ -54,6 +62,10 @@ MCPAuthType = Optional[
         MCPAuth.oauth2,
         MCPAuth.aws_sigv4,
         MCPAuth.token,
+        MCPAuth.oauth2_token_exchange,
+        MCPAuth.oauth2_id_jag,
+        MCPAuth.true_passthrough,
+        MCPAuth.oauth_delegate,
     ]
 ]
 
@@ -67,11 +79,14 @@ class MCPPublicServer(BaseModel):
     name: str
     alias: Optional[str] = None
     server_name: Optional[str] = None
-    url: Optional[str] = None
     transport: MCPTransportType
     spec_path: Optional[str] = None
     auth_type: Optional[MCPAuthType] = None
     mcp_info: Optional[Dict[str, Any]] = None
+
+
+# OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).
+MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"]
 
 
 class MCPCredentials(TypedDict, total=False):
@@ -116,6 +131,86 @@ class MCPCredentials(TypedDict, total=False):
 
     aws_session_name: Optional[str]
     """Session name for STS AssumeRole (used in CloudTrail). Not a secret — stored unencrypted."""
+
+    audience: Optional[str]
+    """
+    Target audience for OAuth 2.0 Token Exchange (RFC 8693).
+
+    Legacy input shape: this setting has a dedicated ``audience`` column, which is
+    authoritative. A value sent here is accepted for back-compat (the pre-column
+    REST shape, released since 2026-05), lifted into the column on write, and
+    stripped from the stored blob. Prefer the top-level request field.
+    """
+
+    token_exchange_endpoint: Optional[str]
+    """
+    IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693).
+
+    Legacy input shape: lifted into the dedicated ``token_exchange_endpoint``
+    column on write and stripped from the stored blob; the column is
+    authoritative. Prefer the top-level request field.
+    """
+
+    subject_token_type: Optional[str]
+    """
+    Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
+    Default: DEFAULT_SUBJECT_TOKEN_TYPE (urn:ietf:params:oauth:token-type:access_token).
+
+    Legacy input shape: lifted into the dedicated ``subject_token_type`` column on
+    write and stripped from the stored blob; the column is authoritative. Prefer
+    the top-level request field.
+    """
+
+    id_jag_resource_token_endpoint: Optional[str]
+    """
+    Resource authorization server JWT-bearer (RFC 7523) endpoint for ID-JAG leg 2
+    """
+
+    id_jag_resource: Optional[str]
+    """
+    Optional RFC 8707 resource indicator sent on ID-JAG leg 1
+    """
+
+    client_private_key: Optional[str]
+    """
+    PEM private key used to sign the private-key-JWT client_assertion (RFC 7523)
+    """
+
+    client_private_key_id: Optional[str]
+    """
+    Key id (kid) advertised in the client_assertion JWT header
+    """
+
+    client_assertion_signing_alg: Optional[str]
+    """
+    Signing algorithm for the client_assertion JWT. Default: RS256
+    """
+
+    token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod]
+    """
+    How the gateway authenticates to the upstream token endpoint. "client_secret_basic"
+    sends HTTP Basic; defaults to "client_secret_post" when unset.
+    """
+
+    redirect_uris: Optional[List[str]]
+    """
+    The redirect URIs a dynamically registered (RFC 7591) OAuth client was bound to at
+    registration time. Lets a later registration detect that the proxy's public origin no
+    longer matches the registered callback and re-register instead of reusing a client the
+    IdP will reject. Absent for admin-configured clients and for clients registered before
+    this field existed. Not a secret; stored unencrypted.
+    """
+
+    token_exchange_profile: Optional[str]
+    """
+    Token exchange wire dialect: "rfc8693" (default, the standard token-exchange grant) or
+    "entra_obo" (Microsoft Entra On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use
+    extension). Not a secret; stored unencrypted.
+
+    Legacy input shape: lifted into the dedicated ``token_exchange_profile`` column on
+    write and stripped from the stored blob; the column is authoritative. Prefer the
+    top-level request field.
+    """
 
 
 class MCPServerCostInfo(TypedDict, total=False):
@@ -197,7 +292,5 @@ class MCPPostCallResponseObject(BaseModel):
     Pydantic object used for MCP post_call_hook response
     """
 
-    mcp_tool_call_response: List[
-        Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]
-    ]
+    mcp_tool_call_response: List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]
     hidden_params: HiddenParams

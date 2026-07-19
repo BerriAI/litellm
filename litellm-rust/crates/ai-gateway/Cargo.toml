@@ -1,0 +1,44 @@
+[package]
+name = "litellm-ai-gateway"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "litellm_ai_gateway"
+
+[[bin]]
+name = "litellm-ai-gateway"
+path = "src/main.rs"
+required-features = ["server"]
+
+[dependencies]
+litellm-core.workspace = true
+# reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
+# Python proxy callbacks API.
+reqwest.workspace = true
+# `sync` powers the bounded mpsc channel the realtime logger drains.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+axum = { workspace = true, features = ["ws"], optional = true }
+serde.workspace = true
+subtle = { workspace = true, optional = true }
+# sha2 hashes the master key into user_api_key_hash (matches the proxy's
+# SHA-256 hash_token) so the plaintext credential never enters a log payload.
+sha2 = { workspace = true, optional = true }
+pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
+
+[features]
+default = []
+server = ["dep:axum", "dep:subtle", "dep:sha2"]
+# Build the gateway's config from the proxy YAML via an embedded Python
+# interpreter (links libpython; requires `litellm` importable at runtime).
+python-config = ["dep:pyo3"]
+
+[dev-dependencies]
+futures-channel = "0.3"
+tower = { version = "0.5.3", features = ["util"] }

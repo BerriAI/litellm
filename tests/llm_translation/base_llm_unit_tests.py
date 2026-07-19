@@ -30,6 +30,10 @@ from litellm.types.utils import Usage, ModelResponse
 from abc import ABC, abstractmethod
 from openai import OpenAI
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from tests._live_test_helpers import _skip_live_prompt_caching_test  # noqa: E402
+
 
 def _usage_format_tests(usage: litellm.Usage):
     """
@@ -853,7 +857,11 @@ class BaseLLMChatTest(ABC):
     @pytest.mark.parametrize(
         "image_url",
         [
-            "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
+            # In-repo logo served via jsdelivr (sha-pinned, immutable).
+            # Bedrock fetches the URL and base64-embeds it in the
+            # Converse request body; using a multi-MB hosted product
+            # photo here previously bloated cassettes to ~60 MB each.
+            "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/ui/litellm-dashboard/public/assets/logos/litellm_logo.jpg",
             "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
         ],
     )
@@ -898,7 +906,10 @@ class BaseLLMChatTest(ABC):
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": "https://www.gstatic.com/webp/gallery/1.webp",
+                                # sha-pinned in-repo logo via jsdelivr; gstatic's
+                                # robots.txt blocks server-side fetchers (e.g.
+                                # Anthropic), which 400s the request.
+                                "url": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/ui/litellm-dashboard/public/assets/logos/litellm_logo.jpg",
                                 "detail": detail,
                             },
                         },
@@ -956,6 +967,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
+        _skip_live_prompt_caching_test()
         print("test_prompt_caching")
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching
@@ -1446,9 +1458,11 @@ class BaseLLMChatTest(ABC):
             reasoning_effort="high",
         )
         # either accepts reasoning effort or thinking budget
-        assert "reasoning_effort" in optional_params or "4096" in json.dumps(
-            optional_params
-        )
+        from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
+        assert "reasoning_effort" in optional_params or str(
+            DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+        ) in json.dumps(optional_params)
 
         try:
             litellm._turn_on_debug()
@@ -1765,12 +1779,17 @@ class BaseAnthropicChatTest(ABC):
             model=base_completion_call_args["model"]
         )
 
+        from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
         optional_params = get_optional_params(
             model=base_completion_call_args.get("model"),
             custom_llm_provider=provider,
             reasoning_effort="high",
         )
-        assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+        assert optional_params["thinking"] == {
+            "type": "enabled",
+            "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+        }
 
         assert "reasoning_effort" not in optional_params
 

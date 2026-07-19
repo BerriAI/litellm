@@ -1123,3 +1123,268 @@ async def test_combined_prefix_reflects_in_s3_object_key():
     result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
     key = result.s3_object_key
     assert "myteam/apikey/" in key, f"Expected both prefixes in key: {key}"
+
+
+def test_s3_object_key_sanitizes_slashes_in_file_name():
+    """Response ids containing slashes (e.g. bedrock batch job ARNs) must not
+    create nested S3 folders; only path/prefix/date slashes are separators."""
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 2, 11, 0, 35, 18, 391582)
+    file_name = "time-00-35-18-391582_arn:aws:bedrock:us-east-1:123456789012:model-invocation-job/gl18r6skk9yy"
+
+    key = get_s3_object_key(
+        s3_path="LiteLLMAPPLogs",
+        prefix="myteam/",
+        start_time=start_time,
+        s3_file_name=file_name,
+    )
+
+    assert key == (
+        "LiteLLMAPPLogs/myteam/2026-02-11/"
+        "time-00-35-18-391582_arn:aws:bedrock:us-east-1:123456789012:model-invocation-job_gl18r6skk9yy.json"
+    )
+
+
+def test_create_s3_batch_logging_element_flat_key_for_arn_response_id():
+    """End-to-end through the s3_v2 element builder: an ARN response id must
+    yield a flat file directly under the date segment."""
+    logger = S3Logger(s3_use_team_prefix=False, s3_use_key_prefix=False)
+    payload = StandardLoggingPayload(
+        id="arn:aws:bedrock:us-east-1:123456789012:model-invocation-job/gl18r6skk9yy",
+        metadata={},
+        messages=[],
+    )
+
+    start_time = datetime(2026, 2, 11, 0, 35, 18, 391582)
+    result = logger.create_s3_batch_logging_element(start_time, payload)
+
+    assert result is not None
+    date_segment = "2026-02-11/"
+    file_segment = result.s3_object_key.split(date_segment, 1)[1]
+    assert "/" not in file_segment, f"Expected flat file under date segment, got: {result.s3_object_key}"
+    assert file_segment.endswith("model-invocation-job_gl18r6skk9yy.json")
+
+
+# --------------------------------------------------------------
+# params_source / s3_callback_params_override (audit-log decoupling)
+# --------------------------------------------------------------
+def test_s3_callback_params_override_uses_alternate_dict():
+    """`s3_callback_params_override` makes the logger read its config from
+    the override dict instead of `litellm.s3_callback_params`."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "normal-bucket"}
+    try:
+        logger = S3Logger(
+            s3_callback_params_override={
+                "s3_bucket_name": "audit-bucket",
+                "s3_path": "audit-prefix",
+                "s3_region_name": "us-west-2",
+            }
+        )
+        assert logger.s3_bucket_name == "audit-bucket"
+        assert logger.s3_path == "audit-prefix"
+        assert logger.s3_region_name == "us-west-2"
+    finally:
+        litellm.s3_callback_params = original
+
+
+def test_s3_callback_params_override_does_not_mutate_inputs(monkeypatch):
+    """Resolving `os.environ/X` markers must not mutate the override dict
+    or `litellm.s3_callback_params`."""
+    import litellm
+
+    monkeypatch.setenv("MY_AUDIT_BUCKET", "resolved-bucket")
+    override = {"s3_bucket_name": "os.environ/MY_AUDIT_BUCKET"}
+    original_global = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "os.environ/MY_AUDIT_BUCKET"}
+    try:
+        logger = S3Logger(s3_callback_params_override=override)
+        assert logger.s3_bucket_name == "resolved-bucket"
+        assert override["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
+        assert (
+            litellm.s3_callback_params["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
+        )
+    finally:
+        litellm.s3_callback_params = original_global
+
+
+def test_s3_callback_params_override_none_falls_back_to_global():
+    """No override → behaves exactly as today (reads `litellm.s3_callback_params`)."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "from-global"}
+    try:
+        logger = S3Logger()
+        assert logger.s3_bucket_name == "from-global"
+    finally:
+        litellm.s3_callback_params = original
+
+
+def test_s3_callback_params_override_empty_dict_is_opt_in():
+    """An empty override dict skips the global entirely (env/IAM-only config)."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {"s3_bucket_name": "from-global"}
+    try:
+        logger = S3Logger(s3_callback_params_override={})
+        assert logger.s3_bucket_name is None
+    finally:
+        litellm.s3_callback_params = original
+
+
+def _expected_content_md5(payload: dict) -> str:
+    import base64
+    import hashlib
+
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    json_string = safe_dumps(payload)
+    return base64.b64encode(
+        hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
+    ).decode()
+
+
+def _require_non_security_md5(monkeypatch):
+    import hashlib
+
+    original_md5 = hashlib.md5
+
+    def fips_md5(data=b"", *, usedforsecurity=True):
+        if usedforsecurity:
+            raise ValueError("MD5 blocked for security use")
+        return original_md5(data, usedforsecurity=usedforsecurity)
+
+    monkeypatch.setattr(hashlib, "md5", fips_md5)
+
+
+@pytest.mark.asyncio
+async def test_async_upload_sets_content_md5_header(monkeypatch):
+    """
+    Object Lock buckets reject PUTs without a Content-MD5 header (AWS spec).
+    The async upload must send a base64 md5 of the exact signed body.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    payload = {"test": "content-md5"}
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-md5.json",
+        payload=payload,
+        s3_object_download_filename="test-md5.json",
+    )
+    _require_non_security_md5(monkeypatch)
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(test_element)
+
+    headers = logger.async_httpx_client.put.call_args.kwargs["headers"]
+    assert headers["Content-MD5"] == _expected_content_md5(payload)
+    assert "x-amz-server-side-encryption" not in headers
+
+
+def test_sync_upload_sets_content_md5_header(monkeypatch):
+    """The sync upload path must also send Content-MD5 for Object Lock buckets."""
+    from unittest.mock import MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    payload = {"test": "sync-content-md5"}
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sync-md5.json",
+        payload=payload,
+        s3_object_download_filename="test-sync-md5.json",
+    )
+    _require_non_security_md5(monkeypatch)
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put.return_value = response
+
+    with patch(
+        "litellm.integrations.s3_v2._get_httpx_client",
+        return_value=mock_sync_client,
+    ):
+        logger.upload_data_to_s3(test_element)
+
+    headers = mock_sync_client.put.call_args.kwargs["headers"]
+    assert headers["Content-MD5"] == _expected_content_md5(payload)
+    assert "x-amz-server-side-encryption" not in headers
+
+
+@pytest.mark.asyncio
+async def test_async_upload_sets_server_side_encryption_header_when_configured():
+    """
+    When s3_server_side_encryption is set (e.g. buckets with a KMS default
+    encryption policy), the PUT must carry x-amz-server-side-encryption.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_server_side_encryption="aws:kms",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sse.json",
+        payload={"test": "sse"},
+        s3_object_download_filename="test-sse.json",
+    )
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(test_element)
+
+    headers = logger.async_httpx_client.put.call_args.kwargs["headers"]
+    assert headers["x-amz-server-side-encryption"] == "aws:kms"
+
+
+def test_s3_server_side_encryption_read_from_callback_params():
+    """s3_server_side_encryption can be configured via s3_callback_params."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "from-global",
+        "s3_server_side_encryption": "aws:kms",
+    }
+    try:
+        logger = S3Logger()
+        assert logger.s3_server_side_encryption == "aws:kms"
+    finally:
+        litellm.s3_callback_params = original

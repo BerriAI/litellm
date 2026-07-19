@@ -6,6 +6,7 @@ export interface ModelInfo {
   team_id: string;
   db_model: boolean;
   access_groups: string[] | null;
+  blocked?: boolean;
 }
 
 export interface LiteLLMParams {

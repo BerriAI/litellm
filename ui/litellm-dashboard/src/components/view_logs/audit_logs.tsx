@@ -3,7 +3,8 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { Table, Tag, Input, Select, Button, Pagination, Spin } from "antd";
 import { ReloadOutlined, LoadingOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import moment from "moment";
+import { resolveLogoSrc } from "@/lib/assetPaths";
+import { DateCell, IdCell } from "@/components/shared/table_cells";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./columns";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
@@ -20,7 +21,7 @@ interface AuditLogsProps {
   premiumUser: boolean;
 }
 
-const asset_logos_folder = "../ui/assets/";
+const asset_logos_folder = "/ui/assets/";
 export const auditLogsPreviewImg = `${asset_logos_folder}audit-logs-preview.png`;
 
 const TABLE_NAME_DISPLAY: Record<string, string> = {
@@ -40,14 +41,7 @@ const ACTION_COLOR: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
-export default function AuditLogs({
-  userID,
-  userRole,
-  token,
-  accessToken,
-  isActive,
-  premiumUser,
-}: AuditLogsProps) {
+export default function AuditLogs({ userID, userRole, token, accessToken, isActive, premiumUser }: AuditLogsProps) {
   const [page, setPage] = useState(1);
 
   // Filter state
@@ -63,17 +57,7 @@ export default function AuditLogs({
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const query = useQuery({
-    queryKey: [
-      "audit_logs",
-      page,
-      PAGE_SIZE,
-      objectId,
-      changedBy,
-      keyHash,
-      teamId,
-      action,
-      tableName,
-    ],
+    queryKey: ["audit_logs", page, PAGE_SIZE, objectId, changedBy, keyHash, teamId, action, tableName],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
         return { audit_logs: [], total: 0, page: 1, page_size: PAGE_SIZE, total_pages: 0 };
@@ -111,11 +95,7 @@ export default function AuditLogs({
       dataIndex: "updated_at",
       key: "updated_at",
       width: 200,
-      render: (val: string) => (
-        <span className="font-mono text-xs whitespace-nowrap">
-          {moment.utc(val).local().format("MMM D, YYYY HH:mm:ss")}
-        </span>
-      ),
+      render: (val: string) => <DateCell value={val} />,
     },
     {
       title: "Action",
@@ -139,9 +119,7 @@ export default function AuditLogs({
       title: "Object ID",
       dataIndex: "object_id",
       key: "object_id",
-      render: (val: string) => (
-        <span className="font-mono text-xs">{val}</span>
-      ),
+      render: (val: string) => <IdCell value={val} variant="plain" truncate={false} />,
     },
     {
       title: "Changed By",
@@ -155,12 +133,7 @@ export default function AuditLogs({
       dataIndex: "changed_by_api_key",
       key: "changed_by_api_key",
       width: 140,
-      render: (val: string) =>
-        val ? (
-          <span className="font-mono text-xs">{val.slice(0, 12)}…</span>
-        ) : (
-          "—"
-        ),
+      render: (val: string) => <IdCell value={val} variant="plain" />,
     },
   ];
 
@@ -175,7 +148,7 @@ export default function AuditLogs({
           Here&apos;s a preview of what Audit Logs offer:
         </p>
         <img
-          src={auditLogsPreviewImg}
+          src={resolveLogoSrc(auditLogsPreviewImg)}
           alt="Audit Logs Preview"
           style={{
             maxWidth: "100%",
@@ -197,7 +170,7 @@ export default function AuditLogs({
 
   return (
     <>
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow-sm">
         {/* Header */}
         <div className="border-b px-6 py-4">
           <div className="flex items-center justify-between mb-4">
@@ -210,29 +183,61 @@ export default function AuditLogs({
               placeholder="Object ID"
               allowClear
               style={{ width: 200 }}
-              onSearch={(val) => { setObjectId(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setObjectId(""); resetPage(); } }}
+              onSearch={(val) => {
+                setObjectId(val);
+                resetPage();
+              }}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setObjectId("");
+                  resetPage();
+                }
+              }}
             />
             <Search
               placeholder="Changed By"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => { setChangedBy(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setChangedBy(""); resetPage(); } }}
+              onSearch={(val) => {
+                setChangedBy(val);
+                resetPage();
+              }}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setChangedBy("");
+                  resetPage();
+                }
+              }}
             />
             <Search
               placeholder="Team ID"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => { setTeamId(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setTeamId(""); resetPage(); } }}
+              onSearch={(val) => {
+                setTeamId(val);
+                resetPage();
+              }}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setTeamId("");
+                  resetPage();
+                }
+              }}
             />
             <Search
               placeholder="Key Hash"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => { setKeyHash(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setKeyHash(""); resetPage(); } }}
+              onSearch={(val) => {
+                setKeyHash(val);
+                resetPage();
+              }}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setKeyHash("");
+                  resetPage();
+                }
+              }}
             />
             <Select
               placeholder="All Actions"
@@ -244,7 +249,10 @@ export default function AuditLogs({
                 { label: "Deleted", value: "deleted" },
                 { label: "Rotated", value: "rotated" },
               ]}
-              onChange={(val) => { setAction(val); resetPage(); }}
+              onChange={(val) => {
+                setAction(val);
+                resetPage();
+              }}
             />
             <Select
               placeholder="All Tables"
@@ -257,7 +265,10 @@ export default function AuditLogs({
                 { label: "Organizations", value: "LiteLLM_OrganizationTable" },
                 { label: "Models", value: "LiteLLM_ProxyModelTable" },
               ]}
-              onChange={(val) => { setTableName(val); resetPage(); }}
+              onChange={(val) => {
+                setTableName(val);
+                resetPage();
+              }}
             />
 
             {/* Pagination + refresh pushed to the right */}
@@ -298,11 +309,7 @@ export default function AuditLogs({
         />
       </div>
 
-      <AuditLogDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        log={selectedLog}
-      />
+      <AuditLogDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} log={selectedLog} />
     </>
   );
 }

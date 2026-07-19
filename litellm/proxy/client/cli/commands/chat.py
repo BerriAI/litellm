@@ -28,14 +28,10 @@ def _get_available_models(ctx: click.Context) -> List[Dict[str, Any]]:
         return []
 
 
-def _select_model(
-    console: Console, available_models: List[Dict[str, Any]]
-) -> Optional[str]:
+def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> Optional[str]:
     """Interactive model selection"""
     if not available_models:
-        console.print(
-            "[yellow]No models available or could not fetch models list.[/yellow]"
-        )
+        console.print("[yellow]No models available or could not fetch models list.[/yellow]")
         model_name = Prompt.ask("Please enter a model name")
         return model_name if model_name.strip() else None
 
@@ -48,14 +44,10 @@ def _select_model(
 
     models_to_display: List[Dict[str, Any]] = available_models[:MAX_MODELS_TO_DISPLAY]
     for i, model in enumerate(models_to_display):  # Limit to first 200 models
-        table.add_row(
-            str(i + 1), str(model.get("id", "")), str(model.get("owned_by", ""))
-        )
+        table.add_row(str(i + 1), str(model.get("id", "")), str(model.get("owned_by", "")))
 
     if len(available_models) > MAX_MODELS_TO_DISPLAY:
-        console.print(
-            f"\n[dim]... and {len(available_models) - MAX_MODELS_TO_DISPLAY} more models[/dim]"
-        )
+        console.print(f"\n[dim]... and {len(available_models) - MAX_MODELS_TO_DISPLAY} more models[/dim]")
 
     console.print(table)
 
@@ -122,13 +114,13 @@ def chat(
     Examples:
 
         # Chat with a specific model
-        litellm-proxy chat gpt-4
+        lite chat gpt-4
 
         # Chat without specifying model (will show model selection)
-        litellm-proxy chat
+        lite chat
 
         # Chat with custom settings
-        litellm-proxy chat gpt-4 --temperature 0.9 --system "You are a helpful coding assistant"
+        lite chat gpt-4 --temperature 0.9 --system "You are a helpful coding assistant"
     """
     console = Console()
 
@@ -158,7 +150,7 @@ def chat(
             f"Max Tokens: [yellow]{max_tokens or 'unlimited'}[/yellow]\n\n"
             f"Type your messages and press Enter. Type '/quit' or '/exit' to end the session.\n"
             f"Type '/help' for more commands.",
-            title="🤖 Chat Session",
+            title="Chat Session",
         )
     )
 
@@ -172,9 +164,7 @@ def chat(
                 break
 
             # Handle special commands
-            should_exit, messages, new_model = _handle_special_commands(
-                console, user_input, messages, system, ctx
-            )
+            should_exit, messages, new_model = _handle_special_commands(console, user_input, messages, system, ctx)
 
             if should_exit:
                 break
@@ -261,9 +251,7 @@ def _show_history(console: Console, messages: List[Dict[str, Any]]):
         content = message["content"]
 
         if role == "system":
-            console.print(
-                f"[dim]{i}. [bold magenta]System:[/bold magenta] {content}[/dim]"
-            )
+            console.print(f"[dim]{i}. [bold magenta]System:[/bold magenta] {content}[/dim]")
         elif role == "user":
             console.print(f"{i}. [bold cyan]You:[/bold cyan] {content}")
         elif role == "assistant":
@@ -291,9 +279,7 @@ def _save_conversation(console: Console, messages: List[Dict[str, Any]], command
         console.print(f"[red]Error saving conversation: {e}[/red]")
 
 
-def _load_conversation(
-    console: Console, command: str, system: Optional[str]
-) -> List[Dict[str, Any]]:
+def _load_conversation(console: Console, command: str, system: Optional[str]) -> List[Dict[str, Any]]:
     """Load conversation from a file"""
     parts = command.split()
     if len(parts) < 2:
@@ -395,9 +381,7 @@ def _stream_response(
         console.print(f"\n[red]Error: HTTP {e.response.status_code}[/red]")
         try:
             error_body = e.response.json()
-            console.print(
-                f"[red]{error_body.get('error', {}).get('message', 'Unknown error')}[/red]"
-            )
+            console.print(f"[red]{error_body.get('error', {}).get('message', 'Unknown error')}[/red]")
         except json.JSONDecodeError:
             console.print(f"[red]{e.response.text}[/red]")
         return None

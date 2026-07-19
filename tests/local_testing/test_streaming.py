@@ -993,6 +993,11 @@ def test_vertex_ai_stream(provider):
 
         except litellm.RateLimitError as e:
             pass
+        except litellm.exceptions.MidStreamFallbackError as e:
+            # Streaming 429s are wrapped in MidStreamFallbackError so the
+            # Router can fall back; treat as a transient rate-limit pass.
+            if not isinstance(e.original_exception, litellm.RateLimitError):
+                pytest.fail(f"Error occurred: {e}")
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 

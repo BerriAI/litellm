@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 from httpx._models import Headers, Response
 
 import litellm
-from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -17,19 +17,17 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
-    ModelInfoBase,
     ModelResponse,
     ModelResponseStream,
     ProviderField,
     StreamingChoices,
 )
 
-from ..common_utils import OllamaError, _convert_image
+from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -93,9 +91,7 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
-    )
+    stop: Optional[list] = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -224,67 +220,20 @@ class OllamaConfig(BaseConfig):
         )
 
     def get_model_info(
-        self, model: str, api_base: Optional[str] = None
-    ) -> ModelInfoBase:
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> Any:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
         }'
         """
-        if model.startswith("ollama/") or model.startswith("ollama_chat/"):
-            model = model.split("/", 1)[1]
-        api_base = (
-            api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
-        )
-        api_key = self.get_api_key()
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        return OllamaModelInfo().get_model_info(model=model, api_base=api_base, api_key=api_key)
 
-        try:
-            response = litellm.module_level_client.post(
-                url=f"{api_base}/api/show",
-                json={"name": model},
-                headers=headers,
-            )
-        except Exception as e:
-            verbose_logger.debug(
-                "OllamaError: Could not get model info for %s from %s. Error: %s",
-                model,
-                api_base,
-                e,
-            )
-            return ModelInfoBase(
-                key=model,
-                litellm_provider="ollama",
-                mode="chat",
-                input_cost_per_token=0.0,
-                output_cost_per_token=0.0,
-                max_tokens=None,
-                max_input_tokens=None,
-                max_output_tokens=None,
-            )
-
-        model_info = response.json()
-
-        _max_tokens: Optional[int] = self._get_max_tokens(model_info)
-
-        return ModelInfoBase(
-            key=model,
-            litellm_provider="ollama",
-            mode="chat",
-            supports_function_calling=self._supports_function_calling(model_info),
-            input_cost_per_token=0.0,
-            output_cost_per_token=0.0,
-            max_tokens=_max_tokens,
-            max_input_tokens=_max_tokens,
-            max_output_tokens=_max_tokens,
-        )
-
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return OllamaError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return OllamaError(status_code=status_code, message=error_message, headers=headers)
 
     def transform_response(
         self,
@@ -335,9 +284,7 @@ class OllamaConfig(BaseConfig):
                                     "id": f"call_{str(uuid.uuid4())}",
                                     "function": {
                                         "name": function_call["name"],
-                                        "arguments": json.dumps(
-                                            function_call["arguments"]
-                                        ),
+                                        "arguments": json.dumps(function_call["arguments"]),
                                     },
                                     "type": "function",
                                 }
@@ -358,12 +305,8 @@ class OllamaConfig(BaseConfig):
                     reasoning_content: Optional[str] = None
                     content: Optional[str] = None
                     if response_text is not None:
-                        reasoning_content, content = _parse_content_for_reasoning(
-                            response_text
-                        )
-                    message = litellm.Message(
-                        content=content, reasoning_content=reasoning_content
-                    )
+                        reasoning_content, content = _parse_content_for_reasoning(response_text)
+                    message = litellm.Message(content=content, reasoning_content=reasoning_content)
                     model_response.choices[0].message = message  # type: ignore
                     model_response.choices[0].finish_reason = "stop"
         else:
@@ -380,7 +323,8 @@ class OllamaConfig(BaseConfig):
         model_response.model = "ollama/" + model
         _prompt = request_data.get("prompt", "")
         prompt_tokens = response_json.get(
-            "prompt_eval_count", len(encoding.encode(_prompt, disallowed_special=()))  # type: ignore
+            "prompt_eval_count",
+            len(encoding.encode(_prompt, disallowed_special=())),  # type: ignore
         )
         completion_tokens = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))
@@ -404,9 +348,7 @@ class OllamaConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        custom_prompt_dict = (
-            litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
-        )
+        custom_prompt_dict = litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
 
         text_completion_request = litellm_params.get("text_completion")
         if model in custom_prompt_dict:
@@ -444,9 +386,7 @@ class OllamaConfig(BaseConfig):
         if format is not None:
             data["format"] = format
         if images is not None:
-            data["images"] = [
-                _convert_image(convert_to_ollama_image(image)) for image in images
-            ]
+            data["images"] = [_convert_image(convert_to_ollama_image(image)) for image in images]
         if think is not None:
             data["think"] = think
 
@@ -503,21 +443,15 @@ class OllamaConfig(BaseConfig):
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
-    ):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         super().__init__(streaming_response, sync_stream, json_mode)
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
 
-    def _handle_string_chunk(
-        self, str_line: str
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def _handle_string_chunk(self, str_line: str) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return self.chunk_parser(json.loads(str_line))
 
-    def chunk_parser(
-        self, chunk: dict
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
         try:
             if "error" in chunk:
                 raise Exception(f"Ollama Error - {chunk}")
@@ -557,10 +491,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         text = text.replace("</think>", "")
                         self.finished_reasoning_content = True
 
-                    if (
-                        self.started_reasoning_content
-                        and not self.finished_reasoning_content
-                    ):
+                    if self.started_reasoning_content and not self.finished_reasoning_content:
                         reasoning_content = text
                     else:
                         content = text
@@ -569,9 +500,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     choices=[
                         StreamingChoices(
                             index=0,
-                            delta=Delta(
-                                reasoning_content=reasoning_content, content=content
-                            ),
+                            delta=Delta(reasoning_content=reasoning_content, content=content),
                         )
                     ],
                     finish_reason=finish_reason,

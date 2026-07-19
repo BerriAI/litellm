@@ -1,7 +1,9 @@
 import asyncio
+import collections
 import datetime
 import json
 import os
+import re
 import sys
 from datetime import timezone
 
@@ -60,31 +62,131 @@ def _filter_logs_by_date_range(logs, where):
     return filtered
 
 
+def _reconstruct_ui_where_from_sql(sql_query, params):
+    """
+    Rebuild the Prisma-style ``where`` dict the filter_fns below expect from the
+    raw SQL + params the endpoint emits.
+
+    ``ui_view_spend_logs`` computes the total with a bounded
+    ``SELECT COUNT(*) FROM (SELECT 1 ... LIMIT $cap+1)`` query and fetches the
+    page with a separate ``ORDER BY ... LIMIT/OFFSET`` query. Both carry the
+    same WHERE clause, so the terminator can be ``ORDER BY`` (page query) or
+    ``LIMIT`` (bounded count query).
+    """
+    where: dict = {}
+    clause = re.search(r"WHERE (.*?)\s+(?:ORDER BY|LIMIT)", sql_query, re.DOTALL)
+    if clause is None:
+        return where
+
+    def _iso(value):
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+    eq_cols = {
+        "team_id": "team_id",
+        '"user"': "user",
+        "api_key": "api_key",
+        "request_id": "request_id",
+        "model": "model",
+        "model_id": "model_id",
+        "model_group": "model_group",
+        "end_user": "end_user",
+    }
+    date_bounds: dict = {}
+    metadata_conds: list = []
+    for cond in (c.strip() for c in clause.group(1).split(" AND ")):
+        gte = re.search(r'"startTime" >= \(\$(\d+)', cond)
+        lte = re.search(r'"startTime" <= \(\$(\d+)', cond)
+        alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
+        code = re.search(r"error_code' = \$(\d+)", cond)
+        msg = re.search(r"error_message' LIKE \$(\d+)", cond)
+        sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
+        status = re.fullmatch(r"status = \$(\d+)", cond)
+        if gte:
+            date_bounds["gte"] = _iso(params[int(gte.group(1)) - 1])
+        elif lte:
+            date_bounds["lte"] = _iso(params[int(lte.group(1)) - 1])
+        elif "OR team_id = ANY" in cond:
+            where["OR"] = where.get("OR", []) + [{"multi_team": True}]
+        elif "status = 'success'" in cond:
+            where["OR"] = where.get("OR", []) + [{"status": "success"}]
+        elif sess:
+            where["session_id"] = {"contains": str(params[int(sess.group(1)) - 1]).strip("%")}
+        elif status:
+            where["status"] = {"equals": params[int(status.group(1)) - 1]}
+        elif alias:
+            metadata_conds.append(
+                {
+                    "path": ["user_api_key_alias"],
+                    "string_contains": str(params[int(alias.group(1)) - 1]).strip("%"),
+                }
+            )
+        elif code:
+            metadata_conds.append(
+                {
+                    "path": ["error_information", "error_code"],
+                    "equals": params[int(code.group(1)) - 1],
+                }
+            )
+        elif msg:
+            metadata_conds.append(
+                {
+                    "path": ["error_information", "error_message"],
+                    "string_contains": str(params[int(msg.group(1)) - 1]).strip("%"),
+                }
+            )
+        else:
+            for sql_col, key in eq_cols.items():
+                eq = re.fullmatch(rf"{re.escape(sql_col)} = \$(\d+)", cond)
+                if eq:
+                    where[key] = params[int(eq.group(1)) - 1]
+                    break
+
+    if date_bounds:
+        where["startTime"] = date_bounds
+    if len(metadata_conds) == 1:
+        where["metadata"] = metadata_conds[0]
+    elif len(metadata_conds) > 1:
+        where["AND"] = [{"metadata": cond} for cond in metadata_conds]
+    return where
+
+
 def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
 
     Args:
         mock_spend_logs: List of mock spend log dicts.
-        filter_fn: Callable[[dict], list] - receives where_conditions from count(),
-                   returns the filtered list of logs for that query.
+        filter_fn: Callable[[dict], list] - receives the reconstructed
+                   where_conditions, returns the filtered list of logs.
         team_lookup_fn: Optional async callable for team RBAC (find_unique).
                         If provided, adds litellm_teamtable to db.
     """
-    filtered_holder = []
 
     class MockDB:
         async def count(self, *args, **kwargs):
-            where = kwargs.get("where", {})
-            filtered = filter_fn(where)
-            filtered_holder.clear()
-            filtered_holder.extend(filtered)
-            return len(filtered)
+            return len(filter_fn(kwargs.get("where", {})))
+
+        async def group_by(self, by, where, count):
+            col = by[0]
+            allowed = where.get(col, {}).get("in")
+            tallied = collections.Counter(
+                log[col]
+                for log in mock_spend_logs
+                if log.get(col) is not None and (allowed is None or log[col] in allowed)
+            )
+            return [{col: value, "_count": {col: n}} for value, n in tallied.items()]
 
         async def query_raw(self, sql_query, *params):
+            if "mcp_tool_call_count" in sql_query:
+                return []
+            filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
+            total = len(filtered)
+            if "COUNT(*)" in sql_query:
+                cap_plus_one = params[-1]
+                return [{"total_count": min(total, cap_plus_one)}]
             page_size = params[-2] if len(params) >= 2 else 50
             skip = params[-1] if len(params) >= 1 else 0
-            return filtered_holder[skip : skip + page_size]
+            return [row for row in filtered[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -342,6 +444,7 @@ def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypat
 
 ignored_keys = [
     "request_id",
+    "metadata.litellm_call_id",
     "session_id",
     "startTime",
     "endTime",
@@ -359,6 +462,8 @@ ignored_keys = [
     "metadata.additional_usage_values.cache_read_input_tokens",
     "metadata.additional_usage_values.inference_geo",
     "metadata.additional_usage_values.speed",
+    "metadata.additional_usage_values.service_tier",
+    "metadata.additional_usage_values.iterations",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
     "metadata.user_api_key",
@@ -508,6 +613,73 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     assert data["data"][0]["user"] == "test_user_1"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_id_query,expected_request_ids",
+    [
+        ("session-filter-demo-1", {"req1", "req2"}),
+        ("session-filter-demo-2", {"req3"}),
+        ("session-filter", {"req1", "req2", "req3"}),
+        ("demo", {"req1", "req2", "req3"}),
+        ("no-such-session", set()),
+    ],
+)
+async def test_ui_view_spend_logs_with_session_id(
+    client, monkeypatch, session_id_query, expected_request_ids
+):
+    def make_log(request_id, session_id):
+        return {
+            "id": f"log-{request_id}",
+            "request_id": request_id,
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "session_id": session_id,
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        }
+
+    mock_spend_logs = [
+        make_log("req1", "session-filter-demo-1"),
+        make_log("req2", "session-filter-demo-1"),
+        make_log("req3", "session-filter-demo-2"),
+        make_log("req4", "unrelated-abc"),
+    ]
+
+    def filter_by_session(where):
+        session_filter = where.get("session_id")
+        if session_filter is None:
+            return mock_spend_logs
+        return [
+            log
+            for log in mock_spend_logs
+            if session_filter["contains"] in log["session_id"]
+        ]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_session),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={
+            "session_id": session_id_query,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == len(expected_request_ids)
+    assert {log["request_id"] for log in data["data"]} == expected_request_ids
+    assert all(session_id_query in log["session_id"] for log in data["data"])
+
+
 # Mock spend logs with distinct values for sorting tests.
 # req_a: spend=0.10, tokens=500, start/end earliest
 # req_b: spend=0.05, tokens=200, start/end 2nd
@@ -596,6 +768,8 @@ async def test_ui_view_spend_logs_sort_by_and_sort_order(
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(base_logs)}]
         # Endpoint uses raw SQL with ORDER BY startTime DESC; mock returns sorted data
         order = (
             {"startTime": "desc"}
@@ -605,7 +779,7 @@ async def test_ui_view_spend_logs_sort_by_and_sort_order(
         sorted_logs = _sort_logs(base_logs, order)
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return sorted_logs[skip : skip + page_size]
+        return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -739,13 +913,15 @@ async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatc
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(base_logs)}]
         reverse = "DESC" in sql_query
         sorted_logs = sorted(
             base_logs, key=lambda x: x.get("request_duration_ms", 0), reverse=reverse
         )
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return sorted_logs[skip : skip + page_size]
+        return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -832,6 +1008,8 @@ async def test_ui_view_spend_logs_sort_by_model(
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(base_logs)}]
         assert "model" in sql_query
         # model is non-nullable in the schema, so NULLS LAST should NOT be
         # appended — only ttft_ms gets that clause. This guards against
@@ -843,7 +1021,7 @@ async def test_ui_view_spend_logs_sort_by_model(
         )
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return sorted_logs[skip : skip + page_size]
+        return [row for row in sorted_logs[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -943,6 +1121,8 @@ async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(base_logs)}]
         # Endpoint must compute TTFT inline and use NULLS LAST.
         assert "completionStartTime" in sql_query
         assert "NULLS LAST" in sql_query
@@ -1314,7 +1494,8 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
             assert session_id == "session-123"
             assert page_size == 1
             assert skip == 1  # page=2, page_size=1
-            return [mock_spend_logs[1]]
+            assert 'ORDER BY "startTime" DESC' in sql_query
+            return [mock_spend_logs[0]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -1337,7 +1518,7 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
     assert data["page_size"] == 1
     assert data["total_pages"] == 2
     assert len(data["data"]) == 1
-    assert data["data"][0]["request_id"] == "req2"
+    assert data["data"][0]["request_id"] == "req1"
 
 
 @pytest.mark.asyncio
@@ -1622,6 +1803,71 @@ async def test_ui_view_spend_logs_with_model_id(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_model_group(client, monkeypatch):
+    """Test that the model_group query param filters spend logs by model group."""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "model_group": "gpt-3.5-turbo",
+            "status": "success",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4-0613",
+            "model_group": "gpt-4",
+            "status": "success",
+        },
+    ]
+
+    def filter_by_model_group(where):
+        if "model_group" in where and where["model_group"] == "gpt-4":
+            return [mock_spend_logs[1]]
+        return mock_spend_logs
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_model_group),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "model_group": "gpt-4",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_group"] == "gpt-4"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
     mock_spend_logs = [
         {
@@ -1752,7 +1998,7 @@ class TestSpendLogsPayload:
                     "model": "gpt-4o",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "compression_savings": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.00022500000000000002,
                     "total_tokens": 30,
@@ -1848,7 +2094,7 @@ class TestSpendLogsPayload:
                     "model": "claude-4-sonnet-20250514",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "compression_savings": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -1942,7 +2188,7 @@ class TestSpendLogsPayload:
                     "model": "claude-4-sonnet-20250514",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "compression_savings": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -2563,7 +2809,8 @@ async def test_ui_view_spend_logs_with_error_code(client):
             assert data["total"] == 1
             assert len(data["data"]) == 1
             assert data["data"][0]["id"] == "log1"
-            metadata = json.loads(data["data"][0]["metadata"])
+            metadata = data["data"][0]["metadata"]
+            assert isinstance(metadata, dict)
             assert "error_information" in metadata
             assert metadata["error_information"]["error_code"] == "404"
     finally:
@@ -2636,7 +2883,8 @@ async def test_ui_view_spend_logs_with_error_message(client):
             assert data["total"] == 1
             assert len(data["data"]) == 1
             assert data["data"][0]["id"] == "log1"
-            metadata = json.loads(data["data"][0]["metadata"])
+            metadata = data["data"][0]["metadata"]
+            assert isinstance(metadata, dict)
             assert "error_information" in metadata
             assert (
                 "Rate limit exceeded" in metadata["error_information"]["error_message"]
@@ -2728,7 +2976,8 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
             assert data["total"] == 1
             assert len(data["data"]) == 1
             assert data["data"][0]["id"] == "log3"
-            metadata = json.loads(data["data"][0]["metadata"])
+            metadata = data["data"][0]["metadata"]
+            assert isinstance(metadata, dict)
             assert "user_api_key_alias" in metadata
             assert metadata["user_api_key_alias"] == "test-key-1"
             assert "error_information" in metadata
@@ -2751,16 +3000,27 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     )
 
     session_id = "sess-abc-123"
+    api_key = "hashed-key-xyz"
     dict_rows = [
-        {"request_id": "req-1", "session_id": session_id, "call_type": "completion"},
-        {"request_id": "req-2", "session_id": session_id, "call_type": "mcp_tool_call"},
-        {"request_id": "req-3", "session_id": None, "call_type": "completion"},
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": api_key},
+        {"request_id": "req-2", "session_id": session_id, "call_type": "mcp_tool_call", "api_key": api_key},
+        {"request_id": "req-3", "session_id": None, "call_type": "completion", "api_key": api_key},
     ]
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[
             {"session_id": session_id, "_count": {"session_id": 2}},
+        ]
+    )
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "session_total_spend": 15.0,
+                "mcp_tool_call_count": 1,
+                "mcp_tool_call_spend": 10.0,
+            }
         ]
     )
 
@@ -2780,6 +3040,14 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     # Rows with the shared session_id should have session_total_count=2
     assert rows[0]["session_total_count"] == 2
     assert rows[1]["session_total_count"] == 2
+    assert rows[0]["mcp_tool_call_count"] == 1
+    assert rows[0]["mcp_tool_call_spend"] == 10.0
+    assert rows[1]["mcp_tool_call_count"] == 1
+    assert rows[1]["mcp_tool_call_spend"] == 10.0
+
+    # Every row in the session carries the full session spend, not just its own
+    assert rows[0]["session_total_spend"] == 15.0
+    assert rows[1]["session_total_spend"] == 15.0
 
     # Row without a session_id defaults to 1
     assert rows[2]["session_total_count"] == 1
@@ -2790,6 +3058,64 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
         where={"session_id": {"in": [session_id]}},
         count={"session_id": True},
     )
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
+    """
+    Regression test for LIT-4342: for a multi-round session the UI must show the
+    summed cost of every round, not just the first call.  _build_ui_spend_logs_response
+    enriches each row of a session with session_total_spend aggregated across the
+    whole session, scoped to the authorized api_keys of the page.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-multi-round"
+    api_key = "hashed-key-xyz"
+    # Three rounds of the same chat session with different per-call spend.
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": api_key, "spend": 0.01},
+        {"request_id": "req-2", "session_id": session_id, "call_type": "completion", "api_key": api_key, "spend": 0.02},
+        {"request_id": "req-3", "session_id": session_id, "call_type": "completion", "api_key": api_key, "spend": 0.03},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"session_id": session_id, "_count": {"session_id": 3}}]
+    )
+    # The raw aggregate query returns the full session spend (0.01 + 0.02 + 0.03).
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "session_total_spend": 0.06,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert [row["session_total_spend"] for row in rows] == [0.06, 0.06, 0.06]
+    # No MCP calls in this session, so MCP fields must not be attached.
+    assert all("mcp_tool_call_count" not in row for row in rows)
+
+    # The aggregate must be scoped to the authorized api_keys of the page.
+    _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
+    assert call_args[1] == [session_id]
+    assert call_args[2] == [api_key]
 
 
 # ---------------------------------------------------------------------------
@@ -3183,5 +3509,832 @@ async def test_view_spend_logs_date_range_hashes_sk_api_key(client, monkeypatch)
         where = mock_client.db.captured_where
         assert where is not None
         assert where["api_key"] == "hashed::sk-raw-admin-token"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _SpendScopeMockPrismaClient:
+
+    def __init__(self, get_data_returns=None, find_many_returns=None):
+        self._get_data_returns = (
+            get_data_returns if get_data_returns is not None else []
+        )
+        self._find_many_returns = (
+            find_many_returns if find_many_returns is not None else []
+        )
+        self.get_data_calls = []
+        self.find_many_calls = []
+
+        client = self
+
+        class _VerificationTokenTable:
+            async def find_many(self, where=None, order=None, include=None):
+                client.find_many_calls.append(
+                    {"where": where, "order": order, "include": include}
+                )
+                return client._find_many_returns
+
+        class _DB:
+            def __init__(self):
+                self.litellm_verificationtoken = _VerificationTokenTable()
+
+        self.db = _DB()
+
+    async def get_data(self, table_name=None, query_type=None, **kwargs):
+        self.get_data_calls.append(
+            {"table_name": table_name, "query_type": query_type, **kwargs}
+        )
+        if query_type == "find_unique":
+            return self._get_data_returns[0] if self._get_data_returns else None
+        return self._get_data_returns
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_proxy_admin_returns_all_keys(client, monkeypatch):
+    """Admins keep their existing full-table view of /spend/keys."""
+    mock_keys = [
+        {"token": "hashed-a", "user_id": "alice", "spend": 10.0},
+        {"token": "hashed-b", "user_id": "bob", "spend": 5.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        # Admin path: goes through get_data (full table), never the scoped find_many
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["table_name"] == "key"
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_all"
+        assert mock_prisma.find_many_calls == []
+        assert response.json() == mock_keys
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_proxy_admin_view_only_returns_all_keys(client, monkeypatch):
+    """View-only admins are still admins for this endpoint."""
+    mock_keys = [{"token": "hashed-a", "user_id": "alice"}]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="admin_viewer"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert mock_prisma.find_many_calls == []
+        assert len(mock_prisma.get_data_calls) == 1
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+async def test_spend_key_fn_internal_user_scoped_to_own_keys(client, monkeypatch, role):
+    """Both internal-user roles must only see keys they own."""
+    caller_owned_keys = [
+        {"token": "hashed-mine-1", "user_id": "alice", "spend": 2.0},
+        {"token": "hashed-mine-2", "user_id": "alice", "spend": 1.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=caller_owned_keys)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=role, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        # Non-admin path goes through the same get_data helper as admin,
+        # but with a user_id scope so only the caller's rows come back.
+        assert mock_prisma.find_many_calls == []
+        assert len(mock_prisma.get_data_calls) == 1
+        call = mock_prisma.get_data_calls[0]
+        assert call["table_name"] == "key"
+        assert call["query_type"] == "find_all"
+        assert call["user_id"] == "alice"
+        assert response.json() == caller_owned_keys
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_key_fn_internal_user_without_user_id_returns_empty(
+    client, monkeypatch
+):
+    """
+    A non-admin key with no user_id has no tenant scope. Returning the full
+    table would re-introduce the leak; return an empty list instead.
+    """
+    mock_prisma = _SpendScopeMockPrismaClient(
+        get_data_returns=[{"token": "do-not-leak"}],
+        find_many_returns=[{"token": "do-not-leak"}],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id=None
+    )
+    try:
+        response = client.get(
+            "/spend/keys", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+        assert mock_prisma.get_data_calls == []
+        assert mock_prisma.find_many_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_proxy_admin_returns_all_users_without_user_id(
+    client, monkeypatch
+):
+    """Admins keep their existing full-table view of /spend/users."""
+    mock_users = [
+        {"user_id": "alice", "user_email": "alice@example.com", "spend": 1.0},
+        {"user_id": "bob", "user_email": "bob@example.com", "spend": 2.0},
+    ]
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=mock_users)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["table_name"] == "user"
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_all"
+        assert response.json() == mock_users
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_proxy_admin_can_query_specific_user_id(
+    client, monkeypatch
+):
+    """Admins can still target a specific user_id."""
+    mock_user = {
+        "user_id": "carol",
+        "user_email": "carol@example.com",
+        "spend": 7.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[mock_user])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "carol"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "carol"
+        assert response.json() == [mock_user]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+async def test_spend_user_fn_internal_user_scoped_without_user_id(
+    client, monkeypatch, role
+):
+    """No user_id supplied -> must query the caller's own row, not the table."""
+    own_row = {"user_id": "alice", "user_email": "alice@example.com", "spend": 3.0}
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=role, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "alice"
+        assert response.json() == [own_row]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_supplying_other_user_id_returns_403(
+    client, monkeypatch
+):
+    """
+    An internal user passing user_id=victim must be rejected outright, not
+    silently rewritten. A 403 makes the attempt observable in logs.
+    """
+    leaked_victim_row = {
+        "user_id": "victim",
+        "user_email": "victim@example.com",
+        "spend": 999.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[leaked_victim_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "victim"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        assert mock_prisma.get_data_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_supplying_own_user_id_is_allowed(
+    client, monkeypatch
+):
+    """
+    Passing your own user_id explicitly is fine — the 403 only fires when
+    the supplied id differs from the caller's.
+    """
+    own_row = {"user_id": "alice", "user_email": "alice@example.com", "spend": 3.0}
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users",
+            params={"user_id": "alice"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(mock_prisma.get_data_calls) == 1
+        assert mock_prisma.get_data_calls[0]["query_type"] == "find_unique"
+        assert mock_prisma.get_data_calls[0]["user_id"] == "alice"
+        assert response.json() == [own_row]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_internal_user_without_user_id_returns_empty(
+    client, monkeypatch
+):
+    """
+    A non-admin key with no user_id has no tenant scope -> return empty,
+    never the full table. Same defensive contract as /spend/keys.
+    """
+    mock_prisma = _SpendScopeMockPrismaClient(
+        get_data_returns=[{"user_id": "do-not-leak"}]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, user_id=None
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        assert response.json() == []
+        assert mock_prisma.get_data_calls == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_user_fn_strips_password_field(client, monkeypatch):
+    """
+    Existing password-redaction behavior must be preserved on the scoped
+    path so we don't regress a separate disclosure when adding the fix.
+    """
+    own_row = {
+        "user_id": "alice",
+        "user_email": "alice@example.com",
+        "password": "hashed-password-must-not-leak",
+        "spend": 1.0,
+    }
+    mock_prisma = _SpendScopeMockPrismaClient(get_data_returns=[own_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice"
+    )
+    try:
+        response = client.get(
+            "/spend/users", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body) == 1
+        assert "password" not in body[0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_rehydrates_metadata_jsonb_text(client, monkeypatch):
+    """
+    Regression for #29674: query_raw returns the JSONB `metadata` column as a
+    string, so failure rows (status="failure", error_information.error_code=...)
+    looked like successes at the UI layer because metadata.status was the
+    string ".status" attribute lookup on a str. The endpoint must re-hydrate
+    `metadata` to a dict before returning.
+    """
+    failure_metadata = {
+        "status": "failure",
+        "error_information": {
+            "error_code": "403",
+            "error_message": "Forbidden by upstream",
+        },
+        "user_api_key_alias": "alias-1",
+    }
+
+    raw_row = {
+        "request_id": "req-failure-1",
+        "call_type": "completion",
+        "api_key": "hashed-key",
+        "spend": 0.0,
+        "total_tokens": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "startTime": "2025-01-01T00:00:00Z",
+        "endTime": "2025-01-01T00:00:01Z",
+        "completionStartTime": None,
+        "model": "gpt-4o",
+        "model_id": None,
+        "model_group": None,
+        "custom_llm_provider": "openai",
+        "api_base": None,
+        "user": "u",
+        "metadata": json.dumps(failure_metadata),  # JSONB column comes back as str
+        "cache_hit": None,
+        "cache_key": None,
+        "request_tags": None,
+        "team_id": None,
+        "organization_id": None,
+        "end_user": None,
+        "requester_ip_address": None,
+        "session_id": None,
+        "status": "failure",
+        "mcp_namespaced_tool_name": None,
+        "agent_id": None,
+        "request_duration_ms": 1000,
+    }
+
+    async def mock_count(*args, **kwargs):
+        return 1
+
+    async def mock_query_raw(sql_query, *params):
+        return [{**raw_row, "total_count": 1}]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["data"], "expected one row in data"
+        row = body["data"][0]
+        md = row["metadata"]
+        # The bug had metadata returned as a JSON string; the fix re-hydrates
+        # it so the dashboard's metadata.status / metadata.error_information
+        # accessors work.
+        assert isinstance(md, dict), f"metadata should be dict, got {type(md)}"
+        assert md["status"] == "failure"
+        assert md["error_information"]["error_code"] == "403"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_metadata_invalid_json_falls_back_to_empty_dict(
+    client, monkeypatch
+):
+    """
+    Defensive: if `metadata` is somehow not valid JSON, fall back to {} rather
+    than 500-ing the whole UI page.
+    """
+    raw_row = {
+        "request_id": "req-bad-json",
+        "call_type": "completion",
+        "api_key": "hashed-key",
+        "spend": 0.0,
+        "total_tokens": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "startTime": "2025-01-01T00:00:00Z",
+        "endTime": "2025-01-01T00:00:01Z",
+        "completionStartTime": None,
+        "model": "gpt-4o",
+        "model_id": None,
+        "model_group": None,
+        "custom_llm_provider": "openai",
+        "api_base": None,
+        "user": "u",
+        "metadata": "{not-json",
+        "cache_hit": None,
+        "cache_key": None,
+        "request_tags": None,
+        "team_id": None,
+        "organization_id": None,
+        "end_user": None,
+        "requester_ip_address": None,
+        "session_id": None,
+        "status": "success",
+        "mcp_namespaced_tool_name": None,
+        "agent_id": None,
+        "request_duration_ms": 500,
+    }
+
+    async def mock_count(*args, **kwargs):
+        return 1
+
+    async def mock_query_raw(sql_query, *params):
+        return [{**raw_row, "total_count": 1}]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["data"]
+        assert body["data"][0]["metadata"] == {}
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _FakeColdStorageLogger:
+    """Injectable cold storage logger that records the object key it was asked for."""
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.requested_object_keys = []
+
+    async def get_proxy_server_request_from_cold_storage_with_object_key(
+        self, object_key
+    ):
+        self.requested_object_keys.append(object_key)
+        return self._payload
+
+
+def _cold_storage_handler(payload):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger(payload)
+    return ColdStorageHandler(cold_storage_logger=logger), logger
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, False),
+        ("", False),
+        ("   ", False),
+        ("{}", False),
+        ("[]", False),
+        ("null", False),
+        ('{"a": 1}', True),
+        ({}, False),
+        ({"a": 1}, True),
+        ([], False),
+        ([1], True),
+        (5, True),
+    ],
+)
+def test_spend_log_field_has_content(value, expected):
+    assert spend_management_endpoints._spend_log_field_has_content(value) is expected
+
+
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        (None, None),
+        ("{}", None),
+        ("not-json", None),
+        ({"cold_storage_object_key": ""}, None),
+        ({"cold_storage_object_key": "k/req-1.json"}, "k/req-1.json"),
+        ('{"cold_storage_object_key": "k/req-2.json"}', "k/req-2.json"),
+    ],
+)
+def test_cold_storage_object_key_from_metadata(metadata, expected):
+    assert (
+        spend_management_endpoints._cold_storage_object_key_from_metadata(metadata)
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_prefers_pg_and_skips_cold_storage():
+    handler, logger = _cold_storage_handler({"messages": "X", "response": "Y"})
+    row = {
+        "messages": "{}",
+        "response": '{"choices": [{"message": {"content": "hi"}}]}',
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/req.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert resolved.response == '{"choices": [{"message": {"content": "hi"}}]}'
+    assert logger.requested_object_keys == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_fetches_from_cold_storage_when_pg_empty():
+    cold_payload = {
+        "messages": [{"role": "user", "content": "what is 2+2"}],
+        "response": {"choices": [{"message": {"content": "4"}}]},
+        "proxy_server_request": {"body": {"model": "gpt-4o-mini"}},
+    }
+    handler, logger = _cold_storage_handler(cold_payload)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "llm-gateway/prod/req-42.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["llm-gateway/prod/req-42.json"]
+    assert resolved.messages == cold_payload["messages"]
+    assert resolved.response == cold_payload["response"]
+    assert resolved.proxy_server_request == cold_payload["proxy_server_request"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_metadata_as_json_string():
+    cold_payload = {"messages": "in", "response": "out", "proxy_server_request": None}
+    handler, logger = _cold_storage_handler(cold_payload)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": json.dumps({"cold_storage_object_key": "k/str-meta.json"}),
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["k/str-meta.json"]
+    assert resolved.response == "out"
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_no_object_key_returns_empty_without_fetch():
+    handler, logger = _cold_storage_handler({"messages": "should-not-be-used"})
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == []
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_cold_storage_miss_falls_back_to_pg_values():
+    handler, logger = _cold_storage_handler(None)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/missing.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["k/missing.json"]
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_cold_storage_exception_falls_back_to_pg_values():
+    """A backend error during fetch degrades to PG values instead of bubbling a 500."""
+
+    class _RaisingLogger:
+        async def get_proxy_server_request_from_cold_storage_with_object_key(
+            self, object_key
+        ):
+            raise RuntimeError("cold storage backend unavailable")
+
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    handler = ColdStorageHandler(cold_storage_logger=_RaisingLogger())
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/boom.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_uses_injected_logger():
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger({"messages": "in", "response": "out"})
+    handler = ColdStorageHandler(cold_storage_logger=logger)
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result == {"messages": "in", "response": "out"}
+    assert logger.requested_object_keys == ["k/req.json"]
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_returns_none_when_no_logger_configured(monkeypatch):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", None, raising=False)
+    handler = ColdStorageHandler()
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_resolves_configured_logger_from_registry(
+    monkeypatch,
+):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger({"messages": "from-registry"})
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2", raising=False)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_custom_logger_for_callback_name",
+        lambda name: logger if name == "s3_v2" else None,
+    )
+    handler = ColdStorageHandler()
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result == {"messages": "from-registry"}
+    assert logger.requested_object_keys == ["k/req.json"]
+
+
+def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
+    """End-to-end: a placeholder row with a cold_storage_object_key is served from
+    cold storage through the detail endpoint."""
+    from types import SimpleNamespace
+
+    placeholder_row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/cold.json"},
+    }
+
+    async def _query_raw(_sql, *_args):
+        return [placeholder_row]
+
+    fake_prisma = SimpleNamespace(db=SimpleNamespace(query_raw=_query_raw))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake_prisma)
+
+    cold_logger = _FakeColdStorageLogger(
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "response": {"choices": [{"message": {"content": "hello"}}]},
+            "proxy_server_request": None,
+        }
+    )
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2", raising=False)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_custom_logger_for_callback_name",
+        lambda name: cold_logger if name == "s3_v2" else None,
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-cold",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+        assert body["response"] == {"choices": [{"message": {"content": "hello"}}]}
+        assert cold_logger.requested_object_keys == ["k/cold.json"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)

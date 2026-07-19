@@ -14,16 +14,16 @@ import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
-from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 
 @pytest.fixture
 def model_list():
     return [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
                 "tpm": 1000,  # Add TPM limit so async method doesn't return early
                 "rpm": 100,  # Add RPM limit so async method doesn't return early
@@ -33,16 +33,16 @@ def model_list():
             },
         },
         {
-            "model_name": "gpt-4o",
+            "model_name": "gpt-5.5",
             "litellm_params": {
-                "model": "gpt-4o",
+                "model": "gpt-5.5",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
         {
-            "model_name": "dall-e-3",
+            "model_name": "gpt-image-1",
             "litellm_params": {
-                "model": "dall-e-3",
+                "model": "gpt-image-1",
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
@@ -64,8 +64,8 @@ def model_list():
 
 
 def test_validate_fallbacks(model_list):
-    router = Router(model_list=model_list, fallbacks=[{"gpt-4o": "gpt-3.5-turbo"}])
-    router.validate_fallbacks(fallback_param=[{"gpt-4o": "gpt-3.5-turbo"}])
+    router = Router(model_list=model_list, fallbacks=[{"gpt-5.5": "gpt-5-mini"}])
+    router.validate_fallbacks(fallback_param=[{"gpt-5.5": "gpt-5-mini"}])
 
 
 def test_routing_strategy_init(model_list):
@@ -149,9 +149,9 @@ def test_print_deployment(model_list):
 
     router = Router(model_list=model_list)
     deployment = {
-        "model_name": "gpt-3.5-turbo",
+        "model_name": "gpt-5-mini",
         "litellm_params": {
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "api_key": os.getenv("OPENAI_API_KEY"),
         },
     }
@@ -190,7 +190,7 @@ def test_completion(model_list):
     """Test if the completion function is working correctly"""
     router = Router(model_list=model_list)
     response = router._completion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response="I'm fine, thank you!",
     )
@@ -207,12 +207,12 @@ async def test_image_generation(model_list, sync_mode):
     router = Router(model_list=model_list)
     if sync_mode:
         response = router._image_generation(
-            model="dall-e-3",
+            model="gpt-image-1",
             prompt="A cute baby sea otter",
         )
     else:
         response = await router._aimage_generation(
-            model="dall-e-3",
+            model="gpt-image-1",
             prompt="A cute baby sea otter",
         )
 
@@ -224,7 +224,7 @@ async def test_router_acompletion_util(model_list):
     """Test if the underlying '_acompletion' function is working correctly"""
     router = Router(model_list=model_list)
     response = await router._acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response="I'm fine, thank you!",
     )
@@ -236,7 +236,7 @@ async def test_router_abatch_completion_one_model_multiple_requests_util(model_l
     """Test if the 'abatch_completion_one_model_multiple_requests' function is working correctly"""
     router = Router(model_list=model_list)
     response = await router.abatch_completion_one_model_multiple_requests(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[
             [{"role": "user", "content": "Hello, how are you?"}],
             [{"role": "user", "content": "Hello, how are you?"}],
@@ -253,7 +253,7 @@ async def test_router_schedule_acompletion(model_list):
     """Test if the 'schedule_acompletion' function is working correctly"""
     router = Router(model_list=model_list)
     response = await router.schedule_acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response="I'm fine, thank you!",
         priority=1,
@@ -272,7 +272,7 @@ async def test_router_schedule_atext_completion(model_list):
     ) as mock_atext_completion:
         mock_atext_completion.return_value = TextCompletionResponse()
         response = await router.atext_completion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             prompt="Hello, how are you?",
             priority=1,
         )
@@ -291,9 +291,9 @@ async def test_router_schedule_factory(model_list):
     ) as mock_atext_completion:
         mock_atext_completion.return_value = TextCompletionResponse()
         response = await router._schedule_factory(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             args=(
-                "gpt-3.5-turbo",
+                "gpt-5-mini",
                 "Hello, how are you?",
             ),
             priority=1,
@@ -310,7 +310,7 @@ async def test_router_function_with_fallbacks(model_list, sync_mode):
     """Test if the router 'async_function_with_fallbacks' + 'function_with_fallbacks' are working correctly"""
     router = Router(model_list=model_list)
     data = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
         "mock_response": "I'm fine, thank you!",
         "num_retries": 0,
@@ -334,7 +334,7 @@ async def test_router_function_with_retries(model_list, sync_mode):
     """Test if the router 'async_function_with_retries' + 'function_with_retries' are working correctly"""
     router = Router(model_list=model_list)
     data = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
         "mock_response": "I'm fine, thank you!",
         "num_retries": 0,
@@ -355,7 +355,7 @@ async def test_router_make_call(model_list):
     router = Router(model_list=model_list)
     response = await router.make_call(
         original_function=router._acompletion,
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response="I'm fine, thank you!",
     )
@@ -364,7 +364,7 @@ async def test_router_make_call(model_list):
     ## ATEXT_COMPLETION
     response = await router.make_call(
         original_function=router._atext_completion,
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         prompt="Hello, how are you?",
         mock_response="I'm fine, thank you!",
     )
@@ -373,7 +373,7 @@ async def test_router_make_call(model_list):
     ## AEMBEDDING
     response = await router.make_call(
         original_function=router._aembedding,
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         input="Hello, how are you?",
         mock_response=[0.1, 0.2, 0.3],
     )
@@ -382,7 +382,7 @@ async def test_router_make_call(model_list):
     ## AIMAGE_GENERATION
     response = await router.make_call(
         original_function=router._aimage_generation,
-        model="dall-e-3",
+        model="gpt-image-1",
         prompt="A cute baby sea otter",
         mock_response="https://example.com/image.png",
     )
@@ -394,7 +394,7 @@ def test_update_kwargs_with_deployment(model_list):
     router = Router(model_list=model_list)
     kwargs: dict = {"metadata": {}}
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
     router._update_kwargs_with_deployment(
         deployment=deployment,
@@ -460,10 +460,10 @@ def test_get_fallback_model_group_from_fallbacks(model_list):
     """Test if the '_get_fallback_model_group_from_fallbacks' function is working correctly"""
     router = Router(model_list=model_list)
     fallback_model_group_name = router._get_fallback_model_group_from_fallbacks(
-        model_group="gpt-4o",
-        fallbacks=[{"gpt-4o": "gpt-3.5-turbo"}],
+        model_group="gpt-5.5",
+        fallbacks=[{"gpt-5.5": "gpt-5-mini"}],
     )
-    assert fallback_model_group_name == "gpt-3.5-turbo"
+    assert fallback_model_group_name == "gpt-5-mini"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -474,9 +474,9 @@ async def test_deployment_callback_on_success(sync_mode):
 
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
                 "rpm": 100,
             },
@@ -486,7 +486,7 @@ async def test_deployment_callback_on_success(sync_mode):
     router = Router(model_list=model_list)
     # Get the actual deployment ID that was generated
     gpt_deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
     deployment_id = gpt_deployment["model_info"]["id"]
 
@@ -496,14 +496,14 @@ async def test_deployment_callback_on_success(sync_mode):
     kwargs = {
         "litellm_params": {
             "metadata": {
-                "model_group": "gpt-3.5-turbo",
+                "model_group": "gpt-5-mini",
             },
             "model_info": {"id": deployment_id},
         },
         "standard_logging_object": standard_logging_payload,
     }
     response = litellm.ModelResponse(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         usage={"total_tokens": 100},
     )
     if sync_mode:
@@ -524,6 +524,55 @@ async def test_deployment_callback_on_success(sync_mode):
 
 
 @pytest.mark.asyncio
+async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
+    """
+    An IO-limited deployment (itpm/otpm, no tpm/rpm) must still record TPM usage
+    in the router's routing counter so TPM-aware routing strategies see its real
+    load in mixed model groups; its itpm/otpm enforcement runs separately.
+    """
+    import time
+
+    model_list = [
+        {
+            "model_name": "opus",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-fake",
+                "itpm": 1000,
+            },
+            "model_info": {"id": "io-100"},
+        }
+    ]
+    router = Router(model_list=model_list)
+
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 100
+    standard_logging_payload["model_id"] = "io-100"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "deployment": "openai/gpt-4o-mini",
+                "model_group": "opus",
+            },
+            "model_info": {"id": "io-100"},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+    response = litellm.ModelResponse(model="openai/gpt-4o-mini", usage={"total_tokens": 100})
+
+    tpm_key = await router.deployment_callback_on_success(
+        kwargs=kwargs,
+        completion_response=response,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+    # The IO deployment is no longer skipped: its TPM routing counter is tracked.
+    assert tpm_key is not None
+    assert await router.cache.async_get_cache(key=tpm_key) == 100
+
+
+@pytest.mark.asyncio
 async def test_deployment_callback_on_failure(model_list):
     """Test if the '_deployment_callback_on_failure' function is working correctly"""
     import time
@@ -532,7 +581,7 @@ async def test_deployment_callback_on_failure(model_list):
     kwargs = {
         "litellm_params": {
             "metadata": {
-                "model_group": "gpt-3.5-turbo",
+                "model_group": "gpt-5-mini",
             },
             "model_info": {"id": 100},
         },
@@ -547,7 +596,7 @@ async def test_deployment_callback_on_failure(model_list):
     assert result is False
 
     model_response = router.completion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response="I'm fine, thank you!",
     )
@@ -575,7 +624,7 @@ def test_deployment_callback_respects_cooldown_time(model_list):
     kwargs = {
         "exception": FakeException(),
         "litellm_params": {
-            "metadata": {"model_group": "gpt-3.5-turbo"},
+            "metadata": {"model_group": "gpt-5-mini"},
             "model_info": {"id": 100},
             "cooldown_time": 0,
         },
@@ -610,7 +659,7 @@ def test_update_usage(model_list):
     """Test if the '_update_usage' function is working correctly"""
     router = Router(model_list=model_list)
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
     deployment_id = deployment["model_info"]["id"]
     request_count = router._update_usage(
@@ -635,14 +684,14 @@ def test_should_raise_content_policy_error(
     """Test if the '_should_raise_content_policy_error' function is working correctly"""
     router = Router(
         model_list=model_list,
-        default_fallbacks=["gpt-4o"] if fallback_type == "default" else None,
+        default_fallbacks=["gpt-5.5"] if fallback_type == "default" else None,
     )
 
     assert (
         router._should_raise_content_policy_error(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             response=litellm.ModelResponse(
-                model="gpt-3.5-turbo",
+                model="gpt-5-mini",
                 choices=[
                     {
                         "finish_reason": finish_reason,
@@ -653,7 +702,7 @@ def test_should_raise_content_policy_error(
             ),
             kwargs={
                 "content_policy_fallbacks": (
-                    [{"gpt-3.5-turbo": "gpt-4o"}]
+                    [{"gpt-5-mini": "gpt-5.5"}]
                     if fallback_type == "model-specific"
                     else None
                 )
@@ -667,7 +716,7 @@ def test_get_healthy_deployments(model_list):
     """Test if the '_get_healthy_deployments' function is working correctly"""
     router = Router(model_list=model_list)
     deployments = router._get_healthy_deployments(
-        model="gpt-3.5-turbo", parent_otel_span=None
+        model="gpt-5-mini", parent_otel_span=None
     )
     assert len(deployments) > 0
 
@@ -685,11 +734,11 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
     router = Router(model_list=model_list)
 
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
 
     litellm_logging_obj = Logging(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
@@ -713,7 +762,7 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
                 side_effect=litellm.RateLimitError(
                     message="Rate limit error",
                     llm_provider="openai",
-                    model="gpt-3.5-turbo",
+                    model="gpt-5-mini",
                 )
             ),
         ):
@@ -752,9 +801,9 @@ def test_create_deployment(
         os.environ["LITELLM_ENVIRONMENT"] = "staging"
     deployment = router._create_deployment(
         deployment_info={},
-        _model_name="gpt-3.5-turbo",
+        _model_name="gpt-5-mini",
         _litellm_params={
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "api_key": "test",
             "custom_llm_provider": "openai",
         },
@@ -779,7 +828,7 @@ def test_deployment_is_active_for_environment(
     """Test if the '_deployment_is_active_for_environment' function is working correctly"""
     router = Router(model_list=model_list)
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
     if set_supported_environments:
         os.environ["LITELLM_ENVIRONMENT"] = "staging"
@@ -805,7 +854,7 @@ def test_add_deployment(model_list):
     """Test if the '_add_deployment' function is working correctly"""
     router = Router(model_list=model_list)
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
     deployment["model_info"]["id"] = "100"
     ## Test 1: call user facing function
@@ -821,9 +870,9 @@ def test_upsert_deployment(model_list):
     router = Router(model_list=model_list)
     print("model list", len(router.model_list))
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
-    deployment.litellm_params.model = "gpt-4o"
+    deployment.litellm_params.model = "gpt-5.5"
     router.upsert_deployment(deployment=deployment)
     assert len(router.model_list) == len(model_list)
 
@@ -832,7 +881,7 @@ def test_delete_deployment(model_list):
     """Test if the 'delete_deployment' function is working correctly"""
     router = Router(model_list=model_list)
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
     router.delete_deployment(id=deployment["model_info"]["id"])
     assert len(router.model_list) == len(model_list) - 1
@@ -842,7 +891,7 @@ def test_get_model_info(model_list):
     """Test if the 'get_model_info' function is working correctly"""
     router = Router(model_list=model_list)
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
     model_info = router.get_model_info(id=deployment["model_info"]["id"])
     assert model_info is not None
@@ -852,19 +901,19 @@ def test_get_model_group(model_list):
     """Test if the 'get_model_group' function is working correctly"""
     router = Router(model_list=model_list)
     deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
+        model_group_name="gpt-5-mini"
     )
     model_group = router.get_model_group(id=deployment["model_info"]["id"])
     assert model_group is not None
-    assert model_group[0]["model_name"] == "gpt-3.5-turbo"
+    assert model_group[0]["model_name"] == "gpt-5-mini"
 
 
-@pytest.mark.parametrize("user_facing_model_group_name", ["gpt-3.5-turbo", "gpt-4o"])
+@pytest.mark.parametrize("user_facing_model_group_name", ["gpt-5-mini", "gpt-5.5"])
 def test_set_model_group_info(model_list, user_facing_model_group_name):
     """Test if the 'set_model_group_info' function is working correctly"""
     router = Router(model_list=model_list)
     resp = router._set_model_group_info(
-        model_group="gpt-3.5-turbo",
+        model_group="gpt-5-mini",
         user_facing_model_group_name=user_facing_model_group_name,
     )
     assert resp is not None
@@ -879,11 +928,371 @@ async def test_set_response_headers(model_list):
     assert resp is None
 
 
+@pytest.mark.asyncio
+async def test_set_response_headers_subtracts_in_flight_delta(model_list):
+    """
+    LIT-2719: router-derived `x-ratelimit-remaining-*` headers must be
+    post-decrement (match OpenAI/Anthropic vendor semantics) so the proxy's
+    HTTP response headers and the prometheus gauges that read them stay
+    comparable across providers.
+
+    Router's TPM/RPM counter is incremented post-response by
+    `deployment_callback_on_success`, so `get_remaining_model_group_usage`
+    sees pre-decrement values. `set_response_headers` must replay the
+    in-flight increment before writing the headers.
+    """
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 42
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-limit-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-limit-requests": 100,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 958
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    # Limit headers pass through unmodified.
+    assert headers["x-ratelimit-limit-tokens"] == 1000
+    assert headers["x-ratelimit-limit-requests"] == 100
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_in_flight_delta_only_adjusts_tpm_rpm(model_list):
+    """
+    The in-flight replay applies only to the post-incremented TPM/RPM counters
+    (`x-ratelimit-remaining-tokens` / `-requests`). The ITPM/OTPM counters are
+    incremented at reservation time (pre-call), so the input/output token
+    headers already reflect this request and must pass through untouched.
+    """
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 30
+        prompt_tokens: int = 20
+        completion_tokens: int = 10
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-remaining-input-tokens": 1000,
+            "x-ratelimit-remaining-output-tokens": 500,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    # TPM/RPM headers replay the in-flight increment...
+    assert headers["x-ratelimit-remaining-tokens"] == 970
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    # ...but the reservation-based input/output headers pass through unchanged.
+    assert headers["x-ratelimit-remaining-input-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-output-tokens"] == 500
+
+
+@pytest.mark.asyncio
+async def test_get_model_group_io_token_usage_sums_across_deployments():
+    """
+    get_model_group_io_token_usage must sum ITPM/OTPM across every deployment
+    in the model group (not just the first), reading the same per-deployment
+    cache keys the pre-call reservation writes to.
+    """
+    from litellm.types.router import RouterCacheEnum
+    from litellm.utils import get_utc_datetime
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "opus",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "itpm": 1000,
+                    "otpm": 500,
+                },
+                "model_info": {"id": "io-usage-dep-1"},
+            },
+            {
+                "model_name": "opus",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "itpm": 1000,
+                    "otpm": 500,
+                },
+                "model_info": {"id": "io-usage-dep-2"},
+            },
+        ]
+    )
+
+    minute = get_utc_datetime().strftime("%H-%M")
+    keys_and_values = [
+        (
+            RouterCacheEnum.ITPM.value.format(
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+            ),
+            30,
+        ),
+        (
+            RouterCacheEnum.OTPM.value.format(
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+            ),
+            10,
+        ),
+        (
+            RouterCacheEnum.ITPM.value.format(
+                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+            ),
+            70,
+        ),
+        (
+            RouterCacheEnum.OTPM.value.format(
+                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+            ),
+            20,
+        ),
+    ]
+    for key, value in keys_and_values:
+        await router.cache.async_increment_cache(key=key, value=value, ttl=60)
+
+    current_itpm, current_otpm = await router.get_model_group_io_token_usage("opus")
+
+    assert current_itpm == 100
+    assert current_otpm == 30
+
+
+@pytest.mark.asyncio
+async def test_get_model_group_io_token_usage_no_deployments_returns_none():
+    router = Router(model_list=[])
+    current_itpm, current_otpm = await router.get_model_group_io_token_usage(
+        "nonexistent-group"
+    )
+    assert current_itpm is None
+    assert current_otpm is None
+
+
+@pytest.mark.asyncio
+async def test_get_remaining_model_group_usage_merges_io_and_tpm_headers(model_list):
+    """
+    A model group with both itpm/otpm and tpm/rpm limits must expose the
+    standard remaining-tokens/requests headers alongside the input/output token
+    headers, so clients and prometheus gauges relying on either still get data.
+    """
+    from unittest.mock import Mock
+
+    from litellm.types.router import ModelGroupInfo
+
+    router = Router(model_list=model_list)
+    router._cached_get_model_group_info = Mock(
+        return_value=ModelGroupInfo(
+            model_group="gpt-3.5-turbo",
+            providers=["openai"],
+            itpm=2000,
+            otpm=1000,
+            tpm=5000,
+            rpm=50,
+        )
+    )
+    router.get_model_group_io_token_usage = AsyncMock(return_value=(100, 40))
+    router.get_model_group_usage = AsyncMock(return_value=(500, 5))
+
+    headers = await router.get_remaining_model_group_usage("gpt-3.5-turbo")
+
+    assert headers["x-ratelimit-remaining-input-tokens"] == 1900
+    assert headers["x-ratelimit-remaining-output-tokens"] == 960
+    assert headers["x-ratelimit-remaining-tokens"] == 4500
+    assert headers["x-ratelimit-remaining-requests"] == 45
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_native_input_token_header_does_not_suppress_router_headers(model_list):
+    """
+    A provider that natively returns `x-ratelimit-remaining-input-tokens` must
+    not suppress the router's own remaining-tokens/requests headers for a
+    non-IO model group.
+    """
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 42
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {"additional_headers": {"x-ratelimit-remaining-input-tokens": 5}}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 958
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    # the provider's native header is left untouched
+    assert headers["x-ratelimit-remaining-input-tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_native_token_header_does_not_suppress_io_headers(model_list):
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 42
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-remaining-input-tokens": 900,
+            "x-ratelimit-remaining-output-tokens": 450,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {"additional_headers": {"x-ratelimit-remaining-tokens": 5}}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 5
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-input-tokens"] == 900
+    assert headers["x-ratelimit-remaining-output-tokens"] == 450
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_handles_missing_usage(model_list):
+    """
+    Streaming chunks and some response shapes may lack a `usage` attribute or
+    populated `total_tokens`. The in-flight subtraction must default to 0
+    tokens (still subtract 1 from requests) and never raise.
+    """
+    from pydantic import BaseModel
+
+    class _Resp(BaseModel):
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-requests"] == 99
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_dict_anthropic_messages_response(model_list):
+    """Anthropic /v1/messages returns a dict; IO rate-limit headers must attach."""
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-limit-input-tokens": 25,
+            "x-ratelimit-remaining-input-tokens": 20,
+            "x-ratelimit-limit-output-tokens": 100,
+            "x-ratelimit-remaining-output-tokens": 95,
+        }
+    )
+
+    resp = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "usage": {"input_tokens": 5, "output_tokens": 1},
+    }
+    await router.set_response_headers(response=resp, model_group="io-itpm-strict")
+
+    assert "_hidden_params" in resp
+    headers = resp["_hidden_params"]["additional_headers"]
+    assert headers["x-litellm-model-group"] == "io-itpm-strict"
+    assert headers["x-ratelimit-limit-input-tokens"] == 25
+    assert headers["x-ratelimit-remaining-input-tokens"] == 20
+    assert headers["x-ratelimit-remaining-output-tokens"] == 95
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_wraps_bare_async_generator(model_list):
+    """
+    Streaming responses that never go through Router.make_call's usual
+    object-based wrappers (e.g. the Anthropic /v1/messages -> Responses API
+    bridge, which yields a raw async generator with no `_hidden_params` slot)
+    must still get IO rate-limit headers attached via a thin wrapper.
+    """
+
+    async def _raw_generator():
+        yield {"type": "message_start"}
+        yield {"type": "message_stop"}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-limit-input-tokens": 25,
+            "x-ratelimit-remaining-input-tokens": 20,
+        }
+    )
+
+    wrapped = await router.set_response_headers(response=_raw_generator(), model_group="io-itpm-strict")
+
+    assert hasattr(wrapped, "_hidden_params")
+    headers = wrapped._hidden_params["additional_headers"]
+    assert headers["x-litellm-model-group"] == "io-itpm-strict"
+    assert headers["x-ratelimit-limit-input-tokens"] == 25
+    assert headers["x-ratelimit-remaining-input-tokens"] == 20
+
+    from collections.abc import AsyncIterator
+
+    assert isinstance(wrapped, AsyncIterator)
+    chunks = [chunk async for chunk in wrapped]
+    assert chunks == [{"type": "message_start"}, {"type": "message_stop"}]
+
+
 def test_get_all_deployments(model_list):
     """Test if the 'get_all_deployments' function is working correctly"""
     router = Router(model_list=model_list)
     deployments = router._get_all_deployments(
-        model_name="gpt-3.5-turbo", model_alias="gpt-3.5-turbo"
+        model_name="gpt-5-mini", model_alias="gpt-5-mini"
     )
     assert len(deployments) > 0
 
@@ -908,7 +1317,7 @@ def test_common_checks_available_deployment(model_list):
     """Test if the 'common_checks_available_deployment' function is working correctly"""
     router = Router(model_list=model_list)
     _, available_deployments = router._common_checks_available_deployment(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=[{"role": "user", "content": "hi"}],
         input="hi",
         specific_deployment=False,
@@ -921,12 +1330,10 @@ def test_filter_cooldown_deployments(model_list):
     """Test if the 'filter_cooldown_deployments' function is working correctly"""
     router = Router(model_list=model_list)
     deployments = router._filter_cooldown_deployments(
-        healthy_deployments=router._get_all_deployments(model_name="gpt-3.5-turbo"),  # type: ignore
+        healthy_deployments=router._get_all_deployments(model_name="gpt-5-mini"),  # type: ignore
         cooldown_deployments=[],
     )
-    assert len(deployments) == len(
-        router._get_all_deployments(model_name="gpt-3.5-turbo")
-    )
+    assert len(deployments) == len(router._get_all_deployments(model_name="gpt-5-mini"))
 
 
 def test_track_deployment_metrics(model_list):
@@ -936,10 +1343,10 @@ def test_track_deployment_metrics(model_list):
     router = Router(model_list=model_list)
     router._track_deployment_metrics(
         deployment=router.get_deployment_by_model_group_name(
-            model_group_name="gpt-3.5-turbo"
+            model_group_name="gpt-5-mini"
         ),
         response=ModelResponse(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             usage={"total_tokens": 100},
         ),
         parent_otel_span=None,
@@ -974,7 +1381,7 @@ def test_get_num_retries_from_retry_policy(
     print("exception_type", exception_type)
     calc_num_retries = router.get_num_retries_from_retry_policy(
         exception=exception_type(
-            message="test", llm_provider="openai", model="gpt-3.5-turbo"
+            message="test", llm_provider="openai", model="gpt-5-mini"
         )
     )
     assert calc_num_retries == num_retries
@@ -1005,7 +1412,7 @@ def test_get_allowed_fails_from_policy(
     )
     calc_allowed_fails = router.get_allowed_fails_from_policy(
         exception=exception_type(
-            message="test", llm_provider="openai", model="gpt-3.5-turbo"
+            message="test", llm_provider="openai", model="gpt-5-mini"
         )
     )
     assert calc_allowed_fails == allowed_fails
@@ -1097,16 +1504,16 @@ def test_get_model_from_alias(model_list):
     """Test if the 'get_model_from_alias' function is working correctly"""
     router = Router(
         model_list=model_list,
-        model_group_alias={"gpt-4o": "gpt-3.5-turbo"},
+        model_group_alias={"gpt-5.5": "gpt-5-mini"},
     )
-    model = router._get_model_from_alias(model="gpt-4o")
-    assert model == "gpt-3.5-turbo"
+    model = router._get_model_from_alias(model="gpt-5.5")
+    assert model == "gpt-5-mini"
 
 
 def test_get_deployment_by_litellm_model(model_list):
     """Test if the 'get_deployment_by_litellm_model' function is working correctly"""
     router = Router(model_list=model_list)
-    deployment = router._get_deployment_by_litellm_model(model="gpt-3.5-turbo")
+    deployment = router._get_deployment_by_litellm_model(model="gpt-5-mini")
     assert deployment is not None
 
 
@@ -1166,8 +1573,8 @@ def test_replace_model_in_jsonl(model_list):
         (
             "fo::hi::static::hello",
             "fo::*::static::*",
-            "openai/gpt-3.5-turbo",
-            "openai/gpt-3.5-turbo",
+            "openai/gpt-5-mini",
+            "openai/gpt-5-mini",
         ),
         (
             "bedrock/meta.llama3-70b",
@@ -1260,10 +1667,10 @@ async def test_async_callback_filter_deployments(model_list):
 
     router = Router(model_list=model_list)
 
-    healthy_deployments = router.get_model_list(model_name="gpt-3.5-turbo")
+    healthy_deployments = router.get_model_list(model_name="gpt-5-mini")
 
     new_healthy_deployments = await router.async_callback_filter_deployments(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         healthy_deployments=healthy_deployments,
         messages=[],
         parent_otel_span=None,
@@ -1277,10 +1684,10 @@ def test_cached_get_model_group_info(model_list):
     router = Router(model_list=model_list)
 
     # First call - should hit the actual function
-    result1 = router._cached_get_model_group_info("gpt-3.5-turbo")
+    result1 = router._cached_get_model_group_info("gpt-5-mini")
 
     # Second call with same argument - should hit the cache
-    result2 = router._cached_get_model_group_info("gpt-3.5-turbo")
+    result2 = router._cached_get_model_group_info("gpt-5-mini")
 
     # Verify results are the same
     assert result1 == result2
@@ -1364,7 +1771,7 @@ def test_is_auto_router_deployment(model_list):
     assert router._is_auto_router_deployment(litellm_params_auto) is True
 
     # Test case 2: Model doesn't start with "auto_router/" - should return False
-    litellm_params_regular = LiteLLM_Params(model="gpt-3.5-turbo")
+    litellm_params_regular = LiteLLM_Params(model="gpt-5-mini")
     assert router._is_auto_router_deployment(litellm_params_regular) is False
 
     # Test case 3: Model is empty string - should return False
@@ -1389,8 +1796,8 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
     litellm_params = LiteLLM_Params(
         model="auto_router/test",
         auto_router_config_path="/path/to/config",
-        auto_router_default_model="gpt-3.5-turbo",
-        auto_router_embedding_model="text-embedding-ada-002",
+        auto_router_default_model="gpt-5-mini",
+        auto_router_embedding_model="text-embedding-3-small",
     )
     deployment = Deployment(
         model_name="test-auto-router",
@@ -1406,14 +1813,14 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
         model_name="test-auto-router",
         auto_router_config_path="/path/to/config",
         auto_router_config=None,
-        default_model="gpt-3.5-turbo",
-        embedding_model="text-embedding-ada-002",
+        default_model="gpt-5-mini",
+        embedding_model="text-embedding-3-small",
         litellm_router_instance=router,
     )
 
     # Verify the auto-router was added to the router's auto_routers dict
     assert "test-auto-router" in router.auto_routers
-    assert router.auto_routers["test-auto-router"] == mock_auto_router_instance
+    assert router.auto_routers["test-auto-router"][0].strategy == mock_auto_router_instance
 
 
 @patch("litellm.router_strategy.auto_router.auto_router.AutoRouter")
@@ -1426,14 +1833,18 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     mock_auto_router.return_value = mock_auto_router_instance
 
     # Add an existing auto-router
-    router.auto_routers["test-auto-router"] = mock_auto_router_instance
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    router.auto_routers["test-auto-router"] = [
+        TaggedPreRoutingStrategy(tags=(), strategy=mock_auto_router_instance)
+    ]
 
     # Try to add another auto-router with the same name
     litellm_params = LiteLLM_Params(
         model="auto_router/test",
         auto_router_config_path="/path/to/config",
-        auto_router_default_model="gpt-3.5-turbo",
-        auto_router_embedding_model="text-embedding-ada-002",
+        auto_router_default_model="gpt-5-mini",
+        auto_router_embedding_model="text-embedding-3-small",
     )
     deployment = Deployment(
         model_name="test-auto-router",
@@ -1442,7 +1853,7 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     )
 
     with pytest.raises(
-        ValueError, match="Auto-router deployment test-auto-router already exists"
+        ValueError, match="Auto-router deployment test-auto-router with tags .* already exists"
     ):
         router.init_auto_router_deployment(deployment)
 
@@ -1898,7 +2309,7 @@ def test_get_metadata_variable_name_from_kwargs(model_list):
 
     # Test case 4: kwargs contains other keys but no metadata keys - should return "metadata"
     kwargs_other = {
-        "model": "gpt-4",
+        "model": "gpt-5.5",
         "messages": [{"role": "user", "content": "hello"}],
     }
     result = router._get_metadata_variable_name_from_kwargs(kwargs_other)
@@ -2094,15 +2505,15 @@ def test_get_first_default_fallback():
     # Test with default fallback ("*")
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+            "model_name": "gpt-5-mini",
+            "litellm_params": {"model": "gpt-5-mini", "api_key": "fake-key"},
         }
     ]
 
-    router = Router(model_list=model_list, fallbacks=[{"*": ["gpt-3.5-turbo"]}])
+    router = Router(model_list=model_list, fallbacks=[{"*": ["gpt-5-mini"]}])
 
     result = router._get_first_default_fallback()
-    assert result == "gpt-3.5-turbo"
+    assert result == "gpt-5-mini"
 
     # Test with no fallbacks
     router_no_fallbacks = Router(model_list=model_list)
@@ -2111,7 +2522,7 @@ def test_get_first_default_fallback():
 
     # Test with fallbacks but no default
     router_no_default = Router(
-        model_list=model_list, fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}]
+        model_list=model_list, fallbacks=[{"gpt-5.5": ["gpt-5-mini"]}]
     )
     result = router_no_default._get_first_default_fallback()
     assert result is None
@@ -2133,16 +2544,16 @@ def test_resolve_model_name_from_model_id():
     # Test case 2: model_id directly matches a model_name
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": "test-key",
             },
         },
     ]
     router = Router(model_list=model_list)
-    result = router.resolve_model_name_from_model_id("gpt-3.5-turbo")
-    assert result == "gpt-3.5-turbo"
+    result = router.resolve_model_name_from_model_id("gpt-5-mini")
+    assert result == "gpt-5-mini"
 
     # Test case 3: model_id matches litellm_params.model exactly
     model_list = [
@@ -2195,9 +2606,9 @@ def test_resolve_model_name_from_model_id():
     # Test case 6: model_id doesn't match anything
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": "test-key",
             },
         },
@@ -2214,9 +2625,9 @@ def test_resolve_model_name_from_model_id():
     # Test case 8: Multiple models, find the correct one
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": "test-key",
             },
         },
@@ -2236,17 +2647,17 @@ def test_resolve_model_name_from_model_id():
     # This tests the has_model_id path in Strategy 1
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",
+            "model_name": "gpt-5-mini",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-5-mini",
                 "api_key": "test-key",
             },
         },
     ]
     router = Router(model_list=model_list)
 
-    result = router.resolve_model_name_from_model_id("gpt-3.5-turbo")
-    assert result == "gpt-3.5-turbo"
+    result = router.resolve_model_name_from_model_id("gpt-5-mini")
+    assert result == "gpt-5-mini"
 
 
 def test_get_valid_args():
@@ -2283,8 +2694,8 @@ def test_get_router_model_info_with_deployment_object():
     router = Router(
         model_list=[
             {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-4", "api_key": "test-key"},
+                "model_name": "gpt-5.5",
+                "litellm_params": {"model": "gpt-5.5", "api_key": "test-key"},
                 "model_info": {"id": "test-id"},
             }
         ]
@@ -2300,9 +2711,129 @@ def test_get_router_model_info_with_deployment_object():
     # that reuses the existing LiteLLM_Params instead of reconstructing it
     model_info = router.get_router_model_info(
         deployment=deployment,
-        received_model_name="gpt-4",
+        received_model_name="gpt-5.5",
     )
 
     # Verify we got valid model info back
     assert model_info is not None
     assert isinstance(model_info, dict)
+
+
+def test_deployment_has_budget_limits():
+    router = Router(model_list=[])
+
+    with_budget = Deployment(
+        model_name="budgeted-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            max_budget=0.001,
+            budget_duration="1d",
+        ),
+        model_info=ModelInfo(id="budget-deployment-id"),
+    )
+    without_budget = Deployment(
+        model_name="unbudgeted-model",
+        litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini"),
+        model_info=ModelInfo(id="no-budget-deployment-id"),
+    )
+
+    assert router._deployment_has_budget_limits(deployment=with_budget) is True
+    assert router._deployment_has_budget_limits(deployment=without_budget) is False
+
+
+def test_sync_deployment_budget_config(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
+
+    router = Router(model_list=[], optional_pre_call_checks=[])
+    deployment = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+            max_budget=0.000000000001,
+            budget_duration="1d",
+        ),
+        model_info=ModelInfo(id="runtime-budget-deployment"),
+    )
+
+    router._sync_deployment_budget_config(deployment=deployment)
+
+    budget_limiter = router._get_router_deployment_budget_limiter()
+    assert budget_limiter is not None
+    config = budget_limiter._get_budget_config_for_deployment(
+        "runtime-budget-deployment"
+    )
+    assert config is not None
+    assert config.max_budget == 0.000000000001
+
+
+def test_sync_deployment_budget_config_clears_removed_limits(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
+
+    router = Router(model_list=[], optional_pre_call_checks=[])
+    model_id = "runtime-budget-deployment"
+    budgeted = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+            max_budget=0.000000000001,
+            budget_duration="1d",
+        ),
+        model_info=ModelInfo(id=model_id),
+    )
+    unbudgeted = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+        ),
+        model_info=ModelInfo(id=model_id),
+    )
+
+    router._sync_deployment_budget_config(deployment=budgeted)
+    budget_limiter = router._get_router_deployment_budget_limiter()
+    assert budget_limiter is not None
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is not None
+
+    router._sync_deployment_budget_config(deployment=unbudgeted)
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is None
+
+
+def test_upsert_deployment_clears_stale_budget_config(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
+
+    router = Router(model_list=[], optional_pre_call_checks=[])
+    model_id = "upsert-budget-deployment"
+    budgeted = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+            max_budget=0.000000000001,
+            budget_duration="1d",
+        ),
+        model_info=ModelInfo(id=model_id),
+    )
+    unbudgeted = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+        ),
+        model_info=ModelInfo(id=model_id),
+    )
+
+    router.upsert_deployment(deployment=budgeted)
+    budget_limiter = router._get_router_deployment_budget_limiter()
+    assert budget_limiter is not None
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is not None
+
+    router.upsert_deployment(deployment=unbudgeted)
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is None

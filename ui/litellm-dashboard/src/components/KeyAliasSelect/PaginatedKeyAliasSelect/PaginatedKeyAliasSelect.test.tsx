@@ -64,9 +64,7 @@ describe("PaginatedKeyAliasSelect", () => {
   });
 
   it("should display custom placeholder when provided", () => {
-    renderWithProviders(
-      <PaginatedKeyAliasSelect onChange={mockOnChange} placeholder="Choose alias" />,
-    );
+    renderWithProviders(<PaginatedKeyAliasSelect onChange={mockOnChange} placeholder="Choose alias" />);
 
     expect(screen.getByText("Choose alias")).toBeInTheDocument();
   });
@@ -144,9 +142,7 @@ describe("PaginatedKeyAliasSelect", () => {
       expect(screen.getByRole("option", { name: "alias-1" })).toBeInTheDocument();
     });
 
-    const scrollableContainer = document.querySelector(
-      ".ant-select-dropdown .rc-virtual-list-holder",
-    );
+    const scrollableContainer = document.querySelector(".ant-select-dropdown .rc-virtual-list-holder");
     expect(scrollableContainer).toBeInTheDocument();
   });
 
@@ -206,9 +202,7 @@ describe("PaginatedKeyAliasSelect", () => {
   });
 
   it("should respect allowClear prop", () => {
-    renderWithProviders(
-      <PaginatedKeyAliasSelect value="alias-1" onChange={mockOnChange} allowClear={false} />,
-    );
+    renderWithProviders(<PaginatedKeyAliasSelect value="alias-1" onChange={mockOnChange} allowClear={false} />);
 
     expect(screen.getByRole("combobox")).toBeInTheDocument();
   });

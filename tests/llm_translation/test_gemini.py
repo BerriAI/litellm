@@ -17,6 +17,66 @@ from litellm import completion
 import json
 
 
+GEMINI_3_IMAGE_SIZE_MAPPINGS = [
+    ("512x512", "1:1", "512"),
+    ("1024x1024", "1:1", "1K"),
+    ("2048x2048", "1:1", "2K"),
+    ("4096x4096", "1:1", "4K"),
+    ("256x1024", "1:4", "512"),
+    ("512x2048", "1:4", "1K"),
+    ("1024x4096", "1:4", "2K"),
+    ("2048x8192", "1:4", "4K"),
+    ("192x1536", "1:8", "512"),
+    ("384x3072", "1:8", "1K"),
+    ("768x6144", "1:8", "2K"),
+    ("1536x12288", "1:8", "4K"),
+    ("424x632", "2:3", "512"),
+    ("848x1264", "2:3", "1K"),
+    ("1696x2528", "2:3", "2K"),
+    ("3392x5056", "2:3", "4K"),
+    ("632x424", "3:2", "512"),
+    ("1264x848", "3:2", "1K"),
+    ("2528x1696", "3:2", "2K"),
+    ("5056x3392", "3:2", "4K"),
+    ("448x600", "3:4", "512"),
+    ("896x1200", "3:4", "1K"),
+    ("1792x2400", "3:4", "2K"),
+    ("3584x4800", "3:4", "4K"),
+    ("1024x256", "4:1", "512"),
+    ("2048x512", "4:1", "1K"),
+    ("4096x1024", "4:1", "2K"),
+    ("8192x2048", "4:1", "4K"),
+    ("600x448", "4:3", "512"),
+    ("1200x896", "4:3", "1K"),
+    ("2400x1792", "4:3", "2K"),
+    ("4800x3584", "4:3", "4K"),
+    ("464x576", "4:5", "512"),
+    ("928x1152", "4:5", "1K"),
+    ("1856x2304", "4:5", "2K"),
+    ("3712x4608", "4:5", "4K"),
+    ("576x464", "5:4", "512"),
+    ("1152x928", "5:4", "1K"),
+    ("2304x1856", "5:4", "2K"),
+    ("4608x3712", "5:4", "4K"),
+    ("1536x192", "8:1", "512"),
+    ("3072x384", "8:1", "1K"),
+    ("6144x768", "8:1", "2K"),
+    ("12288x1536", "8:1", "4K"),
+    ("384x688", "9:16", "512"),
+    ("768x1376", "9:16", "1K"),
+    ("1536x2752", "9:16", "2K"),
+    ("3072x5504", "9:16", "4K"),
+    ("688x384", "16:9", "512"),
+    ("1376x768", "16:9", "1K"),
+    ("2752x1536", "16:9", "2K"),
+    ("5504x3072", "16:9", "4K"),
+    ("792x336", "21:9", "512"),
+    ("1584x672", "21:9", "1K"),
+    ("3168x1344", "21:9", "2K"),
+    ("6336x2688", "21:9", "4K"),
+]
+
+
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gemini/gemini-2.5-flash"}
@@ -365,6 +425,143 @@ def test_gemini_flash_image_preview_models(model_name: str):
         ]
 
 
+@pytest.mark.parametrize(
+    "model, kwargs, expected_image_config",
+    [
+        (
+            "gemini/gemini-3-pro-image-preview",
+            {"imageConfig": {"aspectRatio": "16:9", "imageSize": "512px"}},
+            {"aspectRatio": "16:9", "imageSize": "512px"},
+        ),
+        (
+            "gemini/gemini-2.5-flash-image",
+            {"size": "2048x2048"},
+            {"aspectRatio": "1:1"},
+        ),
+    ],
+)
+def test_gemini_image_generation_forwards_image_config(
+    model: str, kwargs: dict, expected_image_config: dict
+):
+    from unittest.mock import patch, MagicMock
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+    ) as mock_post:
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"inlineData": {"data": "test_base64_image_data"}}]
+                    }
+                }
+            ]
+        }
+        mock_http_response.status_code = 200
+        mock_post.return_value = mock_http_response
+
+        litellm.image_generation(
+            model=model,
+            prompt="Generate a simple test image",
+            api_key="test_api_key",
+            **kwargs,
+        )
+
+        request_data = mock_post.call_args.kwargs.get("json", {})
+        assert request_data["generationConfig"]["imageConfig"] == expected_image_config
+
+
+def test_gemini_image_generation_image_config_takes_precedence_over_size():
+    from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
+
+    explicit_image_config = {"aspectRatio": "16:9", "imageSize": "2K"}
+
+    mapped_params = GoogleImageGenConfig().map_openai_params(
+        non_default_params={
+            "imageConfig": explicit_image_config,
+            "size": "768x1376",
+        },
+        optional_params={},
+        model="gemini-3-pro-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped_params["imageConfig"] == explicit_image_config
+
+
+def test_gemini_image_generation_ignores_non_dict_image_config():
+    from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
+
+    mapped_params = GoogleImageGenConfig().map_openai_params(
+        non_default_params={
+            "size": "768x1376",
+            "imageConfig": "not-a-dict",
+        },
+        optional_params={},
+        model="gemini-3-pro-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped_params["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "1K"}
+
+
+@pytest.mark.parametrize(
+    "size, expected_aspect_ratio, expected_image_size",
+    GEMINI_3_IMAGE_SIZE_MAPPINGS,
+)
+def test_gemini_image_generation_openai_size_maps_to_google_table(
+    size: str, expected_aspect_ratio: str, expected_image_size: str
+):
+    from litellm.llms.gemini.common_utils import (
+        map_openai_size_to_gemini_image_config,
+    )
+
+    assert map_openai_size_to_gemini_image_config(
+        size, "gemini-3-pro-image-preview"
+    ) == {
+        "aspectRatio": expected_aspect_ratio,
+        "imageSize": expected_image_size,
+    }
+
+
+@pytest.mark.parametrize(
+    "size, expected_aspect_ratio, expected_image_size",
+    [
+        ("1000x1800", "9:16", "1K"),
+        ("1800x1000", "16:9", "1K"),
+        ("3000x3000", "1:1", "2K"),
+        ("500x500", "1:1", "512"),
+        ("1280x896", "4:3", "1K"),
+        ("896x1280", "3:4", "1K"),
+    ],
+)
+def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
+    size: str, expected_aspect_ratio: str, expected_image_size: str
+):
+    from litellm.llms.gemini.common_utils import (
+        map_openai_size_to_gemini_image_config,
+    )
+
+    assert map_openai_size_to_gemini_image_config(
+        size, "gemini-3-pro-image-preview"
+    ) == {
+        "aspectRatio": expected_aspect_ratio,
+        "imageSize": expected_image_size,
+    }
+
+
+@pytest.mark.parametrize("size", ["auto", "invalid", "0x1024", "1024x0"])
+def test_gemini_image_generation_openai_size_auto_uses_google_defaults(size: str):
+    from litellm.llms.gemini.common_utils import (
+        map_openai_size_to_gemini_image_config,
+    )
+
+    assert map_openai_size_to_gemini_image_config(
+        size, "gemini-3-pro-image-preview"
+    ) is None
+
+
 def test_gemini_imagen_models_use_predict_endpoint():
     """
     Test that Imagen models still use :predict endpoint (not broken by gemini-2.5-flash-image-preview fix)
@@ -387,6 +584,7 @@ def test_gemini_imagen_models_use_predict_endpoint():
         response = litellm.image_generation(
             model="gemini/imagen-3.0-generate-001",
             prompt="Generate a simple test image",
+            size="1280x896",
             api_key="test_api_key",
         )
 
@@ -410,6 +608,9 @@ def test_gemini_imagen_models_use_predict_endpoint():
         request_data = call_args.kwargs.get("json", {})
         assert "instances" in request_data
         assert "parameters" in request_data
+        assert request_data["parameters"]["aspectRatio"] == "4:3"
+        assert request_data["parameters"]["imageSize"] == "1K"
+        assert "imageConfig" not in request_data["parameters"]
 
 
 def test_gemini_thinking():
@@ -1362,8 +1563,12 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         # For Gemini 3, should not force thinkingLevel by default
-        assert "thinkingLevel" not in result, "Should not force thinkingLevel for Gemini 3"
-        assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
+        assert (
+            "thinkingLevel" not in result
+        ), "Should not force thinkingLevel for Gemini 3"
+        assert (
+            "thinkingBudget" not in result
+        ), "Should NOT have thinkingBudget for Gemini 3"
         assert result["includeThoughts"] is True
 
         # Test 2: Anthropic thinking disabled for Gemini 3
@@ -1395,7 +1600,10 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_zero["includeThoughts"] is False
-        assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
+        assert (
+            "thinkingLevel" not in result_zero
+            or result_zero.get("thinkingLevel") is None
+        )
 
         # Test 4: Gemini 3 flash-preview should also follow provider defaults by default
         result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
@@ -1525,8 +1733,12 @@ def test_anthropic_thinking_param_via_map_openai_params():
     # Check that thinkingConfig was created without forced thinkingLevel
     assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
     thinking_config = result["thinkingConfig"]
-    assert "thinkingLevel" not in thinking_config, "Should not force thinkingLevel for Gemini 3 by default"
-    assert "thinkingBudget" not in thinking_config, "Should NOT have thinkingBudget for Gemini 3"
+    assert (
+        "thinkingLevel" not in thinking_config
+    ), "Should not force thinkingLevel for Gemini 3 by default"
+    assert (
+        "thinkingBudget" not in thinking_config
+    ), "Should NOT have thinkingBudget for Gemini 3"
     assert thinking_config["includeThoughts"] is True
 
     # Test with Gemini 2 model
@@ -1594,13 +1806,49 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
     ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
 
 
-def test_gemini_image_size_limit_exceeded():
+def test_gemini_image_size_limit_exceeded(monkeypatch):
     """
     Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.
 
     This validates that the 50MB default limit prevents downloading very large images
     that could cause memory issues and pod crashes.
+
+    The image fetch is mocked (mirroring the LargeImageClient pattern in
+    tests/test_litellm/litellm_core_utils/test_image_handling.py) so the test
+    deterministically exercises the size-limit rejection path without any
+    external network dependency.
     """
+    from httpx import Request, Response
+
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    class LargeImageClient:
+        """Returns a response whose Content-Length exceeds the 50MB limit."""
+
+        def get(self, url, follow_redirects=True):
+            size_bytes = int(100 * 1024 * 1024)  # 100MB > 50MB default limit
+            return Response(
+                status_code=200,
+                headers={
+                    "Content-Type": "image/jpeg",
+                    "Content-Length": str(size_bytes),
+                },
+                # Empty body: the Content-Length header check in
+                # _process_image_response rejects the image before the body
+                # is ever streamed, so there's no need to allocate 100MB.
+                content=b"",
+                request=Request("GET", url),
+            )
+
+    # Bypass SSRF validation (which would resolve DNS / hit the network) and
+    # route straight to our mocked client.
+    monkeypatch.setattr(
+        image_handling,
+        "safe_get",
+        lambda client, url, **kw: client.get(url, follow_redirects=True),
+    )
+    monkeypatch.setattr(litellm, "module_level_client", LargeImageClient())
+
     messages = [
         {
             "role": "user",
@@ -1608,7 +1856,7 @@ def test_gemini_image_size_limit_exceeded():
                 {"type": "text", "text": "What is in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/5/51/Blue_Marble_2002.jpg",
+                    "image_url": "https://example.com/large-image.jpg",
                 },
             ],
         }

@@ -649,7 +649,7 @@ def test_stream_chunk_builder_openai_audio_output_usage():
 
     try:
         completion = client.chat.completions.create(
-            model="gpt-4o-audio-preview",
+            model="gpt-audio-1.5",
             modalities=["text", "audio"],
             audio={"voice": "alloy", "format": "pcm16"},
             messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
@@ -657,8 +657,14 @@ def test_stream_chunk_builder_openai_audio_output_usage():
             stream_options={"include_usage": True},
         )
     except Exception as e:
-        if "openai-internal" in str(e):
-            pytest.skip("Skipping test due to openai-internal error")
+        err = str(e).lower()
+        if (
+            "model_not_found" in err
+            or "does not exist" in err
+            or "openai-internal" in err
+        ):
+            pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
+        raise
 
     chunks = []
     for chunk in completion:

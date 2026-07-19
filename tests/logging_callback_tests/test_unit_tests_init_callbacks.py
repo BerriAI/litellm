@@ -164,7 +164,7 @@ async def use_callback_in_llm_call(
 
     for _ in range(5):
         await litellm.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             temperature=0.1,
             mock_response="hello",
@@ -217,7 +217,7 @@ def test_dynamic_logging_global_callback():
     cl = CustomLogger()
 
     litellm_logging = LiteLLMLoggingObj(
-        model="claude-3-opus-20240229",
+        model="claude-opus-4-7",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="completion",
@@ -240,7 +240,7 @@ def test_dynamic_logging_global_callback():
                 result=ModelResponse(
                     id="chatcmpl-5418737b-ab14-420b-b9c5-b278b6681b70",
                     created=1732306261,
-                    model="claude-3-opus-20240229",
+                    model="claude-opus-4-7",
                     object="chat.completion",
                     system_fingerprint=None,
                     choices=[
@@ -277,7 +277,7 @@ def test_get_combined_callback_list():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     _logging = LiteLLMLoggingObj(
-        model="claude-3-opus-20240229",
+        model="claude-opus-4-7",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="completion",
@@ -298,7 +298,7 @@ def test_get_combined_callback_list_returns_copy_when_dynamic_is_none():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     _logging = LiteLLMLoggingObj(
-        model="claude-3-opus-20240229",
+        model="claude-opus-4-7",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="completion",

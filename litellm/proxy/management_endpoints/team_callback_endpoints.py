@@ -27,8 +27,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.management_endpoints.team_endpoints import _verify_team_access
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.repositories.team_repository import TeamRepository
 
 router = APIRouter()
 
@@ -55,16 +57,10 @@ def _redact_callback_secrets(metadata: Any) -> Any:
     if isinstance(logging_entries, list):
         for entry in logging_entries:
             if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
-                entry["callback_vars"] = {
-                    k: _CALLBACK_VARS_REDACTED for k in entry["callback_vars"]
-                }
+                entry["callback_vars"] = {k: _CALLBACK_VARS_REDACTED for k in entry["callback_vars"]}
     callback_settings = redacted.get("callback_settings")
-    if isinstance(callback_settings, dict) and isinstance(
-        callback_settings.get("callback_vars"), dict
-    ):
-        callback_settings["callback_vars"] = {
-            k: _CALLBACK_VARS_REDACTED for k in callback_settings["callback_vars"]
-        }
+    if isinstance(callback_settings, dict) and isinstance(callback_settings.get("callback_vars"), dict):
+        callback_settings["callback_vars"] = {k: _CALLBACK_VARS_REDACTED for k in callback_settings["callback_vars"]}
     return redacted
 
 
@@ -118,9 +114,7 @@ async def _emit_team_callback_audit_log(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
                 updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by
-                or user_api_key_dict.user_id
-                or litellm_proxy_admin_name,
+                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
                 changed_by_api_key=user_api_key_dict.api_key,
                 table_name=LitellmTableNames.TEAM_TABLE_NAME,
                 object_id=team_id,
@@ -198,15 +192,11 @@ async def add_team_callbacks(
             )
 
         # Check if team_id exists already
-        _existing_team = await prisma_client.get_data(
-            team_id=team_id, table_name="team", query_type="find_unique"
-        )
+        _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
         if _existing_team is None:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": f"Team id = {team_id} does not exist. Please use a different team id."
-                },
+                detail={"error": f"Team id = {team_id} does not exist. Please use a different team id."},
             )
 
         # IDOR guard: only proxy admins / org admins / team admins of THIS
@@ -220,12 +210,8 @@ async def add_team_callbacks(
 
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata
-        team_callback_settings: List[dict] = team_metadata.get(
-            "logging"
-        )  # will be dict of type AddTeamCallback
-        if team_callback_settings is None or not isinstance(
-            team_callback_settings, list
-        ):
+        team_callback_settings: List[dict] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
+        if team_callback_settings is None or not isinstance(team_callback_settings, list):
             team_callback_settings = []
 
         ## check if it already exists, for the same callback event
@@ -245,10 +231,12 @@ async def add_team_callbacks(
         team_callback_settings.append(data.model_dump())
 
         team_metadata["logging"] = team_callback_settings
+        team_metadata = encrypt_callback_vars(team_metadata)
         team_metadata_json = json.dumps(team_metadata)  # update team_metadata
 
-        new_team_row = await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
+        new_team_row = await TeamRepository(prisma_client).table.update(
+            where={"team_id": team_id},
+            data={"metadata": team_metadata_json},  # type: ignore
         )
 
         await _emit_team_callback_audit_log(
@@ -270,9 +258,7 @@ async def add_team_callbacks(
         raise e
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {}".format(str(e))
         )
         raise ProxyException(
             message="Internal Server Error, " + str(e),
@@ -318,9 +304,7 @@ async def disable_team_logging(
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
         # Check if team exists
-        _existing_team = await prisma_client.get_data(
-            team_id=team_id, table_name="team", query_type="find_unique"
-        )
+        _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
         if _existing_team is None:
             raise HTTPException(
                 status_code=404,
@@ -347,19 +331,19 @@ async def disable_team_logging(
 
         # Update metadata
         team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        team_metadata = encrypt_callback_vars(team_metadata)
         team_metadata_json = json.dumps(team_metadata)
 
         # Update team in database
-        updated_team = await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
+        updated_team = await TeamRepository(prisma_client).table.update(
+            where={"team_id": team_id},
+            data={"metadata": team_metadata_json},  # type: ignore
         )
 
         if updated_team is None:
             raise HTTPException(
                 status_code=404,
-                detail={
-                    "error": f"Team id = {team_id} does not exist. Error updating team logging"
-                },
+                detail={"error": f"Team id = {team_id} does not exist. Error updating team logging"},
             )
 
         # Disabling a team's logging callbacks is itself a logging-control
@@ -391,9 +375,7 @@ async def disable_team_logging(
     except ProxyException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {str(e)}"
-        )
+        verbose_proxy_logger.error(f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {str(e)}")
         verbose_proxy_logger.debug(traceback.format_exc())
         raise ProxyException(
             message="Internal Server Error, " + str(e),
@@ -445,9 +427,7 @@ async def get_team_callbacks(
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
         # Check if team_id exists
-        _existing_team = await prisma_client.get_data(
-            team_id=team_id, table_name="team", query_type="find_unique"
-        )
+        _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
         if _existing_team is None:
             raise HTTPException(
                 status_code=404,
@@ -488,9 +468,7 @@ async def get_team_callbacks(
         raise
     except Exception as e:
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {}".format(str(e))
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):

@@ -9,6 +9,8 @@ secrets from strings without depending on the logging-configuration module.
 import re
 from typing import List
 
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
+
 _REDACTED = "REDACTED"
 
 
@@ -30,7 +32,7 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # Basic auth headers
         r"Basic\s+[A-Za-z0-9+/]{10,}={0,2}",
         # OpenAI / Anthropic sk- prefixed keys
-        r"sk-[A-Za-z0-9\-_]{20,}",
+        rf"sk-[A-Za-z0-9\-_]{{{MINIMUM_CUSTOM_KEY_LENGTH - len('sk-')},}}",
         # Generic api_key / api-key / apikey (handles 'key': 'value' dict repr)
         r"(?:api[_-]?key)['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]{8,}",
         # x-api-key / api-key header values (handles 'key': 'value' dict repr)
@@ -50,13 +52,15 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"(?<=://)[^\s'\"]*:[^\s'\"@]+(?=@)",
         # Databricks personal access tokens
         r"dapi[0-9a-f]{32}",
+        # Module-level provider keys logged as litellm.<provider>_key=<value>
+        r"litellm\.[A-Za-z0-9_]*_key['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+",
         # ── Key-name-based redaction ──
         # Catches secrets inside dicts/config dumps by matching on the KEY name
         # regardless of what the value looks like.
         # e.g. 'master_key': 'any-value-here', "database_url": "postgres://..."
         # private_key with PEM-aware value capture
         r"""private_key['\"]?\s*[:=]\s*['\"]?(?:-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----|[^\s,'\"})\]{}>]+)""",
-        r"(?:master_key|database_url|db_url|connection_string|"
+        r"(?:master_key|xai_key|database_url|db_url|connection_string|"
         r"signing_key|encryption_key|"
         r"auth_token|access_token|refresh_token|"
         r"slack_webhook_url|webhook_url|"

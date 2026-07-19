@@ -18,38 +18,38 @@ sys.path.insert(
 
 import litellm  # noqa: E402
 
-from tests._vcr_conftest_common import (  # noqa: E402
+from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
+    _pin_multipart_boundary,
     apply_vcr_auto_marker_to_items,
+    emit_cassette_cache_session_banner,
+    emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
+    install_live_call_probe,
     record_vcr_outcome,
     register_persister_if_enabled,
+    reset_vcr_diag_dir,
     vcr_config_dict,
 )
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint  # noqa: E402
 
-# vcrpy and respx both patch the httpx transport — applying both makes one
-# silently win, so respx-using files opt out of the auto-marker.
-_RESPX_CONFLICTING_FILES = frozenset(
-    {
-        "test_gpt4o_audio.py",
-        "test_nvidia_nim.py",
-        "test_openai.py",
-        "test_openai_o1.py",
-        "test_prompt_caching.py",
-        "test_text_completion_unit_tests.py",
-        "test_xai.py",
-    }
-)
-_VCR_AUTO_MARKER_SKIP_FILES = _RESPX_CONFLICTING_FILES | frozenset(
-    {"test_vcr_redis_persister.py"}
+
+@pytest.fixture(scope="session", autouse=True)
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
+
+# Per-item respx detection (``apply_vcr_auto_marker_to_items``) handles
+# the vast majority of respx-vs-vcrpy conflicts automatically. The entries
+# below are the persister's and the WebSocket VCR's own unit-test files, which
+# exercise ``save_cassette`` / ``load_cassette`` against fakeredis and must not
+# themselves run under a live cassette context.
+_VCR_AUTO_MARKER_SKIP_FILES = frozenset(
+    {"test_vcr_redis_persister.py", "test_ws_vcr.py"}
 )
 
-# Tests that observe live cross-call provider state (e.g. prompt-cache
-# warm-up between two consecutive calls); replay can't reproduce that state.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES = (
-    "::test_prompt_caching",
-    "TestBedrockInvokeNovaJson::test_json_response_pydantic_obj",
-    "::test_bedrock_converse__streaming_passthrough",
-)
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
 _verbose_state = VerboseReporterState()
@@ -73,16 +73,24 @@ def pytest_runtest_makereport(item, call):
 
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
 
 
 def pytest_configure(config):
     _verbose_state.remember_pluginmanager(config)
+    reset_vcr_diag_dir()
 
 
 def pytest_runtest_logreport(report):
     _verbose_state.maybe_emit_verdict(report)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    emit_cassette_cache_session_banner(terminalreporter)
+    emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)
 
 
 # ---------------------------------------------------------------------------

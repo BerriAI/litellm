@@ -51,6 +51,12 @@ def get_expected_batch_file_usage(file_path: str) -> tuple[int, int]:
     return expected_request_count, expected_total_tokens
 
 
+def _write_batch_file(tmp_path, file_name: str, content: str) -> str:
+    path = tmp_path / file_name
+    path.write_text(content)
+    return str(path)
+
+
 @pytest.mark.asyncio()
 @pytest.mark.skipif(
     os.environ.get("OPENAI_API_KEY") is None,
@@ -114,7 +120,7 @@ async def test_batch_rate_limits():
 
 
 @pytest.mark.asyncio()
-async def test_batch_rate_limit_single_file():
+async def test_batch_rate_limit_single_file(tmp_path):
     """
     Test batch rate limiting with a single file.
 
@@ -122,8 +128,6 @@ async def test_batch_rate_limit_single_file():
     - File with < 200 tokens: should go through
     - File with > 200 tokens: should hit rate limit
     """
-    import tempfile
-
     CUSTOM_LLM_PROVIDER = "openai"
 
     # Setup: Create internal usage cache and rate limiter
@@ -152,17 +156,18 @@ async def test_batch_rate_limit_single_file():
 {"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hi"}]}}
 {"custom_id": "request-3", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey"}]}}"""
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        f.write(small_batch_content)
-        small_file_path = f.name
+    small_file_path = _write_batch_file(
+        tmp_path, "small-batch-rate-limit.jsonl", small_batch_content
+    )
 
     try:
         # Upload file to OpenAI
-        file_obj_small = await litellm.acreate_file(
-            file=open(small_file_path, "rb"),
-            purpose="batch",
-            custom_llm_provider=CUSTOM_LLM_PROVIDER,
-        )
+        with open(small_file_path, "rb") as batch_file:
+            file_obj_small = await litellm.acreate_file(
+                file=batch_file,
+                purpose="batch",
+                custom_llm_provider=CUSTOM_LLM_PROVIDER,
+            )
         print(f"Created small file: {file_obj_small.id}")
         await asyncio.sleep(1)  # Give API time to process
 
@@ -183,8 +188,6 @@ async def test_batch_rate_limit_single_file():
         print(f"  Actual tokens: {result.get('_batch_token_count')}")
     except HTTPException as e:
         pytest.fail(f"Should not have hit rate limit with small file: {e.detail}")
-    finally:
-        os.unlink(small_file_path)
 
     # Test 2: File with > 200 tokens should hit rate limit
     print("\n=== Test 2: File over 200 tokens ===")
@@ -221,47 +224,45 @@ async def test_batch_rate_limit_single_file():
 
     large_batch_content = "\n".join(requests)
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        f.write(large_batch_content)
-        large_file_path = f.name
+    large_file_path = _write_batch_file(
+        tmp_path, "large-batch-rate-limit.jsonl", large_batch_content
+    )
 
-    try:
-        # Upload file to OpenAI
+    # Upload file to OpenAI
+    with open(large_file_path, "rb") as batch_file:
         file_obj_large = await litellm.acreate_file(
-            file=open(large_file_path, "rb"),
+            file=batch_file,
             purpose="batch",
             custom_llm_provider=CUSTOM_LLM_PROVIDER,
         )
-        print(f"Created large file: {file_obj_large.id}")
-        await asyncio.sleep(1)  # Give API time to process
+    print(f"Created large file: {file_obj_large.id}")
+    await asyncio.sleep(1)  # Give API time to process
 
-        data_over_limit = {
-            "model": "gpt-3.5-turbo",
-            "input_file_id": file_obj_large.id,
-            "custom_llm_provider": CUSTOM_LLM_PROVIDER,
-        }
+    data_over_limit = {
+        "model": "gpt-3.5-turbo",
+        "input_file_id": file_obj_large.id,
+        "custom_llm_provider": CUSTOM_LLM_PROVIDER,
+    }
 
-        # Should raise HTTPException with 429 status
-        with pytest.raises(HTTPException) as exc_info:
-            await batch_limiter.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=dual_cache,
-                data=data_over_limit,
-                call_type="acreate_batch",
-            )
+    # Should raise HTTPException with 429 status
+    with pytest.raises(HTTPException) as exc_info:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=dual_cache,
+            data=data_over_limit,
+            call_type="acreate_batch",
+        )
 
-        assert exc_info.value.status_code == 429, "Should return 429 status code"
-        assert (
-            "tokens" in exc_info.value.detail.lower()
-        ), "Error message should mention tokens"
-        print(f"✓ File with 250+ tokens correctly rejected (over limit of 200)")
-        print(f"  Error: {exc_info.value.detail}")
-    finally:
-        os.unlink(large_file_path)
+    assert exc_info.value.status_code == 429, "Should return 429 status code"
+    assert (
+        "tokens" in exc_info.value.detail.lower()
+    ), "Error message should mention tokens"
+    print(f"✓ File with 250+ tokens correctly rejected (over limit of 200)")
+    print(f"  Error: {exc_info.value.detail}")
 
 
 @pytest.mark.asyncio()
-async def test_batch_rate_limit_multiple_requests():
+async def test_batch_rate_limit_multiple_requests(tmp_path):
     """
     Test batch rate limiting with multiple requests.
 
@@ -269,8 +270,6 @@ async def test_batch_rate_limit_multiple_requests():
     - Request 1: file with ~100 tokens (should go through, 100/200 used)
     - Request 2: file with ~105 tokens (should hit limit, 100+105=205 > 200)
     """
-    import tempfile
-
     CUSTOM_LLM_PROVIDER = "openai"
 
     # Setup: Create internal usage cache and rate limiter
@@ -313,17 +312,18 @@ async def test_batch_rate_limit_multiple_requests():
 
     batch_content_1 = "\n".join(requests_1)
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        f.write(batch_content_1)
-        file_path_1 = f.name
+    file_path_1 = _write_batch_file(
+        tmp_path, "batch-rate-limit-request-1.jsonl", batch_content_1
+    )
 
     try:
         # Upload file to OpenAI
-        file_obj_1 = await litellm.acreate_file(
-            file=open(file_path_1, "rb"),
-            purpose="batch",
-            custom_llm_provider=CUSTOM_LLM_PROVIDER,
-        )
+        with open(file_path_1, "rb") as batch_file:
+            file_obj_1 = await litellm.acreate_file(
+                file=batch_file,
+                purpose="batch",
+                custom_llm_provider=CUSTOM_LLM_PROVIDER,
+            )
         print(f"Created file 1: {file_obj_1.id}")
         await asyncio.sleep(1)  # Give API time to process
 
@@ -346,8 +346,6 @@ async def test_batch_rate_limit_multiple_requests():
         )
     except HTTPException as e:
         pytest.fail(f"Request 1 should not have hit rate limit: {e.detail}")
-    finally:
-        os.unlink(file_path_1)
 
     # Request 2: File with ~105+ tokens (total would exceed 200)
     print("\n=== Request 2: File with ~105 tokens (should hit limit) ===")
@@ -371,43 +369,41 @@ async def test_batch_rate_limit_multiple_requests():
 
     batch_content_2 = "\n".join(requests_2)
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        f.write(batch_content_2)
-        file_path_2 = f.name
+    file_path_2 = _write_batch_file(
+        tmp_path, "batch-rate-limit-request-2.jsonl", batch_content_2
+    )
 
-    try:
-        # Upload file to OpenAI
+    # Upload file to OpenAI
+    with open(file_path_2, "rb") as batch_file:
         file_obj_2 = await litellm.acreate_file(
-            file=open(file_path_2, "rb"),
+            file=batch_file,
             purpose="batch",
             custom_llm_provider=CUSTOM_LLM_PROVIDER,
         )
-        print(f"Created file 2: {file_obj_2.id}")
-        await asyncio.sleep(1)  # Give API time to process
+    print(f"Created file 2: {file_obj_2.id}")
+    await asyncio.sleep(1)  # Give API time to process
 
-        data_request2 = {
-            "model": "gpt-3.5-turbo",
-            "input_file_id": file_obj_2.id,
-            "custom_llm_provider": CUSTOM_LLM_PROVIDER,
-        }
+    data_request2 = {
+        "model": "gpt-3.5-turbo",
+        "input_file_id": file_obj_2.id,
+        "custom_llm_provider": CUSTOM_LLM_PROVIDER,
+    }
 
-        # Should raise HTTPException with 429 status
-        with pytest.raises(HTTPException) as exc_info:
-            await batch_limiter.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=dual_cache,
-                data=data_request2,
-                call_type="acreate_batch",
-            )
+    # Should raise HTTPException with 429 status
+    with pytest.raises(HTTPException) as exc_info:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=dual_cache,
+            data=data_request2,
+            call_type="acreate_batch",
+        )
 
-        assert exc_info.value.status_code == 429, "Should return 429 status code"
-        assert (
-            "tokens" in exc_info.value.detail.lower()
-        ), "Error message should mention tokens"
-        print(f"✓ Request 2 correctly rejected")
-        print(f"  Error: {exc_info.value.detail}")
-    finally:
-        os.unlink(file_path_2)
+    assert exc_info.value.status_code == 429, "Should return 429 status code"
+    assert (
+        "tokens" in exc_info.value.detail.lower()
+    ), "Error message should mention tokens"
+    print(f"✓ Request 2 correctly rejected")
+    print(f"  Error: {exc_info.value.detail}")
 
 
 @pytest.mark.asyncio()
@@ -415,7 +411,7 @@ async def test_batch_rate_limit_multiple_requests():
     os.environ.get("OPENAI_API_KEY") is None,
     reason="OPENAI_API_KEY not set - skipping integration test",
 )
-async def test_batch_rate_limiter_with_managed_files():
+async def test_batch_rate_limiter_with_managed_files(tmp_path):
     """
     Test for GEN-2166: Verify batch rate limiter can read user files when managed files are enabled.
 
@@ -425,7 +421,6 @@ async def test_batch_rate_limiter_with_managed_files():
     3. Rate limiting is enforced (not silently bypassed)
     4. No 403 Permission Denied errors occur for files owned by the user
     """
-    import tempfile
     from unittest.mock import AsyncMock, MagicMock, patch
 
     CUSTOM_LLM_PROVIDER = "openai"
@@ -472,18 +467,19 @@ async def test_batch_rate_limiter_with_managed_files():
 
     batch_content = "\n".join(requests)
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        f.write(batch_content)
-        file_path = f.name
+    file_path = _write_batch_file(
+        tmp_path, "managed-files-batch-rate-limit.jsonl", batch_content
+    )
 
     try:
         # Step 1: Upload file to OpenAI (simulating user upload)
         print("\n1. Uploading batch input file...")
-        file_obj = await litellm.acreate_file(
-            file=open(file_path, "rb"),
-            purpose="batch",
-            custom_llm_provider=CUSTOM_LLM_PROVIDER,
-        )
+        with open(file_path, "rb") as batch_file:
+            file_obj = await litellm.acreate_file(
+                file=batch_file,
+                purpose="batch",
+                custom_llm_provider=CUSTOM_LLM_PROVIDER,
+            )
         print(f"   ✓ File uploaded: {file_obj.id}")
         await asyncio.sleep(1)  # Give API time to process
 
@@ -568,12 +564,10 @@ async def test_batch_rate_limiter_with_managed_files():
             raise
     except Exception as e:
         pytest.fail(f"Unexpected error: {str(e)}")
-    finally:
-        os.unlink(file_path)
 
 
 @pytest.mark.asyncio()
-async def test_batch_rate_limiter_without_user_context():
+async def test_batch_rate_limiter_without_user_context(tmp_path):
     """
     Test that verifies the bug scenario from GEN-2166.
 
@@ -583,8 +577,6 @@ async def test_batch_rate_limiter_without_user_context():
 
     This test documents the expected behavior with and without user context.
     """
-    import tempfile
-
     CUSTOM_LLM_PROVIDER = "openai"
 
     # Setup
@@ -596,56 +588,53 @@ async def test_batch_rate_limiter_without_user_context():
     # Create a simple batch file
     batch_content = """{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}"""
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        f.write(batch_content)
-        file_path = f.name
+    file_path = _write_batch_file(
+        tmp_path, "without-user-context-batch-rate-limit.jsonl", batch_content
+    )
 
-    try:
-        # Upload file
+    # Upload file
+    with open(file_path, "rb") as batch_file:
         file_obj = await litellm.acreate_file(
-            file=open(file_path, "rb"),
+            file=batch_file,
             purpose="batch",
             custom_llm_provider=CUSTOM_LLM_PROVIDER,
         )
-        await asyncio.sleep(1)
+    await asyncio.sleep(1)
 
-        # Test 1: Without user context (old behavior - would fail with managed files)
-        print("\n=== Test 1: count_input_file_usage WITHOUT user context ===")
-        try:
-            usage_without_context = await BATCH_LIMITER.count_input_file_usage(
-                file_id=file_obj.id,
-                custom_llm_provider=CUSTOM_LLM_PROVIDER,
-                user_api_key_dict=None,  # Explicitly passing None
-            )
-            print(
-                f"✓ Works for non-managed files (tokens: {usage_without_context.total_tokens})"
-            )
-            print("  Note: Would fail with 403 for managed files (GEN-2166 bug)")
-        except Exception as e:
-            print(f"✗ Failed: {str(e)}")
-
-        # Test 2: With user context (new behavior - works with managed files)
-        print("\n=== Test 2: count_input_file_usage WITH user context ===")
-        user_api_key_dict = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user-123",
-        )
-
-        usage_with_context = await BATCH_LIMITER.count_input_file_usage(
+    # Test 1: Without user context (old behavior - would fail with managed files)
+    print("\n=== Test 1: count_input_file_usage WITHOUT user context ===")
+    try:
+        usage_without_context = await BATCH_LIMITER.count_input_file_usage(
             file_id=file_obj.id,
             custom_llm_provider=CUSTOM_LLM_PROVIDER,
-            user_api_key_dict=user_api_key_dict,  # Passing user context
+            user_api_key_dict=None,  # Explicitly passing None
         )
-        print(f"✓ Works with user context (tokens: {usage_with_context.total_tokens})")
-        print("  Note: This fixes GEN-2166 for managed files")
+        print(
+            f"✓ Works for non-managed files (tokens: {usage_without_context.total_tokens})"
+        )
+        print("  Note: Would fail with 403 for managed files (GEN-2166 bug)")
+    except Exception as e:
+        print(f"✗ Failed: {str(e)}")
 
-        # Verify both return the same results
-        assert usage_with_context.total_tokens == usage_without_context.total_tokens
-        assert usage_with_context.request_count == usage_without_context.request_count
-        print("\n✓ Both methods return identical results for non-managed files")
+    # Test 2: With user context (new behavior - works with managed files)
+    print("\n=== Test 2: count_input_file_usage WITH user context ===")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user-123",
+    )
 
-    finally:
-        os.unlink(file_path)
+    usage_with_context = await BATCH_LIMITER.count_input_file_usage(
+        file_id=file_obj.id,
+        custom_llm_provider=CUSTOM_LLM_PROVIDER,
+        user_api_key_dict=user_api_key_dict,  # Passing user context
+    )
+    print(f"✓ Works with user context (tokens: {usage_with_context.total_tokens})")
+    print("  Note: This fixes GEN-2166 for managed files")
+
+    # Verify both return the same results
+    assert usage_with_context.total_tokens == usage_without_context.total_tokens
+    assert usage_with_context.request_count == usage_without_context.request_count
+    print("\n✓ Both methods return identical results for non-managed files")
 
 
 @pytest.mark.asyncio()

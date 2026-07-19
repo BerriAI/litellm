@@ -67,20 +67,14 @@ def _strip_unsupported_columns(csv_bytes: bytes) -> bytes:
         return csv_bytes
 
     header_cols = lines[0].decode("utf-8").split(",")
-    keep_indices = [
-        i
-        for i, col in enumerate(header_cols)
-        if col.strip('"') in VANTAGE_SUPPORTED_COLUMNS
-    ]
+    keep_indices = [i for i, col in enumerate(header_cols) if col.strip('"') in VANTAGE_SUPPORTED_COLUMNS]
 
     # If all columns are supported, return as-is
     if len(keep_indices) == len(header_cols):
         return csv_bytes
 
     dropped = [col for i, col in enumerate(header_cols) if i not in keep_indices]
-    verbose_logger.debug(
-        "Vantage destination: dropping unsupported columns: %s", dropped
-    )
+    verbose_logger.debug("Vantage destination: dropping unsupported columns: %s", dropped)
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -143,10 +137,7 @@ class FocusVantageDestination(FocusDestination):
         # Check both size and row-count limits before single-shot upload
         lines = content.split(b"\n")
         data_line_count = sum(1 for line in lines[1:] if line.strip())
-        within_limits = (
-            len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD
-            and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
-        )
+        within_limits = len(content) <= VANTAGE_MAX_BYTES_PER_UPLOAD and data_line_count <= VANTAGE_MAX_ROWS_PER_UPLOAD
         if within_limits:
             await self._upload_csv(client, content, filename)
             return
@@ -154,10 +145,8 @@ class FocusVantageDestination(FocusDestination):
         # Otherwise split into batches respecting both limits
         await self._upload_batched(client, content, filename)
 
-    async def _upload_csv(
-        self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str
-    ) -> None:
-        url = f"{self.base_url}/v2/integrations/" f"{self.integration_token}/costs.csv"
+    async def _upload_csv(self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str) -> None:
+        url = f"{self.base_url}/v2/integrations/{self.integration_token}/costs.csv"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
         }
@@ -174,9 +163,7 @@ class FocusVantageDestination(FocusDestination):
             filename,
         )
 
-    async def _upload_batched(
-        self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str
-    ) -> None:
+    async def _upload_batched(self, client: AsyncHTTPHandler, csv_bytes: bytes, filename: str) -> None:
         """Split the CSV into batches and upload each.
 
         Continues uploading remaining batches even if one fails, then raises
@@ -195,16 +182,12 @@ class FocusVantageDestination(FocusDestination):
             try:
                 # If a single batch still exceeds 2 MB, split further by size
                 if len(batch_csv) > VANTAGE_MAX_BYTES_PER_UPLOAD:
-                    await self._upload_size_limited(
-                        client, header, batch_lines, filename, batch_num
-                    )
+                    await self._upload_size_limited(client, header, batch_lines, filename, batch_num)
                 else:
                     batch_filename = f"{filename}.part{batch_num}"
                     await self._upload_csv(client, batch_csv, batch_filename)
             except Exception as e:
-                verbose_logger.error(
-                    "Vantage destination: batch %d failed: %s", batch_num, e
-                )
+                verbose_logger.error("Vantage destination: batch %d failed: %s", batch_num, e)
                 if first_error is None:
                     first_error = e
             batch_num += 1
@@ -244,10 +227,7 @@ class FocusVantageDestination(FocusDestination):
                 )
                 continue
 
-            if (
-                current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD
-                and current_chunk
-            ):
+            if current_size + line_size > VANTAGE_MAX_BYTES_PER_UPLOAD and current_chunk:
                 batch_csv = header + b"\n" + b"\n".join(current_chunk) + b"\n"
                 batch_filename = f"{filename}.part{batch_offset}_{sub_batch}"
                 try:

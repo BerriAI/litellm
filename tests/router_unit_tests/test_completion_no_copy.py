@@ -28,7 +28,7 @@ async def test_acompletion_deployment_not_mutated():
             {
                 "model_name": "gpt-3.5",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo",
+                    "model": "gpt-5-mini",
                     "api_key": "test-key",
                     "temperature": 0.7,
                 },
@@ -46,7 +46,7 @@ async def test_acompletion_deployment_not_mutated():
         mock_acompletion.return_value = ModelResponse(
             id="test",
             choices=[{"message": {"role": "assistant", "content": "test"}, "index": 0}],
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         )
 
@@ -76,7 +76,7 @@ def test_completion_deployment_not_mutated():
             {
                 "model_name": "gpt-3.5",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo",
+                    "model": "gpt-5-mini",
                     "api_key": "test-key",
                     "max_tokens": 100,
                 },
@@ -94,7 +94,7 @@ def test_completion_deployment_not_mutated():
         mock_completion.return_value = ModelResponse(
             id="test",
             choices=[{"message": {"role": "assistant", "content": "test"}, "index": 0}],
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         )
 

@@ -26,7 +26,9 @@ from litellm.utils import (
     _is_streaming_request,
     get_llm_provider,
     get_optional_params_image_gen,
+    get_prompt_cache_min_tokens,
     is_cached_message,
+    is_prompt_caching_valid_prompt,
 )
 
 # Adds the parent directory to the system path
@@ -43,6 +45,22 @@ def local_model_cost_map(monkeypatch):
     finally:
         litellm.model_cost = original_model_cost
         litellm.get_model_info.cache_clear()
+
+
+def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
+    """supports_adaptive_thinking must flow through get_model_info like every other
+    capability flag: both from an explicit cost-map entry and from a
+    fallback-generalization rule for an unmapped model. Regression: the field shipped
+    in the JSON but was never declared on ModelInfo nor copied during construction, so
+    get_model_info (and _supports_factory) silently dropped it for any provider-prefixed
+    or unmapped name."""
+    explicit = litellm.get_model_info(model="claude-opus-4-8")
+    assert explicit["supports_adaptive_thinking"] is True
+
+    generalized = litellm.get_model_info(
+        model="claude-opus-4-9", custom_llm_provider="anthropic"
+    )
+    assert generalized["supports_adaptive_thinking"] is True
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -599,7 +617,8 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
-        "output_cost_per_image_token_batches",
+        "input_cost_per_video_token",
+        "output_cost_per_video_token",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -614,7 +633,6 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_video_per_second_above_8s_interval",
         "input_cost_per_video_per_second_above_15s_interval",
         "input_cost_per_video_per_second_above_128k_tokens",
-        "input_cost_per_token_batch_requests",
         "input_cost_per_token_batches",
         "output_cost_per_token_batches",
         "input_cost_per_token_cache_hit",
@@ -696,16 +714,18 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_flex": {"type": "number"},
+                "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
                     "type": "number"
                 },
                 "cache_read_input_audio_token_cost": {"type": "number"},
-                "cache_read_input_token_cost_per_audio_token": {"type": "number"},
-                "cache_read_input_image_token_cost": {"type": "number"},
+                "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -716,9 +736,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
+                "input_cost_per_video_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
+                "input_cost_per_token_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {
@@ -736,13 +758,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "regional_processing_uplift_multiplier_eu": {"type": "number"},
+                "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
-                "input_cost_per_token_batch_requests": {"type": "number"},
                 "input_cost_per_token_batches": {"type": "number"},
                 "input_cost_per_token_cache_hit": {"type": "number"},
                 "input_cost_per_video_per_second": {"type": "number"},
@@ -754,21 +777,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "ocr_cost_per_credit": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
-                "max_audio_length_hours": {"type": "number"},
-                "max_audio_per_prompt": {"type": "number"},
-                "max_document_chunks_per_query": {"type": "number"},
-                "max_images_per_prompt": {"type": "number"},
                 "max_input_tokens": {"type": "number"},
                 "max_output_tokens": {"type": "number"},
-                "max_pdf_size_mb": {"type": "number"},
-                "max_query_tokens": {"type": "number"},
                 "max_tokens": {"type": "number"},
-                "max_tokens_per_document_chunk": {"type": "number"},
-                "max_video_length": {"type": "number"},
-                "max_videos_per_prompt": {"type": "number"},
                 "metadata": {"type": "object"},
                 "provider_specific_entry": {"type": "object"},
                 "mode": {
@@ -797,7 +812,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
-                "output_cost_per_image_token_batches": {"type": "number"},
+                "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
@@ -806,15 +821,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
-                "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
-                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
-                    "type": "number"
-                },
-                "output_cost_per_image_above_512_and_512_pixels": {"type": "number"},
-                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {
-                    "type": "number"
-                },
-                "output_cost_per_image_premium_image": {"type": "number"},
+                "output_cost_per_token_above_512k_tokens": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_cost_per_reasoning_token": {"type": "number"},
                 "output_cost_per_video_per_second": {"type": "number"},
@@ -828,14 +835,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_assistant_prefill": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
+                "gemini_native_audio": {"type": "boolean"},
+                "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
-                "supports_code_execution": {"type": "boolean"},
-                "supports_file_search": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
                 "supports_parallel_function_calling": {"type": "boolean"},
+                "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
+                "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -853,9 +862,15 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
-                "supports_service_tier": {"type": "boolean"},
-                "supports_preset": {"type": "boolean"},
-                "tool_use_system_prompt_tokens": {"type": "number"},
+                "supports_mid_conversation_system": {"type": "boolean"},
+                "supports_sampling_params": {"type": "boolean"},
+                "supports_output_config": {"type": "boolean"},
+                "supports_speed": {"type": "boolean"},
+                "bedrock_output_config_effort_ceiling": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max", "xhigh"],
+                },
+                "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
@@ -867,8 +882,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/embeddings",
                             "/v1/chat/completions",
                             "/v1/completions",
+                            "/v1/messages",
                             "/v1/images/generations",
                             "/v1/realtime",
+                            "/v1/realtime/transcription_sessions",
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
@@ -913,14 +930,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "enum": ["text", "image", "audio", "code", "video"],
                     },
                 },
-                "supported_resolutions": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                    },
-                },
                 "supports_native_streaming": {"type": "boolean"},
+                "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
+                "use_openai_responses_path": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
@@ -961,6 +974,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     actual_json.pop(
         "sample_spec", None
     )  # remove the sample, whose schema is inconsistent with the real data
+    actual_json.pop(
+        "fallback_generalizations", None
+    )  # reserved meta key, not a model entry
 
     # Validate schema
     validate(actual_json, INTENDED_SCHEMA)
@@ -1058,6 +1074,43 @@ def test_get_model_info_gemini():
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
+def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_cost_map):
+    """Regression LIT-4056: with the bedrock/ routing prefix (plain, converse/, or
+    invoke/), the exact regional cost-map entry must win over the region-stripped
+    base entry, matching the unprefixed control form."""
+    regional = litellm.model_cost["au.anthropic.claude-opus-4-8"]
+    base = litellm.model_cost["anthropic.claude-opus-4-8"]
+    assert regional["input_cost_per_token"] > base["input_cost_per_token"]
+
+    for model in (
+        "bedrock/au.anthropic.claude-opus-4-8",
+        "bedrock/converse/au.anthropic.claude-opus-4-8",
+        "bedrock/invoke/au.anthropic.claude-opus-4-8",
+    ):
+        info = litellm.get_model_info(model=model)
+        assert info["key"] == "au.anthropic.claude-opus-4-8", model
+        assert info["input_cost_per_token"] == regional["input_cost_per_token"], model
+        assert info["output_cost_per_token"] == regional["output_cost_per_token"], model
+
+    control = litellm.get_model_info(model="au.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
+    assert control["key"] == "au.anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_base(local_model_cost_map):
+    """A regional profile with no dedicated cost-map entry must still resolve to its
+    region-stripped base entry."""
+    assert "apac.anthropic.claude-opus-4-8" not in litellm.model_cost
+    info = litellm.get_model_info(model="bedrock/apac.anthropic.claude-opus-4-8")
+    assert info["key"] == "anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost_map):
+    """A doubled bedrock/ prefix routes at runtime via strip_bedrock_routing_prefix,
+    so model info must resolve it to the same entry the request actually bills as."""
+    info = litellm.get_model_info(model="bedrock/bedrock/us.anthropic.claude-sonnet-4-6")
+    assert info["key"] == "us.anthropic.claude-sonnet-4-6"
+
+
 def test_openai_models_in_model_info():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1136,6 +1189,32 @@ def test_check_provider_match():
     # Test non-matching provider
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
+
+
+def test_check_provider_match_none_value_matches_any_provider():
+    """
+    A ``litellm_provider`` of None must be treated the same as a missing
+    key: both mean "no provider constraint" and should match any
+    ``custom_llm_provider``.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/28336.
+    Before the fix, ``register_model`` persisted ``litellm_provider: None``
+    via ``get_model_info`` for deployments registered without a provider
+    (e.g. ``Router.add_deployment``), which caused ``_check_provider_match``
+    to drop custom pricing intermittently.
+    """
+    # Missing key already returned True; None must behave identically.
+    assert litellm.utils._check_provider_match({}, "openai") is True
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "openai")
+        is True
+    )
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "anthropic")
+        is True
+    )
+    # When custom_llm_provider is also None nothing constrains the match.
+    assert litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
 
 
 def test_get_provider_rerank_config():
@@ -1314,6 +1393,48 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
             },
         }
     }
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected",
+    [
+        ("vertex_ai", True),
+        ("vertex_ai_beta", True),
+        ("gdc", True),
+        ("openai", False),
+        ("bedrock", False),
+        ("not_a_real_provider", False),
+    ],
+)
+def test_provider_supports_vertex_params(custom_llm_provider, expected):
+    from litellm.utils import _provider_supports_vertex_params
+
+    assert _provider_supports_vertex_params(custom_llm_provider) is expected
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, should_keep",
+    [
+        ("gemini-2.5-pro", "vertex_ai", True),
+        ("gemini-2.5-pro", "vertex_ai_beta", True),
+        ("gdc/gemini-2.5-flash", "gdc", True),
+        ("gpt-4o", "openai", False),
+    ],
+)
+def test_vertex_params_not_stripped_for_vertex_family(
+    model, custom_llm_provider, should_keep
+):
+    optional_params = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project="my-project",
+        vertex_location="us-central1",
+    )
+    assert ("vertex_project" in optional_params) is should_keep
+    assert ("vertex_location" in optional_params) is should_keep
+    if should_keep:
+        assert optional_params["vertex_project"] == "my-project"
+        assert optional_params["vertex_location"] == "us-central1"
 
 
 from litellm.utils import supports_function_calling
@@ -1500,8 +1621,7 @@ class TestProxyFunctionCalling:
         assert result is True, "Resolvable model names work with fallback logic"
 
         # Documentation notes:
-        print(
-            """
+        print("""
         PROXY MODEL RESOLUTION BEHAVIOR:
         
         ✅ WORKS (with current fallback logic):
@@ -1516,8 +1636,7 @@ class TestProxyFunctionCalling:
            
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
-        """
-        )
+        """)
 
     @pytest.mark.parametrize(
         "proxy_model_with_hints,expected_result",
@@ -1879,8 +1998,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -1933,8 +2051,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2148,8 +2265,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2202,8 +2318,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2417,8 +2532,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2471,8 +2585,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2817,6 +2930,128 @@ def test_generate_gcp_iam_access_token_import_error():
         assert "pip install google-cloud-iam" in str(exc_info.value)
 
 
+def test_generate_azure_ad_redis_token():
+    """Test _generate_azure_ad_redis_token with mocked Azure credential."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "azure-access-token-12345"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock()
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token()
+
+        assert result == expected_token
+        mock_credential.get_token.assert_called_once_with(
+            "https://redis.azure.com/.default"
+        )
+
+
+def test_generate_azure_ad_redis_token_service_principal():
+    """Test _generate_azure_ad_redis_token with service principal credentials."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "sp-access-token-67890"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_client_secret_credential = Mock(return_value=mock_credential)
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock()
+    mock_azure_identity.ClientSecretCredential = mock_client_secret_credential
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token(
+            azure_client_id="test-client-id",
+            azure_tenant_id="test-tenant-id",
+            azure_client_secret="test-secret",
+        )
+
+        assert result == expected_token
+        mock_client_secret_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            client_secret="test-secret",
+        )
+
+
+def test_generate_azure_ad_redis_token_import_error():
+    """Test that _generate_azure_ad_redis_token raises ImportError when azure-identity is missing."""
+    from unittest.mock import patch
+    from litellm._redis import _generate_azure_ad_redis_token
+
+    with patch.dict("sys.modules", {"azure.identity": None}):
+        with pytest.raises(ImportError) as exc_info:
+            _generate_azure_ad_redis_token()
+
+        assert "azure-identity is required" in str(exc_info.value)
+
+
+def test_redis_client_logic_azure_ad_auth():
+    """Test that _get_redis_client_logic sets up Azure AD auth when REDIS_AZURE_AD_TOKEN=true.
+
+    Mocks ``azure.identity`` via ``sys.modules`` so the test does not require
+    the real ``azure-identity`` package to be installed in the CI environment.
+    """
+    from unittest.mock import Mock, patch
+
+    mock_credential = Mock()
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = Mock(return_value=mock_credential)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _get_redis_client_logic
+
+        redis_kwargs = _get_redis_client_logic(
+            host="myredis.redis.cache.windows.net",
+            port="6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+        assert "redis_connect_func" in redis_kwargs
+        # Marker for async paths to detect Azure AD auth
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_redis_ad_token")
+        assert redis_kwargs["redis_connect_func"]._azure_redis_ad_token is True
+        # Live credential object (not raw secret) is exposed for async paths
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_credential")
+        # Raw credentials must NOT be exposed on the function
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_secret")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_id")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_tenant_id")
+
+        # Azure-specific kwargs should be removed from the dict passed to Redis
+        assert "azure_redis_ad_token" not in redis_kwargs
+        assert "azure_client_id" not in redis_kwargs
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
@@ -2880,7 +3115,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
 
 def test_gemini_embedding_2_ga_in_cost_map():
-    """GA gemini-embedding-2 entries align with preview multimodal unit pricing."""
+    """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
     import json
     from pathlib import Path
 
@@ -2891,6 +3126,7 @@ def test_gemini_embedding_2_ga_in_cost_map():
     for key, provider in (
         ("gemini/gemini-embedding-2", "gemini"),
         ("vertex_ai/gemini-embedding-2", "vertex_ai"),
+        ("vertex_ai/gemini-embedding-2-preview", "vertex_ai"),
         ("gemini-embedding-2", "vertex_ai-embedding-models"),
     ):
         info = model_cost.get(key)
@@ -3984,3 +4220,646 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_deepseek_v4_models_in_cost_map():
+    """
+    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
+    configured in model_prices_and_context_window.json.
+
+    Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
+    - deepseek-v4-flash: $0.14/M input, $0.28/M output
+    - deepseek-v4-pro:   $0.435/M input, $0.87/M output (75% discounted active price)
+
+    Closes https://github.com/BerriAI/litellm/issues/26709
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # --- bare model names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+
+    # --- provider-prefixed names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+
+
+def test_deepseek_v4_models_in_backup_cost_map():
+    """
+    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
+    configured in litellm/model_prices_and_context_window_backup.json.
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "litellm" / "model_prices_and_context_window_backup.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # --- bare model names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from backup JSON"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+
+    # --- provider-prefixed names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from backup JSON"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+
+
+_FIREWORKS_MODELS = [
+    (
+        "accounts/fireworks/models/glm-5p2",
+        1.4e-06,
+        4.4e-06,
+        1.4e-07,
+        1048576,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/glm-5p1",
+        1.4e-06,
+        4.4e-06,
+        2.6e-07,
+        202800,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/glm-5p1-fast",
+        2.8e-06,
+        8.8e-06,
+        5.2e-07,
+        202800,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/qwen3p7-plus",
+        4e-07,
+        1.6e-06,
+        8e-08,
+        262144,
+        65536,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/minimax-m3",
+        3e-07,
+        1.2e-06,
+        6e-08,
+        512000,
+        512000,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/minimax-m2p7",
+        3e-07,
+        1.2e-06,
+        6e-08,
+        196608,
+        196608,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/kimi-k2p7-code",
+        9.5e-07,
+        4e-06,
+        1.9e-07,
+        262144,
+        262144,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/kimi-k2p7-code-fast",
+        1.9e-06,
+        8e-06,
+        3.8e-07,
+        262144,
+        262144,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/kimi-k2p6",
+        9.5e-07,
+        4e-06,
+        1.6e-07,
+        262144,
+        262144,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/kimi-k2p6-fast",
+        2e-06,
+        8e-06,
+        3e-07,
+        262144,
+        262144,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/gpt-oss-120b",
+        1.5e-07,
+        6e-07,
+        1.5e-08,
+        131072,
+        32768,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/gpt-oss-20b",
+        7e-08,
+        3e-07,
+        3.5e-08,
+        131072,
+        32768,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/deepseek-v4-pro",
+        1.74e-06,
+        3.48e-06,
+        1.45e-07,
+        1048576,
+        384000,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/deepseek-v4-flash",
+        1.4e-07,
+        2.8e-07,
+        2.8e-08,
+        1048576,
+        384000,
+        False,
+        True,
+    ),
+]
+
+_FIREWORKS_SHORT_FORMS = [
+    "glm-5p2",
+    "glm-5p1",
+    "qwen3p7-plus",
+    "minimax-m3",
+    "minimax-m2p7",
+    "kimi-k2p7-code",
+    "kimi-k2p6",
+    "gpt-oss-120b",
+    "gpt-oss-20b",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+]
+
+_FIREWORKS_ROUTER_SHORT_FORMS = [
+    "glm-5p1-fast",
+    "kimi-k2p6-fast",
+    "kimi-k2p7-code-fast",
+]
+
+
+def _assert_fireworks_entry(
+    model_cost,
+    model_path,
+    expected_input,
+    expected_output,
+    expected_cache,
+    expected_max_input,
+    expected_max_output,
+    expected_vision,
+    expected_reasoning,
+):
+    info = model_cost.get(f"fireworks_ai/{model_path}")
+    assert info is not None, f"fireworks_ai/{model_path} missing from model cost map"
+    assert info["litellm_provider"] == "fireworks_ai"
+    assert info["mode"] == "chat"
+    assert info["input_cost_per_token"] == expected_input
+    assert info["output_cost_per_token"] == expected_output
+    assert info["cache_read_input_token_cost"] == expected_cache
+    assert info["max_input_tokens"] == expected_max_input
+    assert info["max_output_tokens"] == expected_max_output
+    assert info["max_tokens"] == expected_max_output
+    assert info["supports_function_calling"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_reasoning"] is expected_reasoning
+    assert info["supports_response_schema"] is True
+    assert info["supports_vision"] is expected_vision
+
+
+def test_fireworks_models_in_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for entry in _FIREWORKS_MODELS:
+        _assert_fireworks_entry(model_cost, *entry)
+
+    for short in _FIREWORKS_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/models/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+    for short in _FIREWORKS_ROUTER_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/routers/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+def test_fireworks_models_in_backup_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = (
+        Path(__file__).parents[2]
+        / "litellm"
+        / "model_prices_and_context_window_backup.json"
+    )
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for entry in _FIREWORKS_MODELS:
+        _assert_fireworks_entry(model_cost, *entry)
+
+    for short in _FIREWORKS_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/models/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+    for short in _FIREWORKS_ROUTER_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/routers/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+class TestBedrockBaseModelLabelKeepsTools:
+    """Regression for #29618: a Bedrock deployment whose ``base_model`` is a friendly
+    label must not silently drop ``tools``/``tool_choice`` under ``drop_params``."""
+
+    TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    def test_base_model_label_keeps_tools_with_drop_params(self):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            custom_llm_provider="bedrock",
+            base_model="claude-haiku-4-5",
+            tools=self.TOOLS,
+            tool_choice="auto",
+            drop_params=True,
+        )
+
+        assert "tools" in result
+        assert "tool_choice" in result
+
+    def test_base_model_label_alone_drops_tools(self):
+        """Without the real model id the label resolves to no tool support, so passing
+        the label as ``model`` is exactly what dropped tools before the fix."""
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="claude-haiku-4-5",
+            custom_llm_provider="bedrock",
+            tools=self.TOOLS,
+            tool_choice="auto",
+            drop_params=True,
+        )
+
+        assert "tools" not in result
+
+
+def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
+    """`aws_bedrock_project_id` is sent as a bedrock-mantle request header, so it
+    must never reach optional_params (and from there the request body), while
+    other aws_* params keep flowing for boto3 auth."""
+    from litellm.utils import get_optional_params
+
+    result = get_optional_params(
+        model="mantle/anthropic.claude-mythos-preview",
+        custom_llm_provider="bedrock",
+        max_tokens=10,
+        aws_bedrock_project_id="proj_abc123def456",
+        aws_region_name="us-east-1",
+    )
+
+    assert "aws_bedrock_project_id" not in result
+    assert result["aws_region_name"] == "us-east-1"
+
+
+
+class TestGetOptionalParamsTencent:
+    """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
+
+    def test_tencent_supports_thinking_param(self):
+        """Verify get_optional_params for tencent accepts the 'thinking' param."""
+        from unittest.mock import patch
+
+        from litellm.utils import get_optional_params
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = get_optional_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+                thinking={"type": "enabled"},
+            )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_tencent_supports_reasoning_effort(self):
+        """Verify get_optional_params for tencent converts reasoning_effort to thinking."""
+        from unittest.mock import patch
+
+        from litellm.utils import get_optional_params
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = get_optional_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+                reasoning_effort="medium",
+            )
+        assert result.get("thinking") == {"type": "enabled"}
+
+    def test_tencent_supported_params_includes_thinking_and_reasoning_effort(self):
+        """Verify get_supported_openai_params for tencent includes custom params."""
+        from unittest.mock import patch
+
+        from litellm.litellm_core_utils.get_supported_openai_params import (
+            get_supported_openai_params,
+        )
+
+        with patch(
+            "litellm.llms.tencent.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            params = get_supported_openai_params(
+                model="tencent/deepseek-v4-pro",
+                custom_llm_provider="tencent",
+            )
+        assert "thinking" in params
+        assert "reasoning_effort" in params
+
+    def test_tencent_messages_config_routing(self):
+        """Verify ProviderConfigManager routes tencent to TencentAnthropicMessagesConfig."""
+        import litellm
+        from litellm.llms.tencent.messages.transformation import (
+            TencentAnthropicMessagesConfig,
+        )
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="deepseek-v4-pro",
+            provider=litellm.LlmProviders.TENCENT,
+        )
+        assert isinstance(config, TencentAnthropicMessagesConfig)
+        assert config.custom_llm_provider == "tencent"
+
+
+class TestValidateEnvironmentTencent:
+    """Tests that validate_environment resolves TENCENT_API_KEY for the tencent provider."""
+
+    def test_reports_key_present(self):
+        with patch.dict(os.environ, {"TENCENT_API_KEY": "sk-tencent"}):
+            result = litellm.validate_environment(model="tencent/deepseek-v4-pro")
+
+        assert result["keys_in_environment"] is True
+        assert result["missing_keys"] == []
+
+    def test_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(model="tencent/deepseek-v4-pro")
+
+        assert result["keys_in_environment"] is False
+        assert "TENCENT_API_KEY" in result["missing_keys"]
+
+
+class TestVertexEmbeddingEncodingFormat:
+    """vertex_ai/gemini embeddings must accept encoding_format="float" — it's
+    the OpenAI SDK default and float lists are exactly what the vertex API
+    returns. Other values keep the unsupported-param behavior (drop with
+    drop_params, raise otherwise). Issue #33173."""
+
+    def test_encoding_format_float_is_accepted_and_dropped(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            custom_llm_provider="vertex_ai",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_float_accepted_for_gemini_provider(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            custom_llm_provider="gemini",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_base64_still_rejected_without_drop_params(self):
+        with pytest.raises(Exception) as excinfo:
+            litellm.utils.get_optional_params_embeddings(
+                model="gemini-embedding-001",
+                encoding_format="base64",
+                custom_llm_provider="vertex_ai",
+            )
+        assert "encoding_format" in str(excinfo.value)
+
+    def test_encoding_format_base64_dropped_with_drop_params(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="base64",
+            custom_llm_provider="vertex_ai",
+            drop_params=True,
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_dimensions_still_mapped(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            dimensions=256,
+            custom_llm_provider="vertex_ai",
+        )
+        assert optional_params.get("outputDimensionality") == 256
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/gemini-2.5-flash-image",
+        "vertex_ai/gemini-3-pro-image",
+        "vertex_ai/gemini-3-pro-image-preview",
+        "vertex_ai/gemini-3.1-flash-image",
+        "vertex_ai/gemini-3.1-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
+        "gemini/gemini-3-pro-image",
+        "gemini/gemini-3-pro-image-preview",
+        "gemini/gemini-3.1-flash-image",
+        "gemini/gemini-3.1-flash-image-preview",
+    ],
+)
+def test_gemini_image_models_do_not_support_reasoning(
+    model: str, local_model_cost_map: None
+) -> None:
+    assert model in litellm.model_cost, (
+        f"{model} is missing from the local model cost map. "
+        "Add its entry to litellm/model_prices_and_context_window_backup.json."
+    )
+    assert litellm.supports_reasoning(model) is False, (
+        f"{model} incorrectly classified as reasoning-capable. "
+        "Add 'supports_reasoning: false' to its model_cost entry."
+    )
+
+
+PROMPT_CACHE_MESSAGES = [{"role": "user", "content": "the quick brown fox jumps over the lazy dog " * 155}]
+
+
+@pytest.mark.parametrize(
+    "model, expected_min_tokens",
+    [
+        ("claude-opus-4-6", 4096),
+        ("claude-opus-4-7", 2048),
+        ("claude-opus-4-8", 1024),
+        ("claude-fable-5", 512),
+    ],
+)
+def test_get_prompt_cache_min_tokens_resolves_per_model(
+    model: str, expected_min_tokens: int, local_model_cost_map: None
+) -> None:
+    """The smallest cacheable prefix is a per-model property, read from the cost map's
+    prompt_cache_min_tokens. Anthropic's minimum spans 512..4096 across models and moves in both
+    directions across releases, so a single global constant is wrong for every model but one."""
+    assert get_prompt_cache_min_tokens(model=model) == expected_min_tokens
+
+
+def test_get_prompt_cache_min_tokens_differs_per_platform_for_same_model(local_model_cost_map: None) -> None:
+    """The same model can carry a different minimum per platform, so the threshold must come from
+    the platform's own cost-map entry rather than being derived from the model family name."""
+    assert get_prompt_cache_min_tokens(model="claude-fable-5") == 512
+    assert get_prompt_cache_min_tokens(model="anthropic.claude-fable-5") == 1024
+    assert get_prompt_cache_min_tokens(model="claude-fable-5") != get_prompt_cache_min_tokens(
+        model="anthropic.claude-fable-5"
+    )
+
+
+def test_get_prompt_cache_min_tokens_unmapped_model_falls_back_to_default(local_model_cost_map: None) -> None:
+    """get_model_info raises for a model it has no entry for. The resolver must swallow that and
+    fall back to the default, otherwise the raise reaches callers that would read it as
+    "not cacheable" -- turning an unknown model into a silently uncacheable one."""
+    assert get_prompt_cache_min_tokens(model="totally-unknown-model-xyz") == 1024
+
+
+def test_is_prompt_caching_valid_prompt_uses_per_model_minimum(local_model_cost_map: None) -> None:
+    """Regression: a prompt between two models' minimums is cacheable on one and not the other.
+    A 1403-token prompt clears claude-opus-4-8's 1024 minimum but not claude-opus-4-6's 4096, so
+    the flat-1024 check reported claude-opus-4-6 as cacheable and the cache write was rejected
+    upstream. Both assertions must live together: is_prompt_caching_valid_prompt returns False on
+    any internal error, so the True case is what proves the False case isn't a swallowed exception."""
+    token_count = litellm.token_counter(
+        model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES, use_default_image_token_count=True
+    )
+    assert 1024 <= token_count < 4096, (
+        f"prompt drifted to {token_count} tokens; it must sit between claude-opus-4-8's 1024 minimum "
+        "and claude-opus-4-6's 4096 minimum for this test to distinguish them"
+    )
+
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES) is True
+
+
+def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model(local_model_cost_map: None) -> None:
+    """An explicit min_token_count wins over the model-resolved value in both directions. Callers
+    holding only a model-group alias resolve the threshold themselves and pass it, because an alias
+    resolves to nothing here and would silently fall back to the default."""
+    assert (
+        is_prompt_caching_valid_prompt(model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES, min_token_count=512)
+        is True
+    )
+    assert (
+        is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
+        is False
+    )

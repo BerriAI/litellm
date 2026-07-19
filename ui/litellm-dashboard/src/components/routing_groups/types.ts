@@ -1,8 +1,4 @@
-export type RoutingStrategy =
-  | "simple-shuffle"
-  | "least-busy"
-  | "usage-based-routing"
-  | "latency-based-routing";
+export type RoutingStrategy = "simple-shuffle" | "least-busy" | "usage-based-routing" | "latency-based-routing";
 
 export interface RoutingGroup {
   group_name: string;

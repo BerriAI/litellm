@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from litellm._uuid import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,6 +18,154 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_helpers.utils import add_new_member
+
+
+@pytest.mark.asyncio
+async def test_management_otel_span_redacts_mcp_global_env_var_secrets(monkeypatch):
+    """A decrypted MCP global env var secret must never reach telemetry.
+
+    MCP create/update endpoints return the server with decrypted
+    ``scope="global"`` env var values so the admin UI can pre-fill the edit
+    form. ``management_endpoint_wrapper`` serializes the response into an OTEL
+    span, and that span is readable by observability users, so the secret value
+    must be blanked there while names/scopes stay for usefulness. The endpoint's
+    own return value must keep the decrypted value for the admin.
+    """
+    import datetime
+
+    from litellm.proxy._types import (
+        LiteLLM_MCPServerTable,
+        MCPEnvVar,
+        MCPEnvVarScope,
+    )
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    captured = {}
+
+    class _FakeOtelLogger:
+        async def async_management_endpoint_success_hook(
+            self, logging_payload, parent_otel_span
+        ):
+            captured["response"] = logging_payload.response
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", _FakeOtelLogger())
+    monkeypatch.setattr(mgmt_utils, "is_otel_v2_enabled", lambda: False)
+
+    secret = "s3cr3t-p@ss"
+    result = LiteLLM_MCPServerTable(
+        server_id="srv-1",
+        alias="echo",
+        url="http://localhost:8765/mcp",
+        transport="http",
+        env_vars=[
+            MCPEnvVar(name="DB_PASSWORD", value=secret, scope=MCPEnvVarScope.global_),
+            MCPEnvVar(
+                name="CORP_USER",
+                value="",
+                scope=MCPEnvVarScope.user,
+                description="Your DB username",
+            ),
+        ],
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now(),
+    )
+
+    await mgmt_utils._emit_management_endpoint_otel_span(
+        func=lambda: None,
+        kwargs={},
+        parent_otel_span=object(),
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        result=result,
+    )
+
+    serialized = captured["response"]["env_vars"]
+    # The secret must not appear anywhere the span serializer would stringify.
+    assert secret not in str(captured["response"])
+    assert all(entry["value"] == "" for entry in serialized)
+    # Names and scopes survive so the trace stays useful.
+    assert {entry["name"] for entry in serialized} == {"DB_PASSWORD", "CORP_USER"}
+    assert any(entry["scope"] == MCPEnvVarScope.global_ for entry in serialized)
+    # The endpoint's own return value is untouched: the admin still gets the
+    # decrypted value to pre-fill the edit form.
+    assert result.env_vars[0].value == secret
+
+
+@pytest.mark.asyncio
+async def test_management_otel_span_redacts_nested_submission_env_var_secrets(
+    monkeypatch,
+):
+    """Decrypted global env var secrets nested under ``items`` must also be blanked.
+
+    ``GET /v1/mcp/server/submissions`` returns ``MCPSubmissionsSummary`` whose
+    ``items[].env_vars`` carry decrypted ``scope="global"`` values for full admins.
+    ``management_endpoint_wrapper`` stringifies that nested ``items`` value into the
+    OTEL span, so redaction has to walk into ``items`` and not just the top level,
+    while the endpoint's own return value keeps the value for the admin UI.
+    """
+    import datetime
+
+    from litellm.proxy._types import (
+        LiteLLM_MCPServerTable,
+        MCPEnvVar,
+        MCPEnvVarScope,
+        MCPSubmissionsSummary,
+    )
+    from litellm.proxy.management_helpers import utils as mgmt_utils
+
+    captured = {}
+
+    class _FakeOtelLogger:
+        async def async_management_endpoint_success_hook(
+            self, logging_payload, parent_otel_span
+        ):
+            captured["response"] = logging_payload.response
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", _FakeOtelLogger())
+    monkeypatch.setattr(mgmt_utils, "is_otel_v2_enabled", lambda: False)
+
+    secret = "s3cr3t-submission"
+    server = LiteLLM_MCPServerTable(
+        server_id="srv-sub",
+        alias="echo",
+        url="http://localhost:8765/mcp",
+        transport="http",
+        env_vars=[
+            MCPEnvVar(name="DB_PASSWORD", value=secret, scope=MCPEnvVarScope.global_),
+        ],
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now(),
+    )
+    result = MCPSubmissionsSummary(
+        total=1, pending_review=1, active=0, rejected=0, items=[server]
+    )
+
+    await mgmt_utils._emit_management_endpoint_otel_span(
+        func=lambda: None,
+        kwargs={},
+        parent_otel_span=object(),
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        result=result,
+    )
+
+    # The nested secret must not appear anywhere the span serializer stringifies.
+    assert secret not in str(captured["response"])
+
+    redacted_item = captured["response"]["items"][0]
+    redacted_env_vars = (
+        redacted_item["env_vars"]
+        if isinstance(redacted_item, dict)
+        else redacted_item.env_vars
+    )
+    assert [entry["value"] for entry in redacted_env_vars] == [""]
+    assert redacted_env_vars[0]["name"] == "DB_PASSWORD"
+    # The endpoint's own return value is untouched for the admin UI.
+    assert result.items[0].env_vars[0].value == secret
 
 
 @pytest.mark.asyncio
@@ -133,6 +282,81 @@ async def test_add_new_member_clones_default_team_budget_id():
     )
     create_data = team_membership_call_args.kwargs["data"]
     assert create_data["budget_id"] == test_cloned_budget_id
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_budget_duration_only_clones_default_max_budget():
+    """When only a budget_duration is given and the team has a default member
+    budget, the member must clone the default (keeping its max_budget) and just
+    override the reset window. Creating a fresh duration-only row instead would
+    silently drop the team default's cap, leaving the member uncapped."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="dur-clone-user", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": "dur-clone-user",
+        "user_email": None,
+        "teams": ["team-dc"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
+        return_value=mock_user_response
+    )
+    mock_default_budget_row = MagicMock()
+    mock_default_budget_row.model_dump.return_value = {
+        "budget_id": "default-dc",
+        "max_budget": 100.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": 1000,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "1d",
+        "allowed_models": [],
+    }
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=mock_default_budget_row
+    )
+    mock_cloned_budget_row = MagicMock()
+    mock_cloned_budget_row.budget_id = "cloned-dc"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_cloned_budget_row
+    )
+    mock_team_membership_response = MagicMock()
+    mock_team_membership_response.model_dump.return_value = {
+        "team_id": "team-dc",
+        "user_id": "dur-clone-user",
+        "budget_id": "cloned-dc",
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+        return_value=mock_team_membership_response
+    )
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id="team-dc",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="test_admin",
+        default_team_budget_id="default-dc",
+        budget_duration="7d",
+    )
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    cloned_create_data = (
+        mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    )
+    assert cloned_create_data["max_budget"] == 100.0  # kept from the team default
+    assert cloned_create_data["budget_duration"] == "7d"  # overridden by the caller
+    assert cloned_create_data["budget_reset_at"] > datetime.now(timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -284,6 +508,130 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
     assert team_membership_call_args is not None
     create_data = team_membership_call_args.kwargs["data"]
     assert create_data["budget_id"] == test_new_budget_id
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_persists_budget_duration():
+    """Regression for the member_add half of the recurring-member-budget gap:
+    a budget_duration passed to add_new_member must be written to the new
+    member budget along with a future budget_reset_at, so the per-member budget
+    recurs instead of acting as a lifetime cap."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="user-dur", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": "user-dur",
+        "user_email": None,
+        "teams": ["team-dur"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
+        return_value=mock_user_response
+    )
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "budget-dur"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_budget_response
+    )
+    mock_team_membership_response = MagicMock()
+    mock_team_membership_response.model_dump.return_value = {
+        "team_id": "team-dur",
+        "user_id": "user-dur",
+        "budget_id": "budget-dur",
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+        return_value=mock_team_membership_response
+    )
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=10.0,
+        prisma_client=mock_prisma_client,
+        team_id="team-dur",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="test_admin",
+        default_team_budget_id=None,
+        allowed_models=["gpt-4o-mini"],
+        budget_duration="30d",
+    )
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    budget_data = mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs[
+        "data"
+    ]
+    assert budget_data["max_budget"] == 10.0
+    assert budget_data["allowed_models"] == ["gpt-4o-mini"]
+    assert budget_data["budget_duration"] == "30d"
+    reset_at = budget_data["budget_reset_at"]
+    assert isinstance(reset_at, datetime)
+    assert reset_at.tzinfo is not None
+    assert reset_at > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_persists_budget_duration_without_max_budget():
+    """budget_duration alone must still create a member budget; otherwise an
+    explicit recurring window passed without a cap would be silently dropped."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="user-dur2", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": "user-dur2",
+        "user_email": None,
+        "teams": ["team-dur2"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
+        return_value=mock_user_response
+    )
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "budget-dur2"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_budget_response
+    )
+    mock_team_membership_response = MagicMock()
+    mock_team_membership_response.model_dump.return_value = {
+        "team_id": "team-dur2",
+        "user_id": "user-dur2",
+        "budget_id": "budget-dur2",
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+        return_value=mock_team_membership_response
+    )
+
+    _, result_team_membership = await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id="team-dur2",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="test_admin",
+        default_team_budget_id=None,
+        budget_duration="7d",
+    )
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    budget_data = mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs[
+        "data"
+    ]
+    assert budget_data["budget_duration"] == "7d"
+    assert budget_data["budget_reset_at"] > datetime.now(timezone.utc)
+    assert result_team_membership is not None
+    assert result_team_membership.budget_id == "budget-dur2"
 
 
 @pytest.mark.asyncio
