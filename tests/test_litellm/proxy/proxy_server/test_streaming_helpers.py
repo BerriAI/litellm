@@ -19,6 +19,7 @@ import json
 
 import pytest
 
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import (
@@ -36,7 +37,6 @@ from litellm.proxy.proxy_server import (
     data_generator,
     select_data_generator,
 )
-from litellm.router_strategy.complexity_router.config import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
 from .conftest import normalize

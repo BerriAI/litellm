@@ -20,6 +20,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
     DimensionScore,
@@ -27,7 +28,6 @@ from litellm.router_strategy.complexity_router.complexity_router import (
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
-    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     ComplexityRouterConfig,
     ComplexityTier,
 )

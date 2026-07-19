@@ -33,6 +33,7 @@ from litellm.constants import (
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -52,7 +53,6 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
-from litellm.router_strategy.complexity_router.config import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError

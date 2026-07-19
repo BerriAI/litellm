@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -33,9 +34,6 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.utils import ProxyLogging
-from litellm.router_strategy.complexity_router.config import RETURN_RAW_MODEL_NAME_METADATA_KEY
-
-
 class TestProxyBaseLLMRequestProcessing:
     @pytest.mark.asyncio
     async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(

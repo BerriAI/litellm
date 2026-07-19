@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union, cast
 from pydantic import BaseModel
 
 from litellm._logging import verbose_router_logger
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import ModelResponse
 
@@ -32,7 +33,6 @@ from .config import (
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
-    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     TIER_SEVERITY_ORDER,
     ComplexityRouterConfig,
     ComplexityTier,

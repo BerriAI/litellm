@@ -30,7 +30,6 @@ TIER_SEVERITY_ORDER: tuple[ComplexityTier, ...] = (
 )
 
 DEFAULT_TIER_DISTANCE_PENALTY: float = 0.5
-RETURN_RAW_MODEL_NAME_METADATA_KEY: str = "_complexity_router_return_raw_model_name"
 
 
 class KeywordTierRule(BaseModel):
