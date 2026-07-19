@@ -1,11 +1,9 @@
-import datetime
 import json
 import os
 import unittest
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
-import httpx
 import pytest
 
 import litellm
@@ -55,7 +53,6 @@ def test_convert_chat_completion_messages_to_responses_api_image_input():
     assert user_content in response_str
     assert user_image in response_str
 
-    print("response: ", response)
     assert response[0]["content"][1]["image_url"] == user_image
 
 
@@ -146,8 +143,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
     ), "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
-    print("✓ Tool result with image correctly transformed to Responses API format")
-
 
 def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text():
     """
@@ -223,10 +218,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
     assert (
         text_item["text"] == "15 degrees"
     ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
-
-    print(
-        "✓ Tool result with text correctly transformed to use input_text for Responses API format"
-    )
 
 
 def test_openai_responses_chunk_parser_reasoning_summary():
@@ -511,8 +502,6 @@ and I learn to carry this small calm home."""
 
     # Check reasoning content
     assert choice.message.reasoning_content == reasoning_summary.text
-
-    print("✓ transform_response correctly handled reasoning items and output messages")
 
 
 def _make_empty_responses_api_response(model: str = "gpt-5.4"):
@@ -983,10 +972,6 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print(
-        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
-    )
-
 
 # =============================================================================
 # Tests for issue #17246: Streaming tool_calls dropped when text + tool_calls
@@ -1390,8 +1375,6 @@ def test_tool_message_output_uses_input_text_not_output_text():
     ), f"Expected input_text, got {output[0].get('type')}"
     assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
 
-    print("✓ Tool message output correctly uses input_text type")
-
 
 def test_multiple_tool_calls_in_single_choice():
     """
@@ -1533,8 +1516,6 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["id"] == "call_horoscope"
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
-    print("✓ Multiple tool calls are correctly grouped in a single choice")
-
 
 def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
     """
@@ -1547,7 +1528,6 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
     When flag is enabled (flag=True or env var), summary="detailed" is added.
     """
 
-    import litellm
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
@@ -1576,9 +1556,6 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
                 "summary" not in result
             ), f"Summary should NOT be present by default for effort={effort}"
 
-            print(
-                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)"
-            )
 
         # Test 2: With flag enabled - summary IS added
         litellm.reasoning_auto_summary = True
@@ -1592,9 +1569,6 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
                 result["summary"] == "detailed"
             ), f"Summary should be 'detailed' when flag is enabled for effort={effort}"
 
-            print(
-                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)"
-            )
 
         # Test 3: With env var enabled (flag disabled) - summary IS added
         litellm.reasoning_auto_summary = False
@@ -1604,7 +1578,6 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         assert (
             result["summary"] == "detailed"
         ), "Summary should be 'detailed' when env var is enabled"
-        print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
 
         # Test 4: Dict input is passed through as-is (no modification)
         litellm.reasoning_auto_summary = False
@@ -1615,7 +1588,16 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         result_dict = handler._map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
-        print("✓ Dict input is passed through without modification")
+
+        # Test 5: every REASONING_EFFORT level reaches the provider, and anything else (a typo, an
+        # unshipped level, "default") is dropped so the request still succeeds at the provider default
+        from litellm.types.llms.openai import Reasoning
+
+        for effort in ("max", "xhigh", "none"):
+            result_passthrough = handler._map_reasoning_effort(effort)
+            assert result_passthrough == Reasoning(effort=effort)
+        for dropped in ("ultra", "hgih", "unknown_value", "", "default"):
+            assert handler._map_reasoning_effort(dropped) is None
 
         print(
             "✓ All reasoning_effort behaviors work correctly with flag/env var control"
@@ -1811,10 +1793,6 @@ def test_transform_response_preserves_annotations():
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 20
     assert result.usage.total_tokens == 30
-
-    print(
-        "✓ Annotations from Responses API are correctly preserved in Chat Completions format"
-    )
 
 
 def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
@@ -2108,10 +2086,6 @@ def test_multi_tool_call_stream_no_premature_finish():
                 f"Chunk at index {idx} (type={chunks[idx]['type']!r}) must not emit finish_reason "
                 f"— only response.completed should terminate the stream"
             )
-
-    print(
-        "✓ Multi-tool-call stream completes without premature finish_reason termination"
-    )
 
 
 # =============================================================================
@@ -2424,10 +2398,6 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         0,
         1,
     }, f"Parallel tool calls must have distinct indices {{0, 1}}, got: {set(added_tool_call_indices)}"
-
-    print(
-        "✓ Parallel tool calls with split argument deltas stream correctly end-to-end"
-    )
 
 
 def test_map_optional_params_preserves_reasoning_summary():
@@ -2909,6 +2879,165 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
         ri["encrypted_content"] == encrypted
     ), "encrypted_content must be preserved in streaming"
     assert ri["summary"][0]["text"] == summary_text
+
+
+def test_reasoning_items_preserved_when_merged_with_tool_calls():
+    """
+    Regression: when a Responses turn contains [message, reasoning, function_call]
+    (reasoning item arriving AFTER the assistant message), the merge path that
+    attaches accumulated tool_calls onto the last message choice must also backfill
+    the structured ``reasoning_items`` (with ``encrypted_content``) onto that
+    message; otherwise the encrypted reasoning payload needed to round-trip on the
+    next turn is silently dropped. The flattened ``reasoning_content`` string is
+    already backfilled by the existing code; ``reasoning_items`` currently is not.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import (
+        ResponseFunctionToolCall,
+        ResponseOutputMessage,
+        ResponseOutputText,
+    )
+    from openai.types.responses.response_reasoning_item import (
+        ResponseReasoningItem,
+        Summary,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    encrypted = "gAAAAABpw5xyz789FAKE=="
+    summary_text = "deciding which city"
+    preamble = "Let me check the weather."
+
+    output_message = ResponseOutputMessage(
+        id="msg_merge001",
+        content=[
+            ResponseOutputText(
+                annotations=[],
+                text=preamble,
+                type="output_text",
+                logprobs=[],
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    reasoning_item = ResponseReasoningItem(
+        id="rs_merge001",
+        summary=[Summary(text=summary_text, type="summary_text")],
+        type="reasoning",
+        content=None,
+        encrypted_content=encrypted,
+        status=None,
+    )
+    function_call_item = ResponseFunctionToolCall(
+        id="fc_merge001",
+        type="function_call",
+        status="completed",
+        arguments='{"city": "Paris"}',
+        call_id="call_paris_merge",
+        name="get_weather",
+    )
+
+    usage = ResponseAPIUsage(
+        input_tokens=10,
+        input_tokens_details=InputTokensDetails(
+            audio_tokens=None, cached_tokens=0, text_tokens=None
+        ),
+        output_tokens=20,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
+        total_tokens=30,
+        cost=None,
+    )
+    raw_response = ResponsesAPIResponse(
+        id="resp_merge001",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5-mini",
+        object="response",
+        output=[output_message, reasoning_item, function_call_item],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": "low", "summary": "detailed"},
+        status="completed",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+        billing={"payer": "developer"},
+        max_tool_calls=None,
+        prompt_cache_key=None,
+        safety_identifier=None,
+        service_tier="default",
+        top_logprobs=0,
+    )
+    model_response = ModelResponse(
+        id="chatcmpl-merge001",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = handler.transform_response(
+        model="gpt-5-mini",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5-mini"},
+        messages=[{"role": "user", "content": "What's the weather in Paris?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1, (
+        f"merge must collapse into a single choice, got {len(result.choices)}"
+    )
+    choice = result.choices[0]
+    msg = choice.message
+
+    assert msg.tool_calls is not None and len(msg.tool_calls) == 1
+    assert msg.tool_calls[0]["function"]["name"] == "get_weather"
+    assert msg.tool_calls[0]["function"]["arguments"] == '{"city": "Paris"}'
+    assert choice.finish_reason == "tool_calls"
+
+    assert msg.content == preamble, "assistant preamble text must be preserved"
+
+    assert msg.reasoning_content == summary_text, (
+        "reasoning_content must be backfilled onto the merged choice"
+    )
+
+    assert msg.reasoning_items is not None, (
+        "reasoning_items must be backfilled onto the merged choice so encrypted_content "
+        "can round-trip to the provider on the next turn"
+    )
+    assert len(msg.reasoning_items) == 1
+    assert msg.reasoning_items[0]["encrypted_content"] == encrypted
 
 
 def test_streaming_function_call_tool_id_for_degenerate_call_id():
