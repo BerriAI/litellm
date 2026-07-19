@@ -567,18 +567,36 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 pass  # don't fail request if item in list is not supported
 
-        # If we accumulated tool calls, create a single choice with all of them
         if accumulated_tool_calls:
-            msg = Message(
-                content=None,
-                tool_calls=accumulated_tool_calls,
-                reasoning_content=reasoning_content,
-                reasoning_items=cast(
-                    Optional[List[ChatCompletionReasoningItem]],
-                    ([pending_reasoning_item] if pending_reasoning_item is not None else None),
+            last_msg_choice = next(
+                (
+                    c
+                    for c in reversed(choices)
+                    if getattr(c, "message", None) is not None and not getattr(c.message, "tool_calls", None)
                 ),
+                None,
             )
-            choices.append(Choices(message=msg, finish_reason="tool_calls", index=index))
+            if last_msg_choice is not None:
+                last_msg_choice.message.tool_calls = accumulated_tool_calls
+                if getattr(last_msg_choice.message, "content", None) is None:
+                    last_msg_choice.message.content = ""
+                last_msg_choice.finish_reason = "tool_calls"
+                if (
+                    reasoning_content is not None
+                    and getattr(last_msg_choice.message, "reasoning_content", None) is None
+                ):
+                    last_msg_choice.message.reasoning_content = reasoning_content
+            else:
+                msg = Message(
+                    content=None,
+                    tool_calls=accumulated_tool_calls,
+                    reasoning_content=reasoning_content,
+                    reasoning_items=cast(
+                        Optional[List[ChatCompletionReasoningItem]],
+                        ([pending_reasoning_item] if pending_reasoning_item is not None else None),
+                    ),
+                )
+                choices.append(Choices(message=msg, finish_reason="tool_calls", index=index))
             reasoning_content = None
             pending_reasoning_item = None
 
