@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use litellm_ai_gateway::io::messages::{messages as run_messages, MessagesRequest};
 use litellm_ai_gateway::io::ocr::{ocr as run_ocr, OcrRequest};
+use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use litellm_core::error::CoreError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -81,6 +83,76 @@ fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
             None
         }
     })
+}
+
+fn marshal_headers(
+    py: Python<'_>,
+    headers: Option<Py<PyAny>>,
+) -> PyResult<HashMap<String, String>> {
+    let value = match headers {
+        Some(headers) => py_to_json(py, headers.bind(py))?,
+        None => Value::Object(Map::new()),
+    };
+    let Value::Object(headers) = value else {
+        return Err(PyValueError::new_err("headers must be a dict"));
+    };
+    headers
+        .into_iter()
+        .map(|(name, value)| {
+            value
+                .as_str()
+                .map(|value| (name, value.to_string()))
+                .ok_or_else(|| PyValueError::new_err("header values must be strings"))
+        })
+        .collect()
+}
+
+#[pyclass]
+struct ResponsesWebSocketConnection {
+    inner: RustResponsesWebSocketConnection,
+}
+
+#[pymethods]
+impl ResponsesWebSocketConnection {
+    #[classmethod]
+    #[pyo3(signature = (url, headers=None, timeout_seconds=None))]
+    fn connect<'py>(
+        _cls: &Bound<'py, pyo3::types::PyType>,
+        py: Python<'py>,
+        url: String,
+        headers: Option<Py<PyAny>>,
+        timeout_seconds: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let headers = marshal_headers(py, headers)?;
+        let timeout = optional_timeout(timeout_seconds);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
+                .await
+                .map_err(core_error_to_pyerr)?;
+            Python::attach(|py| Py::new(py, ResponsesWebSocketConnection { inner }))
+        })
+    }
+
+    fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.send_text(text).await.map_err(core_error_to_pyerr)
+        })
+    }
+
+    fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.recv_text().await.map_err(core_error_to_pyerr)
+        })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.close().await.map_err(core_error_to_pyerr)
+        })
+    }
 }
 
 fn marshal_inputs(
@@ -289,6 +361,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
     module.add_function(wrap_pyfunction!(messages, module)?)?;
     module.add_function(wrap_pyfunction!(amessages, module)?)?;
+    module.add_class::<ResponsesWebSocketConnection>()?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
     Ok(())
 }

@@ -62,6 +62,7 @@ pub(super) fn prepare_messages_call(
     })?;
 
     Ok(ProviderMessagesRequest {
+        provider: provider.to_string(),
         model,
         config,
         url,

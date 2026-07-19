@@ -1012,6 +1012,7 @@ dependencies = [
  "subtle",
  "tokio",
  "tokio-tungstenite",
+ "tower",
 ]
 
 [[package]]

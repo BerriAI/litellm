@@ -146,9 +146,9 @@ quota_management.<behavior>.<variant>.<assertion>
               <budget>         key | internal_user | end_user | organization | team | team_member | tag
                                | model_max | soft | key_multi_window | team_multi_window
                                | fallback | spend_counter
-              <spend_tracking> chat_completions | stream | embeddings | cache_hit | key_rollup
-                               | concurrent_burst | tags | end_user | per_model | failure
-                               | spend_calculate | pagination
+              <spend_tracking> chat_completions | stream | messages_bridge | embeddings
+                               | cache_hit | key_rollup | concurrent_burst | tags | end_user
+                               | per_model | failure | spend_calculate | pagination
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
               | isolates_per_model | isolates_per_member | enforced_across_keys | routes_to_fallback
@@ -194,6 +194,6 @@ other.<area>.<case>.<assertion>
 
 - when it comes to typing an input schema for an api endpoint, have it type X = A | B | C ... where X = exhaustive union of all supported input schemas and A, B, C typically are composed by a base type. types are only pretty for a api request / response body. make sure to compose types instead of repeating the same base attributes over and over again.
  
-- use the docker-compose to your advantage and spin up a local proxy, make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
+- spin up a local proxy by running the litellm proxy locally (`litellm --config <your-e2e-config>.yml --port 4000`; see CONTRIBUTING.md), make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
 
 - do not use xfail markers, tests should be written in a form that the end user expects it to pass

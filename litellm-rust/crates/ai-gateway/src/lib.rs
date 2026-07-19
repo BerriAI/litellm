@@ -27,9 +27,6 @@ pub mod routes;
 #[cfg(feature = "server")]
 pub mod state;
 
-// Realtime request logging. Only the server serves realtime, so these are
-// `server`-gated; `io::realtime` exposes the generic `observe` hook while the
-// collector and callback fan-out live here.
 mod constants;
 pub mod integrations;
 #[cfg(feature = "server")]

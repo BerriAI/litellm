@@ -130,6 +130,7 @@ class StreamingResponse(BaseModel):
     headers: dict[str, str] = {}
     body: str
     chunks: int = 0  # streamed events (0 for non-streaming)
+    stream_events: list[str] = []
     # First in-stream error event, if any. A streamed call commits its HTTP 200
     # before the upstream completes, so upstream failures (e.g. insufficient
     # quota) arrive as SSE error events inside an otherwise-successful response;
@@ -305,10 +306,16 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
     lines = cast("Iterator[bytes]", resp.iter_lines())
     chunks = 0
     stream_error: str | None = None
+    stream_events: list[str] = []
     for line in lines:
         if not line:
             continue
         chunks += 1
+        decoded_line = line.decode(errors="replace")
+        if decoded_line.startswith("data: "):
+            payload = decoded_line.removeprefix("data: ")
+            if payload != "[DONE]":
+                stream_events.append(payload)
         if stream_error is None and (
             line.startswith(b"event: error")
             or b'"type":"error"' in line
@@ -324,6 +331,7 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         headers=headers,
         body="<streamed>",
         chunks=chunks,
+        stream_events=stream_events,
         stream_error=stream_error,
     )
 
