@@ -53,17 +53,21 @@ GUARDRAIL_NAME = "model_armor"
 
 _SCANNED_CONTENT_KEYS = frozenset({"text", "sanitizedText", "findings"})
 
+_REDACT_MAX_DEPTH = 20
+
 RedactablePayload = Union[dict, list, str, int, float, bool, None]
 
 
-def _redact_scanned_content(payload: RedactablePayload) -> RedactablePayload:
+def _redact_scanned_content(payload: RedactablePayload, depth: int = 0) -> RedactablePayload:
+    if depth >= _REDACT_MAX_DEPTH:
+        return "[REDACTED]"
     if isinstance(payload, dict):
         return {
-            key: "[REDACTED]" if key in _SCANNED_CONTENT_KEYS else _redact_scanned_content(value)
+            key: "[REDACTED]" if key in _SCANNED_CONTENT_KEYS else _redact_scanned_content(value, depth + 1)
             for key, value in payload.items()
         }
     if isinstance(payload, list):
-        return [_redact_scanned_content(item) for item in payload]
+        return [_redact_scanned_content(item, depth + 1) for item in payload]
     return payload
 
 

@@ -688,6 +688,23 @@ async def test_model_armor_error_output_sanitization(sanitize: bool):
         assert marker in direct_log
 
 
+def test_model_armor_redactor_depth_cap_fails_closed():
+    """Past the recursion cap the redactor must return the redaction sentinel,
+    never raw content, and must not raise RecursionError."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+        _REDACT_MAX_DEPTH,
+        _redact_scanned_content,
+    )
+
+    marker = "SYNTHETIC_DEEP_MARKER"
+    payload: dict = {"safe_key": marker}
+    for _ in range(_REDACT_MAX_DEPTH + 5):
+        payload = {"nested": payload}
+
+    redacted = _redact_scanned_content(payload)
+    assert marker not in str(redacted)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sanitize", [True, False])
 async def test_model_armor_handler_raised_http_error_sanitized(sanitize: bool):
