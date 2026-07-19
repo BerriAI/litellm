@@ -359,6 +359,32 @@ class TestGigaChatSupportedParams:
         assert "response_format" in supported
         assert "stream" in supported
 
+    def test_stop_not_supported(self, config):
+        """Claiming stop would silence UnsupportedParamsError and drop the sequences."""
+        assert "stop" not in config.get_supported_openai_params("GigaChat")
+
+    def test_stop_raises_instead_of_being_dropped(self, config):
+        """stop raises UnsupportedParamsError."""
+        import litellm
+        from litellm.utils import get_optional_params
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="GigaChat", custom_llm_provider="gigachat", stop=["END"]
+            )
+
+    def test_stop_dropped_with_drop_params(self, config):
+        """drop_params=True drops stop."""
+        from litellm.utils import get_optional_params
+
+        params = get_optional_params(
+            model="GigaChat",
+            custom_llm_provider="gigachat",
+            stop=["END"],
+            drop_params=True,
+        )
+        assert "stop" not in params
+
 
 class TestGigaChatToolChoiceMapping:
     """Tests for tool_choice -> function_call mapping"""
