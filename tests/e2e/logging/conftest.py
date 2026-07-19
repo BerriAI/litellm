@@ -13,6 +13,7 @@ import pytest
 from logging_client import LangfuseCreds, LoggingClient, build_logging_client, load_langfuse_creds
 from datadog_reader import DdLogsReader, build_dd_logs_reader
 from otel_client import OtelReader, build_otel_reader
+from proxy_client import ProxyClient
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -23,11 +24,11 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(scope="session")
-def client() -> LoggingClient:
-    """The logging suite's client: holds the shared Gateway so `resources` /
+def client(proxy: ProxyClient) -> LoggingClient:
+    """The logging suite's client: holds the shared ProxyClient so `resources` /
     `scoped_key` clean up keys and teams, and adds `/metrics` scraping plus
     Langfuse read-back."""
-    return build_logging_client()
+    return build_logging_client(proxy)
 
 
 @pytest.fixture(scope="session")

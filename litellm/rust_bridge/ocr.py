@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Awaitable, Final, Protocol, Union, cast
+from typing import TYPE_CHECKING, Awaitable, Final, Protocol, Union, cast
 
 import httpx
+
+from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
+
+if TYPE_CHECKING:
+    from litellm.rust_bridge.messages import RustAmessages, RustMessages
 
 
 class RustOcr(Protocol):
@@ -64,13 +69,28 @@ def use_litellm_rust(
     *,
     ocr: RustOcr | None | _Unset = _UNSET,
     aocr: RustAocr | None | _Unset = _UNSET,
+    messages: RustMessages | None | _Unset = _UNSET,
+    amessages: RustAmessages | None | _Unset = _UNSET,
 ) -> None:
     global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
-    _rust_ocr_enabled = enabled
+    configuring_ocr = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
+    configuring_messages = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
+    if configuring_ocr or not configuring_messages:
+        _rust_ocr_enabled = enabled
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
         _rust_aocr_impl = aocr
+    if not configuring_messages:
+        return
+    from litellm.rust_bridge.messages import set_rust_messages
+
+    if not isinstance(messages, _Unset) and not isinstance(amessages, _Unset):
+        set_rust_messages(messages=messages, amessages=amessages)
+    elif not isinstance(messages, _Unset):
+        set_rust_messages(messages=messages)
+    else:
+        set_rust_messages(amessages=amessages)
 
 
 def rust_ocr_enabled() -> bool:
@@ -99,22 +119,14 @@ def load_rust_aocr() -> RustAocr | None:
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
 
 
-def _timeout_to_seconds(timeout: Union[float, httpx.Timeout] | None) -> float | None:
-    if timeout is None:
-        return None
-    if isinstance(timeout, httpx.Timeout):
-        return timeout.read
-    return float(timeout)
-
-
 def ocr(
     *,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, Any] | None,
+    extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: Union[float, httpx.Timeout] | None,
 ) -> dict[str, object] | None:
@@ -123,11 +135,11 @@ def ocr(
         return None
     return rust_ocr(
         model=model,
-        document=cast(dict[str, object], document),
+        document=document,
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
-        extra_headers=cast(dict[str, object] | None, extra_headers),
+        extra_headers=extra_headers,
         optional_params=optional_params,
         timeout_seconds=_timeout_to_seconds(timeout),
     )
@@ -136,11 +148,11 @@ def ocr(
 async def aocr(
     *,
     model: str,
-    document: dict[str, Any],
+    document: dict[str, object],
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, Any] | None,
+    extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: Union[float, httpx.Timeout] | None,
 ) -> dict[str, object] | None:
@@ -149,11 +161,11 @@ async def aocr(
         return None
     return await rust_aocr(
         model=model,
-        document=cast(dict[str, object], document),
+        document=document,
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
-        extra_headers=cast(dict[str, object] | None, extra_headers),
+        extra_headers=extra_headers,
         optional_params=optional_params,
         timeout_seconds=_timeout_to_seconds(timeout),
     )
