@@ -741,6 +741,24 @@ class TestMergePromptManagementMessagesIntoInput:
         assert FUNCTION_CALL_OUTPUT not in result
         mock_warn.assert_called_once()
 
+    def test_hook_output_used_when_original_has_no_messages(self):
+        """Edge case: the original input is entirely non-message items (e.g. a pure
+        tool-output turn with no role-bearing message), but the hook still returns a
+        template message (a prompt_id template that unconditionally prepends a system
+        message). Prompt management still runs -- it does not silently no-op just
+        because the turn had no client messages -- but the orphaned non-message item
+        has no message to anchor to, so it is dropped with a warning rather than left
+        unpaired at the front of the request."""
+        original = [FUNCTION_CALL_OUTPUT]
+        template_msg = {"role": "system", "content": "template preamble"}
+        merged = [template_msg]
+
+        with patch("litellm.responses.main.verbose_logger.warning") as mock_warn:
+            result = _merge_prompt_management_messages_into_input(original, merged)
+
+        assert result == [template_msg]
+        mock_warn.assert_called_once()
+
 
 class TestResponsesReasoningPreservationEndToEnd:
     """[#32335] Reasoning/non-message items survive all the way to the downstream
