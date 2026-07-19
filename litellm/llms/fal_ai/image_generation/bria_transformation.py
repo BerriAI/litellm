@@ -33,7 +33,6 @@ class FalAIBriaConfig(FalAIBaseConfig):
         Get supported OpenAI parameters for Bria 3.2.
         """
         return [
-            "n",
             "response_format",
             "size",
         ]
@@ -51,7 +50,6 @@ class FalAIBriaConfig(FalAIBaseConfig):
         Mappings:
         - size -> aspect_ratio (1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9)
         - response_format -> ignored (Bria returns URLs)
-        - n -> ignored (Bria doesn't support multiple images in one call)
         """
         supported_params = self.get_supported_openai_params(model)
 
@@ -70,9 +68,6 @@ class FalAIBriaConfig(FalAIBaseConfig):
                     # Transform specific parameters
                     if k == "response_format":
                         # Bria always returns URLs, so we can ignore this
-                        continue
-                    elif k == "n":
-                        # Bria doesn't support multiple images, ignore
                         continue
                     elif k == "size":
                         # Map OpenAI size format to Bria aspect ratio
