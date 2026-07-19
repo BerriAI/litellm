@@ -3034,6 +3034,7 @@ export interface paths {
          *     - alias: Optional[str] = None  # human-friendly alias
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
+         *     - budget_duration: Optional[str] = None  # max duration budget should be set for (e.g. '30d')
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
@@ -3567,6 +3568,7 @@ export interface paths {
          *     - alias: Optional[str] = None  # human-friendly alias
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
+         *     - budget_duration: Optional[str] = None  # max duration budget should be set for (e.g. '30d')
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
