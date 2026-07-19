@@ -198,7 +198,11 @@ class TritonGenerateConfig(TritonConfig):
         data_for_triton: Dict[str, Any] = {
             "text_input": prompt_factory(model=model, messages=messages),
             "parameters": {
-                "max_tokens": int(optional_params.get("max_tokens", optional_params.get("max_completion_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON))),
+                "max_tokens": int(
+                    optional_params.get(
+                        "max_tokens", optional_params.get("max_completion_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)
+                    )
+                ),
             },
             "stream": bool(stream),
         }
