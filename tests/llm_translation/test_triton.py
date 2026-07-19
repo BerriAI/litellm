@@ -373,6 +373,98 @@ async def test_triton_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_triton_generate_request_serializes_dict_params():
+    """
+    Triton's `parameters` field only accepts int/bool/string values.
+    Nested dict/list params (e.g. chat_template_kwargs) must be JSON-encoded
+    rather than forwarded as raw objects, otherwise Triton rejects the request.
+    """
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    data_for_triton = config.transform_request(
+        model="triton/qwen3.6-27b",
+        messages=[{"role": "user", "content": "test?"}],
+        optional_params={
+            "max_tokens": 10,
+            "temperature": 0.7,
+            "chat_template_kwargs": {"enable_thinking": False},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert data_for_triton["parameters"]["max_tokens"] == 10
+    assert isinstance(data_for_triton["parameters"]["max_tokens"], int)
+    assert data_for_triton["parameters"]["temperature"] == 0.7
+    assert isinstance(data_for_triton["parameters"]["chat_template_kwargs"], str)
+    assert json.loads(data_for_triton["parameters"]["chat_template_kwargs"]) == {
+        "enable_thinking": False
+    }
+
+
+def test_triton_generate_request_serializes_tuple_params():
+    """Tuples must be JSON-encoded too (Triton only accepts int/bool/string)."""
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    data_for_triton = config.transform_request(
+        model="triton/qwen3.6-27b",
+        messages=[{"role": "user", "content": "test?"}],
+        optional_params={
+            "max_tokens": 10,
+            "stop_sequences": ("foo", "bar"),
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert isinstance(data_for_triton["parameters"]["stop_sequences"], str)
+    assert json.loads(data_for_triton["parameters"]["stop_sequences"]) == ["foo", "bar"]
+
+
+def test_triton_generate_request_max_tokens_always_int():
+    """
+    max_tokens must always be an integer in the Triton payload even if the caller
+    passes it as a string (e.g. from a JSON-decoded HTTP request body).
+    The explicit int() cast must not be silently overwritten by the param loop.
+    """
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    data_for_triton = config.transform_request(
+        model="triton/llama-3-8b-instruct",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_tokens": 10},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data_for_triton["parameters"]["max_tokens"] == 10
+    assert isinstance(data_for_triton["parameters"]["max_tokens"], int), (
+        "max_tokens must be int; the param loop must not overwrite the int() cast"
+    )
+
+
+def test_triton_generate_request_max_completion_tokens_fallback():
+    """max_completion_tokens should be used when max_tokens is absent."""
+    from litellm.llms.triton.completion.transformation import TritonGenerateConfig
+
+    config = TritonGenerateConfig()
+    data_for_triton = config.transform_request(
+        model="triton/llama-3-8b-instruct",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_completion_tokens": 20},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data_for_triton["parameters"]["max_tokens"] == 20
+    assert isinstance(data_for_triton["parameters"]["max_tokens"], int)
+    # max_completion_tokens must not appear as a separate key in parameters
+    assert "max_completion_tokens" not in data_for_triton["parameters"]
+
+
 def test_triton_generate_raw_request():
     from litellm.utils import return_raw_request
     from litellm.types.utils import CallTypes
