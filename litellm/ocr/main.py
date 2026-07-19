@@ -486,6 +486,22 @@ def get_mime_type(file_path: str) -> str:
     return guessed or "application/octet-stream"
 
 
+def _sniff_mime_type_from_bytes(data: bytes) -> str | None:
+    if data.startswith(b"%PDF-"):
+        return "application/pdf"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
+    return None
+
+
 def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str, str]:
     """
     Convert a file-type document dict to a document_url-type document dict
@@ -556,6 +572,9 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
 
     if "mime_type" in document:
         mime_type = document["mime_type"]
+
+    if mime_type.lower() in ("application/octet-stream", "binary/octet-stream"):
+        mime_type = _sniff_mime_type_from_bytes(file_bytes) or mime_type
 
     if not _MIME_PATTERN.match(mime_type):
         raise _OCRInputError(f"Invalid MIME type: {mime_type}")

@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use litellm_core::error::CoreError;
+use litellm_core::ocr::mime::resolve_document_mime;
 use litellm_core::ocr::transformation::OcrProviderConfig;
 use litellm_core::CoreResult;
 use reqwest::Url;
@@ -315,17 +316,18 @@ pub(super) async fn convert_document_url_to_data_uri(
             body: truncate_error_body(&body),
         });
     }
-    let content_type = response
+    let header_content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("application/octet-stream")
-        .to_string();
+        .map(str::to_string);
     let bytes =
         read_response_with_limit(response, &final_url, max_document_download_bytes()).await?;
+    let content_type = resolve_document_mime(
+        header_content_type.as_deref(),
+        &bytes,
+        Some(final_url.path()),
+    );
     let data_uri = format!(
         "data:{content_type};base64,{}",
         BASE64_STANDARD.encode(bytes)

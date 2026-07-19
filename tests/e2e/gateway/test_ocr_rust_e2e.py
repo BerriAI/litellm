@@ -170,6 +170,15 @@ TEST_IMAGE_URL = (
     "/tests/image_gen_tests/test_image.png"
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+FIXTURE_PDF = REPO_ROOT / "tests" / "llm_translation" / "fixtures" / "dummy.pdf"
+FIXTURE_IMAGE = REPO_ROOT / "tests" / "image_gen_tests" / "test_image.png"
+
+RUST_OCR_UPLOAD_CASES = (
+    pytest.param(FIXTURE_PDF, id="pdf_octet_stream"),
+    pytest.param(FIXTURE_IMAGE, id="image_octet_stream"),
+)
+
 CAPTURE_DOCUMENT = OcrDocument(type="document_url", document_url=TEST_PDF_URL)
 
 SUPPORTED_PARAMS = MistralOcrParams(
@@ -323,6 +332,15 @@ class OcrGateway:
                 content=_wire_payload(model, document, params),
             )
 
+    def ocr_upload(self, model: str, content: bytes, upload_name: str) -> httpx.Response:
+        with httpx.Client(timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120"))) as client:
+            return client.post(
+                f"{self.base_url.rstrip('/')}/v1/ocr",
+                headers={"Authorization": f"Bearer {self.master_key}"},
+                data={"model": model},
+                files={"file": (upload_name, content, "application/octet-stream")},
+            )
+
     def create_model(self, model_name: str, litellm_params: dict[str, str]) -> httpx.Response:
         with self._client() as client:
             return client.post(
@@ -400,6 +418,23 @@ class TestRustOcrGateway:
     @pytest.mark.parametrize(("model", "document"), RUST_OCR_GATEWAY_CASES)
     def test_rust_ocr_model_gateway_response(self, resources: OcrResources, model: str, document: OcrDocument) -> None:
         response = resources.gateway.ocr(model, document)
+
+        assert response.status_code == 200, response.text
+        OcrResponseEnvelope.model_validate_json(response.content)
+
+    @pytest.mark.parametrize("fixture_path", RUST_OCR_UPLOAD_CASES)
+    def test_rust_ocr_octet_stream_upload_response(
+        self,
+        resources: OcrResources,
+        fixture_path: Path,
+    ) -> None:
+        assert fixture_path.is_file()
+
+        response = resources.gateway.ocr_upload(
+            "rust-ocr-mistral",
+            fixture_path.read_bytes(),
+            "document",
+        )
 
         assert response.status_code == 200, response.text
         OcrResponseEnvelope.model_validate_json(response.content)
