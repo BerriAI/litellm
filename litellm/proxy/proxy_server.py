@@ -15339,17 +15339,13 @@ async def get_config(
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
         _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
 
-        # Normalize string callbacks to lists; filter out non-string entries
-        # (e.g. callback objects stored in litellm.callbacks at runtime) so
-        # that process_callback() always receives plain string names.
+        # Normalize string callbacks to lists
         def normalize_callback(callback):
             if isinstance(callback, str):
                 return [callback]
             elif callback is None:
                 return []
-            elif isinstance(callback, list):
-                return [c for c in callback if isinstance(c, str)]
-            return []
+            return callback
 
         _success_callbacks = normalize_callback(_success_callbacks)
         _failure_callbacks = normalize_callback(_failure_callbacks)
