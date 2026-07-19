@@ -65,6 +65,8 @@ class FireworksAIMixin:
             raise ValueError("FIREWORKS_API_KEY is not set")
 
         validated_headers = {"Authorization": "Bearer {}".format(api_key), **headers}
+        if not any(key.lower() == "content-type" for key in validated_headers):
+            validated_headers["Content-Type"] = "application/json"
         if not any(key.lower() == "x-session-affinity" for key in validated_headers):
             session_id = get_fireworks_session_id(litellm_params)
             if session_id:

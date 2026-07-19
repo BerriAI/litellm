@@ -123,6 +123,37 @@ def test_validate_environment_preserves_explicit_session_affinity_header():
     assert headers["x-session-affinity"] == "explicit-session"
 
 
+def test_validate_environment_sets_json_content_type():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test-key",
+    )
+
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_validate_environment_preserves_explicit_content_type():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={"content-type": "multipart/form-data"},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test-key",
+    )
+
+    assert headers["content-type"] == "multipart/form-data"
+    assert "Content-Type" not in headers
+
+
 def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     assert (
         get_fireworks_session_id(
