@@ -14,6 +14,7 @@ pub struct MessagesRequest<'a> {
 }
 
 pub(crate) struct ProviderMessagesRequest {
+    pub(crate) provider: String,
     pub(crate) model: String,
     pub(crate) config: &'static dyn AnthropicMessagesProviderConfig,
     pub(crate) url: String,
