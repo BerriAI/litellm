@@ -30,4 +30,5 @@ bedrock-auth = [
 ]
 
 [dev-dependencies]
+reqwest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

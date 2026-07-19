@@ -678,4 +678,61 @@ mod tests {
         .expect("signature");
         assert!(!signed.contains_key("X-Amz-Security-Token"));
     }
+
+    #[ignore]
+    #[tokio::test]
+    async fn live_bedrock_invoke_model_returns_200() -> Result<(), Box<dyn std::error::Error>> {
+        let access_key_id = std::env::var("AWS_BEDROCK_TEST_ACCESS_KEY_ID")?;
+        let secret_access_key = std::env::var("AWS_BEDROCK_TEST_SECRET_ACCESS_KEY")?;
+        let body = br#"{"anthropic_version":"bedrock-2023-05-31","max_tokens":1,"messages":[{"role":"user","content":[{"type":"text","text":"ping"}]}]}"#.to_vec();
+        let headers =
+            BTreeMap::from([("Content-Type".to_string(), "application/json".to_string())]);
+        let credentials = resolve_credentials(
+            AwsAuthConfig {
+                access_key_id: Some(access_key_id),
+                secret_access_key: Some(secret_access_key),
+                region_name: Some("us-west-2".to_string()),
+                ..Default::default()
+            },
+            &no_env,
+        )
+        .await?;
+        let client = reqwest::Client::new();
+        let mut failures = Vec::new();
+
+        for region in ["us-west-2", "us-east-1"] {
+            let url = format!(
+                "https://bedrock-runtime.{region}.amazonaws.com/model/us.anthropic.claude-opus-4-8/invoke"
+            );
+            let signed_headers = sign_bedrock_post(
+                &url,
+                &body,
+                &headers,
+                region,
+                &credentials,
+                SystemTime::now(),
+            )?;
+            let mut request = client.post(&url).body(body.clone());
+            for (name, value) in &headers {
+                request = request.header(name, value);
+            }
+            for (name, value) in signed_headers {
+                request = request.header(name, value);
+            }
+            let response = request.send().await?;
+            let status = response.status();
+            let response_body = response.text().await?;
+            let snippet: String = response_body.chars().take(240).collect();
+            println!("region={region} status={status} response={snippet}");
+            if status == reqwest::StatusCode::OK {
+                return Ok(());
+            }
+            failures.push(format!("{region}: {status} {snippet}"));
+        }
+
+        panic!(
+            "no Bedrock region returned HTTP 200: {}",
+            failures.join("; ")
+        );
+    }
 }
