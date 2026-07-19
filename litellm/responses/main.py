@@ -622,14 +622,6 @@ def _extract_message_items_for_prompt_management(
     return [cast(AllMessageValues, item) for item in input if _is_responses_message_item(item)]
 
 
-def _index_of_identity(items: list[Any], target: Any) -> int:
-    """Return the index of ``target`` in ``items`` by object identity, or -1."""
-    for idx, item in enumerate(items):
-        if item is target:
-            return idx
-    return -1
-
-
 def _message_id_key(item: Any) -> Optional[str]:
     """Return a message item's stable Responses API id (e.g. ``msg_...``), if any.
 
@@ -645,25 +637,41 @@ def _message_id_key(item: Any) -> Optional[str]:
     return None
 
 
-def _locate_anchor_message(items: list[Any], anchor: Any) -> int:
-    """Find ``anchor`` (a message) in ``items`` by object identity first, then by its
-    message id. Returns the index or -1.
+def _build_message_index(items: list[AllMessageValues]) -> tuple[dict[int, int], dict[str, int]]:
+    """Build O(1) lookup indices for the message items in ``items``: one by object
+    identity (``id()``), one by Responses API message id. Only message items are
+    indexed -- non-message items also carry ids but are never used as anchors (see
+    ``_message_id_key``). Used by ``_locate_anchor_message`` so anchors can be
+    located in O(1) instead of a linear scan per lookup.
+    """
+    identity_index: dict[int, int] = {}
+    id_index: dict[str, int] = {}
+    for idx, item in enumerate(items):
+        if not _is_responses_message_item(item):
+            continue
+        identity_index.setdefault(id(item), idx)
+        message_id = _message_id_key(item)
+        if message_id is not None:
+            id_index.setdefault(message_id, idx)
+    return identity_index, id_index
+
+
+def _locate_anchor_message(identity_index: dict[int, int], id_index: dict[str, int], anchor: Any) -> int:
+    """Find ``anchor`` (a message) by object identity first, then by its message id,
+    using the indices built by ``_build_message_index``. Returns the index or -1.
 
     Object identity handles the common hooks that keep the original message objects
     (pass-through, vector-store, prompt-template prepend). The id fallback additionally
     handles hooks that deep-copy messages into new objects while preserving their id
     (anthropic cache-control), so a non-message item can still be re-attached to the
-    correct message. Only message items are matched by id so non-message items -- which
-    also carry ids -- are never matched.
+    correct message.
     """
-    idx = _index_of_identity(items, anchor)
+    idx = identity_index.get(id(anchor), -1)
     if idx != -1:
         return idx
     anchor_id = _message_id_key(anchor)
     if anchor_id is not None:
-        for i, item in enumerate(items):
-            if _is_responses_message_item(item) and item.get("id") == anchor_id:
-                return i
+        return id_index.get(anchor_id, -1)
     return -1
 
 
@@ -686,7 +694,10 @@ def _splice_messages_positional(original_items: list[Any], merged_messages: list
 
 
 def _splice_messages_by_anchor(
-    original_items: list[Any], merged_messages: list[AllMessageValues]
+    original_items: list[Any],
+    merged_messages: list[AllMessageValues],
+    identity_index: dict[int, int],
+    id_index: dict[str, int],
 ) -> tuple[list[Any], int]:
     """Re-attach each non-message item next to the original message it was adjacent to,
     located in the hook output by object identity or message id (see
@@ -700,9 +711,13 @@ def _splice_messages_by_anchor(
     (prompt-template prepend), middle, or ``insert(-1)`` (vector-store context).
 
     A non-message item is only ever placed next to *its own* message, never a different
-    one, so a mis-paired request can never be produced. Returns
-    ``(reconstructed, dropped)`` where ``dropped`` counts non-message items whose anchor
-    message the hook removed/replaced (so they could not be safely placed).
+    one, so a mis-paired request can never be produced. Runs in O(n): the caller passes
+    in the identity/id index (``_build_message_index``) so anchors are located in O(1)
+    instead of a linear scan per lookup, and the result is built in a single pass
+    instead of repeated ``list.insert`` calls (each of which shifts the rest of the
+    list). Returns ``(reconstructed, dropped)`` where ``dropped`` counts non-message
+    items whose anchor message the hook removed/replaced (so they could not be safely
+    placed).
     """
     # Group leading non-message items by the message that follows them, plus any
     # trailing items that follow the last message.
@@ -719,26 +734,30 @@ def _splice_messages_by_anchor(
             pending.append(item)
     trailing = pending
 
-    result: list[Any] = list(merged_messages)
+    prefix_by_index: dict[int, list[Any]] = {}
+    suffix_by_index: dict[int, list[Any]] = {}
     dropped = 0
 
     for anchor, items in before_groups:
-        idx = _locate_anchor_message(result, anchor)
+        idx = _locate_anchor_message(identity_index, id_index, anchor)
         if idx == -1:
             # Anchor message was removed/replaced by the hook -> cannot place safely.
             dropped += len(items)
             continue
-        for offset, non_message_item in enumerate(items):
-            result.insert(idx + offset, non_message_item)
+        prefix_by_index.setdefault(idx, []).extend(items)
 
     if trailing:
-        idx = _locate_anchor_message(result, last_message) if last_message is not None else -1
+        idx = _locate_anchor_message(identity_index, id_index, last_message) if last_message is not None else -1
         if idx == -1:
             dropped += len(trailing)
         else:
-            for offset, non_message_item in enumerate(trailing):
-                result.insert(idx + 1 + offset, non_message_item)
+            suffix_by_index.setdefault(idx, []).extend(trailing)
 
+    result = [
+        out_item
+        for idx, message in enumerate(merged_messages)
+        for out_item in (*prefix_by_index.get(idx, ()), message, *suffix_by_index.get(idx, ()))
+    ]
     return result, dropped
 
 
@@ -788,12 +807,14 @@ def _merge_prompt_management_messages_into_input(
         return cast(ResponseInputParam, merged_messages)
 
     # A message counts as "locatable" if we can find it in the hook output by object
-    # identity or by its message id.
-    num_locatable = sum(1 for m in original_messages if _locate_anchor_message(merged_messages, m) != -1)
+    # identity or by its message id. Indexed once (O(n)) rather than a linear scan of
+    # merged_messages per original message (which would be O(n^2)).
+    identity_index, id_index = _build_message_index(merged_messages)
+    num_locatable = sum(1 for m in original_messages if _locate_anchor_message(identity_index, id_index, m) != -1)
 
     if num_locatable == num_original_messages:
         # Every anchor is locatable: safest, position-independent path (no drops).
-        reconstructed, dropped = _splice_messages_by_anchor(original_items, merged_messages)
+        reconstructed, dropped = _splice_messages_by_anchor(original_items, merged_messages, identity_index, id_index)
     elif len(merged_messages) == num_original_messages:
         # The count is preserved but not every message is locatable by identity/id --
         # e.g. an id-less deep-copy, or a hook that edits/replaces some messages in
@@ -816,7 +837,7 @@ def _merge_prompt_management_messages_into_input(
         # The count changed (messages added/removed), so positional cannot map slots.
         # Preserve every item whose anchor is still locatable (by identity or id) and
         # drop + warn for the rest.
-        reconstructed, dropped = _splice_messages_by_anchor(original_items, merged_messages)
+        reconstructed, dropped = _splice_messages_by_anchor(original_items, merged_messages, identity_index, id_index)
 
     if dropped:
         verbose_logger.warning(

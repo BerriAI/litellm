@@ -15,6 +15,7 @@ Covers:
 
 import asyncio
 import copy
+import time
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -933,3 +934,47 @@ class TestAzureResponsesBodyRetainsReasoning:
             i for i, it in enumerate(body_input) if it.get("type") == "message" and it.get("role") == "assistant"
         )
         assert reasoning_idx == assistant_idx - 1
+
+
+class TestMergePromptManagementPerformance:
+    """[#32335] The merge helper must not degrade to quadratic time on large inputs.
+
+    A caller with a `prompt_id` configured controls both the number of role-bearing
+    messages and their ids, so a large payload (e.g. many messages plus one trailing
+    non-message item) previously drove ~26s of CPU time at 20k messages via repeated
+    linear anchor scans and list.insert() shifting -- a request-processing resource
+    exhaustion vector reachable before any provider call is made.
+    """
+
+    @staticmethod
+    def _build_case(num_messages: int) -> tuple[list, list]:
+        original = [{"role": "user", "content": f"msg {i}", "id": f"m{i}"} for i in range(num_messages)]
+        original.append({"type": "function_call_output", "call_id": "c1", "output": "ok"})
+        # deep-copied (identity lost, ids preserved) -> exercises the id-fallback path,
+        # the most expensive branch under the old O(n^2) implementation
+        merged = copy.deepcopy(original[:num_messages])
+        return original, merged
+
+    def test_large_input_scales_sub_quadratically(self):
+        small_original, small_merged = self._build_case(1000)
+        large_original, large_merged = self._build_case(8000)  # 8x the messages
+
+        start = time.perf_counter()
+        small_result = _merge_prompt_management_messages_into_input(small_original, small_merged)
+        small_elapsed = time.perf_counter() - start
+
+        start = time.perf_counter()
+        large_result = _merge_prompt_management_messages_into_input(large_original, large_merged)
+        large_elapsed = time.perf_counter() - start
+
+        assert len(small_result) == 1001
+        assert len(large_result) == 8001
+
+        # O(n^2) would grow ~64x (8^2) for an 8x input; O(n) grows ~8x. Allow generous
+        # headroom over linear (well below quadratic) to avoid CI-noise flakiness while
+        # still catching a regression to quadratic behavior.
+        max_expected = max(small_elapsed * 8 * 4, 0.5)
+        assert large_elapsed < max_expected, (
+            f"merge helper scaled worse than expected: {small_elapsed:.4f}s at 1k messages, "
+            f"{large_elapsed:.4f}s at 8k messages (limit {max_expected:.4f}s) -- looks quadratic again"
+        )
