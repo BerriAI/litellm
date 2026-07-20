@@ -581,6 +581,103 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params.litellm_credential_name).not.toBe("from-json");
   });
 
+  it("reports a key removed from the LiteLLM Params JSON editor as litellm_params_keys_to_delete (regression: #34005)", async () => {
+    // Removing a key from the raw JSON editor used to be silently ignored: the backend
+    // merges litellm_params rather than replacing it, so an absent key looked identical
+    // to an untouched one and the stale value survived every save.
+    const customKeyModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        someKey: true,
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [customKeyModelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [customKeyModelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const litellmParamsInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) =>
+          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+      );
+    expect(litellmParamsInput).toBeDefined();
+    if (!litellmParamsInput) {
+      return;
+    }
+    expect((litellmParamsInput as HTMLTextAreaElement).value).toContain("someKey");
+    await user.clear(litellmParamsInput);
+    await user.paste(`{"model":"gpt-4","api_base":"https://api.openai.com/v1","custom_llm_provider":"openai"}`);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params).not.toHaveProperty("someKey");
+    expect(updatePayload.litellm_params_keys_to_delete).toContain("someKey");
+  });
+
+  it("reports a key removed from the Model Info JSON editor as model_info_keys_to_delete (regression: #34005)", async () => {
+    const customKeyModelData = {
+      ...defaultModelData,
+      model_info: {
+        ...defaultModelData.model_info,
+        custom_note: "drop-me",
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [customKeyModelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [customKeyModelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const modelInfoInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) => input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_note"'),
+      );
+    expect(modelInfoInput).toBeDefined();
+    if (!modelInfoInput) {
+      return;
+    }
+    await user.clear(modelInfoInput);
+    await user.paste(JSON.stringify({ ...customKeyModelData.model_info, custom_note: undefined }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.model_info).not.toHaveProperty("custom_note");
+    expect(updatePayload.model_info_keys_to_delete).toContain("custom_note");
+  });
+
   it("should not include vector_store_ids in update payload when model has none", async () => {
     // Regression: editing a model without vector stores used to inject
     // vector_store_ids: [] into litellm_params, which then propagated to
