@@ -6,6 +6,7 @@ from typing import Any, Callable, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITELLM_PROXY_BUDGET_NAME
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
@@ -86,6 +87,20 @@ class ResetBudgetJob:
                     )
         except Exception as e:
             verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
+
+    @staticmethod
+    async def _invalidate_global_proxy_spend_cache() -> None:
+        """Drop the cached global-proxy spend accumulator after the proxy
+        budget aggregate row is reset, so the next auth-time load reads the
+        zeroed row instead of a stale (potentially never-expiring) counter.
+        """
+        try:
+            from litellm.proxy.proxy_server import litellm_proxy_admin_name
+        except ImportError as e:
+            verbose_proxy_logger.warning("Failed to invalidate global proxy spend cache: %s", e)
+            return
+
+        await ResetBudgetJob._invalidate_user_api_key_cache_entry(f"{litellm_proxy_admin_name}:spend")
 
     @staticmethod
     async def _invalidate_user_api_key_cache_entry(cache_key: str) -> None:
@@ -534,6 +549,8 @@ class ResetBudgetJob:
                         user_id = getattr(u, "user_id", None)
                         if user_id:
                             await self._invalidate_spend_counter(f"spend:user:{user_id}")
+                        if user_id == LITELLM_PROXY_BUDGET_NAME:
+                            await self._invalidate_global_proxy_spend_cache()
 
             end_time = time.time()
             if len(failed_users) > 0:  # If any users failed to reset

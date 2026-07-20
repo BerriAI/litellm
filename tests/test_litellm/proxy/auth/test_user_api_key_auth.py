@@ -4515,3 +4515,57 @@ class TestCheckKeyModelBudgetWithFallback:
 
         assert exc_info.value is original_error
         assert "model" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
+    """Regression for the global proxy budget ignoring budget_duration
+    (LIT-4309 / gh#31292): the enforced global spend must be loaded from the
+    "litellm-proxy-budget" user row, which the spend writer increments per
+    request and ResetBudgetJob zeroes every budget_duration. It must NOT be
+    loaded from the MonthlyGlobalSpend view, whose window is hardcoded to a
+    trailing 30 days and never resets on the configured duration."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _fetch_global_spend_with_event_coordination,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_budget_row = MagicMock()
+    proxy_budget_row.spend = 42.5
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=proxy_budget_row)
+    prisma_client.db.query_raw = AsyncMock(
+        side_effect=AssertionError("global spend must not be loaded from the fixed-30d MonthlyGlobalSpend view")
+    )
+
+    result = await _fetch_global_spend_with_event_coordination(
+        cache_key="default_user_id:spend",
+        user_api_key_cache=UserApiKeyCache(),
+        prisma_client=prisma_client,
+    )
+
+    assert result == 42.5
+    prisma_client.db.litellm_usertable.find_unique.assert_awaited_once_with(
+        where={"user_id": "litellm-proxy-budget"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
+    """Before the startup upsert creates the aggregate row, enforcement must
+    see None (no cap applied) rather than raising."""
+    from litellm.proxy.auth.user_api_key_auth import (
+        _fetch_global_spend_with_event_coordination,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+    result = await _fetch_global_spend_with_event_coordination(
+        cache_key="default_user_id:spend",
+        user_api_key_cache=UserApiKeyCache(),
+        prisma_client=prisma_client,
+    )
+
+    assert result is None

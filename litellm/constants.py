@@ -1414,6 +1414,7 @@ LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE = int(
     os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000)
 )
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
+LITELLM_PROXY_BUDGET_NAME = "litellm-proxy-budget"
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
