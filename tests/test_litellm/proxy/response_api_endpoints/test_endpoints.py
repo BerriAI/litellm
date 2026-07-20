@@ -881,3 +881,29 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
     followup_body = asyncio.run(real_read_request_body(request=captured_requests[0]))
     assert followup_body.get("stream_options") == {"include_usage": True}
     assert followup_body.get("input") == [{"role": "user", "content": "hello"}]
+
+
+def test_cursor_models_route_delegates_to_model_list():
+    """Clients pointed at <proxy>/cursor as an OpenAI-compatible base URL resolve and
+    verify keys via GET {base}/models (the OpenAI SDK contract). Without a dedicated
+    route those requests fall through to the Cursor Cloud Agents passthrough and 401
+    for lack of a Cursor API key, so BYOK verification fails before any chat request
+    is sent. Both /cursor/models and /cursor/v1/models must serve the standard model
+    list instead."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    import litellm.proxy.proxy_server as ps
+
+    model_payload = {"data": [{"id": "gpt-5.6", "object": "model"}], "object": "list"}
+
+    app.dependency_overrides[user_api_key_auth] = _auth_override
+    try:
+        with patch.object(ps, "model_list", AsyncMock(return_value=model_payload)) as mock_model_list:
+            client = TestClient(app)
+            for path in ("/cursor/models", "/cursor/v1/models"):
+                response = client.get(path, headers={"Authorization": "Bearer sk-test-cursor"})
+                assert response.status_code == 200, f"{path}: {response.text}"
+                assert response.json() == model_payload
+            assert mock_model_list.call_count == 2
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
