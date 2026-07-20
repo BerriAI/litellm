@@ -33,7 +33,7 @@ interface GeneralSettingsPageProps {
   userID: string | null;
 }
 
-interface generalSettingsItem {
+export interface generalSettingsItem {
   field_name: string;
   field_type: string;
   field_value: any;
@@ -90,7 +90,7 @@ const SettingValueEditor: React.FC<{
   return null;
 };
 
-const PromptCachingPanel: React.FC<{
+export const PromptCachingPanel: React.FC<{
   accessToken: string;
   settings: generalSettingsItem[];
   onChange: (fieldName: string, newValue: any) => void;
