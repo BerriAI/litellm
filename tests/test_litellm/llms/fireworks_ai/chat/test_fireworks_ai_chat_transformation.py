@@ -154,6 +154,39 @@ def test_validate_environment_preserves_explicit_content_type():
     assert "Content-Type" not in headers
 
 
+def test_validate_environment_sets_json_content_type_with_session_affinity():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={"litellm_session_id": "session-123"},
+        api_key="test-key",
+    )
+
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Authorization"] == "Bearer test-key"
+    assert headers["x-session-affinity"] == "session-123"
+
+
+def test_validate_environment_resolves_api_key_from_env_and_sets_content_type(monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-env-key")
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert headers["Authorization"] == "Bearer fw-env-key"
+    assert headers["Content-Type"] == "application/json"
+
+
 def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     assert (
         get_fireworks_session_id(

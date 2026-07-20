@@ -64,11 +64,16 @@ class FireworksAIMixin:
         if api_key is None:
             raise ValueError("FIREWORKS_API_KEY is not set")
 
-        validated_headers = {"Authorization": "Bearer {}".format(api_key), **headers}
-        if not any(key.lower() == "content-type" for key in validated_headers):
-            validated_headers["Content-Type"] = "application/json"
-        if not any(key.lower() == "x-session-affinity" for key in validated_headers):
-            session_id = get_fireworks_session_id(litellm_params)
-            if session_id:
-                validated_headers["x-session-affinity"] = session_id
-        return validated_headers
+        auth_headers = {"Authorization": "Bearer {}".format(api_key), **headers}
+        content_type_header = (
+            {} if any(key.lower() == "content-type" for key in auth_headers) else {"Content-Type": "application/json"}
+        )
+        return self._add_session_affinity_header({**auth_headers, **content_type_header}, litellm_params)
+
+    def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:
+        if any(key.lower() == "x-session-affinity" for key in headers):
+            return headers
+        session_id = get_fireworks_session_id(litellm_params)
+        if not session_id:
+            return headers
+        return {**headers, "x-session-affinity": session_id}
