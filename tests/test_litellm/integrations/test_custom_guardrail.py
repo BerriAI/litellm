@@ -1617,19 +1617,20 @@ class TestGuardrailInterventionClassification:
 
 
 class TestHttpExceptionInterventionClassification:
-    """Any 4xx HTTPException from a guardrail is a deliberate block, not a failure."""
+    """Policy-rejection 4xx codes are blocks; infra 4xx/5xx stay failures."""
 
     @pytest.mark.parametrize("status_code", [400, 403, 422])
-    def test_4xx_http_exception_is_intervention(self, status_code):
+    def test_policy_http_exception_is_intervention(self, status_code):
         from fastapi import HTTPException
 
         exc = HTTPException(status_code=status_code, detail="Blocked by guardrail")
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
 
-    def test_5xx_http_exception_is_not_intervention(self):
+    @pytest.mark.parametrize("status_code", [401, 408, 429, 500])
+    def test_infra_http_exception_is_not_intervention(self, status_code):
         from fastapi import HTTPException
 
-        exc = HTTPException(status_code=500, detail="Guardrail provider unavailable")
+        exc = HTTPException(status_code=status_code, detail="Guardrail upstream error")
         assert CustomGuardrail._is_guardrail_intervention(exc) is False
 
     @pytest.mark.asyncio
