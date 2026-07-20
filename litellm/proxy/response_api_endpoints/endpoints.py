@@ -349,8 +349,11 @@ async def cursor_chat_completions(
         )
 
     # OpenAI's Responses API rejects chat-completions-only stream_options
-    # (Cursor sends include_usage); usage arrives via response.completed anyway
-    data.pop("stream_options", None)
+    # (Cursor sends include_usage); usage arrives via response.completed anyway.
+    # Rebuild rather than pop: _read_request_body can return the request-scope
+    # cached parsed-body dict itself, and removing keys from it corrupts the
+    # cache's key snapshot so later readers get an empty body
+    data = {key: value for key, value in data.items() if key != "stream_options"}
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
