@@ -10,9 +10,9 @@ from litellm.caching.disk_cache import DiskCache
 
 
 class _SlowInt(int):
-    def __add__(self, value: int) -> int:
+    def __add__(self, value: int) -> "_SlowInt":
         time.sleep(0.05)
-        return int(self) + value
+        return _SlowInt(int(self) + value)
 
 
 @pytest.fixture
@@ -38,7 +38,8 @@ def test_increment_cache_treats_non_int_cached_value_as_zero(cache):
 
 
 def test_increment_cache_is_atomic_under_thread_concurrency(cache):
-    cache.set_cache("counter", _SlowInt(0))
+    seed = 1000
+    cache.set_cache("counter", _SlowInt(seed))
     thread_count = 8
     barrier = threading.Barrier(thread_count)
 
@@ -49,7 +50,7 @@ def test_increment_cache_is_atomic_under_thread_concurrency(cache):
     with ThreadPoolExecutor(max_workers=thread_count) as executor:
         tuple(executor.map(increment, range(thread_count)))
 
-    assert cache.get_cache("counter") == thread_count
+    assert cache.get_cache("counter") == seed + thread_count
 
 
 async def test_async_increment_starts_from_zero_when_key_missing(cache):

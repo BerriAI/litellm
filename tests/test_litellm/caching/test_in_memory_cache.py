@@ -21,14 +21,15 @@ from litellm.caching.in_memory_cache import InMemoryCache
 
 
 class _SlowInt(int):
-    def __add__(self, value: int) -> int:
+    def __add__(self, value: int) -> "_SlowInt":
         time.sleep(0.05)
-        return int(self) + value
+        return _SlowInt(int(self) + value)
 
 
 def test_increment_cache_is_atomic_under_thread_concurrency():
     cache = InMemoryCache()
-    cache.set_cache("counter", _SlowInt(0))
+    seed = 1000
+    cache.set_cache("counter", _SlowInt(seed))
     thread_count = 8
     barrier = threading.Barrier(thread_count)
 
@@ -39,7 +40,7 @@ def test_increment_cache_is_atomic_under_thread_concurrency():
     with ThreadPoolExecutor(max_workers=thread_count) as executor:
         tuple(executor.map(increment, range(thread_count)))
 
-    assert cache.get_cache("counter") == thread_count
+    assert cache.get_cache("counter") == seed + thread_count
 
 
 def test_in_memory_openai_obj_cache():
