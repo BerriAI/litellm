@@ -22,6 +22,7 @@ import httpx
 from pydantic import BaseModel
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
@@ -402,9 +403,16 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
             else:
+                is_adaptive = mapped_thinking.get("type") == "adaptive"
+                if is_adaptive and not is_claude:
+                    raise BadRequestError(
+                        message=(f"Adaptive thinking is only supported on Databricks Claude models, not {model!r}."),
+                        model=model,
+                        llm_provider="databricks",
+                    )
                 optional_params["thinking"] = mapped_thinking
                 # output_config + adaptive thinking is an Anthropic-only feature.
-                if is_claude and AnthropicConfig._is_adaptive_thinking_model(model, "databricks"):
+                if is_claude and is_adaptive:
                     mapped_effort: Optional[str] = None
                     if isinstance(reasoning_effort_value, str):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort_value)
