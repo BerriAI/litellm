@@ -16,8 +16,10 @@ from models import (
     ChatMessage,
     KeyDeleteBody,
     KeyGenerateBody,
+    KeyGenerateResponse,
     KeyListParams,
     KeyListResponse,
+    KeyRegenerateBody,
     KeyUpdateBody,
     OrgDeleteBody,
     OrgInfoParams,
@@ -88,6 +90,16 @@ class ManagementClient:
                 response_type=NoBody,
             )
         )
+
+    def regenerate_key(self, key: str) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/key/regenerate",
+                headers=self.proxy.transport.master,
+                json=KeyRegenerateBody(key=key),
+                response_type=KeyGenerateResponse,
+            )
+        ).key
 
     def key_alias_count(self, key_alias: str) -> int:
         return unwrap(
