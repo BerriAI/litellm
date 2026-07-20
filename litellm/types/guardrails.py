@@ -687,6 +687,14 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "so only a valid guardrail response can block or modify it."
         ),
     )
+    skip_unscannable_attachments: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
+            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
+            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+        ),
+    )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -904,6 +912,7 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_entities: List[str]
     supported_actions: List[str]
     supported_modes: List[str]
+    supported_modes_by_provider: Dict[str, List[str]]
     pii_entity_categories: List[PiiEntityCategoryMap]
     content_filter_settings: Optional[Dict[str, Any]] = None
 

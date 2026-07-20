@@ -772,7 +772,6 @@ class TestProxyOAuthHeaderForwarding:
         self,
     ):
         """OAuth Authorization header IS forwarded when x-litellm-api-key was used for proxy auth."""
-        from unittest.mock import patch
 
         from starlette.datastructures import Headers
 
@@ -1728,6 +1727,51 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+
+
+class TestDefaultSuffixAdaptiveThinking:
+    """@default-suffixed Vertex AI model names (e.g. vertex_ai/claude-opus-4-8@default)
+    must resolve as adaptive thinking. Before the fix, _model_map_lookup_candidates
+    never stripped the @default suffix, so the lookup fell through to the bare
+    model name without @default, which may or may not have the flag, and for
+    provider-prefixed forms the lookup always missed (issue #31760)."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "vertex_ai/claude-opus-4-8@default",
+            "vertex_ai/claude-sonnet-4-6@default",
+            "vertex_ai/claude-opus-4-7@default",
+            "vertex_ai/claude-opus-4-6@default",
+            "vertex_ai/claude-fable-5@default",
+        ],
+    )
+    def test_default_suffix_models_are_adaptive_thinking(
+        self, local_model_cost_map, model: str
+    ) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True, (
+            f"{model} not classified as adaptive thinking. "
+            "Check _model_map_lookup_candidates strips @default suffix."
+        )
+
+    @pytest.mark.parametrize(
+        "model,expected_bare",
+        [
+            ("vertex_ai/claude-opus-4-8@default", "claude-opus-4-8"),
+            ("vertex_ai/claude-sonnet-4-6@default", "claude-sonnet-4-6"),
+        ],
+    )
+    def test_lookup_candidates_include_bare_name(
+        self, model: str, expected_bare: str
+    ) -> None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
+        assert expected_bare in candidates, (
+            f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
+        )
 
 
 class TestCapabilityProbeUsesCallerProvider:

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
+    from litellm.types.utils import LiteLLMBatch
 
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
@@ -277,13 +278,20 @@ class CheckBatchCost:
         except Exception:
             return None
 
-    async def check_batch_cost(self):
+    async def _track_completed_batch_cost(
+        self,
+        job: "LiteLLM_ManagedObjectTable",
+        response: "LiteLLMBatch",
+        model_id: str,
+        batch_id: str,
+        prom_logger: Optional["PrometheusLogger"],
+    ) -> Optional[Tuple[Optional[str], Optional[str]]]:
         """
-        Check if the batch JOB has been tracked.
-        - get all status="validating" and file_purpose="batch" jobs
-        - check if batch is now complete
-        - if not, return False
-        - if so, return True
+        Fetch a completed batch's results, compute cost/usage, and emit the
+        aretrieve_batch spend log. Returns (model_name, llm_provider) on
+        success, None when the job can't be routed to a deployment. Raises on
+        results-fetch or cost-computation failures so the caller can leave the
+        job unprocessed and retry it on a later poll.
         """
         from litellm.batches.batch_utils import (
             _get_file_content_as_dictionary,
@@ -296,6 +304,184 @@ class CheckBatchCost:
             _is_base64_encoded_unified_file_id,
         )
 
+        verbose_proxy_logger.info(
+            f"Batch ID: {batch_id} is complete, tracking cost and usage"
+        )
+
+        # aretrieve_batch is called with the raw provider batch ID, so response.id
+        # is the raw provider value (e.g. "batch_20260223-0518.234"). We need the
+        # unified base64 ID in the S3 log so downstream consumers can correlate it
+        # back to the batch they submitted via the proxy.
+        #
+        # CheckBatchCost builds its own LiteLLMLogging object (logging_obj below) and
+        # calls async_success_handler(result=response) directly. That handler calls
+        # _build_standard_logging_payload(response, ...) which reads response.id at
+        # that point — so setting response.id here is sufficient.
+        #
+        # The HTTP endpoint does this substitution via the managed files hook
+        # (async_post_call_success_hook). CheckBatchCost bypasses that hook entirely,
+        # so we do it explicitly here.
+        response.id = job.unified_object_id
+
+        # This background job runs as default_user_id, so going through the HTTP endpoint
+        # would trigger check_managed_file_id_access and get 403. Instead, extract the raw
+        # provider file ID and call afile_content directly with deployment credentials.
+        raw_output_file_id = response.output_file_id
+        decoded = _is_base64_encoded_unified_file_id(raw_output_file_id)
+        if decoded:
+            try:
+                raw_output_file_id = decoded.split("llm_output_file_id,")[1].split(";")[0]
+            except (IndexError, AttributeError):
+                pass
+
+        credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+        _file_content = await afile_content(
+            file_id=raw_output_file_id,
+            **credentials,
+        )
+
+        # Access content - handle both direct attribute and method call
+        if hasattr(_file_content, 'content'):
+            content_bytes = _file_content.content  # type: ignore[union-attr]
+        elif hasattr(_file_content, 'read'):
+            content_bytes = await _file_content.read()  # type: ignore[misc]
+        else:
+            content_bytes = _file_content  # type: ignore[assignment]
+
+        file_content_as_dict = _get_file_content_as_dictionary(
+            content_bytes  # type: ignore[arg-type]
+        )
+
+        # Record output file size
+        if prom_logger and content_bytes:
+            try:
+                prom_logger.record_managed_file_size(
+                    size_bytes=len(content_bytes),  # type: ignore
+                    purpose="batch",
+                    file_type="output",
+                    model=model_id,
+                )
+            except Exception:
+                pass
+
+        deployment_info = self.llm_router.get_deployment(model_id=model_id)
+        if deployment_info is None:
+            verbose_proxy_logger.info(
+                f"Skipping job {job.unified_object_id} because it is not a valid deployment info"
+            )
+            self._record_error(prom_logger, "deployment_not_found")
+            return None
+        custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
+        litellm_model_name = deployment_info.litellm_params.model
+
+        model_name, llm_provider, _, _ = get_llm_provider(
+            model=litellm_model_name,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
+        # output/error file IDs to managed base64 IDs before the DB write here.
+        managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
+        if managed_files_hook is not None:
+            from litellm.proxy._types import UserAPIKeyAuth
+            _minimal_auth = UserAPIKeyAuth(
+                user_id=job.created_by or "default-user-id",
+                team_id=getattr(job, "team_id", None),
+            )
+            for _file_attr in ["output_file_id", "error_file_id"]:
+                _raw_file_id = getattr(response, _file_attr, None)
+                if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
+                    try:
+                        _unified_file_id = managed_files_hook.get_unified_output_file_id(
+                            output_file_id=_raw_file_id,
+                            model_id=model_id,
+                            model_name=str(model_name) if model_name else deployment_info.model_name or None,
+                        )
+                        await managed_files_hook.store_unified_file_id(
+                            file_id=_unified_file_id,
+                            file_object=None,
+                            litellm_parent_otel_span=None,
+                            model_mappings={model_id: _raw_file_id},
+                            user_api_key_dict=_minimal_auth,
+                        )
+                        setattr(response, _file_attr, _unified_file_id)
+                        verbose_proxy_logger.info(
+                            f"CheckBatchCost: converted {_file_attr} "
+                            f"{_raw_file_id!r} -> managed ID for batch {batch_id}"
+                        )
+                    except Exception as _e:
+                        verbose_proxy_logger.warning(
+                            f"CheckBatchCost: failed to create managed file ID for "
+                            f"{_file_attr}={_raw_file_id!r}: {_e}"
+                        )
+
+        # Pass deployment model_info so custom batch pricing
+        # (input_cost_per_token_batches etc.) is used for cost calc
+        deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
+        batch_cost, batch_usage, batch_models = (
+            await calculate_batch_cost_and_usage(
+                file_content_dictionary=file_content_as_dict,
+                custom_llm_provider=llm_provider,  # type: ignore
+                model_name=model_name,
+                model_info=deployment_model_info,  # type: ignore[arg-type]
+            )
+        )
+        logging_obj = LiteLLMLogging(
+            model=batch_models[0],
+            messages=[{"role": "user", "content": "<retrieve_batch>"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=datetime.now(),
+            litellm_call_id=str(uuid.uuid4()),
+            function_id=str(uuid.uuid4()),
+        )
+
+        creator_user_id = job.created_by
+        user_info = await self._get_user_info(batch_id, job.created_by)
+
+        logging_obj.update_environment_variables(
+            litellm_params={
+                # set the user-agent header so that S3 callback consumers can easily identify CheckBatchCost callbacks
+                "proxy_server_request": {
+                    "headers": {
+                        "user-agent": CHECK_BATCH_COST_USER_AGENT,
+                    }
+                },
+                "metadata": {
+                    "user_api_key_user_id": creator_user_id,
+                    **user_info,
+                },
+            },
+            optional_params={},
+        )
+
+        await logging_obj.async_success_handler(
+            result=response,
+            batch_cost=batch_cost,
+            batch_usage=batch_usage,
+            batch_models=batch_models,
+        )
+
+        # Record batch duration (completed_at - created_at)
+        if prom_logger and response.completed_at and response.created_at:
+            duration_seconds = float(response.completed_at - response.created_at)
+            if duration_seconds >= 0:
+                prom_logger.record_managed_batch_duration(
+                    duration_seconds=duration_seconds,
+                    model=model_name,
+                    api_provider=str(llm_provider) if llm_provider else None,
+                )
+
+        return model_name, str(llm_provider) if llm_provider else None
+
+    async def check_batch_cost(self):
+        """
+        Check if the batch JOB has been tracked.
+        - get all status="validating" and file_purpose="batch" jobs
+        - check if batch is now complete
+        - if not, return False
+        - if so, return True
+        """
         try:
             from litellm.integrations.prometheus import PrometheusLogger
             prom_logger = PrometheusLogger.get_instance()
@@ -381,177 +567,26 @@ class CheckBatchCost:
                 response.status == "completed"
                 and response.output_file_id is not None
             ):
-                verbose_proxy_logger.info(
-                    f"Batch ID: {batch_id} is complete, tracking cost and usage"
-                )
-
-                # aretrieve_batch is called with the raw provider batch ID, so response.id
-                # is the raw provider value (e.g. "batch_20260223-0518.234"). We need the
-                # unified base64 ID in the S3 log so downstream consumers can correlate it
-                # back to the batch they submitted via the proxy.
-                #
-                # CheckBatchCost builds its own LiteLLMLogging object (logging_obj below) and
-                # calls async_success_handler(result=response) directly. That handler calls
-                # _build_standard_logging_payload(response, ...) which reads response.id at
-                # that point — so setting response.id here is sufficient.
-                #
-                # The HTTP endpoint does this substitution via the managed files hook
-                # (async_post_call_success_hook). CheckBatchCost bypasses that hook entirely,
-                # so we do it explicitly here.
-                response.id = job.unified_object_id
-
-                # This background job runs as default_user_id, so going through the HTTP endpoint
-                # would trigger check_managed_file_id_access and get 403. Instead, extract the raw
-                # provider file ID and call afile_content directly with deployment credentials.
-                raw_output_file_id = response.output_file_id
-                decoded = _is_base64_encoded_unified_file_id(raw_output_file_id)
-                if decoded:
-                    try:
-                        raw_output_file_id = decoded.split("llm_output_file_id,")[1].split(";")[0]
-                    except (IndexError, AttributeError):
-                        pass
-
-                credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
-                _file_content = await afile_content(
-                    file_id=raw_output_file_id,
-                    **credentials,
-                )
-
-                # Access content - handle both direct attribute and method call
-                if hasattr(_file_content, 'content'):
-                    content_bytes = _file_content.content  # type: ignore[union-attr]
-                elif hasattr(_file_content, 'read'):
-                    content_bytes = await _file_content.read()  # type: ignore[misc]
-                else:
-                    content_bytes = _file_content  # type: ignore[assignment]
-
-                file_content_as_dict = _get_file_content_as_dictionary(
-                    content_bytes  # type: ignore[arg-type]
-                )
-
-                # Record output file size
-                if prom_logger and content_bytes:
-                    try:
-                        prom_logger.record_managed_file_size(
-                            size_bytes=len(content_bytes),  # type: ignore
-                            purpose="batch",
-                            file_type="output",
-                            model=model_id,
-                        )
-                    except Exception:
-                        pass
-
-                deployment_info = self.llm_router.get_deployment(model_id=model_id)
-                if deployment_info is None:
-                    verbose_proxy_logger.info(
-                        f"Skipping job {job.unified_object_id} because it is not a valid deployment info"
+                try:
+                    tracked = await self._track_completed_batch_cost(
+                        job=job,
+                        response=response,
+                        model_id=model_id,
+                        batch_id=batch_id,
+                        prom_logger=prom_logger,
                     )
-                    if prom_logger:
-                        prom_logger.record_check_batch_cost_error("deployment_not_found")
+                except Exception as tracking_err:
+                    verbose_proxy_logger.error(
+                        f"CheckBatchCost: failed to track cost for batch {batch_id} "
+                        f"(job {job.id}); leaving it unprocessed so the next poll retries: {tracking_err}"
+                    )
+                    self._record_error(prom_logger, "cost_tracking_error")
                     continue
-                custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
-                litellm_model_name = deployment_info.litellm_params.model
-
-                model_name, llm_provider, _, _ = get_llm_provider(
-                    model=litellm_model_name,
-                    custom_llm_provider=custom_llm_provider,
-                )
-
-                # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
-                # output/error file IDs to managed base64 IDs before the DB write here.
-                managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
-                if managed_files_hook is not None:
-                    from litellm.proxy._types import UserAPIKeyAuth
-                    _minimal_auth = UserAPIKeyAuth(
-                        user_id=job.created_by or "default-user-id",
-                        team_id=getattr(job, "team_id", None),
-                    )
-                    for _file_attr in ["output_file_id", "error_file_id"]:
-                        _raw_file_id = getattr(response, _file_attr, None)
-                        if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
-                            try:
-                                _unified_file_id = managed_files_hook.get_unified_output_file_id(
-                                    output_file_id=_raw_file_id,
-                                    model_id=model_id,
-                                    model_name=str(model_name) if model_name else deployment_info.model_name or None,
-                                )
-                                await managed_files_hook.store_unified_file_id(
-                                    file_id=_unified_file_id,
-                                    file_object=None,
-                                    litellm_parent_otel_span=None,
-                                    model_mappings={model_id: _raw_file_id},
-                                    user_api_key_dict=_minimal_auth,
-                                )
-                                setattr(response, _file_attr, _unified_file_id)
-                                verbose_proxy_logger.info(
-                                    f"CheckBatchCost: converted {_file_attr} "
-                                    f"{_raw_file_id!r} -> managed ID for batch {batch_id}"
-                                )
-                            except Exception as _e:
-                                verbose_proxy_logger.warning(
-                                    f"CheckBatchCost: failed to create managed file ID for "
-                                    f"{_file_attr}={_raw_file_id!r}: {_e}"
-                                )
-
-                # Pass deployment model_info so custom batch pricing
-                # (input_cost_per_token_batches etc.) is used for cost calc
-                deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
-                batch_cost, batch_usage, batch_models = (
-                    await calculate_batch_cost_and_usage(
-                        file_content_dictionary=file_content_as_dict,
-                        custom_llm_provider=llm_provider,  # type: ignore
-                        model_name=model_name,
-                        model_info=deployment_model_info,  # type: ignore[arg-type]
-                    )
-                )
-                logging_obj = LiteLLMLogging(
-                    model=batch_models[0],
-                    messages=[{"role": "user", "content": "<retrieve_batch>"}],
-                    stream=False,
-                    call_type="aretrieve_batch",
-                    start_time=datetime.now(),
-                    litellm_call_id=str(uuid.uuid4()),
-                    function_id=str(uuid.uuid4()),
-                )
-
-                creator_user_id = job.created_by
-                user_info = await self._get_user_info(batch_id, job.created_by)
-
-                logging_obj.update_environment_variables(
-                    litellm_params={
-                        # set the user-agent header so that S3 callback consumers can easily identify CheckBatchCost callbacks
-                        "proxy_server_request": {
-                            "headers": {
-                                "user-agent": CHECK_BATCH_COST_USER_AGENT,
-                            }
-                        },
-                        "metadata": {
-                            "user_api_key_user_id": creator_user_id,
-                            **user_info,
-                        },
-                    },
-                    optional_params={},
-                )
-
-                await logging_obj.async_success_handler(
-                    result=response,
-                    batch_cost=batch_cost,
-                    batch_usage=batch_usage,
-                    batch_models=batch_models,
-                )
-
-                # Record batch duration (completed_at - created_at)
-                if prom_logger and response.completed_at and response.created_at:
-                    duration_seconds = float(response.completed_at - response.created_at)
-                    if duration_seconds >= 0:
-                        prom_logger.record_managed_batch_duration(
-                            duration_seconds=duration_seconds,
-                            model=model_name,
-                            api_provider=str(llm_provider) if llm_provider else None,
-                        )
+                if tracked is None:
+                    continue
 
                 # Track this job for the final metrics summary
-                processed_models.append((model_name, str(llm_provider) if llm_provider else None))
+                processed_models.append(tracked)
 
                 # mark the job as complete
                 try:

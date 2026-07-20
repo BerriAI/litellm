@@ -1,10 +1,11 @@
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from litellm.models.managed_files import LiteLLM_ManagedVectorStoresTable
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
 
@@ -15,6 +16,11 @@ class _SampleModel(BaseModel):
 
 class _SampleSubModel(_SampleModel):
     pass
+
+
+class _RequiredNullableModel(BaseModel):
+    id: str
+    budget_table: Optional[Dict[str, Any]]
 
 
 class TestCacheCodecSerialize:
@@ -53,12 +59,12 @@ class TestCacheCodecSerialize:
     def test_with_model_type_base_model_validated_and_dumped(self):
         m = _SampleModel(name="c", count=None)
         out = CacheCodec.serialize(m, model_type=_SampleModel)
-        assert out == {"name": "c"}
+        assert out == {"name": "c", "count": None}
 
-    def test_with_model_type_exclude_none_on_dump(self):
+    def test_with_model_type_none_field_preserved_on_dump(self):
         out = CacheCodec.serialize({"name": "d"}, model_type=_SampleModel)
-        assert out == {"name": "d"}
-        assert "count" not in out
+        assert out == {"name": "d", "count": None}
+        assert "count" in out
 
     def test_with_model_type_non_dict_non_model_passthrough(self):
         assert CacheCodec.serialize("raw", model_type=_SampleModel) == "raw"
@@ -140,3 +146,39 @@ class TestCacheCodecDeserialize:
             for r in caplog.records
             if r.levelno >= logging.WARNING
         ), f"Expected deserialize validation warning. Records: {[r.message for r in caplog.records]}"
+
+
+class TestCacheCodecRoundTripPreservesNoneFields:
+    def test_none_value_kept_as_null_not_dropped(self):
+        out = CacheCodec.serialize(
+            _RequiredNullableModel(id="x", budget_table=None),
+            model_type=_RequiredNullableModel,
+        )
+        assert out == {"id": "x", "budget_table": None}
+        assert "budget_table" in out
+
+    def test_required_nullable_none_field_survives_round_trip(self):
+        original = _RequiredNullableModel(id="x", budget_table=None)
+        wire = CacheCodec.serialize(original, model_type=_RequiredNullableModel)
+        restored = CacheCodec.deserialize(wire, model_type=_RequiredNullableModel)
+        assert restored == original
+
+    def test_managed_vector_store_row_round_trips_with_optional_fields_none(self):
+        vs = LiteLLM_ManagedVectorStoresTable(
+            vector_store_id="vs_1",
+            custom_llm_provider="openai",
+            vector_store_name=None,
+            vector_store_description=None,
+            vector_store_metadata=None,
+            created_at=None,
+            updated_at=None,
+            litellm_credential_name=None,
+            litellm_params=None,
+            team_id=None,
+            user_id=None,
+        )
+        wire = CacheCodec.serialize(vs, model_type=LiteLLM_ManagedVectorStoresTable)
+        assert wire.get("vector_store_name", "MISSING") is None
+        assert wire.get("team_id", "MISSING") is None
+        restored = CacheCodec.deserialize(wire, model_type=LiteLLM_ManagedVectorStoresTable)
+        assert restored == vs

@@ -60,6 +60,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.budget_throttle import (
+    budget_throttle_percentage,
+    should_throttle_budget_exceeded,
+)
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -94,8 +98,11 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
-from .auth_checks_organization import organization_role_based_access_check
-from .auth_utils import get_model_from_request
+from .auth_checks_organization import (
+    add_team_org_context_to_request_body,
+    organization_role_based_access_check,
+)
+from .auth_utils import get_model_from_request, get_request_route_template
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -703,10 +710,29 @@ async def common_checks(
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(user_object=user_object, route=route, request_body=request_body)
 
+    async def _fetch_team_org_id(team_id: str) -> Optional[str]:
+        try:
+            team = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except HTTPException:
+            return None
+        return team.organization_id
+
+    request_body_for_route_check = await add_team_org_context_to_request_body(
+        route=route,
+        request_body=request_body,
+        fetch_team_org_id=_fetch_team_org_id,
+        route_template=get_request_route_template(request),
+    )
+
     _is_route_allowed = _is_api_route_allowed(
         route=route,
         request=request,
-        request_data=request_body,
+        request_data=request_body_for_route_check,
         valid_token=valid_token,
         user_obj=user_object,
     )
@@ -1473,7 +1499,7 @@ def _should_check_db(key: str, last_db_access_time: LimitedSizeOrderedDict, db_c
     elif last_db_access_time[key][0] is not None:  # check db for non-null values (for refresh operations)
         return True
     elif last_db_access_time[key][0] is None:
-        if current_time - last_db_access_time[key] >= db_cache_expiry:
+        if current_time - last_db_access_time[key][1] >= db_cache_expiry:
             return True
     return False
 
@@ -1648,6 +1674,12 @@ async def get_user_object(
                     include={"organization_memberships": True},
                 )
             else:
+                if should_check_db:
+                    _update_last_db_access_time(
+                        key=db_access_time_key,
+                        value=None,
+                        last_db_access_time=last_db_access_time,
+                    )
                 raise Exception
 
         if response.organization_memberships is not None and len(response.organization_memberships) > 0:
@@ -2499,6 +2531,7 @@ def _copy_user_api_key_auth_for_cache(
 ) -> UserAPIKeyAuth:
     copied_key_obj = user_api_key_obj.model_copy()
     copied_key_obj.budget_reservation = None
+    copied_key_obj.budget_throttle_pct = None
     copied_key_obj.parent_otel_span = None
     copied_key_obj.request_route = None
     return copied_key_obj
@@ -3431,6 +3464,24 @@ async def is_valid_fallback_model(
     return True
 
 
+def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
+    """
+    Throttle an over-budget key instead of blocking it, when the key opted in
+    via `throttle_on_budget_exceeded` and a global percentage is configured.
+
+    Records the percentage on the request-scoped `budget_throttle_pct` so the
+    rate limiter scales the key's TPM/RPM down to it; the persistent limits are
+    left untouched so the throttle never compounds across requests. Returns True
+    when the key was throttled (caller skips raising), False when it should still
+    be hard-blocked.
+    """
+    pct = budget_throttle_percentage()
+    if pct is None or not should_throttle_budget_exceeded(valid_token):
+        return False
+    valid_token.budget_throttle_pct = pct
+    return True
+
+
 async def _virtual_key_max_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -3491,6 +3542,8 @@ async def _virtual_key_max_budget_check(
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+            if _apply_budget_exceeded_throttle(valid_token):
+                return
             # name the key in the error so operators don't have to reverse-map
             # spend back to a key; key_name is the masked form (last 4 chars)
             key_label = valid_token.key_alias or "key"

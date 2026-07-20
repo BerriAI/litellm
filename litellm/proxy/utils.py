@@ -19,6 +19,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Awaitable,
+    Callable,
     ClassVar,
     Dict,
     List,
@@ -49,7 +50,7 @@ from litellm.proxy._types import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -103,6 +104,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -4096,11 +4098,22 @@ class PrismaClient:
             raise e
 
     def _get_engine_pid(self) -> int:
+        """Get the PID of the writer's engine subprocess, or 0 if unavailable.
+
+        Must never raise: prisma's ``_engine`` property raises
+        ``ClientNotConnectedError`` on a disconnected client, and an exception
+        escaping from the reconnect path would leave it unable to recover.
+        """
         try:
-            engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
+            prisma_obj = self.writer_db._original_prisma
+            if prisma_obj.is_connected() is not True:
+                return 0
+            engine = prisma_obj._engine
             process = getattr(engine, "process", None) if engine is not None else None
             if process is not None:
-                return process.pid
+                pid = process.pid
+                if isinstance(pid, int):
+                    return pid
         except (AttributeError, TypeError):
             pass
         return 0
@@ -6086,6 +6099,7 @@ def create_model_info_response(
     include_metadata: bool = False,
     fallback_type: Optional[str] = None,
     llm_router: Optional["Router"] = None,
+    get_model_info: Callable[[str], ModelInfo] = litellm.get_model_info,
 ) -> ModelInfoResponse:
     """
     Create a standardized OpenAI-compatible model object.
@@ -6103,25 +6117,33 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    # Surface context-window limits for OpenAI-compatible discovery clients.
-    # Only emitted when known, so wildcard routes and limitless backends stay clean.
-    # Limits are best-effort enrichment, so a single malformed deployment degrades
-    # to the base response rather than 500-ing the whole listing.
+    try:
+        model_cost_info: ModelInfo | None = get_model_info(model_id)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "create_model_info_response: cost map lookup failed for %s: %s",
+            model_id,
+            e,
+        )
+        model_cost_info = None
+
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    if model_cost_info is not None:
+        max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
+        max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
+
     if llm_router is not None:
-        try:
-            model_group_info = llm_router.get_model_group_info(model_id)
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "create_model_info_response: get_model_group_info failed for %s: %s",
-                model_id,
-                e,
-            )
-            model_group_info = None
-        if model_group_info is not None:
-            if model_group_info.max_input_tokens is not None:
-                base["max_input_tokens"] = int(model_group_info.max_input_tokens)
-            if model_group_info.max_output_tokens is not None:
-                base["max_output_tokens"] = int(model_group_info.max_output_tokens)
+        configured_input, configured_output = llm_router.get_configured_token_limits(model_id)
+        if configured_input is not None:
+            max_input_tokens = configured_input
+        if configured_output is not None:
+            max_output_tokens = configured_output
+
+    if max_input_tokens is not None:
+        base["max_input_tokens"] = max_input_tokens
+    if max_output_tokens is not None:
+        base["max_output_tokens"] = max_output_tokens
 
     if not include_metadata:
         return base

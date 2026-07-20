@@ -8,7 +8,7 @@ import {
   MoreOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import type { MCPServer } from "./types";
+import { AUTH_TYPE, type MCPServer } from "./types";
 import { getMaskedAndFullUrl } from "./utils";
 
 const { Text } = Typography;
@@ -57,6 +57,14 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   const transport = server.transport || "http";
   const displayTransport = server.spec_path && transport !== "stdio" ? "openapi" : transport;
   const authType = server.auth_type || "none";
+  // An oauth2 server with no persisted oauth2_flow was never classified as M2M vs
+  // interactive; flag it so an admin can set it from the edit page (see the OAuth
+  // Flow Type selector) instead of leaving LiteLLM to fall back to a default.
+  // Delegate (PKCE passthrough) servers authenticate upstream and route to
+  // passthrough regardless of oauth2_flow, so the classification does not apply to
+  // them and they are not flagged.
+  const oauthFlowUnset =
+    server.auth_type === AUTH_TYPE.OAUTH2 && !server.oauth2_flow && !server.delegate_auth_to_upstream;
   const status = server.status || "unknown";
   const healthTone = HEALTH_TONE[status] ?? HEALTH_TONE.unknown;
   const isPublic = server.available_on_public_internet;
@@ -203,6 +211,16 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
         />
         <Tag className="m-0">{displayTransport.toUpperCase()}</Tag>
         <Tag className="m-0">{authType}</Tag>
+        {oauthFlowUnset && (
+          <Tooltip title="This OAuth server has no flow set (Machine-to-Machine vs Interactive). Open it and choose an OAuth Flow Type so LiteLLM authenticates it as you intend.">
+            <Tag color="warning" className="m-0">
+              <span className="inline-flex items-center gap-1">
+                <ExclamationCircleFilled />
+                OAuth flow not set
+              </span>
+            </Tag>
+          </Tooltip>
+        )}
         <Tag color={isPublic ? "green" : "orange"} className="m-0">
           <span className="inline-flex items-center gap-1">
             <span className={`h-1.5 w-1.5 rounded-full ${isPublic ? "bg-green-500" : "bg-orange-500"}`} />

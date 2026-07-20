@@ -23,6 +23,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
     CredError,
     NoneConfig,
+    PassthroughConfig,
     SharedKey,
     TokenExchangeConfig,
 )
@@ -160,6 +161,50 @@ def test_token_exchange_with_creds_but_no_endpoint_is_owned_for_fail_closed():
     assert spec.config.token_exchange_endpoint is None
 
 
+def test_token_exchange_maps_entra_obo_profile():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_profile="entra_obo",
+            scopes=["api://target/.default"],
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "entra_obo"
+
+
+def test_token_exchange_defaults_to_rfc8693_profile():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "rfc8693"
+
+
+@pytest.mark.parametrize("bogus", ["", "RFC8693", "jwt_bearer", "entra", "unknown"])
+def test_token_exchange_unknown_profile_normalizes_to_rfc8693(bogus):
+    # A bad DB/config value must normalize to rfc8693, not raise a ValidationError building the spec.
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp/token",
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_profile=bogus,
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "rfc8693"
+
+
 def test_token_exchange_omits_audience_when_unset():
     spec = to_server_spec(
         _server(
@@ -188,6 +233,12 @@ def test_token_exchange_empty_subject_token_type_normalizes_to_default():
     assert spec is not None
     assert isinstance(spec.config, TokenExchangeConfig)
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_client_forwarded_modes_map_to_passthrough_config(auth_type):
+    spec = to_server_spec(_server(auth_type=auth_type))
+    assert spec is not None and isinstance(spec.config, PassthroughConfig)
 
 
 @pytest.mark.parametrize(
@@ -330,3 +381,35 @@ def test_raise_token_exchange_challenge_includes_server_root_path():
         raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/api/v1")
     www = exc_info.value.headers["WWW-Authenticate"]
     assert 'resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/obo-srv"' in www
+
+
+def test_raise_token_exchange_challenge_static_form_is_unchanged_without_step_up():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="")
+    assert exc_info.value.headers["WWW-Authenticate"] == (
+        'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv", '
+        'error="invalid_token", '
+        'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+    )
+
+
+def test_raise_token_exchange_challenge_uses_insufficient_claims_with_claims_present():
+    # Per the Microsoft claims-challenge format, a claims challenge MUST use error=insufficient_claims
+    # (the value MSAL-family clients key on), and the claims ride base64-encoded, never raw.
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="", claims=claims)
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
+    assert 'error="insufficient_claims"' in www
+    assert 'error="invalid_token"' not in www
+    assert f'claims="{base64.b64encode(claims.encode()).decode()}"' in www
+    assert claims not in www  # raw JSON never appears; only the base64 form

@@ -2,29 +2,7 @@
 Tests for the Meta Model API (Muse Spark) provider configuration and integration.
 """
 
-import pytest
-
 import litellm
-
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled cost map so muse-spark-1.1 resolves.
-
-    muse-spark-1.1 is a day-0 model that ships only in the bundled backup; the
-    default remote fetch of ``main`` does not carry it yet, so tests that read its
-    model info must pin the local map instead of depending on network state or a
-    leaked cost map from an earlier test.
-    """
-    original_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_cost
-        litellm.get_model_info.cache_clear()
 
 
 class TestMetaProviderConfig:
@@ -116,12 +94,14 @@ class TestMetaProviderConfig:
 
 
 class TestMetaReasoningParams:
-    def test_muse_spark_supports_reasoning_effort(self, local_model_cost_map):
-        params = litellm.get_supported_openai_params(model="muse-spark-1.1", custom_llm_provider="meta")
+    def test_muse_spark_supports_reasoning_effort(self):
+        params = litellm.get_supported_openai_params(
+            model="muse-spark-1.1", custom_llm_provider="meta"
+        )
         assert params is not None
         assert "reasoning_effort" in params
 
-    def test_reasoning_effort_mapped_through(self, local_model_cost_map):
+    def test_reasoning_effort_mapped_through(self):
         cfg = litellm.ProviderConfigManager.get_provider_chat_config(
             model="muse-spark-1.1", provider=litellm.LlmProviders.META
         )
@@ -136,7 +116,9 @@ class TestMetaReasoningParams:
 
     def test_reasoning_effort_gated_on_capability(self):
         """A meta model without reasoning metadata must not advertise reasoning_effort."""
-        params = litellm.get_supported_openai_params(model="some-non-reasoning-model", custom_llm_provider="meta")
+        params = litellm.get_supported_openai_params(
+            model="some-non-reasoning-model", custom_llm_provider="meta"
+        )
         assert params is not None
         assert "reasoning_effort" not in params
 
@@ -211,7 +193,7 @@ class TestMetaAnthropicMessages:
 
 
 class TestMuseSparkModelInfo:
-    def test_muse_spark_pricing_and_capabilities(self, local_model_cost_map):
+    def test_muse_spark_pricing_and_capabilities(self):
         info = litellm.get_model_info("meta/muse-spark-1.1")
 
         assert info["litellm_provider"] == "meta"
@@ -225,7 +207,7 @@ class TestMuseSparkModelInfo:
         assert info["supports_function_calling"] is True
         assert info["supports_prompt_caching"] is True
 
-    def test_muse_spark_cost_calculation(self, local_model_cost_map):
+    def test_muse_spark_cost_calculation(self):
         from litellm import completion_cost
         from litellm.types.utils import ModelResponse, Usage
 

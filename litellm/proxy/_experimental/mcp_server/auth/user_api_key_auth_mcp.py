@@ -1,13 +1,25 @@
 import re
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple, cast
 
 from fastapi import HTTPException
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
+from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
+    BridgeEnvelopeAdmitted,
+    BridgeEnvelopeInvalid,
+    NotBridgeEnvelope,
+    envelope_keys_from_master_key,
+    is_bridge_envelope_shaped,
+    resolve_bridge_envelope,
+)
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     LiteLLM_TeamTable,
     ProxyException,
     SpecialHeaders,
@@ -16,12 +28,17 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    _run_centralized_common_checks,
+    user_api_key_auth,
+)
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
 )
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def _parse_mcp_server_names_from_path(path: str, mcp_servers_header: Optional[List[str]] = None) -> Optional[List[str]]:
@@ -219,6 +236,35 @@ class MCPRequestHandler:
             # when EVERY target is auth_type=oauth2 with delegate_auth_to_upstream
             # set; fails closed otherwise.
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif MCPRequestHandler._target_servers_are_true_passthrough(
+            path=request_route,
+            mcp_servers=mcp_servers,
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        ):
+            validated_user_api_key_auth = UserAPIKeyAuth()
+        elif (
+            (
+                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                    path=request_route,
+                    mcp_servers=mcp_servers,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            )
+            is not None
+            and oauth2_headers
+            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+        ):
+            # A single DCR-bridge oauth_delegate target carrying an envelope-shaped
+            # Authorization: open the envelope, admit under its recovered identity, and
+            # inject the inner upstream token for egress. A non-envelope bearer on the same
+            # server is NOT admitted here — it falls through to the oauth2 arm, which 401s.
+            validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=bridge_delegate_target,
+                authorization_value=oauth2_headers["Authorization"],
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=request_route,
+            )
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real
             # LiteLLM credential, so a failed validation is a genuine 401/403 and
@@ -357,6 +403,7 @@ class MCPRequestHandler:
         # Inline imports avoid a circular dependency: mcp_server_manager imports
         # from this module.
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
             global_mcp_server_manager,
         )
         from litellm.types.mcp import MCPAuth
@@ -382,9 +429,288 @@ class MCPRequestHandler:
             # fetches the upstream token automatically using stored credentials,
             # so allowing anonymous bypass would let any external caller invoke
             # tools authenticated as LiteLLM's service account.
-            if server.has_client_credentials:
+            #
+            # Resolve the flow rather than reading has_client_credentials directly:
+            # this is a security gate, and a legacy row whose oauth2_flow was never
+            # stamped still carries the M2M credential shape (client_id/secret +
+            # token_url, no authorization_url). Treating an unstamped-but-M2M-shaped
+            # row as non-M2M here would reopen the anonymous bypass the explicit
+            # column no longer closes on its own. Shares the one resolution helper
+            # with the egress backstop and the anonymous-delegate allowlist; all fail
+            # closed on the ambiguous shape and are removed together once no null rows
+            # remain. A pure-PKCE delegate server (no stored credentials) resolves to a
+            # non-M2M flow and keeps its bypass.
+            if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
                 return False
         return True
+
+    @staticmethod
+    def _target_servers_are_true_passthrough(
+        path: str, mcp_servers: Optional[list[str]], client_ip: Optional[str]
+    ) -> bool:
+        """
+        True only when EVERY MCP server the request targets is ``auth_type == true_passthrough``.
+        Fails closed when any target does not opt in or cannot be resolved.
+
+        Used by :meth:`process_mcp_request` to skip LiteLLM admission auth entirely: the gateway is a
+        transparent proxy and the caller's ``Authorization`` is an upstream token, never a LiteLLM key.
+        Mirrors :meth:`_target_servers_delegate_auth_to_upstream`; a mixed-target request keeps normal auth.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        target_names = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        if not target_names:
+            return False
+
+        for name in target_names:
+            server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
+            if server is None or server.auth_type != MCPAuth.true_passthrough:
+                return False
+        return True
+
+    @staticmethod
+    def _single_dcr_bridge_delegate_target(
+        path: str, mcp_servers: Optional[List[str]], client_ip: Optional[str]
+    ) -> Optional[MCPServer]:
+        """The one DCR-bridge ``oauth_delegate`` server this request targets, or ``None``.
+
+        Returns the server only when EXACTLY ONE target resolves and it is both
+        ``is_oauth_delegate`` and ``is_dcr_bridge``. Fails closed (``None``) on a
+        multi-target request, an unresolved target, or a non-matching server, so the
+        envelope admission arm never fires for an aggregate scope or a server that did not
+        opt into the bridge. Mirrors :meth:`_target_servers_are_true_passthrough`.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        target_names = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
+        if len(target_names) != 1:
+            return None
+        server = global_mcp_server_manager.get_mcp_server_by_name(target_names[0], client_ip=client_ip)
+        if server is None or not server.is_oauth_delegate or not server.is_dcr_bridge:
+            return None
+        # Egress resolves the injected per-server token only by alias / server_name; a server with
+        # neither cannot receive the forwarded token, so fail closed rather than admit-and-drop.
+        if not (server.server_name or server.alias):
+            return None
+        return server
+
+    @staticmethod
+    async def _admit_dcr_bridge_delegate(
+        server: MCPServer,
+        authorization_value: str,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        request: Request,
+        route: str,
+    ) -> Tuple[UserAPIKeyAuth, Optional[Dict[str, Dict[str, str]]]]:
+        """Open the bridge envelope and admit the caller under the live key it references.
+
+        The envelope's signature proves the user authenticated when it was minted, but
+        authorization is resolved fresh here rather than trusted from the envelope: the
+        sealed ``key_hash`` reloads the current ``UserAPIKeyAuth`` record, and the admitted
+        identity then runs through the standard pipeline's centralized policy gate, so the
+        key's present restrictions and revocation state gate the request instead of a
+        snapshot frozen at mint time. The inner upstream token is injected under the
+        server's per-server auth-header key so egress forwards it via the
+        ``PassthroughConfig`` override; the envelope ``Authorization`` the leak-defense
+        strips never reaches the upstream. A new headers dict is returned rather than
+        mutating the input. Fails closed with a 401 on an invalid or expired envelope, or
+        when the referenced key is missing, blocked, or expired, its owner is
+        SCIM-deactivated, or the centralized policy gate rejects it (blocked team or
+        project, org or budget limits).
+
+        The sealed token is keyed alias-first, matching the order egress resolves
+        (``lookup_mcp_server_auth_in_headers`` tries ``alias`` before ``server_name``). Keying
+        under ``server_name`` would leave a caller-supplied ``x-mcp-{alias}-authorization`` at the
+        higher-priority alias slot, pairing the admitted identity with an attacker's upstream
+        credential; the alias-keyed injection overwrites any such caller value.
+        """
+        from litellm.proxy.proxy_server import master_key
+
+        if not master_key:
+            raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
+
+        await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
+
+        keys = envelope_keys_from_master_key(master_key)
+        result = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
+        match result:
+            case BridgeEnvelopeAdmitted():
+                header_key = server.alias or server.server_name
+                if header_key is None:
+                    raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
+                admitted = await MCPRequestHandler._reload_admitted_key(result.identity.key_hash)
+                await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
+                injected = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
+                new_headers = {**(mcp_server_auth_headers or {}), **injected}
+                return admitted, new_headers
+            case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
+                raise HTTPException(status_code=401, detail="Invalid or expired credential")
+            case _:
+                assert_never(result)
+
+    @staticmethod
+    async def _run_pre_db_read_auth_checks(request: Request, route: str) -> None:
+        """Run the proxy-wide gates ``user_api_key_auth`` applies before any key lookup: the
+        request-size and body-safety limits, the IP allowlist, and the ``general_settings``
+        route allowlist. The envelope arm bypasses ``user_api_key_auth`` (it opens the envelope
+        and reloads the identity itself), so without this a caller blocked by IP or hitting a
+        proxy route the allowlist forbids would be admitted through an envelope where the same
+        principal presented on the normal MCP admission path would be rejected. Runs before the
+        envelope crypto so a disallowed caller is turned away before any work, mirroring the
+        standard pipeline's pre-DB ordering. Violations raise the gate's own status (an IP or
+        route block is a 403, an oversized body its own limit error)."""
+        from litellm.proxy.auth.auth_utils import pre_db_read_auth_checks
+
+        await pre_db_read_auth_checks(
+            request=request,
+            request_data=await _read_request_body(request=request),
+            route=route,
+        )
+
+    @staticmethod
+    async def _reload_admitted_key(key_hash: str) -> UserAPIKeyAuth:
+        """Reload the live key record an admitted envelope references and re-check live policy.
+
+        Resolving the current ``UserAPIKeyAuth`` (cache first, then DB) is what stops the
+        envelope from carrying frozen authority: the key's present team/org/object-permission
+        restrictions ride on the returned object, and a key that has since been deleted,
+        blocked, or expired fails closed with a 401 here rather than being admitted as an
+        unrestricted identity. ``get_key_object`` raises for a hash with no key row; a
+        blocked or expired row is rejected explicitly because ``get_key_object`` resolves a
+        row without applying those checks (the main ``user_api_key_auth`` pipeline enforces
+        them downstream, which this admission path bypasses). The owner's SCIM state is the
+        other builder-inline check mirrored here, so IdP offboarding revokes every envelope
+        minted under the user's keys rather than leaving them live until expiry. Team,
+        project, org, and budget state are NOT re-checked here; the caller runs the admitted
+        identity through ``_enforce_admitted_live_policy`` for those.
+        """
+        from litellm.proxy.auth.auth_checks import get_key_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail="Server misconfigured: no database connection")
+        try:
+            key_object = await get_key_object(
+                hashed_token=key_hash,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+        except (ProxyException, HTTPException):
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+        except Exception as e:  # noqa: BLE001  # a DB outage during reload is a retryable 503, not an opaque 500
+            MCPRequestHandler._raise_503_if_db_unavailable(e)
+            raise
+        if not MCPRequestHandler._admitted_key_is_active(key_object):
+            raise HTTPException(status_code=401, detail="Invalid or expired credential")
+        await MCPRequestHandler._reject_if_admitted_owner_scim_deactivated(key_object)
+        return key_object
+
+    @staticmethod
+    def _raise_503_if_db_unavailable(e: Exception) -> None:
+        """Raise a retryable 503 when ``e`` means the auth database is unreachable, else return so the
+        caller applies its own fail-closed mapping. A DB outage must not masquerade as an auth failure
+        (401) or surface as an opaque 500; the caller retries. Mirrors ``UserAPIKeyAuthExceptionHandler``,
+        which renders a service-unavailable database error as 503 on the standard pipeline."""
+        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+        if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+            raise HTTPException(
+                status_code=503,
+                detail="Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+            ) from None
+
+    @staticmethod
+    async def _reject_if_admitted_owner_scim_deactivated(key_object: UserAPIKeyAuth) -> None:
+        """Fail closed with a 401 when the key's owning user was deactivated via SCIM.
+
+        The standard pipeline enforces this inline in ``_user_api_key_auth_builder`` rather
+        than in ``common_checks``, so the centralized policy gate does not cover it; without
+        this mirror, IdP offboarding would leave the user's already-minted envelopes live
+        until expiry. A failed user lookup skips the gate (fail-open), matching the builder:
+        this is the one deliberately fail-open check in an otherwise fail-closed arm, so a
+        transient DB outage during this lookup admits the request rather than rejecting it,
+        keeping parity with how the standard pipeline treats the same lookup failure."""
+        if key_object.user_id is None:
+            return
+        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        try:
+            user_object = await get_user_object(
+                user_id=key_object.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+            )
+        except Exception as e:  # noqa: BLE001  # mirror the builder's fail-open user lookup; DB errors are of any type
+            verbose_logger.debug(f"bridge admission: user lookup failed, skipping SCIM gate: {e}")
+            user_object = None
+        if user_object is None or not isinstance(user_object.metadata, dict):
+            return
+        if user_object.metadata.get("scim_active") is False:
+            raise HTTPException(status_code=401, detail="Invalid or expired credential")
+
+    @staticmethod
+    async def _enforce_admitted_live_policy(admitted: UserAPIKeyAuth, request: Request, route: str) -> None:
+        """Run the standard pipeline's authorization checks over the admitted identity.
+
+        Mirrors the ``user_api_key_auth`` wrapper between the builder and its return: clear the
+        request-scoped ``budget_reservation`` on the reloaded identity, run the route gate
+        (``RouteChecks.should_call_route``) to enforce the identity's ``allowed_routes`` and any
+        disabled/admin-only route, then run ``_run_centralized_common_checks`` (the same gate every
+        builder path funnels through) for team-block, project-block, org, and budget. The route gate
+        closes a bypass: a key barred from MCP routes could otherwise mint an envelope at the token
+        endpoint (not itself an MCP route) and replay it against MCP, because the centralized checks
+        treat MCP as an inference route and never re-check ``allowed_routes``.
+
+        Failures surface with the status the standard pipeline would give them, mirroring
+        ``UserAPIKeyAuthExceptionHandler``: a disallowed route is the route gate's own 403, an
+        over-budget identity is a 429, a sub-check that raised its own ``HTTPException``/
+        ``ProxyException`` keeps that status, a transient database outage is a retryable 503, and
+        only a genuinely unresolvable failure (a blocked team/project raises a bare ``Exception``,
+        same as the standard pipeline's fallback) becomes the fail-closed 401. Collapsing every
+        failure to 401 was misleading: it told an over-budget but validly-authenticated caller their
+        credential was invalid, which on a DCR client reads as broken auth and can trigger a
+        pointless re-authorize loop that cannot fix a budget problem, and it masked a DB outage as an
+        auth error."""
+        from litellm.proxy.auth.route_checks import RouteChecks
+
+        admitted.budget_reservation = None
+        try:
+            RouteChecks.should_call_route(route=route, valid_token=admitted, request=request)
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=admitted,
+                request=request,
+                request_data=await _read_request_body(request=request),
+                route=route,
+            )
+        except (HTTPException, ProxyException):
+            raise
+        except litellm.BudgetExceededError as e:
+            raise HTTPException(status_code=getattr(e, "status_code", 429), detail=str(e)) from None
+        except Exception as e:  # noqa: BLE001  # untyped gate failure: retryable 503 for a DB outage, else fail closed 401
+            MCPRequestHandler._raise_503_if_db_unavailable(e)
+            raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
+
+    @staticmethod
+    def _admitted_key_is_active(key_object: UserAPIKeyAuth) -> bool:
+        """False when the referenced key is blocked or past its expiry, so a revoked key
+        cannot be admitted through its still-unexpired envelope. Mirrors the active-key gate
+        the bridge token endpoint applies at mint time."""
+        if key_object.blocked is True:
+            return False
+        expires = key_object.expires
+        if expires is None:
+            return True
+        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+        if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        return expiry >= datetime.now(timezone.utc)
 
     @staticmethod
     def _resolve_target_server_names(path: str, mcp_servers_header: Optional[List[str]]) -> List[str]:
@@ -545,10 +871,19 @@ class MCPRequestHandler:
 
         ASGI headers are in format: List[List[bytes, bytes]]
         We need to convert them to the format Headers expects.
+
+        Collapsing the ASGI list into a dict keeps the last value for a duplicated
+        header name, so a request carrying more than one ``Authorization`` is
+        rejected first: for the client-forwarded token modes the gateway relays the
+        caller's ``Authorization`` upstream, so a duplicate would make which token is
+        forwarded ambiguous (and diverge from what admission inspected). Multiple
+        ``Authorization`` headers is malformed for bearer auth anyway (RFC 9110: not
+        a comma-combinable field), so fail closed with a 400.
         """
+        raw_headers = scope.get("headers", [])
+        MCPRequestHandler._reject_duplicate_authorization(raw_headers)
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs
-            raw_headers = scope.get("headers", [])
             # Convert bytes to strings and create dict for Headers constructor
             headers_dict = {name.decode("latin-1"): value.decode("latin-1") for name, value in raw_headers}
             return Headers(headers_dict)
@@ -556,6 +891,26 @@ class MCPRequestHandler:
             verbose_logger.exception(f"Error getting headers from scope: {e}")
             # Return empty Headers object with empty dict
             return Headers({})
+
+    @staticmethod
+    def _reject_duplicate_authorization(raw_headers: object) -> None:
+        """Raise 400 when the raw ASGI headers carry more than one ``Authorization`` header."""
+        if not isinstance(raw_headers, (list, tuple)):
+            return
+        count = 0
+        for entry in raw_headers:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 1:
+                continue
+            name = entry[0]
+            if isinstance(name, (bytes, bytearray)) and bytes(name).lower() == b"authorization":
+                count += 1
+            elif isinstance(name, str) and name.lower() == "authorization":
+                count += 1
+        if count > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Multiple Authorization headers are not allowed",
+            )
 
     @staticmethod
     async def get_allowed_mcp_servers(
@@ -724,6 +1079,9 @@ class MCPRequestHandler:
             f"MCP team permission lookup: team_id={user_api_key_auth.team_id if user_api_key_auth else None}"
         )
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
+            return None
+
+        if user_api_key_auth.team_id == UI_TEAM_ID:
             return None
 
         # Get the team object (which has object_permission already loaded)
@@ -1019,6 +1377,9 @@ class MCPRequestHandler:
             )
 
             if user_api_key_auth is None or not user_api_key_auth.team_id or prisma_client is None:
+                return []
+
+            if user_api_key_auth.team_id == UI_TEAM_ID:
                 return []
 
             team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
@@ -1501,6 +1862,9 @@ class MCPRequestHandler:
 
         if prisma_client is None:
             verbose_logger.debug("prisma_client is None")
+            return []
+
+        if user_api_key_auth.team_id == UI_TEAM_ID:
             return []
 
         try:

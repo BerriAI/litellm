@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    coerce_token_limit,
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
@@ -90,7 +91,12 @@ from litellm.router_utils.add_retry_fallback_headers import (
     _HiddenParamsHost,
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
+    apply_quality_router_decision_headers,
+    apply_remaining_usage_headers,
+    ensure_response_additional_headers,
     get_hidden_params_dict,
+    prepare_response_for_header_attachment,
+    response_in_flight_token_count,
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
@@ -132,6 +138,12 @@ from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
 )
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
+)
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    build_io_token_rate_limit_headers,
+    deployment_has_io_token_limits,
+    refund_stale_reservation_before_retry,
+    set_io_token_rate_limit_request_kwargs,
 )
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
@@ -845,6 +857,8 @@ class Router:
                     router_cache=self.cache,
                     routing_args={},
                 )
+            case _:
+                pass
 
         if selector is not None and register_callbacks and isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(selector)  # type: ignore
@@ -1647,6 +1661,7 @@ class Router:
                 )
                 thread.start()
 
+            kwargs.setdefault("messages", messages)
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
             model_name = litellm_params["model"]
@@ -2330,6 +2345,8 @@ class Router:
                 self.completed_response = None
                 self.start_time = getattr(source_iterator, "start_time", datetime.now())
                 self._failure_handled = False
+                self._yielded_first_chunk = False
+                self._generated_content = ""
                 self._completed_response_cached = False
                 self._completed_response_logged = False
                 self._completed_response_cache_hit = None
@@ -2347,7 +2364,20 @@ class Router:
                 return self
 
             async def __anext__(self):
-                chunk = await self._async_generator.__anext__()
+                try:
+                    chunk = await self._async_generator.__anext__()
+                except StopAsyncIteration:
+                    # The inner generator is exhausted. If we never sniffed a
+                    # terminal event off a chunk (the bridge path emits the
+                    # final response.completed via common_done_event_logic,
+                    # which raises StopAsyncIteration after returning it),
+                    # fall back to whatever the source iterator latched so
+                    # the proxy's container-ownership hook still sees a
+                    # completed_response instead of logging a spurious
+                    # "no completed_response" warning.
+                    if self.completed_response is None:
+                        self.completed_response = getattr(source_iterator, "completed_response", None)
+                    raise
                 # Sniff the terminal stream event off each forwarded chunk
                 # so ``self.completed_response`` is populated regardless of
                 # which inner iterator produced it (source_iterator,
@@ -2670,6 +2700,7 @@ class Router:
                     )
                 )
 
+            kwargs.setdefault("messages", messages)
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
 
@@ -2943,6 +2974,13 @@ class Router:
                 "deployment_model_name": deployment_model_name,
             }
         )
+
+        # A retry/fallback reuses this same kwargs dict for the next deployment.
+        # Refund and clear any reservation the previous deployment attempt left
+        # here before it's wiped below, instead of relying on that attempt's
+        # (possibly still-pending) failure event to do it.
+        refund_stale_reservation_before_retry(self.cache, kwargs)
+        set_io_token_rate_limit_request_kwargs(kwargs)
 
         ## DEPLOYMENT-LEVEL TAGS
         deployment_tags = deployment.get("litellm_params", {}).get("tags")
@@ -6751,7 +6789,13 @@ class Router:
                     deployment_id=id,
                 )
 
-                ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
+                deployment_dict = deployment_info if isinstance(deployment_info, dict) else deployment_info.model_dump()
+                has_io_token_limits = deployment_has_io_token_limits(deployment_dict)
+
+                ## Nothing to track only when neither tpm/rpm nor itpm/otpm limits are
+                ## set. IO deployments still record TPM/RPM usage here so TPM-aware
+                ## routing strategies see their real load in mixed model groups; their
+                ## itpm/otpm enforcement runs separately in ModelRateLimitingCheck.
                 if (
                     tpm is None
                     and rpm is None
@@ -6759,6 +6803,7 @@ class Router:
                     and rpm_litellm_params is None
                     and tpm_model_info is None
                     and rpm_model_info is None
+                    and not has_io_token_limits
                 ):
                     return
 
@@ -7352,8 +7397,7 @@ class Router:
             # deployment sharing the same backend model name.
             # Each deployment's full pricing is already stored under its
             # unique model_id above.
-            _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
-            _shared_model_info = {k: v for k, v in _model_info.items() if k not in _custom_pricing_fields}
+            _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info)
             _existing_shared_mode = (cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}).get("mode")
             _deployment_mode = _shared_model_info.get("mode")
             # Keep the built-in bridge mode stable for shared backend keys.
@@ -8017,8 +8061,7 @@ class Router:
         # deployment sharing the same backend model name.
         # Each deployment's full pricing is already stored under its
         # unique model_id above (when present).
-        _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
-        _shared_model_info = {k: v for k, v in _model_info_dict.items() if k not in _custom_pricing_fields}
+        _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info_dict)
         _backend_alias_cost = {_model_name: _shared_model_info}
         if "responses/" in _model_name:
             _stripped_model_name = _model_name.replace("responses/", "")
@@ -8315,6 +8358,26 @@ class Router:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
 
+    def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
+        """
+        Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
+        deployment's model_info for model_name, via O(1) index lookup.
+
+        Returns (None, None) for wildcard-expanded or unknown names, and treats a
+        malformed configured value as absent rather than failing the listing. Unlike
+        get_model_group_info, this never triggers pattern matching or deep copies, so it
+        is safe to call per listed model on the /v1/models hot path.
+        """
+        deployment = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return (None, None)
+
+        model_info = deployment.model_info
+        return (
+            coerce_token_limit(model_info.get("max_input_tokens")),
+            coerce_token_limit(model_info.get("max_output_tokens")),
+        )
+
     def get_deployment_credentials_with_provider(self, model_id: str) -> Optional[Dict[str, Any]]:
         """
         Get API credentials and provider info from a model name in model_list.
@@ -8595,6 +8658,8 @@ class Router:
 
         total_tpm: Optional[int] = None
         total_rpm: Optional[int] = None
+        total_itpm: Optional[int] = None
+        total_otpm: Optional[int] = None
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         model_list = self.get_model_list(model_name=model_group)
         if model_list is None:
@@ -8634,6 +8699,18 @@ class Router:
                 _deployment_rpm = model_litellm_params.get("rpm", None)  # type: ignore
             if _deployment_rpm is None:
                 _deployment_rpm = model_info_dict.get("rpm", None)  # type: ignore
+
+            _deployment_itpm: Optional[int] = model.get("itpm")  # type: ignore
+            if _deployment_itpm is None:
+                _deployment_itpm = model_litellm_params.get("itpm", None)  # type: ignore
+            if _deployment_itpm is None:
+                _deployment_itpm = model_info_dict.get("itpm", None)  # type: ignore
+
+            _deployment_otpm: Optional[int] = model.get("otpm")  # type: ignore
+            if _deployment_otpm is None:
+                _deployment_otpm = model_litellm_params.get("otpm", None)  # type: ignore
+            if _deployment_otpm is None:
+                _deployment_otpm = model_info_dict.get("otpm", None)  # type: ignore
 
             # get model info
             try:
@@ -8775,6 +8852,16 @@ class Router:
                 if total_rpm is None:
                     total_rpm = 0
                 total_rpm += _deployment_rpm  # type: ignore
+
+            if _deployment_itpm is not None:
+                if total_itpm is None:
+                    total_itpm = 0
+                total_itpm += _deployment_itpm  # type: ignore
+
+            if _deployment_otpm is not None:
+                if total_otpm is None:
+                    total_otpm = 0
+                total_otpm += _deployment_otpm  # type: ignore
         if model_group_info is not None:
             ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
             if total_tpm is not None:
@@ -8782,6 +8869,12 @@ class Router:
 
             if total_rpm is not None:
                 model_group_info.rpm = total_rpm
+
+            if total_itpm is not None:
+                model_group_info.itpm = total_itpm
+
+            if total_otpm is not None:
+                model_group_info.otpm = total_otpm
 
             ## UPDATE WITH CONFIGURABLE CLIENTSIDE AUTH PARAMS FOR MODEL GROUP
             if configurable_clientside_auth_params is not None:
@@ -8885,6 +8978,58 @@ class Router:
                     rpm_usage += t
         return tpm_usage, rpm_usage
 
+    async def get_model_group_io_token_usage(self, model_group: str) -> tuple[Optional[int], Optional[int]]:
+        """
+        Returns current ITPM/OTPM usage for a model group (sum across deployments).
+        """
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
+        itpm_keys: list[str] = []
+        otpm_keys: list[str] = []
+
+        model_list = self.get_model_list(model_name=model_group)
+        if model_list is None:
+            return None, None
+
+        for model in model_list:
+            model_id: Optional[str] = model.get("model_info", {}).get("id")  # type: ignore
+            litellm_model: Optional[str] = model["litellm_params"].get("model")
+            if model_id is None or litellm_model is None:
+                continue
+            itpm_keys.append(
+                RouterCacheEnum.ITPM.value.format(
+                    id=model_id,
+                    model=litellm_model,
+                    current_minute=current_minute,
+                )
+            )
+            otpm_keys.append(
+                RouterCacheEnum.OTPM.value.format(
+                    id=model_id,
+                    model=litellm_model,
+                    current_minute=current_minute,
+                )
+            )
+
+        combined_values = await self.cache.async_batch_get_cache(keys=itpm_keys + otpm_keys)
+        if combined_values is None:
+            return None, None
+
+        itpm_values = combined_values[: len(itpm_keys)]
+        otpm_values = combined_values[len(itpm_keys) :]
+
+        total_itpm: Optional[int] = None
+        for value in itpm_values:
+            if isinstance(value, int):
+                total_itpm = (total_itpm or 0) + value
+
+        total_otpm: Optional[int] = None
+        for value in otpm_values:
+            if isinstance(value, int):
+                total_otpm = (total_otpm or 0) + value
+
+        return total_itpm, total_otpm
+
     @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
     def _cached_get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
         """
@@ -8894,25 +9039,33 @@ class Router:
         """
         return self.get_model_group_info(model_group)
 
-    async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
+    async def get_remaining_model_group_usage(self, model_group: str) -> dict[str, int]:
         model_group_info = self._cached_get_model_group_info(model_group)
 
-        if model_group_info is not None and model_group_info.tpm is not None:
-            tpm_limit = model_group_info.tpm
-        else:
-            tpm_limit = None
+        returned_dict: dict[str, int] = {}
 
-        if model_group_info is not None and model_group_info.rpm is not None:
-            rpm_limit = model_group_info.rpm
-        else:
-            rpm_limit = None
+        # ITPM/OTPM groups emit input/output token headers, but they may also set
+        # tpm/rpm, so build both sets rather than returning early - clients and
+        # prometheus gauges that read the standard headers still get data.
+        if model_group_info is not None and (model_group_info.itpm is not None or model_group_info.otpm is not None):
+            current_itpm, current_otpm = await self.get_model_group_io_token_usage(model_group)
+            returned_dict.update(
+                build_io_token_rate_limit_headers(
+                    itpm_limit=model_group_info.itpm,
+                    otpm_limit=model_group_info.otpm,
+                    current_itpm=current_itpm,
+                    current_otpm=current_otpm,
+                )
+            )
+
+        tpm_limit = model_group_info.tpm if model_group_info is not None else None
+        rpm_limit = model_group_info.rpm if model_group_info is not None else None
 
         if tpm_limit is None and rpm_limit is None:
-            return {}
+            return returned_dict
 
         current_tpm, current_rpm = await self.get_model_group_usage(model_group)
 
-        returned_dict = {}
         if tpm_limit is not None:
             returned_dict["x-ratelimit-remaining-tokens"] = tpm_limit - (current_tpm or 0)
             returned_dict["x-ratelimit-limit-tokens"] = tpm_limit
@@ -8935,69 +9088,25 @@ class Router:
         # - if healthy_deployments > 1, return model group rate limit headers
         # - else return the model's rate limit headers
         """
-        if response is not None and hasattr(response, "_hidden_params"):
-            hidden_params = getattr(response, "_hidden_params", {}) or {}
-            if hasattr(hidden_params, "model_dump"):
-                hidden_params = hidden_params.model_dump()
-            if not isinstance(hidden_params, dict):
-                return response
-            response._hidden_params = hidden_params
+        response = prepare_response_for_header_attachment(response)
+        if response is None:
+            return response
 
-            additional_headers = hidden_params.get("additional_headers")
-            if not isinstance(additional_headers, dict):
-                additional_headers = {}
-                hidden_params["additional_headers"] = additional_headers
-            additional_headers["x-litellm-model-group"] = model_group
+        additional_headers = ensure_response_additional_headers(response)
+        additional_headers["x-litellm-model-group"] = model_group
+        apply_quality_router_decision_headers(additional_headers, request_kwargs)
 
-            # Lift QualityRouter routing decision into response headers for
-            # transparency. The decision is stashed in request_kwargs.metadata
-            # by QualityRouter.async_pre_routing_hook.
-            metadata = (request_kwargs.get("metadata") or {}) if isinstance(request_kwargs, dict) else {}
-            decision = metadata.get("quality_router_decision") if isinstance(metadata, dict) else None
-            if isinstance(decision, dict):
-                # Only emit headers for fields that have a meaningful value.
-                # `complexity_tier` and `matched_keyword` are mutually exclusive
-                # (the keyword path short-circuits classification), so each
-                # request emits one or the other but not both.
-                if decision.get("routed_model") is not None:
-                    additional_headers["x-litellm-quality-router-model"] = str(decision["routed_model"])
-                if decision.get("quality_tier") is not None:
-                    additional_headers["x-litellm-quality-router-tier"] = str(decision["quality_tier"])
-                if decision.get("routed_via") is not None:
-                    additional_headers["x-litellm-quality-router-via"] = str(decision["routed_via"])
-                if decision.get("matched_keyword") is not None:
-                    additional_headers["x-litellm-quality-router-keyword"] = str(decision["matched_keyword"])
-                if decision.get("complexity_tier") is not None:
-                    additional_headers["x-litellm-quality-router-complexity"] = str(decision["complexity_tier"])
-
-            if (
-                "x-ratelimit-remaining-tokens" not in additional_headers
-                and "x-ratelimit-remaining-requests" not in additional_headers
-                and model_group is not None
-            ):
-                remaining_usage = await self.get_remaining_model_group_usage(model_group)
-
-                # get_remaining_model_group_usage reads the router's TPM/RPM
-                # counter, which is incremented post-response by
-                # deployment_callback_on_success. So the values returned here
-                # are pre-decrement for the current request, while vendor
-                # headers (OpenAI/Anthropic/Azure) are post-decrement. Replay
-                # the in-flight increment so router-derived headers match
-                # vendor-derived semantics — for both the HTTP response sent
-                # to the client and the prometheus gauges that read these
-                # headers downstream (LIT-2719).
-                in_flight_tokens = 0
-                usage = getattr(response, "usage", None)
-                if usage is not None:
-                    in_flight_tokens = getattr(usage, "total_tokens", 0) or 0
-                in_flight_delta = {
-                    "x-ratelimit-remaining-tokens": in_flight_tokens,
-                    "x-ratelimit-remaining-requests": 1,
-                }
-
-                for header, value in remaining_usage.items():
-                    if value is not None:
-                        additional_headers[header] = value - in_flight_delta.get(header, 0)
+        if model_group is not None:
+            remaining_usage = await self.get_remaining_model_group_usage(model_group)
+            # get_remaining_model_group_usage reads the router's TPM/RPM counter,
+            # which is incremented post-response by deployment_callback_on_success.
+            # Replay the in-flight increment for TPM/RPM only (LIT-2719); ITPM/OTPM
+            # counters are incremented at reservation time and must not be adjusted.
+            apply_remaining_usage_headers(
+                additional_headers,
+                remaining_usage,
+                response_in_flight_token_count(response),
+            )
         return response
 
     def _build_model_name_index(self, model_list: list) -> None:

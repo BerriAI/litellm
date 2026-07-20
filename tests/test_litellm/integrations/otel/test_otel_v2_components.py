@@ -672,8 +672,7 @@ def test_error_details_stamped_as_span_attributes_for_labels_ingest():
     """OTel-defined keys and litellm-specific detail keys both ride span
     attributes so backends that flatten attrs into label indexes (Elastic APM
     ``labels.*``, Datadog span tags) render them. The exception event with the
-    full untruncated message stays alongside — both places, matching v1's
-    shape."""
+    full untruncated message stays alongside."""
     from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
     from litellm.integrations.otel.emitter import SpanEmitter
 
@@ -706,8 +705,8 @@ def test_error_details_stamped_as_span_attributes_for_labels_ingest():
     # OTel-defined keys (from the ``error.*`` semconv registry).
     assert span.attributes[Error.TYPE] == "litellm.BadRequestError"
     assert span.attributes[Error.MESSAGE] == "400: violated moderation policy"
-    # LiteLLM-specific detail keys — vendor-namespaced under ``error.*``
-    # for v1-parity, not defined by OTel semconv.
+    # LiteLLM-specific detail keys, under the ``litellm.provider.error.*``
+    # vendor namespace, not defined by OTel semconv.
     assert span.attributes[LiteLLMError.CODE] == "400"
     assert span.attributes[LiteLLMError.STACK_TRACE] == "File proxy_server.py line 8570 ..."
     assert span.attributes[LiteLLMError.LLM_PROVIDER] == "openai"
@@ -734,19 +733,18 @@ def test_error_details_omitted_when_span_error_carries_only_message():
     assert LiteLLMError.LLM_PROVIDER not in span.attributes
 
 
-def test_v2_error_attribute_keys_match_v1_error_attributes_byte_for_byte():
-    """v1 (``opentelemetry.py``) and v2 (``otel/`` package) stamp identical
-    span-attribute keys so consumers reading ``labels.error_message`` don't
-    care which integration produced the span. Renaming either side is a
-    breaking change for downstream dashboards; this test locks the vocabulary."""
-    from litellm.integrations._types.open_inference import ErrorAttributes
+def test_error_attribute_keys_are_pinned():
+    """``error.type`` and ``error.message`` come from the semconv ``error.*``
+    registry; the litellm-specific detail keys are vendor keys under
+    ``litellm.provider.error.*``. Pins the exact strings so the emitted
+    vocabulary can't drift silently."""
     from litellm.integrations.otel.model.semconv import Error, LiteLLMError
 
-    assert Error.TYPE == ErrorAttributes.ERROR_TYPE
-    assert Error.MESSAGE == ErrorAttributes.ERROR_MESSAGE
-    assert LiteLLMError.CODE == ErrorAttributes.ERROR_CODE
-    assert LiteLLMError.STACK_TRACE == ErrorAttributes.ERROR_STACK_TRACE
-    assert LiteLLMError.LLM_PROVIDER == ErrorAttributes.ERROR_LLM_PROVIDER
+    assert Error.TYPE == "error.type"
+    assert Error.MESSAGE == "error.message"
+    assert LiteLLMError.CODE == "litellm.provider.error.code"
+    assert LiteLLMError.STACK_TRACE == "litellm.provider.error.stack_trace"
+    assert LiteLLMError.LLM_PROVIDER == "litellm.provider.error.llm_provider"
 
 
 def test_error_message_falls_back_to_error_type_when_message_absent():

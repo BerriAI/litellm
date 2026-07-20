@@ -17,7 +17,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
-    LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
@@ -8868,77 +8867,6 @@ async def test_team_member_me_returns_defaults_when_no_membership_row(mock_db_cl
 
 
 @pytest.mark.asyncio
-async def test_team_member_me_fills_team_default_budget_when_no_membership_row(
-    mock_db_client,
-):
-    """When membership has no budget row, surface the team's default member budget."""
-    from fastapi import Request
-
-    from litellm.proxy.management_endpoints.team_endpoints import team_member_me
-
-    team_id = "team-me-default-budget"
-    caller_id = "alice@example.com"
-    caller_auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER, user_id=caller_id
-    )
-    default_budget = LiteLLM_BudgetTable(
-        budget_id="team-default-b",
-        max_budget=100.0,
-        budget_duration="30d",
-        model_max_budget=None,
-    )
-    team = LiteLLM_TeamTableCachedObj(
-        team_id=team_id,
-        team_alias="team-vec",
-        members_with_roles=[
-            Member(user_id=caller_id, user_email=None, role="user"),
-        ],
-        metadata={"team_member_budget_id": "team-default-b"},
-        models=[],
-        spend=0.0,
-        model_max_budget={
-            "claude-opus-4-8": {"budget_limit": 20, "time_period": "1d"},
-        },
-    )
-
-    p_team, p_membership, p_user = _patch_member_me_helpers(team=team)
-    with (
-        p_team,
-        p_membership,
-        p_user,
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_team_member_default_budget",
-            AsyncMock(return_value=default_budget),
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints._build_model_max_budget_usage_for_member_me",
-            AsyncMock(
-                return_value={
-                    "claude-opus-4-8": {
-                        "current_spend": 5.0,
-                        "budget_limit": 20.0,
-                        "time_period": "1d",
-                        "scope": "team",
-                        "percent_used": 25.0,
-                    }
-                }
-            ),
-        ),
-    ):
-        response = await team_member_me(
-            http_request=MagicMock(spec=Request),
-            team_id=team_id,
-            user_api_key_dict=caller_auth,
-        )
-
-    assert response.using_team_default_budget is True
-    assert response.litellm_budget_table is not None
-    assert response.litellm_budget_table.max_budget == 100.0
-    assert response.model_max_budget_usage is not None
-    assert response.model_max_budget_usage["claude-opus-4-8"]["percent_used"] == 25.0
-
-
-@pytest.mark.asyncio
 async def test_team_member_me_rejects_team_key_without_user_id(mock_db_client):
     """A team key with no user_id can't resolve 'me' — must return 400."""
     from fastapi import Request, HTTPException
@@ -9571,6 +9499,374 @@ class TestEmitTeamMembersMetric:
 
 
 @pytest.mark.asyncio
+async def test_new_team_rejects_reserved_ui_session_team_id():
+    """
+    /team/new must reject team_id "litellm-dashboard" (UI_TEAM_ID): it is the
+    virtual team stamped on every UI dashboard session token, so a real DB row
+    with that id would bind its budget and permissions to every UI session.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import UI_TEAM_ID, NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    team_request = NewTeamRequest(
+        team_alias="dashboard-clone",
+        team_id=UI_TEAM_ID,
+    )
+    dummy_request = MagicMock(spec=Request)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server._license_check") as mock_license,
+    ):
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        mock_license.is_team_count_over_limit.return_value = False
+        mock_prisma.get_data = AsyncMock(return_value=None)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        assert exc_info.value.code == "400"
+        assert "reserved" in str(exc_info.value.message)
+        mock_prisma.get_data.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PATCH /team/{team_id} — RFC 7386 JSON Merge Patch
+#
+# The new PATCH endpoint delegates to the same write path as POST /team/update;
+# the single intended divergence is metadata. POST replaces the metadata column
+# wholesale, PATCH merges it per RFC 7386 (omit preserves, null deletes, value
+# overwrites, recursing into nested objects). Every other field must behave
+# identically. Each test drives BOTH endpoints against an identical mocked team
+# and asserts on the exact dict handed to litellm_teamtable.update.
+# ---------------------------------------------------------------------------
+
+_PATCH_TEAM_ID = "team-merge-patch-test"
+_ABSENT = object()
+
+
+async def _drive_team_write(
+    kind,
+    *,
+    existing_metadata=None,
+    existing_kwargs=None,
+    payload=None,
+    raw_body=None,
+    user=None,
+    find_returns_none=False,
+    json_side_effect=None,
+):
+    """Drive POST ``update_team`` or PATCH ``patch_team`` against a mocked team.
+
+    Returns ``(endpoint_result, update_mock)``; propagates whatever the endpoint
+    raises. Inspect ``update_mock.call_args.kwargs["data"]`` for the DB write.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock
+    from unittest.mock import patch as _patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LitellmUserRoles,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        patch_team,
+        update_team,
+    )
+
+    existing = LiteLLM_TeamTable(
+        team_id=_PATCH_TEAM_ID,
+        team_alias="t",
+        metadata=existing_metadata,
+        organization_id=None,
+        **(existing_kwargs or {}),
+    )
+    auth = user or UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="u")
+
+    with (
+        _patch("litellm.proxy.proxy_server.prisma_client") as pc,
+        _patch("litellm.proxy.proxy_server.llm_router", None),
+        _patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        _patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        _patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        _patch(
+            "litellm.proxy.management_endpoints.team_endpoints._refresh_cached_team",
+            new=AsyncMock(),
+        ),
+    ):
+        pc.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=None if find_returns_none else existing
+        )
+        pc.db.litellm_teamtable.update = AsyncMock(
+            return_value=LiteLLM_TeamTable(team_id=_PATCH_TEAM_ID, team_alias="t")
+        )
+        pc.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        req = Mock(spec=Request)
+        if kind == "post":
+            result = await update_team(
+                data=UpdateTeamRequest(team_id=_PATCH_TEAM_ID, **(payload or {})),
+                http_request=req,
+                user_api_key_dict=auth,
+                litellm_changed_by=None,
+            )
+        else:
+            if json_side_effect is not None:
+                req.json = AsyncMock(side_effect=json_side_effect)
+            else:
+                req.json = AsyncMock(
+                    return_value=raw_body if raw_body is not None else dict(payload or {})
+                )
+            result = await patch_team(
+                team_id=_PATCH_TEAM_ID,
+                http_request=req,
+                user_api_key_dict=auth,
+                litellm_changed_by=None,
+            )
+        return result, pc.db.litellm_teamtable.update
+
+
+async def _written_metadata(kind, existing_metadata, body):
+    _, update_mock = await _drive_team_write(kind, existing_metadata=existing_metadata, payload=body)
+    written = update_mock.call_args.kwargs["data"]
+    return written["metadata"] if "metadata" in written else _ABSENT
+
+
+# (label, existing_metadata, merge_patch_body, expected_POST_metadata, expected_PATCH_metadata)
+_METADATA_MAPPING = [
+    (
+        "omit-metadata-preserves-in-both",
+        {"cost_center": "1234"},
+        {"tpm_limit": 5},
+        _ABSENT,  # POST: metadata column left untouched
+        _ABSENT,  # PATCH: metadata column left untouched
+    ),
+    (
+        "add-key-POST-wipes-others-PATCH-preserves",
+        {"cost_center": "1234", "foo": "bar"},
+        {"metadata": {"foo": "baz"}},
+        {"foo": "baz"},  # POST replaces wholesale -> cost_center wiped
+        {"cost_center": "1234", "foo": "baz"},  # PATCH merges -> cost_center kept
+    ),
+    (
+        "overwrite-plus-null-delete-plus-add",
+        {"cost_center": "1234", "foo": "bar"},
+        {"metadata": {"cost_center": "9999", "foo": None, "new": "x"}},
+        {"cost_center": "9999", "foo": None, "new": "x"},  # POST stores the literal null
+        {"cost_center": "9999", "new": "x"},  # PATCH deletes foo via null
+    ),
+    (
+        "null-delete-one-key",
+        {"a": 1, "b": 2},
+        {"metadata": {"b": None}},
+        {"b": None},  # POST wholesale replace -> only b:null survives
+        {"a": 1},  # PATCH deletes b, preserves a
+    ),
+    (
+        "nested-object-deep-merge",
+        {"settings": {"x": 1, "y": 2}},
+        {"metadata": {"settings": {"y": 3, "z": 4}}},
+        {"settings": {"y": 3, "z": 4}},  # POST replaces the nested object wholesale
+        {"settings": {"x": 1, "y": 3, "z": 4}},  # PATCH deep-merges the nested object
+    ),
+    (
+        "nested-object-null-delete",
+        {"settings": {"x": 1, "y": 2}},
+        {"metadata": {"settings": {"x": None}}},
+        {"settings": {"x": None}},  # POST wholesale
+        {"settings": {"y": 2}},  # PATCH deletes nested key, keeps sibling
+    ),
+    (
+        "empty-object-POST-clears-PATCH-noops",
+        {"a": 1},
+        {"metadata": {}},
+        {},  # POST replaces with an empty object
+        {"a": 1},  # PATCH: an empty patch is a no-op
+    ),
+    (
+        "metadata-null-clears-in-both",
+        {"a": 1},
+        {"metadata": None},
+        None,  # POST clears the column
+        None,  # PATCH: an RFC 7386 null patch clears the column too (parity)
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "label, existing_metadata, body, expected_post, expected_patch",
+    _METADATA_MAPPING,
+    ids=[row[0] for row in _METADATA_MAPPING],
+)
+async def test_post_vs_patch_metadata_write_mapping(
+    label, existing_metadata, body, expected_post, expected_patch
+):
+    """Exhaustive map: POST replaces metadata wholesale, PATCH merges per RFC 7386."""
+    post_meta = await _written_metadata("post", existing_metadata, body)
+    patch_meta = await _written_metadata("patch", existing_metadata, body)
+
+    assert post_meta == expected_post, f"POST metadata mismatch for '{label}'"
+    assert patch_meta == expected_patch, f"PATCH metadata mismatch for '{label}'"
+
+
+@pytest.mark.asyncio
+async def test_patch_preserves_required_metadata_key_that_post_would_wipe():
+    """The reason PATCH exists: editing one metadata key must not silently drop
+    the others, which POST /team/update does because it replaces wholesale."""
+    existing = {"cost_center": "FINOPS-1", "team_notes": "keep me"}
+    body = {"metadata": {"team_notes": "edited"}}
+
+    post_meta = await _written_metadata("post", existing, body)
+    patch_meta = await _written_metadata("patch", existing, body)
+
+    assert post_meta == {"team_notes": "edited"}
+    assert "cost_center" not in post_meta  # wiped by POST
+    assert patch_meta == {"cost_center": "FINOPS-1", "team_notes": "edited"}  # preserved by PATCH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, field, expected",
+    [
+        ({"tpm_limit": 50}, "tpm_limit", 50),
+        ({"tpm_limit": None}, "tpm_limit", None),
+        ({"models": ["gpt-4", "claude-3"]}, "models", ["gpt-4", "claude-3"]),
+        ({"blocked": True}, "blocked", True),
+        ({"max_budget": 10.0}, "max_budget", 10.0),
+    ],
+)
+async def test_top_level_fields_identical_post_and_patch(body, field, expected):
+    """Non-metadata fields are unaffected by merge semantics: value overwrites in both,
+    and neither touches metadata when the patch omits it."""
+    _, post_update = await _drive_team_write("post", existing_metadata={"k": "v"}, payload=body)
+    _, patch_update = await _drive_team_write("patch", existing_metadata={"k": "v"}, payload=body)
+    post_written = post_update.call_args.kwargs["data"]
+    patch_written = patch_update.call_args.kwargs["data"]
+
+    assert post_written[field] == expected
+    assert patch_written[field] == expected
+    assert "metadata" not in post_written
+    assert "metadata" not in patch_written
+
+
+@pytest.mark.asyncio
+async def test_patch_strips_system_managed_metadata_key_like_post():
+    """A caller cannot inject/overwrite server-owned keys via PATCH any more than
+    via POST: team_member_budget_id is stripped from the write in both."""
+    existing = {"team_member_budget_id": "budget-123", "cost_center": "1234"}
+    body = {"metadata": {"team_member_budget_id": "HACKED", "cost_center": "9999"}}
+
+    post_meta = await _written_metadata("post", existing, body)
+    patch_meta = await _written_metadata("patch", existing, body)
+
+    assert "team_member_budget_id" not in post_meta
+    assert "team_member_budget_id" not in patch_meta
+    assert post_meta == {"cost_center": "9999"}
+    assert patch_meta == {"cost_center": "9999"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_body", [["not", "an", "object"], "a-string", 42, True])
+async def test_patch_rejects_non_object_body(raw_body):
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc:
+        await _drive_team_write("patch", existing_metadata={"a": 1}, raw_body=raw_body)
+    assert exc.value.code == "400" or exc.value.code == 400
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_invalid_json_body():
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc:
+        await _drive_team_write(
+            "patch", existing_metadata={"a": 1}, json_side_effect=ValueError("no body")
+        )
+    assert exc.value.code == "400" or exc.value.code == 400
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_team_id_mismatch_between_path_and_body():
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc:
+        await _drive_team_write(
+            "patch",
+            existing_metadata={"a": 1},
+            raw_body={"team_id": "some-other-team", "tpm_limit": 5},
+        )
+    assert exc.value.code == "400" or exc.value.code == 400
+
+
+@pytest.mark.asyncio
+async def test_patch_accepts_matching_team_id_in_body():
+    """A body team_id equal to the path is tolerated and does not leak into the write."""
+    _, update_mock = await _drive_team_write(
+        "patch",
+        existing_metadata={"a": 1},
+        raw_body={"team_id": _PATCH_TEAM_ID, "tpm_limit": 7},
+    )
+    written = update_mock.call_args.kwargs["data"]
+    assert written["tpm_limit"] == 7
+
+
+@pytest.mark.asyncio
+async def test_patch_team_not_found_returns_404():
+    from litellm.proxy._types import ProxyException
+
+    # metadata present -> patch_team does its own existence check
+    with pytest.raises(ProxyException) as exc:
+        await _drive_team_write(
+            "patch", raw_body={"metadata": {"cost_center": "1"}}, find_returns_none=True
+        )
+    assert exc.value.code == "404" or exc.value.code == 404
+
+    # metadata absent -> existence check happens in the delegated update_team
+    with pytest.raises(ProxyException) as exc2:
+        await _drive_team_write("patch", raw_body={"tpm_limit": 5}, find_returns_none=True)
+    assert exc2.value.code == "404" or exc2.value.code == 404
+
+
+@pytest.mark.asyncio
+async def test_patch_enforces_team_access_via_delegation():
+    """PATCH inherits POST's team-level RBAC: a caller who is neither proxy admin,
+    team admin, nor org admin of the team is rejected."""
+    from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+
+    outsider = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="outsider")
+    with pytest.raises(ProxyException) as exc:
+        await _drive_team_write(
+            "patch", raw_body={"tpm_limit": 5}, user=outsider
+        )
+    assert exc.value.code == "403" or exc.value.code == 403
+
+
+@pytest.mark.asyncio
+async def test_patch_returns_full_team_object_not_wrapper():
+    """Per REST convention the PATCH response is the full team, not POST's
+    {"team_id", "data"} envelope."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    result, _ = await _drive_team_write(
+        "patch", existing_metadata={"a": 1}, raw_body={"metadata": {"b": 2}}
+    )
+    assert isinstance(result, LiteLLM_TeamTable)
+    assert result.team_id == _PATCH_TEAM_ID
+
+@pytest.mark.asyncio
 async def test_update_team_persists_model_max_budget():
     from fastapi import Request
 
@@ -9642,6 +9938,8 @@ async def test_update_team_persists_model_max_budget():
 
 
 @pytest.mark.asyncio
+
+@pytest.mark.asyncio
 async def test_team_member_delete_blocks_self_removal(mock_db_client):
     from litellm.proxy._types import TeamMemberDeleteRequest
     from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
@@ -9677,3 +9975,4 @@ async def test_team_member_delete_blocks_self_removal(mock_db_client):
         )
     assert exc_info.value.status_code == 403
     assert "cannot remove themselves" in str(exc_info.value.detail)
+

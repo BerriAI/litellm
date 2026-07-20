@@ -189,9 +189,7 @@ def test_ProxyConfig__load_yaml_file_raises_on_missing_file():
 @pytest.mark.asyncio
 async def test_ProxyConfig__get_config_from_file_loads_yaml(tmp_path):
     f = tmp_path / "c.yaml"
-    f.write_text(
-        "model_list: []\ngeneral_settings: {}\nlitellm_settings:\n  drop_params: true\n"
-    )
+    f.write_text("model_list: []\ngeneral_settings: {}\nlitellm_settings:\n  drop_params: true\n")
     pc = ProxyConfig()
     result = await pc._get_config_from_file(config_file_path=str(f))
     assert result == {
@@ -534,6 +532,139 @@ def test_ProxyConfig_parse_search_tools_missing_returns_none():
     assert pc.parse_search_tools({}) is None
 
 
+def test_ProxyConfig_merge_config_and_db_search_tools_returns_superset():
+    config_tools = [
+        {
+            "search_tool_name": "config-search",
+            "litellm_params": {"search_provider": "tavily"},
+        }
+    ]
+    db_tools = [
+        {
+            "search_tool_name": "db-search",
+            "litellm_params": {
+                "search_provider": "exa_ai",
+                "api_key": "fake-db-key",
+            },
+        }
+    ]
+
+    merged = ProxyConfig._merge_config_and_db_search_tools(
+        config_search_tools=config_tools,
+        db_search_tools=db_tools,
+    )
+
+    assert [tool["search_tool_name"] for tool in merged] == ["config-search", "db-search"]
+    assert merged[1]["litellm_params"]["api_key"] == "fake-db-key"
+
+
+def test_ProxyConfig_merge_config_and_db_search_tools_prefers_db_duplicate():
+    config_tools = [
+        {
+            "search_tool_name": "shared-search",
+            "litellm_params": {"search_provider": "tavily"},
+        },
+        {
+            "search_tool_name": "config-only",
+            "litellm_params": {"search_provider": "perplexity"},
+        },
+    ]
+    db_tools = [
+        {
+            "search_tool_name": "shared-search",
+            "litellm_params": {
+                "search_provider": "exa_ai",
+                "api_key": "fake-db-key",
+            },
+        }
+    ]
+
+    merged = ProxyConfig._merge_config_and_db_search_tools(
+        config_search_tools=config_tools,
+        db_search_tools=db_tools,
+    )
+
+    assert [tool["search_tool_name"] for tool in merged] == ["config-only", "shared-search"]
+    assert merged[1]["litellm_params"]["search_provider"] == "exa_ai"
+    assert merged[1]["litellm_params"]["api_key"] == "fake-db-key"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.router_utils.search_api_router import SearchAPIRouter
+
+    pc = ProxyConfig()
+    pc.update_config_state(
+        {
+            "search_tools": [
+                {
+                    "search_tool_name": "shared-search",
+                    "litellm_params": {"search_provider": "tavily"},
+                },
+                {
+                    "search_tool_name": "config-only",
+                    "litellm_params": {"search_provider": "perplexity"},
+                },
+            ]
+        }
+    )
+    db_tools = [
+        {
+            "search_tool_name": "shared-search",
+            "litellm_params": {
+                "search_provider": "exa_ai",
+                "api_key": "fake-db-key",
+            },
+        }
+    ]
+    fake_router = MagicMock()
+    mock_get_db_tools = AsyncMock(return_value=db_tools)
+    mock_update_router = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        mock_get_db_tools,
+    )
+    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
+
+    await pc._init_search_tools_in_db(prisma_client=MagicMock())
+
+    mock_get_db_tools.assert_awaited_once()
+    mock_update_router.assert_awaited_once()
+    update_kwargs = mock_update_router.await_args.kwargs
+    assert update_kwargs["router_instance"] is fake_router
+    assert [tool["search_tool_name"] for tool in update_kwargs["search_tools"]] == [
+        "config-only",
+        "shared-search",
+    ]
+    assert update_kwargs["search_tools"][1]["litellm_params"]["api_key"] == "fake-db-key"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_search_tools_in_db_skips_empty_router_update(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.router_utils.search_api_router import SearchAPIRouter
+
+    pc = ProxyConfig()
+    pc.update_config_state({})
+    mock_get_db_tools = AsyncMock(return_value=[])
+    mock_update_router = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        mock_get_db_tools,
+    )
+    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
+
+    await pc._init_search_tools_in_db(prisma_client=MagicMock())
+
+    mock_get_db_tools.assert_awaited_once()
+    mock_update_router.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._load_environment_variables
 # ---------------------------------------------------------------------------
@@ -542,9 +673,7 @@ def test_ProxyConfig_parse_search_tools_missing_returns_none():
 def test_ProxyConfig__load_environment_variables_sets_env(monkeypatch):
     monkeypatch.delenv("TEST_LOAD_ENV_X", raising=False)
     pc = ProxyConfig()
-    pc._load_environment_variables(
-        {"environment_variables": {"TEST_LOAD_ENV_X": "hello"}}
-    )
+    pc._load_environment_variables({"environment_variables": {"TEST_LOAD_ENV_X": "hello"}})
     result = {
         "TEST_LOAD_ENV_X": os.environ.get("TEST_LOAD_ENV_X"),
         "set": True,
@@ -592,6 +721,37 @@ async def test_ProxyConfig_load_config_minimal_yaml(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp_path, monkeypatch):
+    """Regression for #26599: SSRF settings in general_settings must reach litellm globals."""
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings:\n"
+        "  user_url_validation: false\n"
+        "  user_url_allowed_hosts:\n"
+        "    - internal.corp\n"
+        "  provider_url_destination_allowed_hosts:\n"
+        "    - api.example.com\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    original_validation = litellm.user_url_validation
+    original_hosts = list(litellm.user_url_allowed_hosts)
+    original_provider_hosts = list(litellm.provider_url_destination_allowed_hosts)
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        assert litellm.user_url_validation is False
+        assert litellm.user_url_allowed_hosts == ["internal.corp"]
+        assert litellm.provider_url_destination_allowed_hosts == ["api.example.com"]
+    finally:
+        litellm.user_url_validation = original_validation
+        litellm.user_url_allowed_hosts = original_hosts
+        litellm.provider_url_destination_allowed_hosts = original_provider_hosts
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_missing_file_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
@@ -602,9 +762,7 @@ async def test_ProxyConfig_load_config_missing_file_raises(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_load_config_forwards_callback_specific_params(
-    tmp_path, monkeypatch
-):
+async def test_ProxyConfig_load_config_forwards_callback_specific_params(tmp_path, monkeypatch):
     """Regression: callback_settings from config must be forwarded to
     initialize_callbacks_on_proxy as callback_specific_params.
 
@@ -645,16 +803,12 @@ async def test_ProxyConfig_load_config_forwards_callback_specific_params(
 
     # The callbacks branch must forward the loaded callback_settings.
     assert captured.get("callback_specific_params") == {
-        "datadog_cost_management": {
-            "cost_tag_keys": ["capability", "platform", "ai_product"]
-        }
+        "datadog_cost_management": {"cost_tag_keys": ["capability", "platform", "ai_product"]}
     }
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(
-    tmp_path, monkeypatch
-):
+async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(tmp_path, monkeypatch):
     """Regression: `callback_settings:` with no body loads as None because
     dict.get() only falls back to the default when the key is absent. The None
     was forwarded verbatim to initialize_callbacks_on_proxy, where the first
@@ -678,17 +832,13 @@ async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(
         CompressionInterceptionLogger,
     )
 
-    original_callbacks = (
-        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
-    )
+    original_callbacks = list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
     litellm.callbacks = []
     try:
         pc = ProxyConfig()
         await pc.load_config(router=None, config_file_path=str(f))
 
-        assert any(
-            isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks
-        )
+        assert any(isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks)
     finally:
         litellm.callbacks = original_callbacks
 
@@ -1175,7 +1325,9 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
         lambda value, key, return_original_value: (
             "os.environ/LITELLM_DB_MODEL_API_KEY"
             if key == "api_key"
-            else "os.environ/LITELLM_MASTER_KEY" if key == "api_base" else value
+            else "os.environ/LITELLM_MASTER_KEY"
+            if key == "api_base"
+            else value
         ),
     )
     pc = ProxyConfig()
@@ -1207,9 +1359,7 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_team_env_refs_after_db_
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
-        lambda value, key, return_original_value: (
-            "os.environ/LITELLM_MASTER_KEY" if key == "api_key" else value
-        ),
+        lambda value, key, return_original_value: "os.environ/LITELLM_MASTER_KEY" if key == "api_key" else value,
     )
     pc = ProxyConfig()
     m = SimpleNamespace(
@@ -1232,9 +1382,7 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_team_env_refs_after_db_
 
 def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
     pc = ProxyConfig()
-    bad = SimpleNamespace(
-        model_id="m-1", model_name="x", model_info={}, litellm_params="not-a-dict"
-    )
+    bad = SimpleNamespace(model_id="m-1", model_name="x", model_info={}, litellm_params="not-a-dict")
     out = pc.decrypt_model_list_from_db(new_models=[bad])
     # Invalid entries skipped — empty list returned.
     assert out == []
@@ -1284,9 +1432,7 @@ async def test_ProxyConfig__update_llm_router_bad_proxy_logging_raises(monkeypat
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-x")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.general_settings", {"alerting": ["email"]}
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"alerting": ["email"]})
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", pc)
     # Passing None for proxy_logging_obj triggers AttributeError in _add_general_settings_from_db_config
     # when it calls proxy_logging_obj.update_values.
@@ -1537,9 +1683,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     fake_router.update_settings = MagicMock()
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_config.find_first = AsyncMock(
-        return_value=SimpleNamespace(
-            param_value={"timeout": 30, "retries": 2, "fallbacks": []}
-        )
+        return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
     )
     config_data = {"router_settings": {"timeout": 10}}
     await pc._add_router_settings_from_db_config(
@@ -1550,9 +1694,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     snapshot = {
         "called": fake_router.update_settings.called,
         "call_count": fake_router.update_settings.call_count,
-        "kwargs_keys": sorted(
-            list(fake_router.update_settings.call_args.kwargs.keys())
-        ),
+        "kwargs_keys": sorted(list(fake_router.update_settings.call_args.kwargs.keys())),
     }
     assert snapshot == {
         "called": True,
@@ -1565,9 +1707,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
 async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop():
     pc = ProxyConfig()
     # No router and no prisma — should silently return.
-    await pc._add_router_settings_from_db_config(
-        config_data={}, llm_router=None, prisma_client=None
-    )
+    await pc._add_router_settings_from_db_config(config_data={}, llm_router=None, prisma_client=None)
     # Error-style: bad call signature raises.
     with pytest.raises(TypeError):
         await pc._add_router_settings_from_db_config()  # type: ignore[call-arg]
@@ -1672,9 +1812,7 @@ async def test_ProxyConfig__update_general_settings_updates_max_parallel(monkeyp
 
     snapshot = {
         "max_parallel_requests": ps.general_settings.get("max_parallel_requests"),
-        "global_max_parallel_requests": ps.general_settings.get(
-            "global_max_parallel_requests"
-        ),
+        "global_max_parallel_requests": ps.general_settings.get("global_max_parallel_requests"),
         "ui_access_mode": ps.general_settings.get("ui_access_mode"),
     }
     assert snapshot == {
@@ -1816,9 +1954,7 @@ async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plain(
-    tmp_path, monkeypatch
-):
+async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plain(tmp_path, monkeypatch):
     """Regression for LIT-4152 on the ``litellm_settings`` apply loop.
 
     ``load_config`` logged ``setting litellm.<key>=<value>`` verbatim at DEBUG,
@@ -1839,11 +1975,7 @@ async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plai
     api_key_secret = "sk-lit4152-litellm-settings-secret-abcdef1234567890"
     f = tmp_path / "c.yaml"
     f.write_text(
-        "model_list: []\n"
-        "general_settings: {}\n"
-        "litellm_settings:\n"
-        f"  api_key: {api_key_secret}\n"
-        "  num_retries: 7\n"
+        f"model_list: []\ngeneral_settings: {{}}\nlitellm_settings:\n  api_key: {api_key_secret}\n  num_retries: 7\n"
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)

@@ -403,32 +403,34 @@ export default function ChatConversationPage() {
         if (!open) setModelSearchText("");
       }}
     >
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="max-w-[240px] justify-start gap-1.5 overflow-hidden">
-          {selectedModel ? (
-            <>
-              {(() => {
-                const provider = getProviderFromModelName(selectedModel);
-                const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
-                return logo ? (
-                  <img
-                    src={logo}
-                    alt=""
-                    className="w-4 h-4 object-contain shrink-0"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).style.display = "none";
-                    }}
-                  />
-                ) : null;
-              })()}
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{selectedModel}</span>
-            </>
-          ) : (
-            <span className="text-muted-foreground">Select model</span>
-          )}
-          <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-        </Button>
-      </PopoverTrigger>
+      <PopoverTrigger
+        render={
+          <Button variant="outline" size="sm" className="max-w-[240px] justify-start gap-1.5 overflow-hidden">
+            {selectedModel ? (
+              <>
+                {(() => {
+                  const provider = getProviderFromModelName(selectedModel);
+                  const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
+                  return logo ? (
+                    <img
+                      src={logo}
+                      alt=""
+                      className="w-4 h-4 object-contain shrink-0"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                  ) : null;
+                })()}
+                <span className="overflow-hidden text-ellipsis whitespace-nowrap">{selectedModel}</span>
+              </>
+            ) : (
+              <span className="text-muted-foreground">Select model</span>
+            )}
+            <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+          </Button>
+        }
+      />
       <PopoverContent align="start" side="top" className="p-0 w-auto">
         {modelSelectorContent}
       </PopoverContent>
@@ -456,14 +458,16 @@ export default function ChatConversationPage() {
         <div className="flex items-center gap-2 min-w-0">
           {modelSelectorTrigger}
           <Popover open={mcpPopoverOpen} onOpenChange={setMcpPopoverOpen}>
-            <PopoverTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-1 px-2.5 text-muted-foreground">
-                <Plus className="h-3.5 w-3.5" />
-                {selectedMCPServers.length > 0 && (
-                  <span className="text-xs text-primary font-medium">{selectedMCPServers.length}</span>
-                )}
-              </Button>
-            </PopoverTrigger>
+            <PopoverTrigger
+              render={
+                <Button variant="outline" size="sm" className="gap-1 px-2.5 text-muted-foreground">
+                  <Plus className="h-3.5 w-3.5" />
+                  {selectedMCPServers.length > 0 && (
+                    <span className="text-xs text-primary font-medium">{selectedMCPServers.length}</span>
+                  )}
+                </Button>
+              }
+            />
             <PopoverContent side="top" align="start" className="p-0 w-auto">
               <MCPConnectPicker
                 accessToken={accessToken}

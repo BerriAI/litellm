@@ -5,6 +5,16 @@ orbs:
   win: circleci/windows@5.0 # Add Windows orb
 
 commands:
+  skip_if_unrelated_changes:
+    parameters:
+      category:
+        type: enum
+        enum: ["backend", "client"]
+        default: "backend"
+    steps:
+      - run:
+          name: "Skip job when no << parameters.category >>-relevant files changed"
+          command: bash .circleci/scripts/path_filter.sh << parameters.category >>
   setup_google_dns:
     steps:
       - run:
@@ -282,6 +292,7 @@ jobs:
     parallelism: 4
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - restore_cache:
           keys:
@@ -354,6 +365,7 @@ jobs:
     parallelism: 4
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - restore_cache:
           keys:
@@ -427,6 +439,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - restore_cache:
           keys:
@@ -480,6 +493,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -545,6 +559,7 @@ jobs:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -584,6 +599,7 @@ jobs:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -624,6 +640,7 @@ jobs:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -656,6 +673,7 @@ jobs:
       FAKE_OPENAI_API_BASE: http://127.0.0.1:8190
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -705,6 +723,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -755,6 +774,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -787,6 +807,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -832,6 +853,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -877,6 +899,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -918,6 +941,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -963,6 +987,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1004,9 +1029,12 @@ jobs:
       - *python312_image
     working_directory: ~/project
     resource_class: large
+    environment:
+      REQUEST_TIMEOUT: "180"
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -1032,7 +1060,8 @@ jobs:
                 -v -x \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
-                -n 8"
+                -n 8 \
+                --reruns 1 --only-rerun Timeout"
           no_output_timeout: 15m
 
       # Store test results
@@ -1045,6 +1074,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1089,6 +1119,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1132,6 +1163,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1163,6 +1195,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1205,6 +1238,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1248,6 +1282,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1291,6 +1326,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1321,6 +1357,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1366,6 +1403,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1407,6 +1445,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - restore_cache:
           keys:
@@ -1459,6 +1498,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1482,6 +1522,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1507,6 +1548,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1531,6 +1573,7 @@ jobs:
 
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
       - setup_google_dns
@@ -1570,14 +1613,14 @@ jobs:
       - run:
           name: Run helm lint
           command: |
-            helm lint ./deploy/charts/litellm-helm
+            helm lint ./helm/litellm-helm
 
       # Run helm tests
       - run:
           name: Run helm tests
           command: |
             IMAGE_TAG=${CIRCLE_SHA1:-ci}
-            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/ci/test-values.yaml \
+            helm install litellm ./helm/litellm-helm -f ./helm/litellm-helm/ci/test-values.yaml \
               --set image.repository=litellm-ci \
               --set image.tag=${IMAGE_TAG} \
               --set image.pullPolicy=Never
@@ -1606,6 +1649,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1698,6 +1742,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
       - setup_google_dns
@@ -1787,6 +1832,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -1869,6 +1915,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2000,6 +2047,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2085,6 +2133,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2180,6 +2229,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2201,6 +2251,7 @@ jobs:
           # the OTEL test - should get this as a trace
           command: |
             docker run -d \
+              --restart on-failure \
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
@@ -2252,6 +2303,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
       - install_uv
@@ -2333,6 +2385,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2471,6 +2524,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
       - run:
@@ -2537,6 +2591,7 @@ jobs:
       - *python312_image
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - attach_workspace:
           at: .
       # Check file locations
@@ -2567,6 +2622,8 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
       - restore_cache:
           keys:
@@ -2609,6 +2666,8 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
       - restore_cache:
           keys:
@@ -2654,6 +2713,8 @@ jobs:
       PROXY_LOGOUT_URL: "https://www.example.com"
     steps:
       - checkout
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -2791,6 +2852,8 @@ jobs:
       SERVER_ROOT_PATH: "/litellm"
     steps:
       - checkout
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
       - install_uv
       - restore_cache:
@@ -2892,6 +2955,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
 
       - run:
           name: Build Docker image
@@ -2917,6 +2981,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
       - setup_google_dns
