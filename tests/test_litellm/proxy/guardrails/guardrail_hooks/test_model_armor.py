@@ -740,6 +740,151 @@ async def test_model_armor_api_error_honors_fail_open(fail_on_error: bool):
             assert result is request_data
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_model_armor_api_error_fail_open_moderation_and_post_call(fail_on_error: bool):
+    """The during-call and post-call hooks route API failures through fail_on_error
+    exactly like pre-call: sanitized 400 when failing closed, pass-through when open."""
+    api_error = ModelArmorAPIError("Model Armor API error (upstream 503)")
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=fail_on_error,
+    )
+    guardrail.make_model_armor_request = AsyncMock(side_effect=api_error)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+    }
+    mock_llm_response = litellm.ModelResponse()
+    mock_llm_response.choices = [
+        litellm.Choices(message=litellm.Message(content="model output"))
+    ]
+
+    if fail_on_error:
+        with pytest.raises(HTTPException) as mod_exc:
+            await guardrail.async_moderation_hook(
+                data=dict(request_data),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+        assert mod_exc.value.status_code == 400
+        assert mod_exc.value.detail == "Model Armor API error (upstream 503)"
+
+        with pytest.raises(HTTPException) as post_exc:
+            await guardrail.async_post_call_success_hook(
+                data=dict(request_data),
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=mock_llm_response,
+            )
+        assert post_exc.value.status_code == 400
+    else:
+        moderated = await guardrail.async_moderation_hook(
+            data=dict(request_data),
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+        assert moderated is not None
+
+        result = await guardrail.async_post_call_success_hook(
+            data=dict(request_data),
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_llm_response,
+        )
+        assert result is mock_llm_response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_model_armor_api_error_fail_open_streaming(fail_on_error: bool):
+    """A streaming-path API failure yields a sanitized SSE error frame when failing
+    closed and passes the original chunks through when the operator opted into fail-open."""
+    api_error = ModelArmorAPIError("Model Armor API error (upstream 503)")
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=fail_on_error,
+    )
+    guardrail.make_model_armor_request = AsyncMock(side_effect=api_error)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+
+    async def mock_stream():
+        yield litellm.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="streamed output")
+                )
+            ]
+        )
+
+    chunks = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=mock_stream(),
+        request_data={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "synthetic input"}],
+            "metadata": {},
+        },
+    ):
+        chunks.append(chunk)
+
+    if fail_on_error:
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], str)
+        assert "Model Armor API error (upstream 503)" in chunks[0]
+        assert '"code": "400"' in chunks[0]
+    else:
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], litellm.ModelResponseStream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_on_error", [True, False])
+async def test_model_armor_api_error_fail_open_file_scan(fail_on_error: bool):
+    """A file-scan API failure blocks with the sanitized detail when failing closed
+    and skips the attachment when the operator opted into fail-open."""
+    api_error = ModelArmorAPIError("Model Armor API error (upstream 503)")
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        fail_on_error=fail_on_error,
+    )
+    guardrail.make_model_armor_request = AsyncMock(side_effect=api_error)
+
+    pdf_b64 = base64.b64encode(b"%PDF-1.4 synthetic").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                        "filename": "synthetic.pdf",
+                        "format": "application/pdf",
+                    },
+                }
+            ],
+        }
+    ]
+    data = {"metadata": {}}
+
+    if fail_on_error:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail._scan_request_files(messages=messages, data=data)
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Model Armor API error (upstream 503)"
+    else:
+        assert await guardrail._scan_request_files(messages=messages, data=data) is None
+
+
 def test_model_armor_redactor_depth_cap_fails_closed():
     """Past the recursion cap the redactor must return the redaction sentinel,
     never raw content, and must not raise RecursionError."""
@@ -749,12 +894,15 @@ def test_model_armor_redactor_depth_cap_fails_closed():
     )
 
     marker = "SYNTHETIC_DEEP_MARKER"
-    payload: dict = {"safe_key": marker}
+    payload: dict = {"safe_key": marker, "items": [{"safe_key": marker}]}
     for _ in range(_REDACT_MAX_DEPTH + 5):
         payload = {"nested": payload}
 
     redacted = _redact_scanned_content(payload)
     assert marker not in str(redacted)
+
+    shallow = _redact_scanned_content({"filterResults": [{"text": marker, "matchState": "MATCH_FOUND"}]})
+    assert shallow == {"filterResults": [{"text": "[REDACTED]", "matchState": "MATCH_FOUND"}]}
 
 
 @pytest.mark.asyncio
