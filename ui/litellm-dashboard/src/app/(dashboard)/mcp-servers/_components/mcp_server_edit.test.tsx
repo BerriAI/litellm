@@ -432,6 +432,44 @@ describe("MCPServerEdit (auth type switch)", () => {
     expect(payload.registration_url).toBeNull();
   });
 
+  it("preserves the shared leg-1 endpoint and audience when switching token exchange to ID-JAG", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth2_id_jag",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "oauth2_token_exchange",
+          token_exchange_endpoint: "https://idp.example.com/oauth2/token",
+          audience: "api://existing-resource",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await selectAntOption("Authentication", "ID-JAG (Okta Cross App Access)");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("oauth2_id_jag");
+    expect(payload.token_exchange_endpoint).toBe("https://idp.example.com/oauth2/token");
+    expect(payload.audience).toBe("api://existing-resource");
+  });
+
   it("keeps oauth2 endpoint overrides when the auth type is unchanged", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
 
