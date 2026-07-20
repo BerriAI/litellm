@@ -45,21 +45,14 @@ class TestFilterAnthropicOutputSchema:
         assert "minimum value: 0" in result["properties"]["age"]["description"]
         assert "maximum value: 150" in result["properties"]["age"]["description"]
         # Score had no description, should get one from constraints
-        assert (
-            "exclusive minimum value: 0" in result["properties"]["score"]["description"]
-        )
-        assert (
-            "exclusive maximum value: 100"
-            in result["properties"]["score"]["description"]
-        )
+        assert "exclusive minimum value: 0" in result["properties"]["score"]["description"]
+        assert "exclusive maximum value: 100" in result["properties"]["score"]["description"]
 
     def test_removes_string_constraints(self):
         """Test that minLength/maxLength are removed from string schemas."""
         schema = {
             "type": "object",
-            "properties": {
-                "name": {"type": "string", "minLength": 1, "maxLength": 100}
-            },
+            "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 100}},
         }
 
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
@@ -178,10 +171,7 @@ class TestFilterAnthropicOutputSchema:
         assert "uniqueItems" not in result["properties"]["tags"]
         assert result["properties"]["tags"]["items"] == {"type": "string"}
         # Constraint intent preserved in the description
-        assert (
-            "all array items must be unique"
-            in result["properties"]["tags"]["description"]
-        )
+        assert "all array items must be unique" in result["properties"]["tags"]["description"]
 
     def test_removes_contains_constraints(self):
         """Test that contains/minContains/maxContains are removed from arrays."""
