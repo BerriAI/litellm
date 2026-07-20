@@ -22,7 +22,7 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody
+from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody, UserUpdateBody
 
 pytestmark = pytest.mark.e2e
 
@@ -224,6 +224,23 @@ class TestUserRoutes:
         assert info.user_email == email, f"/user/info reports user_email {info.user_email!r}, configured {email!r}"
         assert info.user_role == "internal_user", (
             f"/user/info reports user_role {info.user_role!r}, configured 'internal_user'"
+        )
+
+    @pytest.mark.covers("mgmt.user.update.persists")
+    def test_update_persists_to_user_info(self, client: ManagementClient, resources: ResourceManager) -> None:
+        email = f"e2e-mgmt-{unique_marker()}@example.com"
+        user_id = _create_user(client, resources, UserNewBody(user_email=email, user_role="internal_user"))
+
+        before = client.user_info(user_id).user_info
+        assert before.user_role == "internal_user", (
+            f"/user/info reports pre-update user_role {before.user_role!r}, expected 'internal_user'"
+        )
+
+        client.update_user(UserUpdateBody(user_id=user_id, user_role="internal_user_viewer"))
+
+        info = client.user_info(user_id).user_info
+        assert info.user_role == "internal_user_viewer", (
+            f"/user/info reports user_role {info.user_role!r} after /user/update to 'internal_user_viewer'"
         )
 
 

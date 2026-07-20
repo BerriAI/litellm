@@ -647,6 +647,11 @@ class UserNewResponse(BaseModel):
     user_id: str
 
 
+class UserUpdateBody(BaseModel):
+    user_id: str
+    user_role: UserRole
+
+
 class UserInfoParams(BaseModel):
     user_id: str
 
