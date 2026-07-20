@@ -28,6 +28,7 @@ from models import (
     OrgInfoResponse,
     OrgNewBody,
     OrgNewResponse,
+    OrgUpdateBody,
     TagDeleteBody,
     TagListEntry,
     TagListResponse,
@@ -326,6 +327,16 @@ class ManagementClient:
                 response_type=OrgNewResponse,
             )
         ).organization_id
+
+    def update_org(self, body: OrgUpdateBody) -> None:
+        _ = unwrap(
+            self.proxy.transport.patch(
+                "/organization/update",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
 
     def delete_org(self, organization_id: str) -> None:
         _ = self.proxy.transport.delete(
