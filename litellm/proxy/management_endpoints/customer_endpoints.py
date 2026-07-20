@@ -605,10 +605,7 @@ async def update_end_user(
             # budget_reset_at is not, compute the next reset so reset_budget_job can
             # renew spend. budget_reset_at is server-managed (not on LiteLLM_BudgetTable
             # allowlist), so it must be injected here.
-            if (
-                budget_table_data.get("budget_duration") is not None
-                and "budget_reset_at" not in budget_table_data
-            ):
+            if budget_table_data.get("budget_duration") is not None and "budget_reset_at" not in budget_table_data:
                 budget_table_data["budget_reset_at"] = get_budget_reset_time(
                     budget_duration=budget_table_data["budget_duration"]
                 )

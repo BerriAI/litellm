@@ -3034,6 +3034,12 @@ export interface paths {
          *     - alias: Optional[str] = None  # human-friendly alias
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
+         *     - soft_budget: Optional[float] = None
+         *     - max_parallel_requests: Optional[int] = None
+         *     - tpm_limit: Optional[int] = None
+         *     - rpm_limit: Optional[int] = None
+         *     - model_max_budget: Optional[dict] = None
+         *     - budget_duration: Optional[str] = None  # e.g. "30d", "1mo"; also sets budget_reset_at when creating/updating a budget
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
@@ -3567,6 +3573,12 @@ export interface paths {
          *     - alias: Optional[str] = None  # human-friendly alias
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
+         *     - soft_budget: Optional[float] = None
+         *     - max_parallel_requests: Optional[int] = None
+         *     - tpm_limit: Optional[int] = None
+         *     - rpm_limit: Optional[int] = None
+         *     - model_max_budget: Optional[dict] = None
+         *     - budget_duration: Optional[str] = None  # e.g. "30d", "1mo"; also sets budget_reset_at when creating/updating a budget
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
@@ -31916,13 +31928,27 @@ export interface components {
              * @default false
              */
             blocked: boolean;
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
             /** User Id */
             user_id: string;
         };
