@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 import importlib
 
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
@@ -455,7 +456,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     Regression test for 872e5b98...:
     Ensure responses-side tool discovery enables list-tools SpendLogs logging flags.
     """
-    mock_get_tools = AsyncMock(return_value=[])
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
@@ -509,7 +510,7 @@ def test_get_parent_request_tags_from_nested_litellm_params():
 
 @pytest.mark.asyncio
 async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
-    mock_get_tools = AsyncMock(return_value=[])
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,

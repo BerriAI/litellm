@@ -132,6 +132,18 @@ def get_request_base_url(request: Request) -> str:
     return urlunparse((scheme, _strip_default_port(scheme, netloc), parsed.path, "", "", ""))
 
 
+def well_known_root_suffix() -> str:
+    """The ``SERVER_ROOT_PATH`` segment inserted into a ``.well-known`` path (RFC 8414 / 9728
+    path insertion), empty for a root-mounted proxy or an explicit ``/``.
+
+    The discovery route registrations and the 401 challenges that advertise those routes both
+    derive their path from this one function, so the ``resource_metadata`` URL a client is told
+    to fetch cannot drift from the route that actually serves it.
+    """
+    root = os.getenv("SERVER_ROOT_PATH", "")
+    return "" if root == "/" else root
+
+
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
     """Require a loopback ``redirect_uri`` (OAuth 2.1 §4.1.2.1 + RFC 8252
     §7.3 native-app pattern). MCP clients are native apps that listen on

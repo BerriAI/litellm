@@ -22,23 +22,23 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody
+from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, UserNewBody
 
 pytestmark = pytest.mark.e2e
 
 def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure: str) -> T:
-    deadline = time.monotonic() + client.gateway.poll_timeout
+    deadline = time.monotonic() + client.proxy.poll_timeout
     while time.monotonic() < deadline:
         found = attempt()
         if found is not None:
             return found
-        time.sleep(client.gateway.poll_interval)
+        time.sleep(client.proxy.poll_interval)
     pytest.fail(failure)
 
 
 def _generate_key(client: ManagementClient, resources: ResourceManager, body: KeyGenerateBody) -> str:
-    key = client.gateway.generate_key(body)
-    resources.defer(lambda: client.gateway.delete_key(key))
+    key = client.proxy.generate_key(body)
+    resources.defer(lambda: client.proxy.delete_key(key))
     return key
 
 
@@ -114,7 +114,7 @@ class TestKeyRoutes:
             KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424242, rpm_limit=424243),
         )
 
-        info = client.gateway.key_info(key)
+        info = client.proxy.key_info(key)
         assert info.key_alias == alias, f"/key/info reports key_alias {info.key_alias!r}, configured {alias!r}"
         assert info.models == ["gemini-2.5-flash"], (
             f"/key/info reports models {info.models}, configured ['gemini-2.5-flash']"
@@ -143,7 +143,7 @@ class TestKeyRoutes:
 
         client.update_key_models(key, ["gpt-5.5"])
 
-        info = client.gateway.key_info(key)
+        info = client.proxy.key_info(key)
         assert info.models == ["gpt-5.5"], (
             f"/key/info reports models {info.models} after /key/update to ['gpt-5.5']"
         )
@@ -169,6 +169,32 @@ class TestKeyRoutes:
         _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
 
 
+class TestKeyRegeneration:
+    @pytest.mark.covers("mgmt.key.regenerate.happy_path")
+    def test_regenerate_rotates_to_a_working_new_key(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        old_key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
+
+        new_key = client.regenerate_key(old_key)
+        resources.defer(lambda: client.proxy.delete_key(new_key))
+        assert new_key != old_key, "regenerate returned the same key string, so no rotation happened"
+
+        def new_accepted() -> bool | None:
+            outcome = client.chat_status(new_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code != 401 else None
+
+        _ = _poll(client, new_accepted, "regenerated key was never accepted at auth (still 401) at the deadline")
+
+        def old_rejected() -> bool | None:
+            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code == 401 else None
+
+        _ = _poll(
+            client, old_rejected, "old key was still accepted after regeneration (never rejected 401) at the deadline"
+        )
+
+
 class TestTeamRoutes:
     @pytest.mark.covers("mgmt.team.new.persists")
     def test_new_persists_to_team_info_and_binds_keys(
@@ -184,7 +210,7 @@ class TestTeamRoutes:
         )
 
         key = _generate_key(client, resources, KeyGenerateBody(team_id=team_id))
-        key_info = client.gateway.key_info(key)
+        key_info = client.proxy.key_info(key)
         assert key_info.team_id == team_id, (
             f"key generated under team {team_id} carries team_id {key_info.team_id!r} in /key/info"
         )
@@ -244,6 +270,50 @@ class TestOrganizationRoutes:
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
 
+    @pytest.mark.covers("mgmt.organization.delete.persists")
+    def test_delete_removes_from_organization_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete fires again on the already-deleted org by
+        design: the deferred cleanup must survive this test failing before the
+        in-body delete, and a repeat /organization/delete is a warn-only no-op the
+        teardown absorbs."""
+        org_id = client.create_org(OrgNewBody(organization_alias=f"e2e-mgmt-org-{unique_marker()}"))
+        resources.defer(lambda: client.delete_org(org_id))
+
+        assert client.org_info_status(org_id).status_code == 200, (
+            f"/organization/info did not resolve org {org_id} before deletion"
+        )
+
+        client.delete_org(org_id)
+
+        def gone() -> bool | None:
+            return True if client.org_info_status(org_id).status_code == 404 else None
+
+        _ = _poll(client, gone, f"org {org_id} still resolved on /organization/info after /organization/delete")
+
+
+class TestTagRoutes:
+    @pytest.mark.covers("mgmt.tag.new.happy_path")
+    def test_new_persists_to_tag_list(self, client: ManagementClient, resources: ResourceManager) -> None:
+        name = f"e2e-mgmt-tag-{unique_marker()}"
+        description = "Tag for spend categorization"
+
+        assert all(entry.name != name for entry in client.tag_list()), (
+            f"tag {name!r} was already listed by /tag/list before /tag/new created it"
+        )
+
+        client.create_tag(TagNewBody(name=name, description=description))
+        resources.defer(lambda: client.delete_tag(name))
+
+        def listed() -> TagListEntry | None:
+            return next((entry for entry in client.tag_list() if entry.name == name), None)
+
+        entry = _poll(client, listed, f"/tag/list never listed {name!r} after /tag/new")
+        assert entry.description == description, (
+            f"/tag/list reports description {entry.description!r} for {name!r}, configured {description!r}"
+        )
+
 
 def _assert_route_forbidden(route: str, outcome: StreamingResponse) -> None:
     assert outcome.status_code == 403, (
@@ -260,7 +330,7 @@ class TestManagementRoutePermissions:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         key = client.llm_only_key()
-        resources.defer(lambda: client.gateway.delete_key(key))
+        resources.defer(lambda: client.proxy.delete_key(key))
         marker = unique_marker()
         alias = f"e2e-mgmt-forbidden-key-{marker}"
         team_id = f"e2e-mgmt-forbidden-team-{marker}"
