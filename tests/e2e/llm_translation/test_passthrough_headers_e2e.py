@@ -9,10 +9,8 @@ prove the proxy actually rewrote the outbound request.
 
 from __future__ import annotations
 
-import json
-
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from e2e_config import unique_marker
 from e2e_http import AuthHeaders, NoBody, StreamingResponse, require_successful_call, unwrap
@@ -59,6 +57,10 @@ class EchoBody(BaseModel):
     ping: str
 
 
+class EchoResponse(BaseModel):
+    headers: dict[str, str]
+
+
 def _create_passthrough(
     client: PassthroughClient, *, path: str, static_value: str
 ) -> PassThroughEndpoint:
@@ -92,13 +94,10 @@ def _delete_passthrough(client: PassthroughClient, endpoint_id: str) -> None:
 
 def _echo_headers(resp: StreamingResponse) -> dict[str, str]:
     try:
-        payload = json.loads(resp.body)
-    except json.JSONDecodeError as exc:
-        pytest.fail(f"echo upstream did not return JSON: {exc}; body={resp.body[:300]}")
-    headers = payload.get("headers")
-    if not isinstance(headers, dict):
-        pytest.fail(f"echo body missing headers map: {resp.body[:300]}")
-    return {str(k).lower(): str(v) for k, v in headers.items()}
+        echo = EchoResponse.model_validate_json(resp.body)
+    except ValidationError as exc:
+        pytest.fail(f"echo upstream did not return a headers map: {exc}; body={resp.body[:300]}")
+    return {k.lower(): v for k, v in echo.headers.items()}
 
 
 class TestPassthroughHeaders:

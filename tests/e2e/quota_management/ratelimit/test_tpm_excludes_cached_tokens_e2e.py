@@ -14,9 +14,16 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import require_successful_call, unwrap
-from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
-from models import ChatResponse, KeyGenerateBody, LiteLLMParamsBody, Usage
+from models import (
+    CacheControl,
+    ChatResponse,
+    KeyGenerateBody,
+    LiteLLMParamsBody,
+    RichMessage,
+    TextBlock,
+    Usage,
+)
 from quota_client import QuotaClient
 
 pytestmark = pytest.mark.e2e
@@ -113,7 +120,7 @@ class TestTpmExcludesCachedTokens:
         prefix = _prefix()
         first = _chat(client, key, model, prefix)
         assert first.choices, f"cache prime returned no choices: {first}"
-        first_total = first.usage.total_tokens if first.usage else 0
+        first_total = (first.usage.total_tokens or 0) if first.usage else 0
         assert first_total > 0, f"prime call must report usage: {first.usage}"
 
         deadline = time.monotonic() + 45.0

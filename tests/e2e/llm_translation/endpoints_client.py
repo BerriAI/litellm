@@ -15,7 +15,13 @@ from pydantic import BaseModel
 
 from proxy_client import ProxyClient
 from e2e_http import StreamingResponse
-from models import ChatMessage, LiteLLMParamsBody
+from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
+
+__all__ = [
+    "CacheControl",
+    "RichMessage",
+    "TextBlock",
+]
 
 
 class ResponsesRequest(BaseModel):
@@ -28,21 +34,6 @@ class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[ChatMessage]
-
-
-class CacheControl(BaseModel):
-    type: str = "ephemeral"
-
-
-class TextBlock(BaseModel):
-    type: str = "text"
-    text: str
-    cache_control: CacheControl | None = None
-
-
-class RichMessage(BaseModel):
-    role: str
-    content: list[TextBlock]
 
 
 class RichMessagesRequest(BaseModel):

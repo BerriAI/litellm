@@ -120,6 +120,21 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class CacheControl(BaseModel):
+    type: str = "ephemeral"
+
+
+class TextBlock(BaseModel):
+    type: str = "text"
+    text: str
+    cache_control: CacheControl | None = None
+
+
+class RichMessage(BaseModel):
+    role: str
+    content: list[TextBlock]
+
+
 class ThinkingParam(BaseModel):
     """Extended-thinking control shared by Anthropic and DeepSeek reasoner models.
     DeepSeek accepts only ``type`` (enabled/disabled) and ignores budget_tokens;
