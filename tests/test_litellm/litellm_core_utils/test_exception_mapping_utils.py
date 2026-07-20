@@ -732,3 +732,21 @@ def test_openai_genuine_500_still_maps_to_internal_server_error():
 )
 def test_is_error_str_connection_error(error_str, expected):
     assert ExceptionCheckers.is_error_str_connection_error(error_str) is expected
+
+
+@pytest.mark.parametrize("provider", ["predibase", "databricks", "watsonx"])
+def test_openai_like_connection_error_maps_to_api_connection_error(provider):
+    """_map_openai_like_exception must classify connection failures the same way (#33969)."""
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=500, message="Connection error.")
+
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        exception_type(
+            model="dummy-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
+
+    assert "InternalServerError" not in type(excinfo.value).__name__
+    assert "Connection error" in str(excinfo.value)
