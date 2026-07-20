@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Awaitable, Final, Protocol, Union, cast
 
@@ -48,14 +47,11 @@ _UNSET: Final[_Unset] = _Unset()
 
 @dataclass
 class _RustTranscriptionState:
-    enabled: bool
     transcription: RustTranscription | None = None
     atranscription: RustAtranscription | None = None
 
 
-_STATE = _RustTranscriptionState(
-    enabled=os.getenv("LITELLM_USE_RUST_TRANSCRIPTION", "").strip().lower() in {"1", "true", "yes", "on"}
-)
+_STATE = _RustTranscriptionState()
 
 
 def configure_rust_transcription(
@@ -64,15 +60,10 @@ def configure_rust_transcription(
     transcription: RustTranscription | None | _Unset = _UNSET,
     atranscription: RustAtranscription | None | _Unset = _UNSET,
 ) -> None:
-    _STATE.enabled = enabled
     if not isinstance(transcription, _Unset):
         _STATE.transcription = transcription
     if not isinstance(atranscription, _Unset):
         _STATE.atranscription = atranscription
-
-
-def rust_transcription_enabled() -> bool:
-    return _STATE.enabled
 
 
 def load_rust_transcription() -> RustTranscription | None:

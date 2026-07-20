@@ -7,9 +7,9 @@ use litellm_core::providers::bedrock::audio_transcription::aws_auth_config;
 use litellm_core::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
 use serde_json::Value;
 
-use super::client::http_client;
 use super::common_utils::truncate_error_body;
 use super::types::ProviderAudioTranscriptionRequest;
+use crate::client::http_client;
 
 pub(crate) async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,

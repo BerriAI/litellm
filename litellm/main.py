@@ -28,8 +28,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
-    Awaitable,
-    Callable,
     Coroutine,
     Dict,
     Iterable,
@@ -7462,7 +7460,6 @@ async def amoderation(
 ##### Transcription #######################
 
 
-_RUST_TRANSCRIPTION_PROVIDERS = {"bedrock"}
 _BEDROCK_AUDIO_FORMATS = {"wav", "mp3", "flac", "ogg"}
 
 
@@ -7525,12 +7522,6 @@ def _run_rust_transcription(
 ) -> TranscriptionResponse | None:
     from litellm.rust_bridge import transcription as rust_transcription_bridge
 
-    if not rust_transcription_bridge.rust_transcription_enabled():
-        return None
-    if custom_llm_provider not in _RUST_TRANSCRIPTION_PROVIDERS:
-        return None
-    if rust_transcription_bridge.load_rust_transcription() is None:
-        return None
     rust_response = rust_transcription_bridge.transcription(
         model=model,
         audio=_rust_audio_payload(file),
@@ -7541,7 +7532,9 @@ def _run_rust_transcription(
         optional_params=_rust_audio_optional_params(optional_params, kwargs),
         timeout=timeout,
     )
-    return None if rust_response is None else TranscriptionResponse(**rust_response)
+    if rust_response is None:
+        raise RuntimeError("Rust audio transcription bridge is unavailable")
+    return TranscriptionResponse(**rust_response)
 
 
 async def _run_rust_atranscription(
@@ -7558,12 +7551,6 @@ async def _run_rust_atranscription(
 ) -> TranscriptionResponse | None:
     from litellm.rust_bridge import transcription as rust_transcription_bridge
 
-    if not rust_transcription_bridge.rust_transcription_enabled():
-        return None
-    if custom_llm_provider not in _RUST_TRANSCRIPTION_PROVIDERS:
-        return None
-    if rust_transcription_bridge.load_rust_atranscription() is None:
-        return None
     rust_response = await rust_transcription_bridge.atranscription(
         model=model,
         audio=_rust_audio_payload(file),
@@ -7574,18 +7561,9 @@ async def _run_rust_atranscription(
         optional_params=_rust_audio_optional_params(optional_params, kwargs),
         timeout=timeout,
     )
-    return None if rust_response is None else TranscriptionResponse(**rust_response)
-
-
-async def _run_bedrock_atranscription(
-    *,
-    rust_request: Callable[[], Awaitable[TranscriptionResponse | None]],
-    python_fallback: Callable[[], Awaitable[TranscriptionResponse]],
-) -> TranscriptionResponse:
-    rust_response = await rust_request()
-    if rust_response is not None:
-        return rust_response
-    return await python_fallback()
+    if rust_response is None:
+        raise RuntimeError("Rust audio transcription bridge is unavailable")
+    return TranscriptionResponse(**rust_response)
 
 
 @client
@@ -7853,49 +7831,7 @@ def transcription(
         )
     elif custom_llm_provider == "bedrock":
         if atranscription:
-            from litellm.llms.bedrock.audio_transcription.handler import (
-                BedrockAudioTranscriptionHandler,
-            )
-
-            response = _run_bedrock_atranscription(
-                rust_request=partial(
-                    _run_rust_atranscription,
-                    model=model,
-                    file=file,
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
-                    optional_params=optional_params,
-                    kwargs=kwargs,
-                    timeout=timeout,
-                ),
-                python_fallback=partial(
-                    BedrockAudioTranscriptionHandler().audio_transcriptions,
-                    model=model,
-                    audio_file=file,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params_dict,
-                    model_response=model_response,
-                    atranscription=True,
-                    client=(
-                        client
-                        if client is not None
-                        and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                        else None
-                    ),
-                    timeout=timeout,
-                    max_retries=max_retries,
-                    logging_obj=litellm_logging_obj,
-                    api_base=api_base,
-                    api_key=api_key,
-                    headers=extra_headers,
-                    provider_config=provider_config,
-                    shared_session=shared_session,
-                ),
-            )
-        else:
-            rust_response = _run_rust_transcription(
+            response = _run_rust_atranscription(
                 model=model,
                 file=file,
                 api_key=api_key,
@@ -7906,35 +7842,18 @@ def transcription(
                 kwargs=kwargs,
                 timeout=timeout,
             )
-            if rust_response is not None:
-                response = rust_response
-            else:
-                from litellm.llms.bedrock.audio_transcription.handler import (
-                    BedrockAudioTranscriptionHandler,
-                )
-
-                response = BedrockAudioTranscriptionHandler().audio_transcriptions(
-                    model=model,
-                    audio_file=file,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params_dict,
-                    model_response=model_response,
-                    atranscription=False,
-                    client=(
-                        client
-                        if client is not None
-                        and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                        else None
-                    ),
-                    timeout=timeout,
-                    max_retries=max_retries,
-                    logging_obj=litellm_logging_obj,
-                    api_base=api_base,
-                    api_key=api_key,
-                    headers=extra_headers,
-                    provider_config=provider_config,
-                    shared_session=shared_session,
-                )
+        else:
+            response = _run_rust_transcription(
+                model=model,
+                file=file,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                kwargs=kwargs,
+                timeout=timeout,
+            )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
