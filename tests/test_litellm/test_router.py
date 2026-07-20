@@ -5430,3 +5430,63 @@ class TestRouterRequestTimeoutPropagation:
             )
             == 60
         )
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
+
+    deployment_tags = [{"key": "application", "value": "config-level"}]
+    request_tags = [{"key": "application", "value": "request-level"}]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-sonnet-5",
+                    "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
+                    "aws_region_name": "us-west-2",
+                    "bedrock_tags": deployment_tags,
+                },
+            }
+        ]
+    )
+
+    def fake_response():
+        return httpx.Response(
+            status_code=200,
+            json={
+                "jobArn": "arn:aws:bedrock:us-west-2:123:model-invocation-job/abc1234567",
+                "status": "Submitted",
+            },
+        )
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=lambda *args, **kwargs: fake_response())
+
+    with patch.object(
+        CommonBatchFilesUtils,
+        "sign_aws_request",
+        return_value=({"Authorization": "signed"}, b"{}"),
+    ) as mock_sign, patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        await router.acreate_batch(
+            model="bedrock-batch-model",
+            input_file_id="s3://bucket/input.jsonl",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+        assert mock_sign.call_args.kwargs["data"]["tags"] == deployment_tags
+
+        await router.acreate_batch(
+            model="bedrock-batch-model",
+            input_file_id="s3://bucket/input.jsonl",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            bedrock_tags=request_tags,
+        )
+        assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags
