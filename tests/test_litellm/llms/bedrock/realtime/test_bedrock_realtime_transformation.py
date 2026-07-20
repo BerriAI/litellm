@@ -590,7 +590,7 @@ class TestBedrockRealtimeResponseTransformation:
 
         result = config.transform_realtime_response(
             json.dumps(tool_use_message),
-            "amazon.nova-sonic-v1:0",
+            "amazon.nova-2-sonic-v1:0",
             logging_obj,
             realtime_response_transform_input={
                 "session_configuration_request": json.dumps({"configured": True}),
