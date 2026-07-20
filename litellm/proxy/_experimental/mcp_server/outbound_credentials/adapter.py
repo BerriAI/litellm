@@ -96,16 +96,7 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
         case MCPAuth.basic:
             return _shared_key_spec(server, resource, "Authorization", "Basic", encode=True)
         case MCPAuth.oauth2:
-            if server.has_client_credentials:
-                return _client_credentials_spec(server, resource)
-            if server.needs_user_oauth_token and not server.delegate_auth_to_upstream:
-                return ServerSpec(
-                    server_id=server.server_id,
-                    resource=resource,
-                    config=AuthorizationCodeConfig(),
-                )
-            # delegate/passthrough oauth2 stay on v1
-            return None
+            return _oauth2_spec(server, resource)
         case MCPAuth.oauth2_id_jag:
             return _id_jag_spec(server, resource)
         case MCPAuth.true_passthrough | MCPAuth.oauth_delegate:
@@ -115,6 +106,24 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
         case MCPAuth.aws_sigv4:
             return None  # SigV4 is not migrated yet -> defer to v1
     assert_never(auth_type)
+
+
+def _oauth2_spec(server: MCPServer, resource: str) -> ServerSpec | None:
+    """Dispatch the oauth2 auth_type across its sub-modes: M2M, gateway-managed interactive, or v1.
+
+    ``client_credentials`` (the explicit ``oauth2_flow`` opt-in) builds the M2M spec, per-user
+    ``authorization_code`` without upstream delegation builds the interactive spec, and the
+    delegate/passthrough shapes defer to v1 (None).
+    """
+    if server.has_client_credentials:
+        return _client_credentials_spec(server, resource)
+    if server.needs_user_oauth_token and not server.delegate_auth_to_upstream:
+        return ServerSpec(
+            server_id=server.server_id,
+            resource=resource,
+            config=AuthorizationCodeConfig(),
+        )
+    return None
 
 
 def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
