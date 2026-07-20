@@ -7,6 +7,7 @@ from litellm.proxy.utils import (
     _check_and_merge_model_level_guardrails,
     _merge_guardrails_with_existing,
 )
+from litellm.router import Router
 
 
 def normalize(value):
@@ -45,6 +46,39 @@ def test_check_and_merge_model_level_guardrails_happy_path_merges_lists():
         "model": "gpt-4o",
         "model_info_id": "deployment-123",
         "guardrails_sorted": ["pii-redact", "toxic-filter", "user-policy"],
+    }
+
+
+def test_check_and_merge_model_level_guardrails_preserves_governance_dict():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "governed-model",
+                "litellm_params": {
+                    "model": "openai/provider-model",
+                    "api_key": "test-key",
+                    "guardrails": ["input_token_limit"],
+                },
+                "model_info": {"id": "deployment-123"},
+            }
+        ]
+    )
+    data = {
+        "model": "governed-model",
+        "metadata": {
+            "model_info": {"id": "deployment-123"},
+            "guardrails": {
+                "input_token_limit": True,
+                "min_version": False,
+            },
+        },
+    }
+
+    result = _check_and_merge_model_level_guardrails(data, router)
+
+    assert result["metadata"]["guardrails"] == {
+        "input_token_limit": True,
+        "min_version": False,
     }
 
 
@@ -122,13 +156,13 @@ def test_merge_guardrails_with_existing_happy_path_combines_lists():
     }
     result = _merge_guardrails_with_existing(data, ["c", "a"])
     snapshot = {
-        "guardrails_sorted": sorted(result["metadata"]["guardrails"]),
+        "guardrails": result["metadata"]["guardrails"],
         "user": result["metadata"]["user"],
         "model": result["model"],
         "is_copy": result is not data,
     }
     assert snapshot == {
-        "guardrails_sorted": ["a", "b", "c"],
+        "guardrails": ["a", "b", "c"],
         "user": "u",
         "model": "m",
         "is_copy": True,

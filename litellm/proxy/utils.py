@@ -5701,16 +5701,24 @@ def _merge_guardrails_with_existing(data: dict, model_level_guardrails: Any) -> 
     metadata = modified_data.setdefault("metadata", {})
     existing_guardrails = metadata.get("guardrails", [])
 
-    # Ensure existing_guardrails is a list
-    if not isinstance(existing_guardrails, list):
-        existing_guardrails = [existing_guardrails] if existing_guardrails else []
-
     # Ensure model_level_guardrails is a list
     if not isinstance(model_level_guardrails, list):
         model_level_guardrails = [model_level_guardrails] if model_level_guardrails else []
 
+    # AAP Feature / CUSTOM FORK: preserve governance enable/disable maps.
+    if isinstance(existing_guardrails, dict):
+        metadata["guardrails"] = {
+            **existing_guardrails,
+            **{name: True for name in model_level_guardrails},
+        }
+        return modified_data
+
+    # Ensure existing_guardrails is a list
+    if not isinstance(existing_guardrails, list):
+        existing_guardrails = [existing_guardrails] if existing_guardrails else []
+
     # Combine existing and model-level guardrails
-    metadata["guardrails"] = list(set(existing_guardrails + model_level_guardrails))
+    metadata["guardrails"] = list(dict.fromkeys(existing_guardrails + model_level_guardrails))
     return modified_data
 
 
