@@ -335,6 +335,28 @@ class TestUserRoutes:
         assert info.user_role == "internal_user_viewer", (
             f"/user/info reports user_role {info.user_role!r} after /user/update to 'internal_user_viewer'"
         )
+    @pytest.mark.covers("mgmt.user.delete.persists")
+    def test_delete_removes_the_user_from_inventory(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete fires again on the already-deleted user by
+        design: the deferred cleanup must survive this test failing before the
+        in-body delete, and a repeat /user/delete is a cheap no-op the warn-only
+        teardown absorbs."""
+        user_id = _create_user(
+            client,
+            resources,
+            UserNewBody(user_email=f"e2e-mgmt-{unique_marker()}@example.com", user_role="internal_user"),
+        )
+        assert client.user_count(user_id) == 1, f"user {user_id} was not created before deletion"
+
+        client.delete_user_strict(user_id)
+
+        def removed() -> bool | None:
+            return True if client.user_count(user_id) == 0 else None
+
+        _ = _poll(client, removed, f"user {user_id} still present in /user/list after /user/delete at the deadline")
+
     @pytest.mark.covers("mgmt.user.list.happy_path")
     def test_created_users_appear_in_user_list(
         self, client: ManagementClient, resources: ResourceManager
