@@ -9,6 +9,7 @@ so the traffic-facing read-backs poll to a deadline instead of asserting once.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 
@@ -22,7 +23,14 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody
+from models import (
+    KeyGenerateBody,
+    LiteLLMParamsBody,
+    ModelInfoEntry,
+    OrgNewBody,
+    TeamNewBody,
+    UserNewBody,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -242,6 +250,59 @@ class TestOrganizationRoutes:
         )
         assert info.models == ["gemini-2.5-flash"], (
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
+        )
+
+
+_INITIAL_INPUT_COST = 0.00000111
+_UPDATED_INPUT_COST = 0.00000222
+
+
+def _model_entry(client: ManagementClient, model_name: str) -> ModelInfoEntry | None:
+    return next((entry for entry in client.proxy.model_info() if entry.model_name == model_name), None)
+
+
+class TestModelRoutes:
+    @pytest.mark.covers("mgmt.model.update.persists")
+    def test_update_persists_input_cost_to_model_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        model_name = f"e2e-mgmt-model-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model_name,
+            LiteLLMParamsBody(
+                model="gpt-4o-mini",
+                mock_response="ok",
+                input_cost_per_token=_INITIAL_INPUT_COST,
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        before = _model_entry(client, model_name)
+        assert before is not None, f"{model_name} absent from /model/info right after /model/new"
+        initial = before.litellm_params.input_cost_per_token
+        assert initial is not None and math.isclose(initial, _INITIAL_INPUT_COST, rel_tol=1e-9), (
+            f"/model/info reports input_cost_per_token {initial}, registered {_INITIAL_INPUT_COST}"
+        )
+
+        client.proxy.update_model(
+            model_id,
+            LiteLLMParamsBody(model="gpt-4o-mini", input_cost_per_token=_UPDATED_INPUT_COST),
+        )
+
+        def updated() -> ModelInfoEntry | None:
+            entry = _model_entry(client, model_name)
+            if entry is None:
+                return None
+            cost = entry.litellm_params.input_cost_per_token
+            if cost is not None and math.isclose(cost, _UPDATED_INPUT_COST, rel_tol=1e-9):
+                return entry
+            return None
+
+        _ = _poll(
+            client,
+            updated,
+            f"/model/info never reported input_cost_per_token {_UPDATED_INPUT_COST} for {model_name} "
+            "after /model/update",
         )
 
 
