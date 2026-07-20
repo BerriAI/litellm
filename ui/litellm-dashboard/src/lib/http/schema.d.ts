@@ -25632,14 +25632,28 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Batch Role Arn */
+            aws_batch_role_arn?: string | null;
             /** Aws Bedrock Project Id */
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
+            /** Aws Profile Name */
+            aws_profile_name?: string | null;
             /** Aws Region Name */
             aws_region_name?: string | null;
+            /** Aws Role Name */
+            aws_role_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Aws Session Name */
+            aws_session_name?: string | null;
+            /** Aws Session Token */
+            aws_session_token?: string | null;
+            /** Aws Sts Endpoint */
+            aws_sts_endpoint?: string | null;
+            /** Aws Web Identity Token */
+            aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
             /** Budget Duration */
@@ -25845,6 +25859,12 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Endpoint Url */
+            s3_endpoint_url?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
+            /** S3 Region Name */
+            s3_region_name?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -33483,14 +33503,28 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
+            /** Aws Batch Role Arn */
+            aws_batch_role_arn?: string | null;
             /** Aws Bedrock Project Id */
             aws_bedrock_project_id?: string | null;
             /** Aws Bedrock Runtime Endpoint */
             aws_bedrock_runtime_endpoint?: string | null;
+            /** Aws Profile Name */
+            aws_profile_name?: string | null;
             /** Aws Region Name */
             aws_region_name?: string | null;
+            /** Aws Role Name */
+            aws_role_name?: string | null;
             /** Aws Secret Access Key */
             aws_secret_access_key?: string | null;
+            /** Aws Session Name */
+            aws_session_name?: string | null;
+            /** Aws Session Token */
+            aws_session_token?: string | null;
+            /** Aws Sts Endpoint */
+            aws_sts_endpoint?: string | null;
+            /** Aws Web Identity Token */
+            aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
             /** Budget Duration */
@@ -33696,6 +33730,12 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Endpoint Url */
+            s3_endpoint_url?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
+            /** S3 Region Name */
+            s3_region_name?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
