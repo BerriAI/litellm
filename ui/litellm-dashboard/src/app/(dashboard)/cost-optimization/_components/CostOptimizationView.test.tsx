@@ -1,10 +1,11 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
 const mockUsePaginatedDailyActivity = vi.fn();
 const mockUseQuery = vi.fn();
+const mockUiSpendLogsCall = vi.fn();
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (args: unknown) => mockUseQuery(args),
@@ -17,6 +18,12 @@ vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", (
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
   getCostOptimizationUsageLogs: vi.fn(),
+  uiSpendLogsCall: (args: unknown) => mockUiSpendLogsCall(args),
+}));
+
+vi.mock("@/components/view_logs/LogDetailsDrawer", () => ({
+  LogDetailsDrawer: ({ open, logEntry }: { open: boolean; logEntry: { request_id: string } | null }) =>
+    open && logEntry ? <div data-testid="log-details-drawer">{logEntry.request_id}</div> : null,
 }));
 
 vi.mock("@/components/shared/advanced_date_picker", () => ({
@@ -61,31 +68,63 @@ const day = (date: string, metrics: Partial<SpendMetrics>): DailyData => ({
   },
 });
 
+const detailLog = {
+  request_id: "req-123456789",
+  api_key: "key",
+  team_id: "team",
+  model: "test-model",
+  model_id: "model-id",
+  call_type: "completion",
+  spend: 0.02,
+  total_tokens: 150,
+  prompt_tokens: 100,
+  completion_tokens: 50,
+  startTime: "2026-07-13T12:00:00Z",
+  endTime: "2026-07-13T12:00:01Z",
+  messages: [],
+  response: {},
+  cache_hit: "",
+  metadata: {},
+};
+
 const renderWith = (results: DailyData[]) => {
   mockUsePaginatedDailyActivity.mockReturnValue({ data: { results }, loading: false, isFetchingMore: false });
-  mockUseQuery.mockReturnValue({
-    data: {
-      logs: [
-        {
-          request_id: "req-123456789",
-          timestamp: "2026-07-13T12:00:00Z",
-          model: "test-model",
-          total_tokens: 150,
-          optimization_type: "both",
-          spend: 0.02,
-          savings: 0.14,
-          original_cost: 0.16,
+  mockUseQuery.mockImplementation((args: { queryKey: string[] }) =>
+    args.queryKey[0] === "cost-optimization-usage-logs"
+      ? {
+          data: {
+            logs: [
+              {
+                request_id: "req-123456789",
+                timestamp: "2026-07-13T12:00:00Z",
+                model: "test-model",
+                total_tokens: 150,
+                optimization_type: "both",
+                spend: 0.02,
+                savings: 0.14,
+                original_cost: 0.16,
+                compression_savings_spend: 0.1,
+                prompt_caching_savings_spend: 0.04,
+                tokens_saved: 100,
+                cache_read_tokens: 50,
+              },
+            ],
+            total: 1,
+            page: 1,
+            page_size: 50,
+            total_pages: 1,
+          },
+          isLoading: false,
+          isFetching: false,
+          error: null,
+        }
+      : {
+          data: { data: [detailLog], total: 1 },
+          isLoading: false,
+          isFetching: false,
+          error: null,
         },
-      ],
-      total: 1,
-      page: 1,
-      page_size: 50,
-      total_pages: 1,
-    },
-    isLoading: false,
-    isFetching: false,
-    error: null,
-  });
+  );
   return render(<CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />);
 };
 
@@ -145,5 +184,24 @@ describe("CostOptimizationView", () => {
     expect(getByText("$0.1600")).toBeInTheDocument();
     expect(getByText("$0.0200")).toBeInTheDocument();
     expect(getByText("$0.1400")).toBeInTheDocument();
+  });
+
+  it("fetches and opens request details when an optimized request is clicked", async () => {
+    const { getByText, getByTestId } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
+
+    fireEvent.click(getByText("req-123456789"));
+
+    const detailQuery = mockUseQuery.mock.calls
+      .map(([args]) => args as { queryKey: string[]; queryFn: () => Promise<unknown> })
+      .find((args) => args.queryKey[0] === "cost-optimization-spend-log");
+    expect(detailQuery).toBeDefined();
+    await detailQuery?.queryFn();
+    expect(mockUiSpendLogsCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accessToken: "test-token",
+        params: { request_id: "req-123456789" },
+      }),
+    );
+    expect(getByTestId("log-details-drawer")).toHaveTextContent("req-123456789");
   });
 });

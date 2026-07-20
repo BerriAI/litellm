@@ -3,12 +3,14 @@
 import React, { useMemo, useState } from "react";
 import { PiggyBank } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import moment from "moment";
 
 import { AreaChart, DonutChart } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getCostOptimizationUsageLogs,
+  uiSpendLogsCall,
   type OptimizedRequestLog,
   type OptimizedRequestLogsResponse,
   userDailyActivityCall,
@@ -17,6 +19,8 @@ import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles } from "@/utils/roles";
 import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
+import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
+import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -81,11 +85,13 @@ const OptimizedRequestsTable = ({
   logsPage,
   onPrevious,
   onNext,
+  onRowClick,
 }: {
   data: OptimizedRequestLogsResponse;
   logsPage: number;
   onPrevious: () => void;
   onNext: () => void;
+  onRowClick: (log: OptimizedRequestLog) => void;
 }) => (
   <>
     <div className="overflow-x-auto">
@@ -104,7 +110,19 @@ const OptimizedRequestsTable = ({
         </thead>
         <tbody>
           {data.logs.map((log) => (
-            <tr key={log.request_id} className="border-b last:border-0">
+            <tr
+              key={log.request_id}
+              className="cursor-pointer border-b transition-colors hover:bg-muted/50 last:border-0"
+              onClick={() => onRowClick(log)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onRowClick(log);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
               <td className="max-w-40 truncate px-3 py-3 font-mono text-xs" title={log.request_id}>
                 {log.request_id}
               </td>
@@ -183,6 +201,8 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const [logsPage, setLogsPage] = useState(1);
   const startDate = startTime ? startTime.toISOString().slice(0, 10) : "";
   const endDate = endTime ? endTime.toISOString().slice(0, 10) : "";
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const {
     data: optimizedLogsData,
     isLoading: optimizedLogsLoading,
@@ -206,6 +226,29 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
     optimizedLogsError,
     optimizedLogsData,
   );
+  const drawerStartTime = startTime
+    ? moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")
+    : moment().subtract(24, "hours").utc().format("YYYY-MM-DD HH:mm:ss");
+  const drawerEndTime = endTime
+    ? moment(endTime).utc().endOf("day").format("YYYY-MM-DD HH:mm:ss")
+    : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+  const { data: fullLogResponse } = useQuery({
+    queryKey: ["cost-optimization-spend-log", selectedRequestId, drawerStartTime, drawerEndTime],
+    queryFn: async () => {
+      if (!accessToken || !selectedRequestId) return null;
+      const response = await uiSpendLogsCall({
+        accessToken,
+        start_date: drawerStartTime,
+        end_date: drawerEndTime,
+        page: 1,
+        page_size: 10,
+        params: { request_id: selectedRequestId },
+      });
+      return response as { data: ViewLogsLogEntry[]; total: number };
+    },
+    enabled: Boolean(accessToken && selectedRequestId && drawerOpen),
+  });
+  const selectedLog: ViewLogsLogEntry | null = fullLogResponse?.data?.[0] ?? null;
 
   const overTime = useMemo(
     () =>
@@ -313,6 +356,10 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
               logsPage={logsPage}
               onPrevious={() => setLogsPage((page) => Math.max(1, page - 1))}
               onNext={() => setLogsPage((page) => Math.min(optimizedLogsData.total_pages, page + 1))}
+              onRowClick={(log) => {
+                setSelectedRequestId(log.request_id);
+                setDrawerOpen(true);
+              }}
             />
           ) : null}
           {!optimizedLogsLoading && !optimizedLogsError && !optimizedLogsData?.logs.length && (
@@ -320,6 +367,17 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           )}
         </CardContent>
       </Card>
+      <LogDetailsDrawer
+        open={drawerOpen}
+        onClose={() => {
+          setDrawerOpen(false);
+          setSelectedRequestId(null);
+        }}
+        logEntry={selectedLog}
+        accessToken={accessToken}
+        allLogs={selectedLog ? [selectedLog] : []}
+        startTime={drawerStartTime}
+      />
     </div>
   );
 };
