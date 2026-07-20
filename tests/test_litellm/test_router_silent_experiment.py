@@ -394,6 +394,35 @@ async def test_router_silent_experiment_skips_mutating_call_types():
 
 
 @pytest.mark.asyncio
+async def test_silent_experiment_ageneric_skips_auto_executable_mcp_tools():
+    """
+    Regression test: mirroring must not fire when the request's tools
+    include an MCP tool with require_approval == "never". aresponses
+    auto-executes such tools using the request's MCP auth headers, so
+    mirroring would independently replay that tool execution against the
+    silent deployment.
+    """
+    model_list = [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    mock_aresponses = AsyncMock()
+
+    with patch.object(litellm, "aresponses", mock_aresponses):
+        await router._silent_experiment_ageneric(
+            silent_model="primary-model",
+            original_function=litellm.aresponses,
+            input=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "mcp", "server_label": "x", "require_approval": "never"}],
+        )
+
+    mock_aresponses.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_silent_experiment_ageneric_no_recurse():
     """
     _silent_experiment_ageneric must not fire a second experiment when

@@ -2710,6 +2710,16 @@ class Router:
         try:
             if kwargs.get("metadata", {}).get("is_silent_experiment", False):
                 return
+
+            from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+                LiteLLM_Proxy_MCP_Handler,
+            )
+
+            if LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+                mcp_tools_with_litellm_proxy=kwargs.get("tools") or []
+            ):
+                return
+
             verbose_router_logger.info(f"Starting silent experiment for model {silent_model}")
             silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
             silent_kwargs["metadata"]["model_group"] = silent_model
