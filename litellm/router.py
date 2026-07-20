@@ -200,6 +200,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
+    shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
@@ -7495,12 +7496,13 @@ class Router:
             if deployment.litellm_params.custom_llm_provider is not None:
                 _model_name = deployment.litellm_params.custom_llm_provider + "/" + _model_name
 
-            # For the shared backend key, strip custom pricing fields so that
-            # one deployment's pricing overrides don't pollute another
-            # deployment sharing the same backend model name.
-            # Each deployment's full pricing is already stored under its
-            # unique model_id above.
-            _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info)
+            # For the shared backend key, keep only cost-map schema fields
+            # (minus custom pricing) so that one deployment's pricing overrides
+            # or custom metadata (id, access_via_team_ids, arbitrary keys)
+            # don't pollute another deployment sharing the same backend model
+            # name. Each deployment's full model_info is already stored under
+            # its unique model_id above.
+            _shared_model_info = shared_backend_model_info(_model_info)
             _existing_shared_mode = (cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}).get("mode")
             _deployment_mode = _shared_model_info.get("mode")
             # Keep the built-in bridge mode stable for shared backend keys.
@@ -8219,12 +8221,13 @@ class Router:
         if deployment.litellm_params.custom_llm_provider is not None:
             _model_name = deployment.litellm_params.custom_llm_provider + "/" + _model_name
 
-        # For the shared backend key, strip custom pricing fields so that
-        # one deployment's pricing overrides don't pollute another
-        # deployment sharing the same backend model name.
-        # Each deployment's full pricing is already stored under its
-        # unique model_id above (when present).
-        _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info_dict)
+        # For the shared backend key, keep only cost-map schema fields
+        # (minus custom pricing) so that one deployment's pricing overrides
+        # or custom metadata (id, access_via_team_ids, arbitrary keys)
+        # don't pollute another deployment sharing the same backend model
+        # name. Each deployment's full model_info is already stored under
+        # its unique model_id above (when present).
+        _shared_model_info = shared_backend_model_info(_model_info_dict)
         _backend_alias_cost = {_model_name: _shared_model_info}
         if "responses/" in _model_name:
             _stripped_model_name = _model_name.replace("responses/", "")
