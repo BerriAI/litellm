@@ -1230,6 +1230,32 @@ def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
     assert logging_obj.model_call_details.get("guardrail_hook_ran") is True
 
 
+def test_get_hidden_params_propagates_detailed_timing():
+    """Detailed per-phase timings on the response must survive into the standard logging payload's
+    hidden_params so downstream callbacks (e.g. Prometheus) can export them."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    clean = StandardLoggingPayloadSetup.get_hidden_params(
+        {
+            "timing_pre_processing_ms": 20.0,
+            "timing_post_processing_ms": 10.0,
+        }
+    )
+
+    assert clean["timing_pre_processing_ms"] == 20.0
+    assert clean["timing_post_processing_ms"] == 10.0
+
+
+def test_get_hidden_params_detailed_timing_defaults_none():
+    """When no detailed timing is present, the keys default to None rather than being absent."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    clean = StandardLoggingPayloadSetup.get_hidden_params({})
+
+    assert clean["timing_pre_processing_ms"] is None
+    assert clean["timing_post_processing_ms"] is None
+
+
 def test_get_user_agent_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 

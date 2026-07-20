@@ -2666,6 +2666,8 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_models: Optional[List[str]]
     litellm_model_name: Optional[str]  # the model name sent to the provider by litellm
     usage_object: Optional[dict]
+    timing_pre_processing_ms: Optional[float]  # only populated when LITELLM_DETAILED_TIMING is enabled
+    timing_post_processing_ms: Optional[float]  # only populated when LITELLM_DETAILED_TIMING is enabled
 
 
 class StandardLoggingModelInformation(TypedDict):

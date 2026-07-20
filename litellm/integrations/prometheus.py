@@ -25,6 +25,7 @@ from typing import (
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.exceptions import (
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -387,6 +388,22 @@ class PrometheusLogger(CustomLogger):
                 "Total internal latency (seconds) added by LiteLLM, including "
                 "pre/post-call guardrails (excludes the LLM API call)",
                 labelnames=self.get_labels_for_metric("litellm_overhead_with_guardrails_latency_metric"),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_pre_processing_latency_metric = self._histogram_factory(
+                "litellm_pre_processing_latency_metric",
+                "Latency (seconds) LiteLLM spends before the LLM API call "
+                "(only emitted when LITELLM_DETAILED_TIMING is enabled)",
+                labelnames=self.get_labels_for_metric("litellm_pre_processing_latency_metric"),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_post_processing_latency_metric = self._histogram_factory(
+                "litellm_post_processing_latency_metric",
+                "Latency (seconds) LiteLLM spends after the LLM API call "
+                "(only emitted when LITELLM_DETAILED_TIMING is enabled)",
+                labelnames=self.get_labels_for_metric("litellm_post_processing_latency_metric"),
                 buckets=self.latency_buckets,
             )
 
@@ -1122,6 +1139,52 @@ class PrometheusLogger(CustomLogger):
         )
         self.litellm_overhead_with_guardrails_latency_metric.labels(**labels).observe(
             ((litellm_overhead_time_ms or 0.0) / 1000) + guardrail_overhead_seconds
+        )
+
+    def _observe_phase_latency(
+        self,
+        metric: Any,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        timing_ms: float | None,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: PrometheusLabelFactoryContext | None = None,
+    ) -> None:
+        if timing_ms is None:
+            return
+        labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        metric.labels(**labels).observe(timing_ms / 1000)
+
+    def _set_detailed_timing_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: PrometheusLabelFactoryContext | None = None,
+    ) -> None:
+        """Record per-phase pre/post-processing latency (seconds), gated behind
+        LITELLM_DETAILED_TIMING. The values are already computed on the response
+        hidden params; here they are exported as histograms reusing the
+        litellm_overhead_latency_metric label set.
+        """
+        if not LITELLM_DETAILED_TIMING:
+            return
+        hidden_params = standard_logging_payload["hidden_params"]
+        self._observe_phase_latency(
+            metric=self.litellm_pre_processing_latency_metric,
+            metric_name="litellm_pre_processing_latency_metric",
+            timing_ms=hidden_params.get("timing_pre_processing_ms"),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        self._observe_phase_latency(
+            metric=self.litellm_post_processing_latency_metric,
+            metric_name="litellm_post_processing_latency_metric",
+            timing_ms=hidden_params.get("timing_post_processing_ms"),
+            enum_values=enum_values,
+            label_context=label_context,
         )
 
     def _track_end_user_metric_series(
@@ -2686,6 +2749,12 @@ class PrometheusLogger(CustomLogger):
                 )  # set as seconds
 
             self._set_overhead_with_guardrails_metric(
+                standard_logging_payload=standard_logging_payload,
+                enum_values=enum_values,
+                label_context=label_context,
+            )
+
+            self._set_detailed_timing_metrics(
                 standard_logging_payload=standard_logging_payload,
                 enum_values=enum_values,
                 label_context=label_context,

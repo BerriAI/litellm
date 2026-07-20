@@ -2287,6 +2287,86 @@ def test_set_llm_deployment_success_metrics_with_label_filtering():
         prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
 
 
+def _make_enum_values(standard_logging_payload: StandardLoggingPayload) -> UserAPIKeyLabelValues:
+    return UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        requested_model=standard_logging_payload["model_group"],
+        model=standard_logging_payload["model"],
+        model_id=standard_logging_payload["model_id"],
+        api_base=standard_logging_payload["api_base"],
+    )
+
+
+def test_detailed_timing_metrics_observed_when_enabled(prometheus_logger, monkeypatch):
+    """When LITELLM_DETAILED_TIMING is on, pre/post-processing timings are observed as seconds."""
+    import litellm.integrations.prometheus as prometheus_mod
+
+    monkeypatch.setattr(prometheus_mod, "LITELLM_DETAILED_TIMING", True)
+
+    prometheus_logger.litellm_pre_processing_latency_metric = MagicMock()
+    prometheus_logger.litellm_post_processing_latency_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["hidden_params"]["timing_pre_processing_ms"] = 20.0
+    standard_logging_payload["hidden_params"]["timing_post_processing_ms"] = 10.0
+
+    prometheus_logger._set_detailed_timing_metrics(
+        standard_logging_payload=standard_logging_payload,
+        enum_values=_make_enum_values(standard_logging_payload),
+    )
+
+    prometheus_logger.litellm_pre_processing_latency_metric.labels().observe.assert_called_once_with(0.02)
+    prometheus_logger.litellm_post_processing_latency_metric.labels().observe.assert_called_once_with(0.01)
+
+
+def test_detailed_timing_metrics_not_observed_when_disabled(prometheus_logger, monkeypatch):
+    """When LITELLM_DETAILED_TIMING is off, no per-phase timing is observed even if values exist."""
+    import litellm.integrations.prometheus as prometheus_mod
+
+    monkeypatch.setattr(prometheus_mod, "LITELLM_DETAILED_TIMING", False)
+
+    prometheus_logger.litellm_pre_processing_latency_metric = MagicMock()
+    prometheus_logger.litellm_post_processing_latency_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["hidden_params"]["timing_pre_processing_ms"] = 20.0
+    standard_logging_payload["hidden_params"]["timing_post_processing_ms"] = 10.0
+
+    prometheus_logger._set_detailed_timing_metrics(
+        standard_logging_payload=standard_logging_payload,
+        enum_values=_make_enum_values(standard_logging_payload),
+    )
+
+    prometheus_logger.litellm_pre_processing_latency_metric.labels.assert_not_called()
+    prometheus_logger.litellm_post_processing_latency_metric.labels.assert_not_called()
+
+
+def test_detailed_timing_metrics_skips_missing_values(prometheus_logger, monkeypatch):
+    """A phase with no timing value must not emit a series (avoids bogus 0 observations)."""
+    import litellm.integrations.prometheus as prometheus_mod
+
+    monkeypatch.setattr(prometheus_mod, "LITELLM_DETAILED_TIMING", True)
+
+    prometheus_logger.litellm_pre_processing_latency_metric = MagicMock()
+    prometheus_logger.litellm_post_processing_latency_metric = MagicMock()
+
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["hidden_params"]["timing_pre_processing_ms"] = 20.0
+
+    prometheus_logger._set_detailed_timing_metrics(
+        standard_logging_payload=standard_logging_payload,
+        enum_values=_make_enum_values(standard_logging_payload),
+    )
+
+    prometheus_logger.litellm_pre_processing_latency_metric.labels().observe.assert_called_once_with(0.02)
+    prometheus_logger.litellm_post_processing_latency_metric.labels.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_prometheus_token_metrics_with_prometheus_config():
     """
