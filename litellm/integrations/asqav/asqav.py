@@ -171,7 +171,7 @@ def _extract_response_content_digest(response_obj: Any) -> str | None:
 def _extract_call_id(kwargs: dict[str, Any]) -> str:
     """Prefer standard_logging_object's id, falling back to the raw call id."""
     try:
-        slp: Any = kwargs.get("standard_logging_object"),
+        slp: Any = (kwargs.get("standard_logging_object"),)
         if slp and isinstance(slp, dict):
             call_id = slp.get("id") or slp.get("litellm_call_id")
             if call_id:
@@ -487,7 +487,11 @@ class AsqavLogger(CustomLogger):
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
     async def async_log_success_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any,
+        self,
+        kwargs: dict[str, Any],
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -499,7 +503,11 @@ class AsqavLogger(CustomLogger):
         )
 
     async def async_log_failure_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any,
+        self,
+        kwargs: dict[str, Any],
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
