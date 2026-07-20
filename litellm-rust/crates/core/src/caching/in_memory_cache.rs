@@ -134,8 +134,8 @@ impl<V: Clone> InMemoryCache<V> {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     };
 
     use super::InMemoryCache;

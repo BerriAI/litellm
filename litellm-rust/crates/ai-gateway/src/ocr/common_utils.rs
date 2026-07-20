@@ -1,11 +1,11 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrProviderConfig;
-use litellm_core::CoreResult;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
