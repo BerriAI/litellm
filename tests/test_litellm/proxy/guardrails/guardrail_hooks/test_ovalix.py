@@ -3,6 +3,8 @@ Unit tests for Ovalix guardrail: config resolution and apply_guardrail behavior
 with mocked Tracker service responses (allow, anonymize, block).
 """
 
+import base64
+import gzip
 import os
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -217,7 +219,7 @@ class TestOvalixGuardrail:
 
     @pytest.mark.asyncio
     async def test_call_checkpoint_sends_correct_payload_and_returns_json(self):
-        """_call_checkpoint POSTs to tracker with application_id, checkpoint_id, actor, session_id, data."""
+        """_call_checkpoint POSTs to tracker with application_id, checkpoint_id, actor, session_id, data, tool."""
         for k, v in _ovalix_env().items():
             os.environ[k] = v
         try:
@@ -229,10 +231,12 @@ class TestOvalixGuardrail:
             with patch.object(guardrail._async_handler, "post", new_callable=AsyncMock) as mock_post:
                 mock_post.return_value = mock_response
                 result = await guardrail._call_checkpoint(
-                    content="hello",
+                    data_type="TEXT",
+                    data={"content": "hello"},
                     checkpoint_id="pre-1",
                     actor="a1b2c3d4",
                     session_id="session-1",
+                    application_id="app-1",
                 )
 
             assert result == TRACKER_RESPONSE_ALLOW
@@ -246,6 +250,7 @@ class TestOvalixGuardrail:
             assert body["session_id"] == "session-1"
             assert body["data_type"] == "TEXT"
             assert body["data"] == {"content": "hello"}
+            assert body["tool"] == "LiteLLM"
         finally:
             for k in _ovalix_env():
                 if k in os.environ:
@@ -400,7 +405,7 @@ class TestOvalixGuardrail:
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_response_allow_returns_inputs(self):
-        """When input_type is response and Tracker allows, apply_guardrail returns inputs with texts updated from Tracker."""
+        """When input_type is response and Tracker allows, apply_guardrail leaves texts unchanged (allow never rewrites)."""
         for k, v in _ovalix_env().items():
             os.environ[k] = v
         try:
@@ -424,7 +429,7 @@ class TestOvalixGuardrail:
                     logging_obj=None,
                 )
 
-            assert result.get("texts") == ["how are you?"]
+            assert result.get("texts") == ["Safe assistant reply"]
             assert mock_post.call_count == 1
         finally:
             for k in _ovalix_env():
@@ -717,7 +722,7 @@ async def test_static_mode_uses_config_routing():
         default_on=True,
     )
     routing = await g._resolve_routing({})
-    assert routing == ResolvedRouting("app-1", "pre-1", "post-1", "file-1", None)
+    assert routing == ResolvedRouting("app-1", "pre-1", "post-1", "file-1", "file-1")
 
 
 @pytest.mark.asyncio
@@ -805,3 +810,210 @@ async def test_routing_cache_lru_eviction(monkeypatch):
     for name in ("[App A] x", "[App B] x", "[App C] x"):
         await g._resolve_routing(_alias_request_data(name))
     assert "App A" not in g._routing_cache and len(g._routing_cache) == 2
+
+
+_ALLOW = {"action_type": "allow", "modified_data": {"content": "x"}}
+_BLOCK = {"action_type": "block", "modified_data": {"content": "stop-reason"}}
+_ANON = {"action_type": "anonymize", "modified_data": {"content": "redacted"}}
+
+
+def _static_guardrail():
+    return OvalixGuardrail(
+        tracker_api_base="https://t",
+        tracker_api_key="k",
+        application_id="app-1",
+        pre_checkpoint_id="pre-1",
+        post_checkpoint_id="post-1",
+        file_checkpoint_id="file-1",
+        guardrail_name="o",
+        event_hook="pre_call",
+        default_on=True,
+    )
+
+
+def _post_returning(mapping_fn):
+    resp_factory = mapping_fn
+
+    async def _post(url, headers=None, json=None):
+        r = MagicMock()
+        r.json.return_value = resp_factory(json)
+        r.raise_for_status = MagicMock()
+        return r
+
+    return _post
+
+
+@pytest.mark.asyncio
+async def test_file_block_raises():
+    g = _static_guardrail()
+    data_url = "data:text/plain;base64," + base64.b64encode(b"secret").decode()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hi"],
+        structured_messages=[
+            {"role": "user", "content": [{"type": "file", "file": {"filename": "s.txt", "file_data": data_url}}]}
+        ],
+    )
+    with patch.object(
+        g._async_handler, "post", new=_post_returning(lambda body: _BLOCK if body["data_type"] == "FILE" else _ALLOW)
+    ):
+        with pytest.raises(OvalixGuardrailBlockedException) as exc:
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert "stop-reason" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_file_uses_file_checkpoint_and_gzip_wire():
+    g = _static_guardrail()
+    data_url = "data:text/plain;base64," + base64.b64encode(b"secret").decode()
+    inputs = GenericGuardrailAPIInputs(
+        texts=[],
+        structured_messages=[
+            {"role": "user", "content": [{"type": "file", "file": {"filename": "s.txt", "file_data": data_url}}]}
+        ],
+    )
+    seen = {}
+
+    async def _post(url, headers=None, json=None):
+        seen["last"] = json
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert seen["last"]["data_type"] == "FILE"
+    assert seen["last"]["checkpoint_id"] == "file-1"
+    assert gzip.decompress(base64.b64decode(seen["last"]["data"]["content"])) == b"secret"
+
+
+@pytest.mark.asyncio
+async def test_response_side_file_uses_file_checkpoint():
+    g = _static_guardrail()
+    data_url = "data:image/png;base64," + base64.b64encode(b"img").decode()
+    inputs = GenericGuardrailAPIInputs(texts=[], images=[data_url])
+    seen = {}
+
+    async def _post(url, headers=None, json=None):
+        seen["last"] = json
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="response", logging_obj=None)
+    assert seen["last"]["data_type"] == "FILE"
+    assert seen["last"]["checkpoint_id"] == "file-1"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_block_raises():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=[], tool_calls=[{"id": "c1", "type": "function", "function": {"name": "exfil", "arguments": "{}"}}]
+    )
+    with patch.object(
+        g._async_handler, "post", new=_post_returning(lambda body: _BLOCK if body["data_type"] == "TOOL" else _ALLOW)
+    ):
+        with pytest.raises(OvalixGuardrailBlockedException):
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="response", logging_obj=None)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_anonymize_escalates_to_block():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=[], tool_calls=[{"id": "c1", "type": "function", "function": {"name": "exfil", "arguments": "{}"}}]
+    )
+    with patch.object(
+        g._async_handler, "post", new=_post_returning(lambda body: _ANON if body["data_type"] == "TOOL" else _ALLOW)
+    ):
+        with pytest.raises(OvalixGuardrailBlockedException) as exc:
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="response", logging_obj=None)
+    assert "tool call anonymization isn't possible" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_tool_result_block_raises():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["sunny"],
+        structured_messages=[
+            {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "get_weather"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+        ],
+    )
+    with patch.object(
+        g._async_handler, "post", new=_post_returning(lambda body: _BLOCK if body["data_type"] == "TOOL" else _ALLOW)
+    ):
+        with pytest.raises(OvalixGuardrailBlockedException):
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+
+
+@pytest.mark.asyncio
+async def test_newest_text_block_raises_older_anonymized():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(texts=["old", "new"])
+
+    def _map(body):
+        if body["data_type"] != "TEXT":
+            return _ALLOW
+        return _BLOCK if body["data"]["content"] == "new" else _ALLOW
+
+    with patch.object(g._async_handler, "post", new=_post_returning(_map)):
+        with pytest.raises(OvalixGuardrailBlockedException):
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+
+
+@pytest.mark.asyncio
+async def test_older_text_anonymized_returns_modified_texts():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(texts=["make me anon", "safe newest"])
+
+    def _map(body):
+        if body["data_type"] != "TEXT":
+            return _ALLOW
+        return (
+            {"action_type": "anonymize", "modified_data": {"content": "ANON"}}
+            if body["data"]["content"] == "make me anon"
+            else _ALLOW
+        )
+
+    with patch.object(g._async_handler, "post", new=_post_returning(_map)):
+        result = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert result["texts"] == ["ANON", "safe newest"]
+
+
+@pytest.mark.asyncio
+async def test_all_allow_passes_through():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(texts=["hi"])
+    with patch.object(g._async_handler, "post", new=_post_returning(lambda body: _ALLOW)):
+        result = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert result["texts"] == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_tool_result_content_skipped_on_text_path():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["sunny"],
+        structured_messages=[
+            {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "get_weather"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+        ],
+    )
+    text_calls = []
+
+    async def _post(url, headers=None, json=None):
+        if json["data_type"] == "TEXT":
+            text_calls.append(json["data"]["content"])
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert "sunny" not in text_calls
