@@ -1001,11 +1001,7 @@ def run_server(
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
-        if (
-            azure_postgresql_auth
-            or iam_token_db_auth
-            or get_secret_bool("IAM_TOKEN_DB_AUTH")
-        ):
+        if azure_postgresql_auth or iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
             from litellm.proxy.db.prisma_client import (
                 AZURE_POSTGRESQL_AUTH_MARKER_ENV,
                 build_database_token_auth_url,

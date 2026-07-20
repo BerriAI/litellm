@@ -96,9 +96,7 @@ def build_database_token_auth_url(
 
     from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
-    token = generate_iam_auth_token(
-        db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user
-    )
+    token = generate_iam_auth_token(db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user)
     return endpoint.build_url(token)
 
 
@@ -374,9 +372,7 @@ class PrismaWrapper:
         else:
             endpoint = get_database_auth_endpoint_from_env()
 
-        _db_url = build_database_token_auth_url(
-            endpoint, azure_postgresql_auth=self._azure_postgresql_auth
-        )
+        _db_url = build_database_token_auth_url(endpoint, azure_postgresql_auth=self._azure_postgresql_auth)
 
         os.environ[self._db_url_env_var] = _db_url
         return _db_url

@@ -308,13 +308,8 @@ def _get_credential_provider_from_connect_func(
     if redis_connect_func is None:
         return None
     connect_func_attrs = getattr(redis_connect_func, "__dict__", {})
-    if (
-        "_gcp_service_account" in connect_func_attrs
-        and "_azure_credential" in connect_func_attrs
-    ):
-        raise ValueError(
-            "redis_connect_func cannot define both GCP and Azure credentials"
-        )
+    if "_gcp_service_account" in connect_func_attrs and "_azure_credential" in connect_func_attrs:
+        raise ValueError("redis_connect_func cannot define both GCP and Azure credentials")
     if "_gcp_service_account" in connect_func_attrs:
         return GCPIAMCredentialProvider(redis_connect_func._gcp_service_account)
     if "_azure_credential" in connect_func_attrs:
@@ -578,9 +573,7 @@ def get_redis_client(**env_overrides):
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         redis_connect_func = redis_kwargs.pop("redis_connect_func", None)
-        credential_provider = _get_credential_provider_from_connect_func(
-            redis_connect_func, redis_kwargs
-        )
+        credential_provider = _get_credential_provider_from_connect_func(redis_connect_func, redis_kwargs)
         if credential_provider is not None:
             redis_kwargs["credential_provider"] = credential_provider
 
@@ -620,9 +613,7 @@ def get_redis_async_client(
         # Use a CredentialProvider so the IAM token is regenerated on every new
         # connection — mirrors the sync path where redis_connect_func is invoked
         # per connection.  Without this, the token would expire after ~1 hour.
-        credential_provider = _get_credential_provider_from_connect_func(
-            redis_connect_func, redis_kwargs
-        )
+        credential_provider = _get_credential_provider_from_connect_func(redis_connect_func, redis_kwargs)
         if credential_provider is not None:
             cluster_kwargs["credential_provider"] = credential_provider
 
@@ -651,9 +642,7 @@ def get_redis_async_client(
         if connection_pool is not None:
             return async_redis.Redis(connection_pool=connection_pool)
         redis_connect_func = redis_kwargs.pop("redis_connect_func", None)
-        credential_provider = _get_credential_provider_from_connect_func(
-            redis_connect_func, redis_kwargs
-        )
+        credential_provider = _get_credential_provider_from_connect_func(redis_connect_func, redis_kwargs)
         if credential_provider is not None:
             redis_kwargs["credential_provider"] = credential_provider
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
@@ -676,9 +665,7 @@ def get_redis_async_client(
     # does honour credential_provider — which is called per connection, so the
     # underlying SDK can refresh tokens silently before they expire.
     redis_connect_func = redis_kwargs.pop("redis_connect_func", None)
-    credential_provider = _get_credential_provider_from_connect_func(
-        redis_connect_func, redis_kwargs
-    )
+    credential_provider = _get_credential_provider_from_connect_func(redis_connect_func, redis_kwargs)
     if credential_provider is not None:
         redis_kwargs["credential_provider"] = credential_provider
 
@@ -707,9 +694,7 @@ def get_redis_connection_pool(
             "url": redis_kwargs["url"],
         }
         redis_connect_func = redis_kwargs.pop("redis_connect_func", None)
-        credential_provider = _get_credential_provider_from_connect_func(
-            redis_connect_func, redis_kwargs
-        )
+        credential_provider = _get_credential_provider_from_connect_func(redis_connect_func, redis_kwargs)
         if credential_provider is not None:
             pool_kwargs["credential_provider"] = credential_provider
         if "max_connections" in redis_kwargs:
@@ -726,9 +711,7 @@ def get_redis_connection_pool(
     # connections re-fetch tokens via the SDK's internal cache + silent refresh
     # rather than reusing a single token captured at pool creation.
     redis_connect_func = redis_kwargs.pop("redis_connect_func", None)
-    credential_provider = _get_credential_provider_from_connect_func(
-        redis_connect_func, redis_kwargs
-    )
+    credential_provider = _get_credential_provider_from_connect_func(redis_connect_func, redis_kwargs)
     if credential_provider is not None:
         redis_kwargs["credential_provider"] = credential_provider
 

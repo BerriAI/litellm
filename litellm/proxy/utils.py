@@ -2789,29 +2789,17 @@ class PrismaClient:
     ):
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
-        self.iam_token_db_auth: Optional[bool] = str_to_bool(
-            os.getenv("IAM_TOKEN_DB_AUTH")
-        )
-        azure_postgresql_auth = (
-            str_to_bool(os.getenv(AZURE_POSTGRESQL_AUTH_MARKER_ENV)) is True
-        )
+        self.iam_token_db_auth: Optional[bool] = str_to_bool(os.getenv("IAM_TOKEN_DB_AUTH"))
+        azure_postgresql_auth = str_to_bool(os.getenv(AZURE_POSTGRESQL_AUTH_MARKER_ENV)) is True
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
         except Exception as e:
             verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
-            verbose_proxy_logger.error(
-                "This usually means 'prisma generate' hasn't been run yet."
-            )
-            verbose_proxy_logger.error(
-                "Please run 'prisma generate' to generate the Prisma client."
-            )
-            raise Exception(
-                "Unable to find Prisma binaries. Please run 'prisma generate' first."
-            )
-        iam_flag = (
-            self.iam_token_db_auth if self.iam_token_db_auth is not None else False
-        )
+            verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
+            verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
+            raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
+        iam_flag = self.iam_token_db_auth if self.iam_token_db_auth is not None else False
         token_auth_enabled = bool(iam_flag or azure_postgresql_auth)
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved IAM refresh logs can be told apart.
@@ -2845,11 +2833,7 @@ class PrismaClient:
                 # the same cadence as the writer. We parse the static endpoint
                 # pieces (host/port/user/db) once from the reader URL — only
                 # the IAM token rotates after that.
-                reader_iam_endpoint = (
-                    parse_iam_endpoint_from_url(read_replica_url)
-                    if token_auth_enabled
-                    else None
-                )
+                reader_iam_endpoint = parse_iam_endpoint_from_url(read_replica_url) if token_auth_enabled else None
                 # Mint a fresh IAM token for the reader BEFORE constructing the
                 # Prisma client. Mirrors what `proxy_cli.py` already does for
                 # the writer (proxy_cli.py:812-832) — without this, the reader
