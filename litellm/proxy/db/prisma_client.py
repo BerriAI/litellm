@@ -109,11 +109,13 @@ def _parse_jwt_expiration_claim(token: str) -> datetime | None:
         padding = "=" * (-len(payload) % 4)
         decoded = base64.urlsafe_b64decode(f"{payload}{padding}")
         claims = json.loads(decoded)
+        if not isinstance(claims, dict):
+            return None
         exp = claims.get("exp")
         if exp is None:
             return None
         return datetime.utcfromtimestamp(int(exp))
-    except Exception as e:
+    except (OSError, OverflowError, TypeError, ValueError) as e:
         verbose_proxy_logger.debug(f"Failed to parse JWT token expiration: {e}")
         return None
 
