@@ -551,6 +551,17 @@ class ModelNewResponse(BaseModel):
     model_id: str
 
 
+class ModelUpdateBody(BaseModel):
+    """POST /model/update body: the target deployment (`model_info.id`) plus the
+    `litellm_params` to merge over its stored params. The handler overlays only the
+    non-null fields, so a body carrying `input_cost_per_token` re-prices the
+    deployment while leaving its other params intact."""
+
+    model_config = ConfigDict(protected_namespaces=())
+    litellm_params: LiteLLMParamsBody
+    model_info: ModelInfoBody
+
+
 class ModelListEntry(BaseModel):
     id: str
 
