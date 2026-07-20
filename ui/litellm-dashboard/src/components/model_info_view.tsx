@@ -23,6 +23,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
+import { PROTECTED_MODEL_INFO_KEYS, withNullsForRemovedKeys } from "../utils/modelJsonPatchUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
@@ -404,18 +405,15 @@ export default function ModelInfoView({
         delete updatedLitellmParams.cache_control_injection_points;
       }
 
-      // Parse the model_info from the form values
       let updatedModelInfo;
       try {
         updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
-        // Update access_groups from the form
         if (values.model_access_group) {
           updatedModelInfo = {
             ...updatedModelInfo,
             access_groups: values.model_access_group,
           };
         }
-        // Override health_check_model from the form
         if (values.health_check_model !== undefined) {
           updatedModelInfo = {
             ...updatedModelInfo,
@@ -427,26 +425,49 @@ export default function ModelInfoView({
         return;
       }
 
-      // Final guard: never PATCH a redacted secret. The /model/info snapshot that
-      // seeds this form masks secrets, and any save re-sends the whole params blob;
-      // without this strip a masked value would be re-encrypted over the real secret.
-      // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
-      const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const previousLitellmParams = (localModelData.litellm_params || {}) as Record<string, unknown>;
+      const skipLitellmNulls = new Set<string>(
+        Object.entries(previousLitellmParams)
+          .filter(([key, value]) => key === "litellm_credential_name" || isMaskedSecret(value))
+          .map(([key]) => key),
+      );
+      if (!values.litellm_credential_name) {
+        skipLitellmNulls.add("litellm_credential_name");
+      }
+
+      const safeLitellmParams = withNullsForRemovedKeys(
+        previousLitellmParams,
+        stripMaskedSecrets(updatedLitellmParams),
+        skipLitellmNulls,
+      );
+
+      const patchedModelInfo = withNullsForRemovedKeys(
+        (localModelData.model_info || {}) as Record<string, unknown>,
+        updatedModelInfo as Record<string, unknown>,
+        PROTECTED_MODEL_INFO_KEYS,
+      );
 
       const updateData = {
         model_name: values.model_name,
         litellm_params: safeLitellmParams,
-        model_info: updatedModelInfo,
+        model_info: patchedModelInfo,
       };
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
+
+      const displayLitellmParams = Object.fromEntries(
+        Object.entries(safeLitellmParams).filter(([, value]) => value !== null),
+      );
+      const displayModelInfo = Object.fromEntries(
+        Object.entries(patchedModelInfo).filter(([, value]) => value !== null),
+      );
 
       const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
-        model_info: updatedModelInfo,
+        litellm_params: displayLitellmParams,
+        model_info: displayModelInfo,
       };
 
       setLocalModelData(updatedModelData);
@@ -824,6 +845,7 @@ export default function ModelInfoView({
                       null,
                       2,
                     ),
+                    model_info: JSON.stringify(localModelData.model_info || {}, null, 2),
                   }}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
@@ -1343,12 +1365,8 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Model Info</Text>
                         {isEditing ? (
-                          <Form.Item name="model_info" className="mb-0">
-                            <Input.TextArea
-                              rows={4}
-                              placeholder='{"gpt-4": 100, "claude-v1": 200}'
-                              defaultValue={JSON.stringify(modelData.model_info, null, 2)}
-                            />
+                          <Form.Item name="model_info" className="mb-0" rules={[{ validator: formItemValidateJSON }]}>
+                            <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">

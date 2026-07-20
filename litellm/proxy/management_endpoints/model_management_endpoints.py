@@ -96,6 +96,20 @@ async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Optional[D
     return deployment_pydantic_obj
 
 
+PROTECTED_MODEL_INFO_FIELDS = frozenset(
+    {
+        "id",
+        "db_model",
+        "team_id",
+        "team_public_model_name",
+        "created_at",
+        "created_by",
+        "updated_at",
+        "updated_by",
+    }
+)
+
+
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
     merged_deployment_dict = DeploymentTypedDict(
         model_name=db_model.model_name,
@@ -127,20 +141,24 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # passes through (which today re-sends the OLD pricing on every save) cannot
     # silently undo a litellm_params clear via .update().
     #
-    # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
-    # and cache read/write costs) so this path cannot be used to null out privileged
-    # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
-    # mirrored between litellm_params and model_info by Deployment.__init__, so the
-    # clear propagates to both blobs.
+    # litellm_params: any key set to null is removed (JSON editors send null for deleted keys).
+    # SPECIAL_MODEL_INFO_PARAMS are mirrored between litellm_params and model_info by
+    # Deployment.__init__, so those clears propagate to both blobs.
+    #
+    # model_info: null clears apply only to non-privileged keys (not id/team_id/ownership).
     if updated_patch.litellm_params:
-        for field in updated_patch.litellm_params.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
-                merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
+        for field, value in updated_patch.litellm_params.model_dump(exclude_unset=True).items():
+            if value is not None:
+                continue
+            merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
+            if field in SPECIAL_MODEL_INFO_PARAMS:
                 merged_deployment_dict.get("model_info", {}).pop(field, None)
     if updated_patch.model_info:
-        for field in updated_patch.model_info.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
-                merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
+        for field, value in updated_patch.model_info.model_dump(exclude_unset=True).items():
+            if value is not None or field in PROTECTED_MODEL_INFO_FIELDS:
+                continue
+            merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
+            if field in SPECIAL_MODEL_INFO_PARAMS:
                 merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
 
     # convert to prisma compatible format
