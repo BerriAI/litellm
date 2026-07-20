@@ -94,6 +94,9 @@ def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[s
     return None
 
 
+_GUARDRAIL_INTERVENTION_HTTP_STATUS_CODES = frozenset({400, 403, 422})
+
+
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
@@ -946,8 +949,11 @@ class CustomGuardrail(CustomLogger):
         - GuardrailRaisedException (generic guardrail API, tool permission)
         - BlockedPiiEntityError (Presidio PII detection)
         - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
-        - HTTPException with any 4xx status (content policy / request rejection)
+        - HTTPException with status 400/403/422 (content policy / request rejection)
         - ModifyResponseException (passthrough mode violation)
+
+        Auth, rate-limit, and timeout 4xx (401/408/429) stay failures so Guardrail
+        Monitor does not treat upstream outages as successful blocks.
         """
         if isinstance(e, ModifyResponseException):
             return True
@@ -962,7 +968,7 @@ class CustomGuardrail(CustomLogger):
             return True
         if HTTPException is not None and isinstance(e, HTTPException):
             status_code = e.status_code
-            if isinstance(status_code, int) and 400 <= status_code < 500:
+            if isinstance(status_code, int) and status_code in _GUARDRAIL_INTERVENTION_HTTP_STATUS_CODES:
                 return True
         return False
 
