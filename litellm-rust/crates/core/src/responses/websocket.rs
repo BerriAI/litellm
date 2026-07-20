@@ -1,6 +1,6 @@
+use crate::CoreResult;
 use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
-use crate::CoreResult;
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn supports_native_websocket(&self) -> bool {
