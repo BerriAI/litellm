@@ -1616,6 +1616,49 @@ class TestGuardrailInterventionClassification:
         assert slg["guardrail_status"] == "guardrail_intervened"
 
 
+class TestHttpExceptionInterventionClassification:
+    """Any 4xx HTTPException from a guardrail is a deliberate block, not a failure."""
+
+    @pytest.mark.parametrize("status_code", [400, 403, 422])
+    def test_4xx_http_exception_is_intervention(self, status_code):
+        from fastapi import HTTPException
+
+        exc = HTTPException(status_code=status_code, detail="Blocked by guardrail")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    def test_5xx_http_exception_is_not_intervention(self):
+        from fastapi import HTTPException
+
+        exc = HTTPException(status_code=500, detail="Guardrail provider unavailable")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is False
+
+    @pytest.mark.asyncio
+    async def test_403_block_logged_as_intervened_not_failed(self):
+        from fastapi import HTTPException
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class Block403Guardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-403-rail",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data, **kwargs):
+                raise HTTPException(status_code=403, detail="Blocked by Block403Guardrail")
+
+        guardrail = Block403Guardrail()
+        request_data: dict = {"metadata": {}}
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(data=request_data)
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"
+
+
 class _ApplyStyleGuardrail(CustomGuardrail):
     """Overrides only apply_guardrail, like openai_moderation; async_pre_call_hook stays the CustomLogger no-op."""
 
