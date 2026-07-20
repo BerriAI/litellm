@@ -189,6 +189,20 @@ class TestTeamRoutes:
             f"key generated under team {team_id} carries team_id {key_info.team_id!r} in /key/info"
         )
 
+    @pytest.mark.covers("mgmt.team.new.persists")
+    def test_team_model_allowlist_enforced_on_chat(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """Team-scoped keys only reach models on the team's allow-list (central for
+        org/team access control). Allowed model is callable; a sibling model is 403."""
+        team_id = _create_team(
+            client, resources, f"e2e-mgmt-team-{unique_marker()}", ["gemini-2.5-flash"]
+        )
+        key = _generate_key(client, resources, KeyGenerateBody(team_id=team_id))
+
+        _poll_chat_ok(client, key, "gemini-2.5-flash")
+        _poll_chat_denied(client, key, "gpt-5.5")
+
     @pytest.mark.covers("mgmt.team.member_add.persists")
     def test_member_add_and_delete_persist_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
