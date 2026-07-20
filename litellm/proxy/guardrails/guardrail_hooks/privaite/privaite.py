@@ -2,14 +2,23 @@
 PrivAiTe guardrail for the LiteLLM proxy.
 
 Runs PrivAiTe's engine in-process inside LiteLLM. The pre-call hook anonymizes the
-request (chat `messages` and Responses API `input`) and stashes the reversible map
-in the request metadata (consumed and popped by the post-call hook); the post-call
-hook restores the real values in the response, including chat tool-call arguments,
-the legacy function_call, and Responses API output_text/function_call output. Chat
-streaming is restored too: text content, streamed tool-call arguments, and the
-streamed function_call. (Responses API streaming restore is not yet implemented.)
-On the failure path the map is dropped from metadata as well, so it cannot reach a
-failure spend-log.
+request and stashes the reversible map in the request metadata (consumed and popped
+by the post-call hook); the post-call hook restores the real values in the response,
+including chat tool-call arguments, the legacy function_call, and Responses API
+output_text/function_call output. The request surface scanned matches the PrivAiTe
+core: chat `messages`; the Responses API `input` (every item type: role message,
+tool-call arguments, tool output including `custom_tool_call_output.output` as a
+list of `{type, text}` parts, typed action carriers, bare content parts and bare
+strings; opaque/binary items relayed whole) and `prompt.variables`; the
+`/v1/completions` `prompt` (string or batch list) and `suffix`; the chat
+`prediction.content` and `web_search_options.user_location` auxiliary fields (input
+side only, nothing to restore; tokenized integer-array inputs pass through
+unscanned). Restore covers `content`, the reasoning trace, the refusal and the audio
+transcript besides tool/function arguments. Chat streaming is restored too: text
+content, the reasoning trace, the refusal, the audio transcript, streamed tool-call
+arguments and the streamed function_call. (Responses API streaming restore is not
+yet implemented.) On the failure path the map is dropped from metadata as well, so
+it cannot reach a failure spend-log.
 
 If `block_entities` is configured, a request containing any of those PII types is
 rejected with an HTTP 400 in the pre-call hook, before anything is forwarded to the
@@ -25,6 +34,7 @@ See https://github.com/crp4222/PrivAiTe for the package.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any, cast
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -39,6 +49,58 @@ _LANG_MODELS = {
     "pt": "pt_core_news_md",
     "nl": "nl_core_news_md",
 }
+
+# Responses `input` items relayed byte-for-byte: an opaque/binary payload
+# (encrypted reasoning, a screenshot, a generated image) or a tool/pointer
+# definition with no user text. Parity with the PrivAiTe gateway scrubber.
+_RESPONSES_OPAQUE_TYPES = frozenset(
+    {
+        "reasoning",
+        "compaction",
+        "compaction_trigger",
+        "computer_call_output",
+        "image_generation_call",
+        "item_reference",
+        "mcp_list_tools",
+        "tool_search_call",
+        "tool_search_output",
+        "additional_tools",
+    }
+)
+
+# Responses items whose user data sits in a known structured field (a typed
+# command/action, a patch diff, search queries and results, interpreter code
+# and logs). Every listed field is walked leaf by leaf.
+_RESPONSES_DATA_FIELDS: dict[str, tuple[str, ...]] = {
+    "computer_call": ("action", "actions"),
+    "local_shell_call": ("action",),
+    "shell_call": ("action",),
+    "web_search_call": ("action",),
+    "apply_patch_call": ("operation",),
+    "file_search_call": ("queries", "results"),
+    "code_interpreter_call": ("code", "outputs"),
+    "program": ("code",),
+    "program_output": ("result",),
+}
+
+# Content/output parts whose payload is binary (base64 or a file id), not text:
+# scrubbing them would corrupt the payload without removing anything a text
+# detector could find, so the whole part is relayed whole.
+_BINARY_PART_TYPES = frozenset(
+    {
+        "input_image",
+        "input_file",
+        "input_audio",
+        "image",
+        "output_image",
+        "computer_screenshot",
+    }
+)
+
+# Text-bearing fields on an unknown Responses item shape (e.g. an mcp_call
+# carries both `arguments` and `output`): every one is scanned, not just the
+# first, so a second field is never left raw.
+_GENERIC_TEXT_FIELDS = ("output", "arguments", "input", "text", "reason")
 
 
 def _obj_get(obj: Any, key: str) -> Any:
@@ -175,63 +237,214 @@ class PrivaiteGuardrail(CustomGuardrail):
             self._engine_key = key
             return engine
 
-    # Text-bearing fields on non-message Responses input items: a tool output, a
-    # streamed/echoed tool call, and a bare input_text/output_text content part.
-    # Scanned individually so a mixed input list is not left raw.
-    _ITEM_TEXT_FIELDS = ("output", "arguments", "text")
-
-    def _overwrite_snapshot_input(self, data: dict, new_input: Any) -> None:
-        # A plain `data["input"] = ...` rebind leaks for string input: the proxy
-        # snapshots the request body by shallow-copying data before this hook,
-        # so the original string stays in proxy_server_request.body["input"].
-        # Overwrite the snapshot copy too. (List inputs are mutated in place, so
-        # the aliased snapshot already reflects the anonymized values.)
+    def _overwrite_snapshot_field(self, data: dict, field: str, new_value: Any) -> None:
+        # A plain `data[field] = ...` rebind leaks for a top-level string field
+        # (`input`, `suffix`, a string `prompt`): the proxy snapshots the request
+        # body by shallow-copying data before this hook, so the original string
+        # stays in proxy_server_request.body[field]. Overwrite the snapshot copy
+        # too. (Lists and dicts are mutated in place, so the aliased snapshot
+        # already reflects the anonymized values.)
         psr = data.get("proxy_server_request")
         body = psr.get("body") if isinstance(psr, dict) else None
-        if isinstance(body, dict) and "input" in body:
-            body["input"] = new_input
+        if isinstance(body, dict) and field in body:
+            body[field] = new_value
 
-    def _responses_item_repr(self, item: Any) -> tuple:
-        """Map ONE Responses `input` list item to (engine_message, field) so it
-        can be scanned. field=None means the item IS a message (replace it whole
-        with the anonymized copy); a field name means write the scrubbed content
-        back into item[field]; "__str__" means the item is a bare string. Returns
-        (None, None) for a shape with no scannable text."""
+    @staticmethod
+    def _make_setter(container: Any, key: Any) -> Callable[[str], None]:
+        """A write-back that drops the scrubbed string into container[key]. The
+        container (a list slot or a dict field) is aliased by the proxy's shallow
+        body snapshot, so the in-place write lands in the snapshot too."""
+
+        def _set(value: str) -> None:
+            container[key] = value
+
+        return _set
+
+    def _toplevel_setter(self, data: dict, field: str) -> Callable[[str], None]:
+        """A write-back for a top-level string field that also overwrites the
+        detached body snapshot copy (see _overwrite_snapshot_field)."""
+
+        def _set(value: str) -> None:
+            data[field] = value
+            self._overwrite_snapshot_field(data, field, value)
+
+        return _set
+
+    def _add_leaf(self, batch: list, setters: list, text: Any, setter: Callable[[str], None]) -> None:
+        """Register one non-empty string leaf: a pseudo-message carrying it (so it
+        flows through the engine's single choke point exactly like chat content,
+        block gate included) plus the write-back that restores the scrubbed value."""
+        if isinstance(text, str) and text:
+            batch.append({"role": "user", "content": text})
+            setters.append(setter)
+
+    def _collect_content(self, batch: list, setters: list, content: Any, setter: Callable[[str], None]) -> None:
+        """A role-message `content`: a bare string, or a list of parts whose
+        `text`/`refusal` fields carry user text (a bare string in the list is
+        user text too). Binary parts carry nothing a text detector can find."""
+        if isinstance(content, str):
+            self._add_leaf(batch, setters, content, setter)
+            return
+        if not isinstance(content, list):
+            return
+        for idx, part in enumerate(content):
+            if isinstance(part, str):
+                self._add_leaf(batch, setters, part, self._make_setter(content, idx))
+            elif isinstance(part, dict) and part.get("type") not in _BINARY_PART_TYPES:
+                for field in ("text", "refusal"):
+                    self._add_leaf(batch, setters, part.get(field), self._make_setter(part, field))
+
+    def _collect_data_value(self, batch: list, setters: list, value: Any, setter: Callable[[str], None]) -> None:
+        """Walk a tool payload (a string, a list of parts, or arbitrary nested
+        JSON) registering every string leaf, but relay binary parts whole. Object
+        keys are never scanned, matching the documented boundary."""
+        if isinstance(value, str):
+            self._add_leaf(batch, setters, value, setter)
+            return
+        if isinstance(value, list):
+            for idx, part in enumerate(value):
+                self._collect_data_value(batch, setters, part, self._make_setter(value, idx))
+            return
+        if isinstance(value, dict) and value.get("type") not in _BINARY_PART_TYPES:
+            for key, sub in value.items():
+                self._collect_data_value(batch, setters, sub, self._make_setter(value, key))
+
+    def _collect_responses_item(self, batch: list, setters: list, container: list, idx: int, item: Any) -> None:
+        """Register the scannable text on ONE Responses `input` list item, by its
+        shape (bare string, role message, typed tool call/output, or an unknown
+        shape scanned field by field). Opaque/binary items are relayed whole."""
         if isinstance(item, str):
-            return ({"role": "user", "content": item}, "__str__") if item else (None, None)
-        if isinstance(item, dict):
-            if "role" in item:
-                # A message item; the engine scans its content natively.
-                return item, None
-            for field in self._ITEM_TEXT_FIELDS:
-                if isinstance(item.get(field), str) and item[field]:
-                    return {"role": "user", "content": item[field]}, field
-            if isinstance(item.get("content"), (str, list)) and item["content"]:
-                return {"role": "user", "content": item["content"]}, "content"
-        return None, None
+            self._add_leaf(batch, setters, item, self._make_setter(container, idx))
+            return
+        if not isinstance(item, dict):
+            return
+        if "role" in item and "content" in item:
+            self._collect_content(batch, setters, item["content"], self._make_setter(item, "content"))
+            return
+        itype = item.get("type") or ""
+        if itype in _RESPONSES_OPAQUE_TYPES:
+            return
+        if not self._collect_typed_item(batch, setters, item, itype):
+            self._collect_generic_item(batch, setters, item)
 
-    async def _anonymize_request(self, data: dict, engine: Any) -> Any:
-        """Anonymize chat `messages` AND Responses `input` in place using the
-        engine (span-precise), sharing ONE mapping. Every Responses input item is
-        scanned item by item (message, tool output, tool call, bare string), so a
-        mixed input list no longer slips past detection and the block gate.
-        Returns the mapping, or None if there was nothing to anonymize."""
-        messages = data.get("messages")
-        msg_list = messages if isinstance(messages, list) else []
-        batch: list = list(msg_list)
+    def _collect_typed_item(self, batch: list, setters: list, item: dict, itype: str) -> bool:
+        """Register the text on an item whose user data sits in a type-specific
+        field; returns False to hand an unknown shape to the generic scan. Covers
+        function_call/custom_tool_call, the typed action carriers, and every
+        `*_output` tool output (whose `output` can be a list of {type, text}
+        parts, not just a string)."""
+        if itype == "function_call" and isinstance(item.get("arguments"), str):
+            self._add_leaf(batch, setters, item["arguments"], self._make_setter(item, "arguments"))
+            return True
+        if itype == "custom_tool_call" and isinstance(item.get("input"), str):
+            self._add_leaf(batch, setters, item["input"], self._make_setter(item, "input"))
+            return True
+        fields = _RESPONSES_DATA_FIELDS.get(itype)
+        if fields is not None:
+            for field in fields:
+                if item.get(field) is not None:
+                    self._collect_data_value(batch, setters, item[field], self._make_setter(item, field))
+            return True
+        if itype.endswith("_output") and "output" in item:
+            self._collect_data_value(batch, setters, item["output"], self._make_setter(item, "output"))
+            return True
+        return False
 
+    def _collect_generic_item(self, batch: list, setters: list, item: dict) -> None:
+        """Fallback scan for an unknown item shape: every known text-bearing field
+        plus a role-less `content`, so a second field is never left raw."""
+        for field in _GENERIC_TEXT_FIELDS:
+            self._add_leaf(batch, setters, item.get(field), self._make_setter(item, field))
+        if isinstance(item.get("content"), (str, list)):
+            self._collect_content(batch, setters, item["content"], self._make_setter(item, "content"))
+
+    def _collect_responses_input(self, data: dict, batch: list, setters: list) -> None:
         input_value = data.get("input")
-        targets: list = []  # (index_or_"str", field) describing each write-back
         if isinstance(input_value, str) and input_value:
-            batch.append({"role": "user", "content": input_value})
-            targets.append(("str", None))
+            self._add_leaf(batch, setters, input_value, self._toplevel_setter(data, "input"))
         elif isinstance(input_value, list):
             for idx, item in enumerate(input_value):
-                rep, field = self._responses_item_repr(item)
-                if rep is None:
-                    continue  # no scannable text on this item shape
-                batch.append(rep)
-                targets.append((idx, field))
+                self._collect_responses_item(batch, setters, input_value, idx, item)
+
+    @staticmethod
+    def _prompt_variables(data: dict) -> dict | None:
+        """Responses prompt-template variables carry user data (the template
+        id/version do not). None when there are no scannable variables;
+        /v1/completions sends `prompt` as a string, which is not this surface."""
+        prompt = data.get("prompt")
+        if isinstance(prompt, dict) and isinstance(prompt.get("variables"), dict):
+            return prompt["variables"]
+        return None
+
+    @staticmethod
+    def _has_aux_fields(data: dict) -> bool:
+        """True when the request carries one of the auxiliary text fields scanned
+        by _collect_aux_fields; keeps the pre-call early return from skipping a
+        request whose only user text sits in those fields."""
+        prediction = data.get("prediction")
+        if isinstance(prediction, dict) and "content" in prediction:
+            return True
+        web_search = data.get("web_search_options")
+        if isinstance(web_search, dict) and "user_location" in web_search:
+            return True
+        suffix = data.get("suffix")
+        if isinstance(suffix, str) and suffix:
+            return True
+        # /v1/completions user text: a string prompt or the batch list shape.
+        # (A dict prompt is the Responses template, handled by _prompt_variables.)
+        prompt = data.get("prompt")
+        return isinstance(prompt, (str, list)) and bool(prompt)
+
+    def _collect_prompt_variables(self, data: dict, batch: list, setters: list) -> None:
+        variables = self._prompt_variables(data)
+        if variables is None:
+            return
+        for key, value in variables.items():
+            self._collect_data_value(batch, setters, value, self._make_setter(variables, key))
+
+    def _collect_aux_fields(self, data: dict, batch: list, setters: list) -> None:
+        """The request-side text fields outside messages/input that LiteLLM
+        forwards verbatim (core parity): chat `prediction.content`,
+        `web_search_options.user_location`, and the completions `prompt` (string
+        or batch list) and `suffix`. Request inputs only, nothing to restore."""
+        prediction = data.get("prediction")
+        if isinstance(prediction, dict) and prediction.get("content") is not None:
+            self._collect_data_value(batch, setters, prediction["content"], self._make_setter(prediction, "content"))
+        web_search = data.get("web_search_options")
+        if isinstance(web_search, dict) and web_search.get("user_location") is not None:
+            self._collect_data_value(
+                batch, setters, web_search["user_location"], self._make_setter(web_search, "user_location")
+            )
+        suffix = data.get("suffix")
+        if isinstance(suffix, str) and suffix:
+            self._add_leaf(batch, setters, suffix, self._toplevel_setter(data, "suffix"))
+        prompt = data.get("prompt")
+        if isinstance(prompt, str) and prompt:
+            self._add_leaf(batch, setters, prompt, self._toplevel_setter(data, "prompt"))
+        elif isinstance(prompt, list):
+            # The batch shape: string leaves are scrubbed, a tokenized
+            # (integer-array) prompt passes through unscanned as documented.
+            for idx, part in enumerate(prompt):
+                self._add_leaf(batch, setters, part, self._make_setter(prompt, idx))
+
+    async def _anonymize_request(self, data: dict, engine: Any) -> Any:
+        """Anonymize every scanned request surface in place under ONE shared
+        mapping (chat `messages`, the Responses `input` and `prompt.variables`,
+        and the auxiliary prompt/suffix/prediction/user_location fields), so no
+        source is left untouched when a crafted request carries several. Every
+        scanned string flows through the engine's single choke point, so the block
+        gate and the fail-closed policy apply unchanged. Returns the mapping, or
+        None if there was nothing to anonymize."""
+        messages = data.get("messages")
+        msg_list = messages if isinstance(messages, list) else []
+        # Chat messages are scanned natively (multimodal content, bare-string
+        # lists, per-message block gate); everything else is registered as string
+        # leaves appended after them, sharing this one process_request pass.
+        batch: list = list(msg_list)
+        setters: list = []
+        self._collect_responses_input(data, batch, setters)
+        self._collect_prompt_variables(data, batch, setters)
+        self._collect_aux_fields(data, batch, setters)
 
         if not batch:
             return None
@@ -242,25 +455,8 @@ class PrivaiteGuardrail(CustomGuardrail):
         if msg_list:
             # msg_list is data["messages"] (same object) -> mutate it in place.
             msg_list[:] = anonymized[:n]
-
-        for (target, field), anon in zip(targets, anonymized[n:]):
-            if target == "str":
-                new_text = anon.get("content", input_value)
-                data["input"] = new_text
-                self._overwrite_snapshot_input(data, new_text)
-                continue
-            # every non-"str" target came from the isinstance(input_value, list)
-            # branch above, so input_value is a list here.
-            if not isinstance(input_value, list):
-                continue
-            if field is None:
-                input_value[target] = anon
-            elif field == "__str__":
-                input_value[target] = anon.get("content", input_value[target])
-            else:
-                new_item = dict(input_value[target])
-                new_item[field] = anon.get("content", new_item[field])
-                input_value[target] = new_item
+        for setter, anon in zip(setters, anonymized[n:]):
+            setter(anon.get("content", ""))
         return mapping
 
     async def async_pre_call_hook(self, user_api_key_dict: Any, cache: Any, data: dict, call_type: str) -> dict:
@@ -272,7 +468,12 @@ class PrivaiteGuardrail(CustomGuardrail):
         if isinstance(metadata, dict):
             metadata.pop("privaite_map", None)
 
-        if not data.get("messages") and not data.get("input"):
+        if (
+            not data.get("messages")
+            and not data.get("input")
+            and self._prompt_variables(data) is None
+            and not self._has_aux_fields(data)
+        ):
             return data
 
         engine = await self._engine_for(self._languages())
@@ -297,16 +498,30 @@ class PrivaiteGuardrail(CustomGuardrail):
             data.setdefault("metadata", {})["privaite_map"] = dict(mapping.get_all_fakes())
         return data
 
+    async def _restore_audio_transcript(self, message: Any, engine: Any, mapping: Any) -> None:
+        """Restore the audio transcript on a response message (restore parity with
+        the core: an audio reply carries its text in audio.transcript, where the
+        model echoes placeholders like anywhere else)."""
+        audio = getattr(message, "audio", None)
+        if audio is None:
+            return
+        transcript = _obj_get(audio, "transcript")
+        if isinstance(transcript, str) and transcript:
+            _obj_set(audio, "transcript", await engine.process_response(transcript, mapping))
+
     async def _restore_message(self, message: Any, engine: Any, mapping: Any) -> None:
         """Restore originals in one response message: content, the reasoning
-        trace, tool-call args and the legacy function_call args."""
+        trace, the refusal, the audio transcript, tool-call args and the legacy
+        function_call args."""
         content = getattr(message, "content", None)
         if isinstance(content, str) and content:
             message.content = await engine.process_response(content, mapping)
-        for field in ("reasoning_content", "reasoning"):
+        # A refusal can quote the request, so it carries placeholders too.
+        for field in ("reasoning_content", "reasoning", "refusal"):
             value = getattr(message, field, None)
             if isinstance(value, str) and value:
                 setattr(message, field, await engine.process_response(value, mapping))
+        await self._restore_audio_transcript(message, engine, mapping)
         for tool_call in getattr(message, "tool_calls", None) or []:
             fn = getattr(tool_call, "function", None)
             if fn is None:
@@ -356,10 +571,26 @@ class PrivaiteGuardrail(CustomGuardrail):
         await self._restore_responses_output(response, engine, mapping)
         return response
 
-    def _restore_delta(self, delta: Any, index: int, finished: bool, restore) -> None:
-        """Restore one streamed delta in place: text content, the reasoning
-        trace, streamed tool-call argument fragments (per tool_call index) and
-        the legacy function_call."""
+    def _restore_delta_audio(self, delta: Any, index: int, finished: bool, restore: Any) -> None:
+        """Feed streamed audio transcript fragments through their own restore
+        buffer and flush the held tail on the finish chunk, creating the audio
+        carrier when the finish delta has none so the tail is never dropped."""
+        audio = getattr(delta, "audio", None)
+        fragment = _obj_get(audio, "transcript") if audio is not None else None
+        if not isinstance(fragment, str):
+            fragment = ""
+        if not fragment and not finished:
+            return
+        restored = restore(("audio", index), fragment, finished)
+        if audio is not None:
+            _obj_set(audio, "transcript", restored)
+        elif restored:
+            _obj_set(delta, "audio", {"transcript": restored})
+
+    def _restore_delta(self, delta: Any, index: int, finished: bool, restore: Any) -> None:
+        """Restore one streamed delta in place: text content, the reasoning trace,
+        the refusal, the audio transcript, streamed tool-call argument fragments
+        (per tool_call index) and the legacy function_call."""
         content = getattr(delta, "content", None) or ""
         restored = restore(("content", index), content, finished)
         # Overwrite whenever there was input text (even if the whole fragment is
@@ -368,10 +599,12 @@ class PrivaiteGuardrail(CustomGuardrail):
         # keeps its None instead of becoming "".
         if content or restored:
             delta.content = restored
-        for field in ("reasoning_content", "reasoning"):
+        # A refusal can quote the request, so it carries placeholders too.
+        for field in ("reasoning_content", "reasoning", "refusal"):
             value = getattr(delta, field, None)
             if isinstance(value, str) and (value or finished):
                 setattr(delta, field, restore((field, index), value, finished))
+        self._restore_delta_audio(delta, index, finished, restore)
         for tool_call in getattr(delta, "tool_calls", None) or []:
             fn = getattr(tool_call, "function", None)
             if fn is None:
