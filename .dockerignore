@@ -51,7 +51,7 @@ build/
 **/node_modules
 ui/litellm-dashboard/.next
 ui/litellm-dashboard/out
-litellm-rust/target/
+src/litellm-rust/target/
 litellm/rust_bridge/_native*.so
 *.log
 .env

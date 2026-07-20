@@ -3,7 +3,7 @@ name: LiteLLM Rust
 on:
   push:
     paths:
-      - "litellm-rust/**"
+      - "src/litellm-rust/**"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -12,7 +12,7 @@ on:
       - litellm_oss_staging
       - "litellm_**"
     paths:
-      - "litellm-rust/**"
+      - "src/litellm-rust/**"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: litellm-rust
+        working-directory: src/litellm-rust
     env:
       CARGO_TERM_COLOR: always
 
@@ -50,8 +50,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            litellm-rust/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('litellm-rust/Cargo.lock') }}
+            src/litellm-rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src/litellm-rust/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
