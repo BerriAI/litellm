@@ -239,6 +239,61 @@ def test_create_request_missing_model_raises(config):
         )
 
 
+def test_create_request_signs_with_credentials_from_litellm_params(config):
+    """Regression: the proxy's model-based routing forwards deployment AWS
+    credentials via ``litellm_params`` while ``base_llm_http_handler.create_batch``
+    calls this transform with ``optional_params={}``. The signer reads credentials
+    from ``optional_params``, so unless the transform merges ``litellm_params`` in,
+    boto3 sees no keys and raises "Unable to locate credentials"; region resolution
+    also has to see ``aws_region_name`` from ``litellm_params``."""
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "aws_access_key_id": "AKIA-DEPLOYMENT",
+                "aws_secret_access_key": "secret-deployment",
+                "aws_region_name": "ap-south-1",
+            },
+        )
+    signing_params = mock_sign.call_args.kwargs["optional_params"]
+    assert signing_params["aws_access_key_id"] == "AKIA-DEPLOYMENT"
+    assert signing_params["aws_secret_access_key"] == "secret-deployment"
+    assert mock_sign.call_args.kwargs["endpoint_url"] == (
+        "https://bedrock.ap-south-1.amazonaws.com/model-invocation-job"
+    )
+
+
+def test_create_request_optional_params_win_over_litellm_params_for_signing(config):
+    """Per-request ``optional_params`` must override deployment ``litellm_params``
+    when both carry the same credential field."""
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={"aws_region_name": "us-west-2"},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "aws_region_name": "ap-south-1",
+            },
+        )
+    assert mock_sign.call_args.kwargs["endpoint_url"] == (
+        "https://bedrock.us-west-2.amazonaws.com/model-invocation-job"
+    )
+
+
 def test_create_request_no_timeout_for_non_24h_window(config):
     with patch.object(
         config.common_utils,

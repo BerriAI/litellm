@@ -75,8 +75,6 @@ class Provider:
                     aws_region_name="os.environ/AWS_REGION",
                     s3_region_name="os.environ/AWS_REGION",
                     s3_bucket_name=_env_ref("AWS_BATCH_S3_BUCKET", "AWS_S3_BUCKET_NAME"),
-                    s3_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
-                    s3_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                     aws_batch_role_arn="os.environ/AWS_BATCH_ROLE_ARN",
                 )
             case _:

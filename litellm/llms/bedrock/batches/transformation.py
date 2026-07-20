@@ -211,14 +211,15 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         # For Bedrock, we need to return a pre-signed request with AWS auth headers
         # Use common utility for AWS signing
+        signing_params = {**litellm_params, **optional_params}
         endpoint_url = (
-            f"https://bedrock.{self._get_aws_region_name(optional_params, model)}.amazonaws.com/model-invocation-job"
+            f"https://bedrock.{self._get_aws_region_name(signing_params, model)}.amazonaws.com/model-invocation-job"
         )
         signed_headers, signed_data = self.common_utils.sign_aws_request(
             service_name="bedrock",
             data=bedrock_request,
             endpoint_url=endpoint_url,
-            optional_params=optional_params,
+            optional_params=signing_params,
             method="POST",
         )
 

@@ -8638,6 +8638,8 @@ class Router:
         else:
             credentials["custom_llm_provider"] = "openai"  # default
 
+        credentials["model"] = deployment.litellm_params.model
+
         return credentials
 
     @overload
