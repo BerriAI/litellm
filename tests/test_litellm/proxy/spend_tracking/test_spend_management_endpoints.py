@@ -1467,6 +1467,59 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+@pytest.mark.parametrize(
+    "page_size, expected_status, expected_rows",
+    [
+        (1000, 200, 1000),
+        (1001, 422, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_page_size_upper_bound(
+    client, monkeypatch, page_size, expected_status, expected_rows
+):
+    mock_spend_logs = [
+        {
+            "id": f"log{i}",
+            "request_id": f"req{i}",
+            "api_key": "sk-test-key",
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        }
+        for i in range(1200)
+    ]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, lambda where: mock_spend_logs),
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/v2",
+            params={
+                "page": 1,
+                "page_size": page_size,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == expected_status
+        if expected_status == 200:
+            data = response.json()
+            assert data["page_size"] == page_size
+            assert len(data["data"]) == expected_rows
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 @pytest.mark.asyncio
 async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
     mock_spend_logs = [

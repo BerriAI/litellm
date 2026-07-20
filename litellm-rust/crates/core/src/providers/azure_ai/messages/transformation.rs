@@ -5,7 +5,7 @@ use crate::messages::types::{
     MessageContent, SystemPrompt,
 };
 use crate::providers::anthropic::messages::transformation::{
-    non_empty, AnthropicMessagesConfig, ANTHROPIC_MESSAGES_CONFIG,
+    ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
 };
 use serde_json::{Map, Value};
 

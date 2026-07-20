@@ -184,7 +184,12 @@ class ClientCredentialsConfig(BaseModel):
 
     Fields are optional so the config can be built incomplete: a value may be supplied at
     runtime (`token_url` via RFC 8414 discovery, `client_id`/`secret` via DCR), and the
-    resolver arm raises `CredError.misconfigured` when a needed field is still absent.
+    resolver arm returns `CredError.misconfigured` when a needed field is still absent.
+
+    `audience` is the IdP-specific audience parameter some authorization servers require on
+    the client_credentials grant (sent as `audience` in the token request when set).
+    `token_endpoint_auth_method` selects how the client authenticates to the token endpoint
+    (RFC 6749 section 2.3.1); `None` defaults to `client_secret_post`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -193,6 +198,8 @@ class ClientCredentialsConfig(BaseModel):
     client_secret: SecretStr | None = None
     token_url: str | None = None
     scopes: tuple[str, ...] = ()
+    audience: str | None = None
+    token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
 
 
 class TokenExchangeConfig(BaseModel):

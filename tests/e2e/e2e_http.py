@@ -250,10 +250,32 @@ def delete[R: BaseModel](
     headers: BaseModel,
     json: BaseModel,
     response_type: type[R],
+    params: BaseModel | None = None,
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
         resp = requests.delete(
+            str(url),
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            params=_params(params),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
+
+
+def patch[R: BaseModel](
+    url: URL,
+    *,
+    headers: BaseModel,
+    json: BaseModel,
+    response_type: type[R],
+    timeout: float = 30.0,
+) -> Result[R]:
+    try:
+        resp = requests.patch(
             str(url),
             headers=_headers(headers),
             json=json.model_dump(by_alias=True, exclude_none=True),
