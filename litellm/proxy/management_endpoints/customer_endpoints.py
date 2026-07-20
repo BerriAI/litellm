@@ -43,6 +43,15 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 
 router = APIRouter()
 
+_CUSTOMER_UPDATE_ZERO_ALLOWED_BUDGET_FIELDS = frozenset(
+    {
+        "soft_budget",
+        "max_parallel_requests",
+        "tpm_limit",
+        "rpm_limit",
+    }
+)
+
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
     """Validate a raw end-user DB row into the typed customer response.
@@ -551,14 +560,16 @@ async def update_end_user(
             raise Exception("Not connected to DB!")
 
         # get non default values for key
+        explicit_fields = data.fields_set()
         non_default_values = {}
         for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
-            ):  # models default to [], spend defaults to 0, we should not reset these values
-                non_default_values[k] = v
+            if v is None:
+                continue
+            if v in ([], {}, 0):
+                if k in _CUSTOMER_UPDATE_ZERO_ALLOWED_BUDGET_FIELDS and k in explicit_fields:
+                    non_default_values[k] = v
+                continue
+            non_default_values[k] = v
 
         ## Get end user table data ##
         end_user_table_data = await EndUserRepository(prisma_client).table.find_first(

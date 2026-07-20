@@ -402,3 +402,105 @@ async def test_update_customer_creates_budget_with_duration_and_reset_at(
     assert creation_data["max_budget"] == 50.0
     assert creation_data["budget_duration"] == "1mo"
     assert creation_data["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_persists_soft_budget_zero(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Regression: explicit soft_budget=0 must reach the budget row. The default
+    non_default_values filter treats 0 as unset for spend fields, but
+    /budget/update accepts non-negative soft budgets including zero.
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-soft-budget-zero@example.com",
+        "blocked": False,
+        "litellm_budget_table": None,
+    }
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+
+    mock_created_budget = MagicMock()
+    mock_created_budget.budget_id = "budget-soft-zero"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_created_budget
+    )
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {
+        "user_id": "test-soft-budget-zero@example.com",
+        "blocked": False,
+        "budget_id": "budget-soft-zero",
+    }
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-soft-budget-zero@example.com",
+        max_budget=50.0,
+        soft_budget=0,
+    )
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    creation_data = mock_prisma_client.db.litellm_budgettable.create.call_args[1]["data"]
+    assert creation_data["soft_budget"] == 0
+    assert creation_data["max_budget"] == 50.0
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_updates_existing_budget_with_duration_and_reset_at(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Regression for #33941: when /customer/update updates an existing linked
+    budget, budget_duration must be persisted and budget_reset_at computed.
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "litellm_budget_table": {
+            "budget_id": "existing-budget-123",
+            "max_budget": 100.0,
+        },
+    }
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock(
+        return_value=MagicMock(budget_id="existing-budget-123")
+    )
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "budget_id": "existing-budget-123",
+    }
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-bug-repro@example.com",
+        budget_duration="1mo",
+    )
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.update.assert_called_once()
+    update_data = mock_prisma_client.db.litellm_budgettable.update.call_args[1]["data"]
+    assert update_data["budget_duration"] == "1mo"
+    assert update_data["budget_reset_at"] is not None
+    assert not mock_prisma_client.db.litellm_budgettable.create.called
