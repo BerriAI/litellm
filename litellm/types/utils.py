@@ -152,6 +152,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
+    supports_anthropic_thinking_payload: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
     bedrock_converse_supports_strict_tools: Optional[bool]
 
