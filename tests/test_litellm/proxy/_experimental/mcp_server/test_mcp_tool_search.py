@@ -111,6 +111,60 @@ class TestSearchTools:
             assert "description" in tool
             assert "inputSchema" in tool
 
+    def test_exact_word_outranks_prefix_false_positive(self) -> None:
+        tools = _make_tools(
+            [
+                ("address-lookup", "Look up a contact in the address book"),
+                ("math-add", "Add two numbers together"),
+            ]
+        )
+        results = search_tools("add", tools)
+        assert results[0]["name"] == "math-add"
+
+    def test_name_match_outranks_description_match(self) -> None:
+        tools = _make_tools(
+            [
+                ("files-list", "Search the file index"),
+                ("code-search", "Find matches in the repository"),
+            ]
+        )
+        results = search_tools("search", tools)
+        assert results[0]["name"] == "code-search"
+
+    def test_rare_token_outranks_common_token(self) -> None:
+        tools = _make_tools(
+            [
+                ("files-list", "List all files"),
+                ("repos-list", "List repositories"),
+                ("channels-list", "List channels"),
+                ("email-send", "Send an email message"),
+            ]
+        )
+        results = search_tools("list email", tools)
+        assert results[0]["name"] == "email-send"
+
+    def test_tie_break_is_deterministic_by_name(self) -> None:
+        specs = [
+            ("b-tool", "Fetch the weather"),
+            ("a-tool", "Fetch the weather"),
+        ]
+        forward = [t["name"] for t in search_tools("weather", _make_tools(specs))]
+        reverse = [t["name"] for t in search_tools("weather", _make_tools(specs[::-1]))]
+        assert forward == reverse == ["a-tool", "b-tool"]
+
+    def test_hyphen_and_underscore_are_token_boundaries(self) -> None:
+        results = search_tools("create_issue", SAMPLE_TOOLS)
+        assert results[0]["name"] == "github-create_issue"
+
+    def test_non_positive_top_k_returns_empty(self) -> None:
+        assert search_tools("github", SAMPLE_TOOLS, top_k=0) == []
+        assert search_tools("github", SAMPLE_TOOLS, top_k=-1) == []
+
+    def test_repeated_query_token_not_double_counted(self) -> None:
+        single = [t["name"] for t in search_tools("github issue", SAMPLE_TOOLS)]
+        repeated = [t["name"] for t in search_tools("github github issue", SAMPLE_TOOLS)]
+        assert single == repeated
+
 
 class TestGetVirtualToolDefinitions:
     def test_returns_two_tools(self) -> None:

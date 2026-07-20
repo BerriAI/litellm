@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -13,6 +15,12 @@ if TYPE_CHECKING:
 MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
 MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
 
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_BM25_K1 = 1.5
+_BM25_B = 0.75
+_NAME_WEIGHT = 3.0
+_PREFIX_WEIGHT = 0.3
+
 
 def coerce_top_k(value: Any, default: int = 5) -> int:
     try:
@@ -21,17 +29,47 @@ def coerce_top_k(value: Any, default: int = 5) -> int:
         return default
 
 
+def _tokenize(text: str) -> tuple[str, ...]:
+    return tuple(_TOKEN_RE.findall(text.lower()))
+
+
+def _field_tf(query_token: str, field_tokens: tuple[str, ...]) -> float:
+    return sum(
+        1.0 if token == query_token else _PREFIX_WEIGHT if token.startswith(query_token) else 0.0
+        for token in field_tokens
+    )
+
+
 def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
-    if not query:
+    query_tokens = tuple(dict.fromkeys(_tokenize(query)))
+    if not query_tokens or not tools or top_k <= 0:
         return []
-    tokens = query.lower().split()
+    docs = tuple(
+        (tool, _tokenize(str(tool.get("name", ""))), _tokenize(str(tool.get("description") or ""))) for tool in tools
+    )
+    tf_rows = tuple(
+        tuple(_NAME_WEIGHT * _field_tf(token, name_tokens) + _field_tf(token, desc_tokens) for token in query_tokens)
+        for _, name_tokens, desc_tokens in docs
+    )
+    doc_lengths = tuple(_NAME_WEIGHT * len(name_tokens) + len(desc_tokens) for _, name_tokens, desc_tokens in docs)
+    avg_doc_length = (sum(doc_lengths) / len(doc_lengths)) or 1.0
+    doc_count = len(docs)
+    idfs = tuple(
+        math.log(1.0 + (doc_count - df + 0.5) / (df + 0.5))
+        for df in (sum(1 for row in tf_rows if row[i] > 0.0) for i in range(len(query_tokens)))
+    )
 
-    def _score(tool: dict[str, Any]) -> int:
-        haystack = (tool.get("name", "") + " " + tool.get("description", "")).lower()
-        return sum(1 for t in tokens if t in haystack)
+    def _bm25(row: tuple[float, ...], doc_length: float) -> float:
+        norm = _BM25_K1 * (1.0 - _BM25_B + _BM25_B * doc_length / avg_doc_length)
+        return sum(idf * tf * (_BM25_K1 + 1.0) / (tf + norm) for idf, tf in zip(idfs, row) if tf > 0.0)
 
-    scored = ((s, tool) for tool in tools if (s := _score(tool)) > 0)
-    return [tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]]
+    scored = tuple(
+        (score, tool)
+        for (tool, _, _), row, doc_length in zip(docs, tf_rows, doc_lengths)
+        if (score := _bm25(row, doc_length)) > 0.0
+    )
+    ranked = sorted(scored, key=lambda item: (-item[0], str(item[1].get("name", ""))))
+    return [tool for _, tool in ranked[:top_k]]
 
 
 def get_virtual_tool_definitions() -> list[dict[str, Any]]:
