@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import Any, Coroutine, List, Optional, Union
 
 import httpx
 
@@ -85,6 +85,29 @@ class CloudflareChatConfig(OpenAIGPTConfig):
             api_key=api_key,
             api_base=api_base,
         )
+
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: bool = False,
+    ) -> Union[List[AllMessageValues], "Coroutine[Any, Any, List[AllMessageValues]]"]:
+        """
+        Cloudflare Workers AI expects message content as a plain string.
+        Flatten OpenAI content-part arrays to a single joined string before
+        passing to the parent transformer.
+        """
+        flattened = []
+        for message in messages:
+            if isinstance(message.get("content"), list):
+                text_parts = [
+                    part.get("text", "")
+                    for part in message["content"]
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ]
+                message = {**message, "content": "\n\n".join(text_parts)}
+            flattened.append(message)
+        return super()._transform_messages(flattened, model, is_async)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

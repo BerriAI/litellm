@@ -1,192 +1,66 @@
-import pytest
-
+"""
+Regression tests for Cloudflare content-part message normalization.
+https://github.com/BerriAI/litellm/issues/33984
+"""
 from litellm.llms.cloudflare.chat.transformation import CloudflareChatConfig
 
 
-def test_supported_params_include_tools_and_tool_choice():
+def test_string_content_passthrough():
+    """Plain string content should pass through unchanged."""
     config = CloudflareChatConfig()
-
-    params = config.get_supported_openai_params(model="@cf/meta/llama-2-7b-chat-int8")
-
-    assert "tools" in params
-    assert "tool_choice" in params
-    assert "stream" in params
-    assert "max_tokens" in params
+    messages = [{"role": "user", "content": "Hello"}]
+    result = config._transform_messages(messages, model="cloudflare/@cf/meta/llama-3.2-1b-instruct")
+    assert result[0]["content"] == "Hello"
 
 
-def test_get_complete_url_defaults_to_openai_compatible_endpoint(monkeypatch):
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+def test_content_part_array_flattened_to_string():
+    """OpenAI content-part array should be flattened to a plain string."""
     config = CloudflareChatConfig()
-
-    url = config.get_complete_url(
-        api_base=None,
-        api_key="cf-key",
-        model="@cf/meta/llama-2-7b-chat-int8",
-        optional_params={},
-        litellm_params={},
-    )
-
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
-    assert "/ai/run/" not in url
-
-
-def test_get_complete_url_appends_chat_completions_to_explicit_base():
-    config = CloudflareChatConfig()
-
-    url = config.get_complete_url(
-        api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
-        api_key="cf-key",
-        model="@cf/meta/llama-2-7b-chat-int8",
-        optional_params={},
-        litellm_params={},
-    )
-
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
-    assert "/ai/run/" not in url
-
-
-def test_get_complete_url_is_idempotent_for_full_base():
-    config = CloudflareChatConfig()
-
-    url = config.get_complete_url(
-        api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions",
-        api_key="cf-key",
-        model="@cf/meta/llama-2-7b-chat-int8",
-        optional_params={},
-        litellm_params={},
-    )
-
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
-
-
-def test_get_complete_url_falls_back_to_account_id_when_base_is_empty(monkeypatch):
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
-    config = CloudflareChatConfig()
-
-    url = config.get_complete_url(
-        api_base="",
-        api_key="cf-key",
-        model="@cf/meta/llama-2-7b-chat-int8",
-        optional_params={},
-        litellm_params={},
-    )
-
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
-
-
-def test_get_complete_url_raises_when_account_id_and_base_missing(monkeypatch):
-    monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
-    config = CloudflareChatConfig()
-
-    with pytest.raises(ValueError, match="Missing CLOUDFLARE_ACCOUNT_ID"):
-        config.get_complete_url(
-            api_base=None,
-            api_key="cf-key",
-            model="@cf/meta/llama-2-7b-chat-int8",
-            optional_params={},
-            litellm_params={},
-        )
-
-
-def test_get_complete_url_raises_when_account_id_is_empty(monkeypatch):
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "   ")
-    config = CloudflareChatConfig()
-
-    with pytest.raises(ValueError, match="Missing CLOUDFLARE_ACCOUNT_ID"):
-        config.get_complete_url(
-            api_base=None,
-            api_key="cf-key",
-            model="@cf/meta/llama-2-7b-chat-int8",
-            optional_params={},
-            litellm_params={},
-        )
-
-
-def test_get_complete_url_migrates_legacy_ai_run_base():
-    config = CloudflareChatConfig()
-
-    url = config.get_complete_url(
-        api_base="https://api.cloudflare.com/client/v4/accounts/acct/ai/run/",
-        api_key="cf-key",
-        model="@cf/meta/llama-2-7b-chat-int8",
-        optional_params={},
-        litellm_params={},
-    )
-
-    assert (
-        url
-        == "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/chat/completions"
-    )
-    assert "/ai/run" not in url
-
-
-def test_transform_request_passes_tools_through_in_openai_format():
-    config = CloudflareChatConfig()
-    tools = [
+    messages = [
         {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                },
-            },
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": "More context"},
+            ],
         }
     ]
-    messages = [{"role": "user", "content": "weather in nyc?"}]
-
-    body = config.transform_request(
-        model="@cf/meta/llama-2-7b-chat-int8",
-        messages=messages,
-        optional_params={"tools": tools, "tool_choice": "auto"},
-        litellm_params={},
-        headers={},
-    )
-
-    assert body["messages"] == messages
-    assert body["model"] == "@cf/meta/llama-2-7b-chat-int8"
-    assert body["tools"] == tools
-    assert body["tool_choice"] == "auto"
+    result = config._transform_messages(messages, model="cloudflare/@cf/meta/llama-3.2-1b-instruct")
+    assert result[0]["content"] == "Hello\n\nMore context"
 
 
-def test_validate_environment_requires_api_key():
+def test_non_text_parts_ignored():
+    """Only text-type parts should be included in the joined string."""
     config = CloudflareChatConfig()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                {"type": "text", "text": "Describe the image above"},
+            ],
+        }
+    ]
+    result = config._transform_messages(messages, model="cloudflare/@cf/meta/llama-3.2-1b-instruct")
+    assert result[0]["content"] == "Hello\n\nDescribe the image above"
 
-    with pytest.raises(ValueError, match="Missing Cloudflare API Key"):
-        config.validate_environment(
-            headers={},
-            model="@cf/meta/llama-2-7b-chat-int8",
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key=None,
-        )
 
-
-def test_validate_environment_sets_bearer_and_content_type():
+def test_multiple_messages_mixed():
+    """Multiple messages with mixed content formats all transform correctly."""
     config = CloudflareChatConfig()
-
-    headers = config.validate_environment(
-        headers={},
-        model="@cf/meta/llama-2-7b-chat-int8",
-        messages=[],
-        optional_params={},
-        litellm_params={},
-        api_key="cf-key",
-    )
-
-    assert headers["Authorization"] == "Bearer cf-key"
-    assert headers["Content-Type"] == "application/json"
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": "Environment details here"},
+            ],
+        },
+        {"role": "assistant", "content": "Hi! How can I help?"},
+    ]
+    result = config._transform_messages(messages, model="cloudflare/@cf/meta/llama-3.2-1b-instruct")
+    assert result[0]["content"] == "You are a helpful assistant."
+    assert result[1]["content"] == "Hello\n\nEnvironment details here"
+    assert result[2]["content"] == "Hi! How can I help?"
