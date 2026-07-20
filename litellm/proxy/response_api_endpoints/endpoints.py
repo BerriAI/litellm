@@ -22,6 +22,8 @@ from litellm.types.responses.main import DeleteResponseResult
 
 router = APIRouter()
 
+_user_api_key_auth_dep = Depends(user_api_key_auth)
+
 
 @router.post(
     "/v1/responses",
@@ -281,6 +283,33 @@ async def responses_api(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
+@router.get(
+    "/cursor/models",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.get(
+    "/cursor/v1/models",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+async def cursor_model_list(
+    user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
+):
+    """
+    OpenAI-compatible model listing for the Cursor BYOK base URL.
+
+    Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+    verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+    route those requests fall through to the Cursor Cloud Agents passthrough, which
+    demands a Cursor API key and 401s, so key verification silently fails before any
+    chat request is ever sent. Delegates to the standard `/v1/models` handler.
+    """
+    from litellm.proxy.proxy_server import model_list
+
+    return await model_list(user_api_key_dict=user_api_key_dict)
 
 
 @router.post(

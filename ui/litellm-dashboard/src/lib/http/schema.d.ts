@@ -2645,6 +2645,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cursor/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cursor Model List
+         * @description OpenAI-compatible model listing for the Cursor BYOK base URL.
+         *
+         *     Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+         *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+         *     route those requests fall through to the Cursor Cloud Agents passthrough, which
+         *     demands a Cursor API key and 401s, so key verification silently fails before any
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         */
+        get: operations["cursor_model_list_cursor_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cursor Model List
+         * @description OpenAI-compatible model listing for the Cursor BYOK base URL.
+         *
+         *     Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+         *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+         *     route those requests fall through to the Cursor Cloud Agents passthrough, which
+         *     demands a Cursor API key and 401s, so key verification silently fails before any
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         */
+        get: operations["cursor_model_list_cursor_v1_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cursor/{endpoint}": {
         parameters: {
             query?: never;
@@ -37890,6 +37942,46 @@ export interface operations {
         };
     };
     cursor_chat_completions_cursor_chat_completions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    cursor_model_list_cursor_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    cursor_model_list_cursor_v1_models_get: {
         parameters: {
             query?: never;
             header?: never;

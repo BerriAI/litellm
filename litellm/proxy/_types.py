@@ -285,6 +285,8 @@ class LiteLLMRoutes(enum.Enum):
         "/chat/completions",
         "/v1/chat/completions",
         "/cursor/chat/completions",
+        "/cursor/models",
+        "/cursor/v1/models",
         # completions
         "/engines/{model}/completions",
         "/openai/deployments/{model}/completions",
