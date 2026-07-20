@@ -237,19 +237,6 @@ def fake_async_bridge():
     return bridge
 
 
-def test_use_litellm_rust_toggles_flag():
-    assert rust_bridge.rust_ocr_enabled() is False
-    litellm.use_litellm_rust()
-    assert rust_bridge.rust_ocr_enabled() is True
-    litellm.use_litellm_rust(False)
-    assert rust_bridge.rust_ocr_enabled() is False
-
-
-def test_env_var_enables_rust_ocr(monkeypatch):
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-    assert rust_bridge._env_enables_rust_ocr() is True
-
-
 def test_load_rust_ocr_returns_injected_impl():
     bridge = RecordingBridge()
     litellm.use_litellm_rust(True, ocr=bridge)
@@ -767,17 +754,6 @@ def test_ocr_passes_default_request_timeout_to_rust(fake_bridge):
     from litellm.constants import request_timeout
 
     assert fake_bridge.calls[0]["timeout_seconds"] == float(request_timeout)
-
-
-def test_ocr_does_not_route_to_rust_when_disabled():
-    """With the flag off, the bridge must not be consulted even if an impl exists."""
-    bridge = RecordingBridge()
-    litellm.use_litellm_rust(False, ocr=bridge)
-
-    assert rust_bridge.rust_ocr_enabled() is False
-    # The impl stays available for injection, but the disabled flag gates usage,
-    # so ocr() never reaches the Rust path (asserted via the enabled-path test).
-    assert bridge.calls == []
 
 
 def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):

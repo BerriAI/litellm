@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Any, Awaitable, Final, Protocol, Union, cast
 
 import httpx
@@ -50,16 +49,6 @@ class _Unset:
 _UNSET: Final[_Unset] = _Unset()
 
 
-def _env_enables_rust_ocr() -> bool:
-    return os.getenv("LITELLM_USE_RUST_OCR", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-_rust_ocr_enabled = _env_enables_rust_ocr()
 _rust_ocr_impl: RustOcr | None = None
 _rust_aocr_impl: RustAocr | None = None
 
@@ -75,13 +64,10 @@ def use_litellm_rust(
     transcription: Any | None | _Unset = _UNSET,
     atranscription: Any | None | _Unset = _UNSET,
 ) -> None:
-    global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
-    configuring_ocr = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
+    global _rust_ocr_impl, _rust_aocr_impl
     configuring_messages = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
     configuring_responses_websocket = not isinstance(responses_websocket, _Unset)
     configuring_transcription = not isinstance(transcription, _Unset) or not isinstance(atranscription, _Unset)
-    if configuring_ocr or (not configuring_messages and not configuring_responses_websocket):
-        _rust_ocr_enabled = enabled
     if not isinstance(ocr, _Unset):
         _rust_ocr_impl = ocr
     if not isinstance(aocr, _Unset):
@@ -109,10 +95,6 @@ def use_litellm_rust(
         from litellm.rust_bridge.responses_websocket import set_rust_responses_websocket
 
         set_rust_responses_websocket(connection=responses_websocket)
-
-
-def rust_ocr_enabled() -> bool:
-    return _rust_ocr_enabled
 
 
 def load_rust_ocr() -> RustOcr | None:

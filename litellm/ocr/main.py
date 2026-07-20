@@ -396,7 +396,7 @@ async def aocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
+        if _rust_ocr_supported(prepared):
             from litellm.secret_managers.main import get_secret_str
 
             rust_response = await _run_rust_aocr(
@@ -664,7 +664,7 @@ def ocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
+        if _rust_ocr_supported(prepared):
             from litellm.secret_managers.main import get_secret_str
 
             rust_response = _run_rust_ocr(
