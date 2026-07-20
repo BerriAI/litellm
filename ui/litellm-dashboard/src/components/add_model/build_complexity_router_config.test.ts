@@ -1,14 +1,15 @@
 import {
   buildComplexityRouterConfig,
+  getMissingTiersError,
   getSemanticConfigError,
   BuildComplexityRouterConfigParams,
 } from "./build_complexity_router_config";
 
 const tiers = {
-  SIMPLE: "gpt-4o-mini",
-  MEDIUM: "gpt-4o",
-  COMPLEX: "claude-sonnet-4",
-  REASONING: "o1-preview",
+  SIMPLE: ["gpt-4o-mini"],
+  MEDIUM: ["gpt-4o"],
+  COMPLEX: ["claude-sonnet-4"],
+  REASONING: ["o1-preview"],
 };
 
 const baseParams: BuildComplexityRouterConfigParams = {
@@ -20,12 +21,39 @@ const baseParams: BuildComplexityRouterConfigParams = {
   semanticMatchingEnabled: false,
   embeddingModel: undefined,
   matchThreshold: 0.5,
+  escalationKeywords: ["LITELLM ESCALATE"],
+  adaptive: false,
+  adaptiveWeights: { quality: 0.3, cost: 0.7 },
+  tierDistancePenalty: 0.5,
+  adaptiveEligible: "all",
+  returnRawModelName: false,
 };
 
 describe("buildComplexityRouterConfig", () => {
-  it("emits only tiers and classifier_type when nothing else is configured", () => {
+  it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
-    expect(config).toEqual({ tiers, classifier_type: "heuristic" });
+    expect(config).toEqual({ tiers, classifier_type: "heuristic", escalation_keywords: ["LITELLM ESCALATE"] });
+  });
+
+  it("trims escalation keywords and drops blank entries", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      escalationKeywords: [" LITELLM ESCALATE ", "", "  ", "MAKE IT BETTER"],
+    });
+    expect(config.escalation_keywords).toEqual(["LITELLM ESCALATE", "MAKE IT BETTER"]);
+  });
+
+  it("emits an empty escalation_keywords list so clearing the field disables escalation", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, escalationKeywords: [] });
+    expect(config.escalation_keywords).toEqual([]);
+  });
+
+  it("passes through a tier configured with more than one model as a pool", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tiers: { ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o", "claude-haiku-4-5"] },
+    });
+    expect(config.tiers.SIMPLE).toEqual(["gpt-4o-mini", "gpt-4o", "claude-haiku-4-5"]);
   });
 
   it("includes classifier_llm_config only when classifier_type is llm", () => {
@@ -121,6 +149,86 @@ describe("buildComplexityRouterConfig", () => {
     };
     const config = buildComplexityRouterConfig(params);
     expect(config.keyword_tier_rules).toBeUndefined();
+  });
+
+  it("omits adaptive fields when adaptive is disabled even if weights linger in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: false,
+      adaptiveWeights: { quality: 0.9, cost: 0.1 },
+      tierDistancePenalty: 2,
+      adaptiveEligible: "classified_tier",
+    });
+    expect(config.adaptive).toBeUndefined();
+    expect(config.adaptive_weights).toBeUndefined();
+    expect(config.tier_distance_penalty).toBeUndefined();
+    expect(config.adaptive_eligible).toBeUndefined();
+  });
+
+  it("omits return_raw_model_name when disabled", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: false });
+    expect(config.return_raw_model_name).toBeUndefined();
+  });
+
+  it("includes return_raw_model_name when enabled", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: true });
+    expect(config.return_raw_model_name).toBe(true);
+  });
+
+  it("includes tier_distance_penalty when adaptive is enabled with eligible='all'", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: true,
+      adaptiveWeights: { quality: 0.6, cost: 0.4 },
+      tierDistancePenalty: 0.75,
+      adaptiveEligible: "all",
+    });
+    expect(config.adaptive).toBe(true);
+    expect(config.adaptive_weights).toEqual({ quality: 0.6, cost: 0.4 });
+    expect(config.tier_distance_penalty).toBe(0.75);
+    expect(config.adaptive_eligible).toBe("all");
+  });
+
+  it("omits tier_distance_penalty when eligible='classified_tier', since the penalty doesn't apply there", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      adaptive: true,
+      adaptiveWeights: { quality: 0.6, cost: 0.4 },
+      tierDistancePenalty: 0.75,
+      adaptiveEligible: "classified_tier",
+    });
+    expect(config.adaptive).toBe(true);
+    expect(config.adaptive_eligible).toBe("classified_tier");
+    expect(config.tier_distance_penalty).toBeUndefined();
+  });
+});
+
+describe("getMissingTiersError", () => {
+  it("returns null when all four tiers have a model", () => {
+    expect(getMissingTiersError(tiers)).toBeNull();
+  });
+
+  it("names the specific missing tier when only one is blank", () => {
+    expect(getMissingTiersError({ ...tiers, REASONING: [] })).toBe(
+      "Select a model for the following tier(s): REASONING",
+    );
+  });
+
+  it("names multiple missing tiers in SIMPLE/MEDIUM/COMPLEX/REASONING order", () => {
+    expect(getMissingTiersError({ ...tiers, SIMPLE: [], REASONING: [] })).toBe(
+      "Select a model for the following tier(s): SIMPLE, REASONING",
+    );
+  });
+
+  it("names all four tiers when none are filled", () => {
+    const noTiers = { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] };
+    expect(getMissingTiersError(noTiers)).toBe(
+      "Select a model for the following tier(s): SIMPLE, MEDIUM, COMPLEX, REASONING",
+    );
+  });
+
+  it("treats a tier with more than one model as filled", () => {
+    expect(getMissingTiersError({ ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o"] })).toBeNull();
   });
 });
 

@@ -7,9 +7,9 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sidebar,
-  SidebarContent,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
@@ -40,11 +40,11 @@ import {
   HeartPulse,
   KeyRound,
   LayoutGrid,
-  MessageSquare,
   Network,
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  PiggyBank,
   PlayCircle,
   Route,
   ScrollText,
@@ -72,6 +72,7 @@ import {
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "../utils/roles";
+import BetaBadge from "./BetaBadge";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
@@ -87,7 +88,6 @@ interface SidebarProps {
   onToggleCollapsed?: () => void;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
-  enableChatUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
@@ -124,16 +124,6 @@ const menuGroups: MenuGroup[] = [
         label: "Playground",
         icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
-      },
-      {
-        key: "chat",
-        page: "chat",
-        label: (
-          <span className="flex items-center gap-2">
-            Chat <NewBadge />
-          </span>
-        ),
-        icon: <MessageSquare {...ICON} />,
       },
       {
         key: "models",
@@ -192,6 +182,13 @@ const menuGroups: MenuGroup[] = [
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "Usage",
       },
+      {
+        key: "cost-optimization",
+        page: "cost-optimization",
+        icon: <PiggyBank {...ICON} />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+        label: "Cost Optimization",
+      },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
       {
         key: "guardrails-monitor",
@@ -211,7 +208,7 @@ const menuGroups: MenuGroup[] = [
         page: "projects",
         label: (
           <span className="flex items-center gap-2">
-            Projects <NewBadge />
+            Projects <BetaBadge />
           </span>
         ),
         icon: <Folder {...ICON} />,
@@ -247,13 +244,13 @@ const menuGroups: MenuGroup[] = [
         icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
+      { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
       {
         key: "experimental",
         page: "experimental",
         label: "Experimental",
         icon: <FlaskConical {...ICON} />,
         children: [
-          { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
           { key: "prompts", page: "prompts", label: "Prompts", icon: <FileText {...ICON} />, roles: all_admin_roles },
           {
             key: "transform-request",
@@ -388,7 +385,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
   onToggleCollapsed,
   enabledPagesInternalUsers,
   enableProjectsUI,
-  enableChatUI,
   disableAgentsForInternalUsers,
   allowAgentsForTeamAdmins,
   disableVectorStoresForInternalUsers,
@@ -443,7 +439,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
           return true;
         }
         if (item.key === "projects" && !enableProjectsUI) return false;
-        if (item.key === "chat" && !enableChatUI) return false;
         if (
           !isAdmin &&
           item.key === "agents" &&
@@ -608,15 +603,17 @@ const Sidebar_: React.FC<SidebarProps> = ({
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
-        {visibleGroups.map((group, gi) => (
-          <SidebarGroup key={group.groupLabel}>
-            {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
-            <SidebarGroupLabel>{group.groupLabel}</SidebarGroupLabel>
-            <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
-          </SidebarGroup>
-        ))}
-      </SidebarContent>
+      <ScrollArea className="min-h-0 flex-1">
+        <nav className="flex flex-col gap-0.5 px-3 pb-3">
+          {visibleGroups.map((group, gi) => (
+            <SidebarGroup key={group.groupLabel}>
+              {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
+              <SidebarGroupLabel>{group.groupLabel}</SidebarGroupLabel>
+              <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
+            </SidebarGroup>
+          ))}
+        </nav>
+      </ScrollArea>
 
       <SidebarFooter>
         {isAdminRole(userRole) && (

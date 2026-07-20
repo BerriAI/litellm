@@ -18,6 +18,7 @@ sys.path.insert(
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
+    LiteLLM_ModelTable,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_OrganizationTableWithMembers,
@@ -30,6 +31,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     TeamMemberAddRequest,
+    UpdateTeamRequest,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
     user_api_key_auth,  # Assuming this dependency is needed
@@ -40,6 +42,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _persist_deleted_team_records,
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
+    _update_model_table,
     _validate_and_populate_member_user_info,
     _verify_team_access,
     delete_team,
@@ -550,6 +553,85 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
         "server_b": ["ask_question"],
     }
     assert created_permission_data["mcp_servers"] == ["server_a", "server_b"]
+
+
+@pytest.mark.parametrize(
+    "user_role,user_id,flag_value,expected",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "admin-1", True, False),
+        (LitellmUserRoles.PROXY_ADMIN, "admin-1", False, True),
+        (LitellmUserRoles.PROXY_ADMIN, "admin-1", None, True),
+        (LitellmUserRoles.INTERNAL_USER, "user-1", True, True),
+        (LitellmUserRoles.ORG_ADMIN, "org-admin-1", True, True),
+        (LitellmUserRoles.PROXY_ADMIN, None, False, False),
+    ],
+)
+def test_should_auto_add_team_creator(user_role, user_id, flag_value, expected):
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _should_auto_add_team_creator,
+    )
+
+    general_settings = (
+        {} if flag_value is None else {"disable_auto_add_proxy_admin_to_teams": flag_value}
+    )
+    auth = UserAPIKeyAuth(user_role=user_role, user_id=user_id)
+    assert _should_auto_add_team_creator(auth, general_settings) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "disable_flag,expect_creator_added", [(True, False), (False, True)]
+)
+async def test_new_team_disable_auto_add_proxy_admin_flag(
+    mock_db_client, disable_flag, expect_creator_added
+):
+    """
+    When general_settings.disable_auto_add_proxy_admin_to_teams is True, a proxy
+    admin calling /team/new must NOT be auto-added to the team's members. When
+    the flag is off, the creator is auto-added as a team admin (default
+    behavior, regression guard for LIT-3739).
+    """
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    team_create_result = MagicMock(team_id="team-789")
+    team_create_result.model_dump.return_value = {"team_id": "team-789"}
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = AsyncMock(
+        return_value=team_create_result
+    )
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    admin_auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user-1"
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"disable_auto_add_proxy_admin_to_teams": disable_flag},
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+        new_callable=AsyncMock,
+    ) as mock_add_members:
+        await new_team(
+            data=NewTeamRequest(team_alias="flag-test-team"),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=admin_auth,
+        )
+
+    mock_add_members.assert_called_once()
+    member_add_request = mock_add_members.call_args.kwargs["data"]
+    member_user_ids = [m.user_id for m in member_add_request.member]
+    assert ("admin-user-1" in member_user_ids) is expect_creator_added
 
 
 @pytest.mark.asyncio
@@ -9434,6 +9516,96 @@ async def test_team_info_forwards_key_limit_to_get_data():
         )
 
     assert mock_prisma.get_data.await_args.kwargs["limit"] == 7
+
+
+@pytest.mark.asyncio
+async def test_team_info_returns_model_aliases():
+    """/team/info must join LiteLLM_ModelTable so the response exposes the team's
+    current model aliases; without the ``litellm_model_table`` include the field
+    comes back null and the Admin UI can never display them.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1",
+        litellm_model_table=LiteLLM_ModelTable(
+            id=1,
+            model_aliases={"gpt-4o": "gpt-4o-team-1"},
+            created_by="admin",
+            updated_by="admin",
+        ),
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])
+        ),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    include = mock_prisma.db.litellm_teamtable.find_unique.await_args.kwargs["include"]
+    assert include["litellm_model_table"] is True
+
+    litellm_model_table = response["team_info"].litellm_model_table
+    assert litellm_model_table is not None
+    assert litellm_model_table.model_aliases == {"gpt-4o": "gpt-4o-team-1"}
+
+
+@pytest.mark.asyncio
+async def test_update_model_table_clears_aliases_with_empty_map():
+    """``model_aliases={}`` on /team/update must persist an empty map (json.dumps({}))
+    so existing aliases are cleared, while ``model_aliases=None`` must be a no-op that
+    leaves the model table untouched.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_modeltable.create = AsyncMock()
+    mock_prisma.db.litellm_modeltable.upsert = AsyncMock(
+        return_value=MagicMock(id="model-123")
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+
+    returned_model_id = await _update_model_table(
+        data=UpdateTeamRequest(team_id="team-1", model_aliases={}),
+        model_id="model-123",
+        prisma_client=mock_prisma,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="default_user_id",
+    )
+
+    mock_prisma.db.litellm_modeltable.upsert.assert_awaited_once()
+    upsert_kwargs = mock_prisma.db.litellm_modeltable.upsert.await_args.kwargs
+    assert upsert_kwargs["where"] == {"id": "model-123"}
+    assert upsert_kwargs["data"]["update"]["model_aliases"] == json.dumps({})
+    assert upsert_kwargs["data"]["create"]["model_aliases"] == json.dumps({})
+    assert returned_model_id == "model-123"
+
+    mock_prisma.db.litellm_modeltable.create.reset_mock()
+    mock_prisma.db.litellm_modeltable.upsert.reset_mock()
+
+    noop_model_id = await _update_model_table(
+        data=UpdateTeamRequest(team_id="team-1", model_aliases=None),
+        model_id="model-123",
+        prisma_client=mock_prisma,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="default_user_id",
+    )
+
+    mock_prisma.db.litellm_modeltable.create.assert_not_called()
+    mock_prisma.db.litellm_modeltable.upsert.assert_not_called()
+    assert noop_model_id == "model-123"
 
 
 class TestEmitTeamMembersMetric:

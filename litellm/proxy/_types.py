@@ -20,6 +20,9 @@ from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
+from litellm.types.integrations.compression_interception import (
+    CompressionSavingsMetadata,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1011,10 +1014,10 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_tool_search_enabled: Optional[bool] = None
 
 
+from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 from litellm.types.object_permission import (  # noqa: E402
     ObjectPermissionDict as ObjectPermissionDict,
 )
-from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1118,6 +1121,7 @@ class GenerateKeyRequest(KeyRequestBase):
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
+    key_type: str | None = None
     expires: Optional[datetime] = None
     user_id: Optional[str] = None
     token_id: Optional[str] = None
@@ -1262,6 +1266,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -1367,6 +1372,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    issuer: Optional[str] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
@@ -2119,6 +2125,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     field_default_value: Any
     premium_field: bool = False
     nested_fields: Optional[List[FieldDetail]] = None  # For nested dictionary or Pydantic fields
+    field_options: Optional[list[str]] = None  # Allowed values, for field_type == "Select"
+    field_tab: Optional[str] = None  # Admin UI sub-tab this field renders under; None groups it with the rest
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2366,6 +2374,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_auto_add_proxy_admin_to_teams: bool | None = Field(
+        None,
+        description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
+    )
     maximum_spend_logs_retention_period: Optional[str] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
@@ -2419,6 +2431,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #27639). "
             "A proxy-level WARNING is logged on every request while this flag "
             "is active as a reminder that hard enforcement is relaxed."
+        ),
+    )
+    skip_user_budget_on_team_key: bool | None = Field(
+        None,
+        description=(
+            "If True, restores the legacy behavior where a user's personal "
+            "max_budget is NOT enforced when their key belongs to a team; only "
+            "the team (and team-member) budgets apply. Defaults to False, meaning "
+            "the user's personal max_budget is always enforced regardless of "
+            "whether the key belongs to a team (see GitHub issue #12905)."
         ),
     )
     user_url_validation: Optional[bool] = Field(
@@ -3223,6 +3245,7 @@ class SpendLogsMetadata(TypedDict):
     attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    compression_savings: CompressionSavingsMetadata | None
 
 
 class SpendLogsPayload(TypedDict):
@@ -4442,6 +4465,11 @@ class BaseDailySpendTransaction(TypedDict):
     completion_tokens: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    compression_saved_tokens: int
+
+    # cost-savings metrics (dollars, priced per request before aggregation)
+    compression_savings_spend: float
+    prompt_caching_savings_spend: float
 
     # request level metrics
     spend: float

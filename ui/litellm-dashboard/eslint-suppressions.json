@@ -301,17 +301,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/guardrails/_components/edit_guardrail_form.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "no-restricted-syntax": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/guardrails/_components/guardrail_info.tsx": {
     "max-params": {
       "count": 1
@@ -336,14 +325,6 @@
       "count": 5
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/guardrail_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -512,6 +493,149 @@
   },
   "src/app/(dashboard)/hooks/teams/useTeams.ts": {
     "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.test.tsx": {
+    "unused-imports/no-unused-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
+    "react-hooks/immutability": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/MCPSubmissionsTab.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/ToolTestPanel.tsx": {
+    "no-nested-ternary": {
+      "count": 3
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/UserEnvVarsModal.tsx": {
+    "no-nested-ternary": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/create_mcp_server.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_connect.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/static-components": {
+      "count": 4
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_connection_status.tsx": {
+    "no-nested-ternary": {
+      "count": 3
+    },
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_discovery.tsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_config.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_display.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/immutability": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 5
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_view.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_servers.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_tools.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
       "count": 2
     }
   },
@@ -757,19 +881,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/policies/_components/attachment_table.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/policies/_components/attachment_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/policies/_components/guardrail_selection_modal.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -823,19 +934,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/policies/_components/policy_table.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/policies/_components/policy_table.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/policies/_components/policy_test_panel.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -868,11 +966,6 @@
   "src/app/(dashboard)/projects/_components/ProjectModals/ProjectBaseForm.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
-    }
-  },
-  "src/app/(dashboard)/projects/_components/ProjectsPage.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/prompts/_components/add_prompt_form.tsx": {
@@ -971,17 +1064,9 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/prompts/_components/prompt_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "no-nested-ternary": {
-      "count": 3
+      "count": 1
     },
     "no-restricted-imports": {
       "count": 2
@@ -1022,19 +1107,6 @@
     }
   },
   "src/app/(dashboard)/skills/_components/add_plugin_form.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/skills/_components/plugin_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/tag-management/_components/TagTable.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1198,11 +1270,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/VectorStoreTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1250,16 +1317,6 @@
       "count": 1
     }
   },
-  "src/components/AIHub/AgentHubTableColumns.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/AIHub/AgentHubTableColumns.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/AIHub/ModelHubTable.test.tsx": {
     "max-params": {
       "count": 1
@@ -1269,11 +1326,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/AIHub/SkillHubDashboard.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1323,22 +1375,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedKeysPage/DeletedKeysTable/DeletedKeysTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedTeamsPage/DeletedTeamsTable/DeletedTeamsTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1400,22 +1436,6 @@
       "count": 1
     }
   },
-  "src/components/OldTeams.test.tsx": {
-    "max-nested-callbacks": {
-      "count": 4
-    }
-  },
-  "src/components/OldTeams.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
-    }
-  },
   "src/components/SCIM.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1472,14 +1492,6 @@
       "count": 1
     }
   },
-  "src/components/Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Settings/RouterSettings/Fallbacks/AddFallbacks.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1506,6 +1518,22 @@
       "count": 1
     }
   },
+  "src/components/Teams.test.tsx": {
+    "max-nested-callbacks": {
+      "count": 4
+    }
+  },
+  "src/components/Teams.tsx": {
+    "no-nested-ternary": {
+      "count": 2
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 3
+    }
+  },
   "src/components/ToolDetail.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 2
@@ -1529,25 +1557,6 @@
     }
   },
   "src/components/UIAccessControlForm.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/UsageIndicator.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 1
-    }
-  },
-  "src/components/VirtualKeysPage/VirtualKeysTable.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    },
     "no-restricted-imports": {
       "count": 1
     }
@@ -1796,11 +1805,6 @@
       "count": 1
     }
   },
-  "src/components/common_components/user_search_modal.tsx": {
-    "react-hooks/use-memo": {
-      "count": 1
-    }
-  },
   "src/components/constants.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1850,53 +1854,14 @@
       "count": 1
     }
   },
-  "src/components/mcp_hub_table_columns.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/mcp_server_management/MCPToolPermissions.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/mcp_tools/ByokCredentialModal.tsx": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
-    "react-hooks/immutability": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPSubmissionsTab.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/components/mcp_tools/MCPToolArgumentsForm.tsx": {
     "no-nested-ternary": {
       "count": 5
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 2
     }
   },
   "src/components/mcp_tools/McpCrudPermissionPanel.tsx": {
@@ -1907,133 +1872,8 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
+  "src/components/model_add/CredentialModal.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/ToolTestPanel.tsx": {
-    "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/UserEnvVarsModal.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/create_mcp_server.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_connect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 4
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_connection_status.tsx": {
-    "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_discovery.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_config.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_display.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 5
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_server_view.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_servers.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/mcp_tools.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/components/model_add/AddCredentialModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/EditCredentialModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -2098,11 +1938,6 @@
       "count": 1
     }
   },
-  "src/components/model_hub_table_columns.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/model_info_view.tsx": {
     "no-nested-ternary": {
       "count": 14
@@ -2117,9 +1952,6 @@
   "src/components/molecules/filter.tsx": {
     "no-nested-ternary": {
       "count": 2
-    },
-    "react-hooks/use-memo": {
-      "count": 1
     }
   },
   "src/components/molecules/models/columns.test.tsx": {
@@ -2181,9 +2013,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 4
-    },
-    "react-hooks/use-memo": {
-      "count": 1
     }
   },
   "src/components/organization/organization_view.tsx": {
@@ -2200,11 +2029,6 @@
     }
   },
   "src/components/pass_through_info.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/pass_through_settings.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2246,9 +2070,6 @@
     }
   },
   "src/components/public_model_hub.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 1
     }
@@ -2295,11 +2116,6 @@
     }
   },
   "src/components/shared/usage_date_picker.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/skill_hub_table_columns.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
