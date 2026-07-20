@@ -298,6 +298,25 @@ def test_create_request_forwards_bedrock_tags_from_optional_params(config):
     assert mock_sign.call_args.kwargs["data"]["tags"] == tags
 
 
+def test_create_request_empty_litellm_params_tags_do_not_fall_through(config):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={"bedrock_tags": [{"key": "env", "value": "prod"}]},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "bedrock_tags": [],
+            },
+        )
+    assert mock_sign.call_args.kwargs["data"]["tags"] == []
+
+
 def test_create_request_omits_tags_when_bedrock_tags_absent(config):
     with patch.object(
         config.common_utils,
