@@ -10,7 +10,6 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
-import base64
 import contextvars
 import datetime
 import inspect
@@ -59,7 +58,6 @@ import litellm
 
 # client must be imported from litellm as it's a decorator used at function definition time
 from litellm import client
-from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 
 # Other utils are imported directly to avoid circular imports
 from litellm.utils import (
@@ -7460,112 +7458,6 @@ async def amoderation(
 ##### Transcription #######################
 
 
-_BEDROCK_AUDIO_FORMATS = {"wav", "mp3", "flac", "ogg"}
-
-
-def _rust_audio_payload(file: FileTypes) -> dict[str, object]:
-    processed_audio = process_audio_file(file)
-    content_type_formats = {
-        "audio/flac": "flac",
-        "audio/mpeg": "mp3",
-        "audio/mp3": "mp3",
-        "audio/ogg": "ogg",
-        "audio/wav": "wav",
-        "audio/x-wav": "wav",
-    }
-    content_type_format = content_type_formats.get(processed_audio.content_type)
-    filename_format = processed_audio.filename.rsplit(".", 1)[-1].lower() if "." in processed_audio.filename else ""
-    audio_format = content_type_format or filename_format
-    if audio_format not in _BEDROCK_AUDIO_FORMATS:
-        raise ValueError(f"Unsupported Bedrock audio format for file {processed_audio.filename!r}")
-    return {
-        "data": base64.b64encode(processed_audio.file_content).decode("ascii"),
-        "format": audio_format,
-        "filename": processed_audio.filename,
-    }
-
-
-def _rust_audio_optional_params(
-    optional_params: dict[str, object],
-    kwargs: dict[str, object],
-) -> dict[str, object]:
-    credential_keys = {
-        "aws_access_key_id",
-        "aws_secret_access_key",
-        "aws_session_token",
-        "aws_region_name",
-        "aws_session_name",
-        "aws_profile_name",
-        "aws_role_name",
-        "aws_web_identity_token",
-        "aws_sts_endpoint",
-        "aws_external_id",
-        "aws_bedrock_runtime_endpoint",
-    }
-    return {
-        **optional_params,
-        **{key: value for key, value in kwargs.items() if key in credential_keys and value is not None},
-    }
-
-
-def _run_rust_transcription(
-    *,
-    model: str,
-    file: FileTypes,
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str,
-    extra_headers: dict[str, object] | None,
-    optional_params: dict[str, object],
-    kwargs: dict[str, object],
-    timeout: object,
-) -> TranscriptionResponse | None:
-    from litellm.rust_bridge import transcription as rust_transcription_bridge
-
-    rust_response = rust_transcription_bridge.transcription(
-        model=model,
-        audio=_rust_audio_payload(file),
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=_rust_audio_optional_params(optional_params, kwargs),
-        timeout=timeout,
-    )
-    if rust_response is None:
-        raise RuntimeError("Rust audio transcription bridge is unavailable")
-    return TranscriptionResponse(**rust_response)
-
-
-async def _run_rust_atranscription(
-    *,
-    model: str,
-    file: FileTypes,
-    api_key: str | None,
-    api_base: str | None,
-    custom_llm_provider: str,
-    extra_headers: dict[str, object] | None,
-    optional_params: dict[str, object],
-    kwargs: dict[str, object],
-    timeout: object,
-) -> TranscriptionResponse | None:
-    from litellm.rust_bridge import transcription as rust_transcription_bridge
-
-    rust_response = await rust_transcription_bridge.atranscription(
-        model=model,
-        audio=_rust_audio_payload(file),
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=_rust_audio_optional_params(optional_params, kwargs),
-        timeout=timeout,
-    )
-    if rust_response is None:
-        raise RuntimeError("Rust audio transcription bridge is unavailable")
-    return TranscriptionResponse(**rust_response)
-
-
 @client
 async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     """
@@ -7830,28 +7722,29 @@ def transcription(
             provider_config=provider_config,  # type: ignore[arg-type]
         )
     elif custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+
+        dispatch = BedrockAudioTranscriptionRustDispatch()
         if atranscription:
-            response = _run_rust_atranscription(
+            response = dispatch.async_audio_transcriptions(
                 model=model,
-                file=file,
+                audio_file=file,
                 api_key=api_key,
                 api_base=api_base,
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=extra_headers,
                 optional_params=optional_params,
-                kwargs=kwargs,
                 timeout=timeout,
             )
         else:
-            response = _run_rust_transcription(
+            response = dispatch.audio_transcriptions(
                 model=model,
-                file=file,
+                audio_file=file,
                 api_key=api_key,
                 api_base=api_base,
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=extra_headers,
                 optional_params=optional_params,
-                kwargs=kwargs,
                 timeout=timeout,
             )
     elif provider_config is not None:

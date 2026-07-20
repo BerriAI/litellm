@@ -3,7 +3,7 @@ import importlib
 import pytest
 
 import litellm
-import litellm.main as litellm_main
+from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
 
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
@@ -82,40 +82,38 @@ def test_loader_returns_none_without_native_extension(monkeypatch: pytest.Monkey
     assert rust_bridge.load_rust_atranscription() is None
 
 
-def test_rust_transcription_main_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dispatch_sync_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rust_bridge, "transcription", lambda **_: None)
 
     with pytest.raises(RuntimeError, match="bridge is unavailable"):
-        litellm_main._run_rust_transcription(
+        BedrockAudioTranscriptionRustDispatch().audio_transcriptions(
             model="bedrock/mistral.voxtral-mini-3b-2507",
-            file=("audio.wav", b"audio", "audio/wav"),
+            audio_file=("audio.wav", b"audio", "audio/wav"),
             api_key=None,
             api_base=None,
             custom_llm_provider="bedrock",
             extra_headers=None,
             optional_params={},
-            kwargs={},
             timeout=5,
         )
 
 
 @pytest.mark.asyncio
-async def test_rust_atranscription_main_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     async def unavailable(**_: object) -> None:
         return None
 
     monkeypatch.setattr(rust_bridge, "atranscription", unavailable)
 
     with pytest.raises(RuntimeError, match="bridge is unavailable"):
-        await litellm_main._run_rust_atranscription(
+        await BedrockAudioTranscriptionRustDispatch().async_audio_transcriptions(
             model="bedrock/mistral.voxtral-mini-3b-2507",
-            file=("audio.wav", b"audio", "audio/wav"),
+            audio_file=("audio.wav", b"audio", "audio/wav"),
             api_key=None,
             api_base=None,
             custom_llm_provider="bedrock",
             extra_headers=None,
             optional_params={},
-            kwargs={},
             timeout=5,
         )
 
