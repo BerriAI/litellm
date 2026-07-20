@@ -251,6 +251,37 @@ class TestTeamRoutes:
             f"/team/list never included the created team {team_id}",
         )
 
+    @pytest.mark.covers("mgmt.team.delete.persists")
+    def test_delete_persists_and_revokes_team_bound_key(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete_team/delete_key fire again on the already-
+        deleted team and key by design: both are warn-only no-ops, and the deferred
+        cleanup must survive this test failing before the in-body delete."""
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", ["gpt-5.5"])
+        key = _generate_key(client, resources, KeyGenerateBody(team_id=team_id))
+
+        def accepted() -> bool | None:
+            outcome = client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code != 401 else None
+
+        _ = _poll(client, accepted, "team-bound key was never accepted at auth before team deletion")
+
+        client.delete_team(team_id)
+
+        probe = client.team_info_status(team_id)
+        assert probe.status_code == 404, (
+            f"deleted team {team_id} still resolves: /team/info returned {probe.status_code}: {probe.body[:300]}"
+        )
+
+        def rejected() -> bool | None:
+            outcome = client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code == 401 else None
+
+        _ = _poll(
+            client, rejected, "team-bound key was still accepted on chat (never rejected 401) after team deletion"
+        )
+
     @pytest.mark.covers("mgmt.team.member_add.persists")
     def test_member_add_and_delete_persist_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
