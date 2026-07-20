@@ -58,24 +58,27 @@ def allocate_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def launch_proxy(config_path: Path, port: int, log_path: Path) -> "subprocess.Popen[bytes]":
+def launch_proxy(
+    config_path: Path, port: int, log_path: Path, *, debug: bool = False, detailed_debug: bool = False
+) -> "subprocess.Popen[bytes]":
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "w") as log_file:
-        return subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "litellm.proxy.proxy_cli",
-                "--config",
-                str(config_path),
-                "--port",
-                str(port),
-                "--host",
-                "127.0.0.1",
-            ],
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
+    command = (
+        (
+            sys.executable,
+            "-m",
+            "litellm.proxy.proxy_cli",
+            "--config",
+            str(config_path),
+            "--port",
+            str(port),
+            "--host",
+            "127.0.0.1",
         )
+        + (("--debug",) if debug else ())
+        + (("--detailed_debug",) if detailed_debug else ())
+    )
+    with open(log_path, "w") as log_file:
+        return subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT)
 
 
 def _tail(log_path: Path, lines: int = 40) -> str:

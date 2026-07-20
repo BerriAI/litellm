@@ -1,6 +1,5 @@
 import atexit
 import json
-import secrets
 import signal
 import threading
 from types import FrameType
@@ -35,17 +34,17 @@ from .wizard import run_configure_wizard
 AUTOROUTE_BACKUP_PATH = AUTOROUTE_DIR / "claude_settings_backup.json"
 
 _GENERATED_CONFIG_ADAPTER = TypeAdapter(dict[str, JsonValue])
+MASTER_KEY = "sk-1234"
 
 
-def _mint_and_embed_master_key() -> str:
-    """Generate a fresh key for this session and write it into the generated config.yaml.
+def _embed_master_key() -> str:
+    """Write the local development key into the generated config.yaml.
 
     Must go under general_settings, not litellm_settings -- the proxy server only ever
     reads general_settings.master_key (proxy_server.py:4530) to authenticate requests. A
     key placed under litellm_settings is silently ignored, leaving the ephemeral proxy with
     no real auth: any request reaches it regardless of the token Claude Code sends.
     """
-    master_key = secrets.token_urlsafe(32)
     with open(CONFIG_PATH, "r") as f:
         try:
             generated = _GENERATED_CONFIG_ADAPTER.validate_python(yaml.safe_load(f))
@@ -56,12 +55,12 @@ def _mint_and_embed_master_key() -> str:
     general_settings = generated.get("general_settings")
     updated_settings: dict[str, JsonValue] = {
         **(general_settings if isinstance(general_settings, dict) else {}),
-        "master_key": master_key,
+        "master_key": MASTER_KEY,
     }
     updated: dict[str, JsonValue] = {**generated, "general_settings": updated_settings}
     with secure_create(CONFIG_PATH) as f:
         yaml.safe_dump(updated, f, sort_keys=False)
-    return master_key
+    return MASTER_KEY
 
 
 @click.group(name="autoroute")
@@ -77,7 +76,11 @@ def configure(ctx: click.Context) -> None:
 
 
 @autoroute_group.command("up")
-def up() -> None:
+@click.option("--debug", is_flag=True, help="Enable debug logging in the local proxy.")
+@click.option(
+    "--detailed-debug", "detailed_debug", is_flag=True, help="Enable detailed debug logging in the local proxy."
+)
+def up(debug: bool, detailed_debug: bool) -> None:
     """Launch the ephemeral auto-router proxy and route Claude Code through it"""
     if not CONFIG_PATH.exists():
         raise click.ClickException("No config found. Run `lite autoroute configure` first.")
@@ -108,10 +111,10 @@ def up() -> None:
             "running (or crashed without cleanup). Run `lite autoroute down` first."
         )
 
-    master_key = _mint_and_embed_master_key()
+    master_key = _embed_master_key()
     port = allocate_free_port()
     base_url = f"http://127.0.0.1:{port}"
-    process = launch_proxy(CONFIG_PATH, port, LOG_PATH)
+    process = launch_proxy(CONFIG_PATH, port, LOG_PATH, debug=debug, detailed_debug=detailed_debug)
     write_pid_record(PidRecord(pid=process.pid, port=port, config_path=str(CONFIG_PATH), log_path=str(LOG_PATH)))
 
     try:
@@ -138,6 +141,10 @@ def up() -> None:
         raise click.ClickException(str(e))
 
     click.echo(f"litellm: ephemeral auto-router proxy up at {base_url} (pid {process.pid})")
+    click.echo(f"Config: {CONFIG_PATH}")
+    click.echo(f"Log: {LOG_PATH}")
+    click.echo(f"Port: {port}")
+    click.echo(f"Master key: {MASTER_KEY}")
     click.echo("Claude Code sessions started now will route through it. Press Ctrl-C to stop and restore.")
 
     stop_event = threading.Event()
