@@ -165,6 +165,27 @@ class ChatBody(BaseModel):
     guardrails: list[str] | None = None
 
 
+class RouterSettingsOverride(BaseModel):
+    """Per-request `router_settings_override` in a /chat/completions body: the
+    reliability knobs (fallbacks by trigger, retry count) the reliability suite
+    drives per call instead of via static router config. Serialized exclude_none, so
+    an override sets only the strategies a test exercises. Each fallbacks map is
+    model_name -> the ordered fallback model_names to try."""
+
+    fallbacks: list[dict[str, list[str]]] | None = None
+    context_window_fallbacks: list[dict[str, list[str]]] | None = None
+    content_policy_fallbacks: list[dict[str, list[str]]] | None = None
+    num_retries: int | None = None
+
+
+class ReliabilityChatBody(ChatBody):
+    """A /chat/completions body carrying a per-request router_settings_override.
+    Composes ChatBody (no attribute repetition) and adds the override; serialized
+    exclude_none so an absent override never leaks into the request."""
+
+    router_settings_override: RouterSettingsOverride | None = None
+
+
 class OutMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
@@ -525,6 +546,8 @@ class LiteLLMParamsBody(BaseModel):
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     mock_response: str | None = None
+    mock_timeout: bool | None = None
+    timeout: float | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
