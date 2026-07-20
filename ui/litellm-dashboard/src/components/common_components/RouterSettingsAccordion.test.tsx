@@ -110,6 +110,25 @@ describe("RouterSettingsAccordion", () => {
     expect(fetchAvailableModels).not.toHaveBeenCalled();
   });
 
+  it("ignores a stale team fetch that resolves after teamId changes", async () => {
+    let resolveFirst: (value: { data: { model_name: string }[] }) => void = () => {};
+    const firstResponse = new Promise<{ data: { model_name: string }[] }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    vi.mocked(modelInfoCall)
+      .mockReturnValueOnce(firstResponse as ReturnType<typeof modelInfoCall>)
+      .mockResolvedValueOnce({ data: [{ model_name: "team-b-model" }] });
+
+    const { rerender } = render(<RouterSettingsAccordion accessToken="test-token" teamId="team-a" />);
+    rerender(<RouterSettingsAccordion accessToken="test-token" teamId="team-b" />);
+    await flushPromises();
+
+    resolveFirst({ data: [{ model_name: "team-a-model" }] });
+    await flushPromises();
+
+    expect(screen.getByTestId("available-models").textContent).toBe("team-b-model");
+  });
+
   it("uses the global model list when no teamId is provided", async () => {
     vi.mocked(fetchAvailableModels).mockResolvedValueOnce([{ model_group: "shared-gpt" }]);
 

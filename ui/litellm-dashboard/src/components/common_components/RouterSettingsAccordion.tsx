@@ -181,10 +181,14 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       if (!accessToken) {
         return;
       }
+      let cancelled = false;
       const loadModels = async () => {
         try {
           if (teamId) {
             const response = await modelInfoCall(accessToken, "", "", 1, 1000, undefined, undefined, teamId);
+            if (cancelled) {
+              return;
+            }
             const teamModels: ModelGroup[] = (response?.data ?? [])
               .map((item: { model_name?: string }) => item.model_name)
               .filter((name: string | undefined): name is string => Boolean(name))
@@ -193,12 +197,18 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
             return;
           }
           const uniqueModels = await fetchAvailableModels(accessToken);
+          if (cancelled) {
+            return;
+          }
           setModelInfo(uniqueModels);
         } catch (error) {
           console.error("Error fetching model info for fallbacks:", error);
         }
       };
       loadModels();
+      return () => {
+        cancelled = true;
+      };
     }, [accessToken, teamId]);
 
     // Helper function to build router_settings from current state
