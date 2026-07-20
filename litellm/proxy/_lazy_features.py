@@ -229,9 +229,9 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
         path_prefixes=("/vantage",),
     ),
     LazyFeature(
-        name="usage_ai",
-        module_path="litellm.proxy.management_endpoints.usage_endpoints",
-        path_prefixes=("/usage/ai",),
+        name="dashboard_ai",
+        module_path="litellm.proxy.management_endpoints.dashboard_ai",
+        path_prefixes=("/dashboard/ai",),
     ),
     LazyFeature(
         name="prompts",

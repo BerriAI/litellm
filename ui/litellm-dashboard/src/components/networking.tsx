@@ -4187,7 +4187,7 @@ export const usageAiChatStream = async (
   onToolCall?: (event: UsageAiToolCallEvent) => void,
   signal?: AbortSignal,
 ) => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/usage/ai/chat` : `/usage/ai/chat`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/dashboard/ai/chat` : `/dashboard/ai/chat`;
 
   const response = await fetch(url, {
     method: "POST",

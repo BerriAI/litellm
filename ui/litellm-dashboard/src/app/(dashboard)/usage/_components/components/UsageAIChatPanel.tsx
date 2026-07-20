@@ -260,7 +260,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
       {/* Model selector */}
       <div className="px-5 py-3 border-b border-gray-100 shrink-0">
         <Select
-          placeholder="Select a model (optional, defaults to gpt-4o-mini)"
+          placeholder="Select a model (uses the configured default if left empty)"
           value={selectedModel}
           onChange={(value) => setSelectedModel(value)}
           loading={isLoadingModels}
