@@ -5,10 +5,12 @@ import httpx
 import pytest
 
 import litellm
+import litellm.main as litellm_main
 from litellm.llms.bedrock.audio_transcription.transformation import (
     BedrockAudioTranscriptionConfig,
 )
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.rust_bridge.transcription import configure_rust_transcription
+from litellm.types.utils import TranscriptionResponse
 from litellm.utils import get_optional_params_transcription
 
 
@@ -103,3 +105,47 @@ def test_sigv4_headers_sign_serialized_request_body() -> None:
 
     assert headers.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
     assert "X-Amz-Date" in headers.headers
+
+
+def test_rust_transcription_helper_passes_processed_audio_and_aws_params() -> None:
+    calls: list[dict[str, object]] = []
+
+    def rust_transcription(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {"text": "hello"}
+
+    configure_rust_transcription(True, transcription=rust_transcription, atranscription=None)
+    try:
+        response = litellm_main._run_rust_transcription(
+            model="bedrock/mistral.voxtral-mini-3b-2507",
+            file=("recording.wav", b"audio", "audio/wav"),
+            api_key=None,
+            api_base=None,
+            custom_llm_provider="bedrock",
+            extra_headers=None,
+            optional_params={"temperature": 0.2},
+            kwargs={"aws_region_name": "us-east-1"},
+            timeout=5,
+        )
+    finally:
+        configure_rust_transcription(False, transcription=None, atranscription=None)
+
+    assert response == TranscriptionResponse(text="hello")
+    assert calls[0]["audio"] == {"data": "YXVkaW8=", "format": "wav", "filename": "recording.wav"}
+    assert calls[0]["optional_params"] == {"temperature": 0.2, "aws_region_name": "us-east-1"}
+
+
+@pytest.mark.asyncio
+async def test_bedrock_async_rust_helper_awaits_python_fallback() -> None:
+    async def rust_request() -> None:
+        return None
+
+    async def python_fallback() -> TranscriptionResponse:
+        return TranscriptionResponse(text="fallback")
+
+    response = await litellm_main._run_bedrock_atranscription(
+        rust_request=rust_request,
+        python_fallback=python_fallback,
+    )
+
+    assert response == TranscriptionResponse(text="fallback")
