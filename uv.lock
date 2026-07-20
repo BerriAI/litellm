@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-15T21:54:47.972166Z"
+exclude-newer = "2026-07-17T19:37:15.999873Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4090,6 +4090,7 @@ ci = [
     { name = "blockbuster" },
     { name = "claude-agent-sdk" },
     { name = "detect-secrets" },
+    { name = "diskcache" },
     { name = "google-generativeai" },
     { name = "jsonlines" },
     { name = "langchain" },
@@ -4114,6 +4115,7 @@ dev = [
     { name = "basedpyright" },
     { name = "botocore-stubs" },
     { name = "diff-cover" },
+    { name = "diskcache" },
     { name = "fakeredis" },
     { name = "fastapi-offline" },
     { name = "flake8" },
@@ -4266,6 +4268,7 @@ ci = [
     { name = "blockbuster", specifier = "==1.5.26" },
     { name = "claude-agent-sdk", specifier = "==0.1.44" },
     { name = "detect-secrets", specifier = "==1.5.0" },
+    { name = "diskcache", specifier = ">=5.6.3,<6.0" },
     { name = "google-generativeai", specifier = "==0.8.6" },
     { name = "jsonlines", specifier = "==4.0.0" },
     { name = "langchain", specifier = "==1.3.9" },
@@ -4290,6 +4293,7 @@ dev = [
     { name = "basedpyright", specifier = "==1.39.7" },
     { name = "botocore-stubs", specifier = "==1.43.14" },
     { name = "diff-cover", specifier = "==9.7.2" },
+    { name = "diskcache", specifier = ">=5.6.3,<6.0" },
     { name = "fakeredis", specifier = "==2.34.1" },
     { name = "fastapi-offline", specifier = "==1.7.6" },
     { name = "flake8", specifier = "==7.3.0" },
