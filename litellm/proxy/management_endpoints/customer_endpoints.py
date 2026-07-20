@@ -27,6 +27,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     handle_update_object_permission_common,
 )
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.table_repositories import EndUserRepository
@@ -596,6 +597,13 @@ async def update_end_user(
         if budget_table_data:
             if end_user_budget_table is None:
                 ## Create new budget ##
+                # Compute budget_reset_at from budget_duration when creating a new budget,
+                # matching the behavior of /budget/new (fixes #33941)
+                if budget_table_data.get("budget_reset_at") is None and budget_table_data.get("budget_duration") is not None:
+                    budget_table_data["budget_reset_at"] = get_budget_reset_time(
+                        budget_duration=budget_table_data["budget_duration"]
+                    )
+
                 budget_table_data_record = await BudgetRepository(prisma_client).table.create(
                     data={
                         **budget_table_data,
