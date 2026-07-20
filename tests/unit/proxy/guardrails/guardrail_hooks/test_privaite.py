@@ -862,3 +862,244 @@ async def test_block_entities_fails_closed_when_privaite_too_old(monkeypatch):
     data = {"messages": [{"role": "user", "content": "marie@acme.com"}]}
     with pytest.raises(RuntimeError, match="block_entities"):
         await gr.async_pre_call_hook(None, None, data, "completion")
+
+
+# --- Responses API: tool output list-of-parts, typed carriers, prompt variables ---
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_custom_tool_call_output_list_of_parts():
+    # a shell/custom tool that read a file returns its bytes as a list of
+    # {type, text} parts (not a bare string); every text leaf must be scrubbed
+    # while the binary image part is relayed whole (base64 carries nothing a
+    # text detector can find, and rewriting it would corrupt the payload).
+    gr = _make_guardrail()
+    output = [
+        {"type": "output_text", "text": "the file says reach marie@acme.com"},
+        {"type": "input_image", "image_url": "data:image/png;base64,QUJD"},
+    ]
+    data = {"input": [{"type": "custom_tool_call_output", "call_id": "c1", "output": output}]}
+    out = await gr.async_pre_call_hook(None, None, data, "aresponses")
+
+    scrubbed = out["input"][0]["output"]
+    assert scrubbed[0]["text"] == "the file says reach <EMAIL_ADDRESS_1>"
+    assert scrubbed[1]["image_url"] == "data:image/png;base64,QUJD"  # binary relayed whole
+    assert out["input"][0]["call_id"] == "c1"
+    assert out["metadata"]["privaite_map"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_typed_action_carrier():
+    # a file_search_call carries user data in its `queries`/`results` fields, not
+    # in `content`/`output`; the old field scan never looked there.
+    gr = _make_guardrail()
+    data = {
+        "input": [
+            {
+                "type": "file_search_call",
+                "id": "fs1",
+                "queries": ["records for Marie Dupont", "orders by marie@acme.com"],
+                "results": [{"text": "found Marie Dupont", "score": 0.9}],
+            }
+        ]
+    }
+    out = await gr.async_pre_call_hook(None, None, data, "aresponses")
+    item = out["input"][0]
+    assert item["queries"] == ["records for <PERSON_1>", "orders by <EMAIL_ADDRESS_1>"]
+    assert item["results"][0]["text"] == "found <PERSON_1>"
+    assert item["results"][0]["score"] == 0.9  # non-text leaf untouched
+    assert item["id"] == "fs1"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_prompt_variables():
+    # Responses prompt-template variables carry user data; the template id/version
+    # do not. A variable can be a bare string or a typed content part.
+    gr = _make_guardrail()
+    data = {
+        "prompt": {
+            "id": "pmpt_123",
+            "version": "2",
+            "variables": {
+                "customer": "Marie Dupont",
+                "note": {"type": "input_text", "text": "email marie@acme.com"},
+            },
+        }
+    }
+    out = await gr.async_pre_call_hook(None, None, data, "aresponses")
+    variables = out["prompt"]["variables"]
+    assert variables["customer"] == "<PERSON_1>"
+    assert variables["note"]["text"] == "email <EMAIL_ADDRESS_1>"
+    assert out["prompt"]["id"] == "pmpt_123"  # template id is not user data
+    assert out["prompt"]["version"] == "2"
+    assert out["metadata"]["privaite_map"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_block_gate_fires_on_prompt_variables():
+    # the block gate must reach a blocked type sitting only in prompt.variables;
+    # it is only reachable because the variable is scanned in the first place.
+    from fastapi import HTTPException
+
+    gr = _make_guardrail(block_entities=["EMAIL_ADDRESS"])
+    data = {"prompt": {"id": "pmpt_1", "variables": {"to": "marie@acme.com"}}}
+    with pytest.raises(HTTPException) as ei:
+        await gr.async_pre_call_hook(None, None, data, "aresponses")
+    assert ei.value.status_code == 400
+
+
+# --- Auxiliary request fields: completions prompt/suffix, prediction, user_location ---
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_completions_prompt_string_and_suffix_and_fixes_snapshot():
+    gr = _make_guardrail()
+    body = {"prompt": "Complete for Marie Dupont", "suffix": "signed marie@acme.com"}
+    data = {
+        "prompt": "Complete for Marie Dupont",
+        "suffix": "signed marie@acme.com",
+        "proxy_server_request": {"body": body},
+    }
+    out = await gr.async_pre_call_hook(None, None, data, "text_completion")
+
+    assert out["prompt"] == "Complete for <PERSON_1>"
+    assert out["suffix"] == "signed <EMAIL_ADDRESS_1>"
+    # the detached snapshot copy must be overwritten too, or raw PII leaks through it
+    assert body["prompt"] == out["prompt"]
+    assert body["suffix"] == out["suffix"]
+    assert "Marie Dupont" not in body["prompt"]
+    assert out["metadata"]["privaite_map"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_completions_prompt_batch_list_and_skips_tokens():
+    # the /v1/completions batch shape: string leaves are scrubbed; a tokenized
+    # (integer-array) prompt passes through unscanned as documented.
+    gr = _make_guardrail()
+    prompt = ["reach marie@acme.com", [1, 15, 27]]
+    data = {"prompt": prompt}
+    out = await gr.async_pre_call_hook(None, None, data, "text_completion")
+    assert out["prompt"][0] == "reach <EMAIL_ADDRESS_1>"
+    assert out["prompt"][1] == [1, 15, 27]  # token array untouched
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_prediction_content():
+    # chat predicted outputs carry the client's current document verbatim.
+    gr = _make_guardrail()
+    prediction = {"type": "content", "content": "draft addressed to Marie Dupont"}
+    data = {"messages": [{"role": "user", "content": "edit this"}], "prediction": prediction}
+    out = await gr.async_pre_call_hook(None, None, data, "completion")
+    # prediction dict is aliased by the body snapshot, so it is rewritten in place
+    assert prediction["content"] == "draft addressed to <PERSON_1>"
+    assert out["metadata"]["privaite_map"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_web_search_user_location():
+    gr = _make_guardrail()
+    web_search = {"user_location": {"type": "approximate", "approximate": {"city": "Marie Dupont"}}}
+    data = {"messages": [{"role": "user", "content": "weather?"}], "web_search_options": web_search}
+    await gr.async_pre_call_hook(None, None, data, "completion")
+    assert web_search["user_location"]["approximate"]["city"] == "<PERSON_1>"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_only_aux_field_is_not_skipped():
+    # a request whose ONLY user text is an auxiliary field (no messages/input)
+    # must not be short-circuited by the pre-call early return.
+    gr = _make_guardrail()
+    data = {"suffix": "signed marie@acme.com"}
+    out = await gr.async_pre_call_hook(None, None, data, "text_completion")
+    assert out["suffix"] == "signed <EMAIL_ADDRESS_1>"
+    assert out["metadata"]["privaite_map"]
+
+
+# --- Restore parity: refusal and audio transcript (non-streaming + streaming) ---
+
+
+@pytest.mark.asyncio
+async def test_post_call_restores_refusal_and_audio_transcript():
+    gr = _make_guardrail()
+    data = {"metadata": {"privaite_map": _FAKES}}
+
+    # audio as an object (transcript attribute) and refusal quoting the request.
+    obj_msg = types.SimpleNamespace(
+        content=None,
+        tool_calls=None,
+        function_call=None,
+        refusal="I won't email <PERSON_1>",
+        audio=types.SimpleNamespace(transcript="calling <PERSON_1> now"),
+    )
+    # audio as a dict on a second choice.
+    dict_msg = types.SimpleNamespace(
+        content=None,
+        tool_calls=None,
+        function_call=None,
+        audio={"transcript": "reach <EMAIL_ADDRESS_1>"},
+    )
+    response = types.SimpleNamespace(
+        choices=[types.SimpleNamespace(message=obj_msg), types.SimpleNamespace(message=dict_msg)]
+    )
+    out = await gr.async_post_call_success_hook(data, None, response)
+
+    assert out.choices[0].message.refusal == "I won't email Marie Dupont"
+    assert out.choices[0].message.audio.transcript == "calling Marie Dupont now"
+    assert out.choices[1].message.audio["transcript"] == "reach marie@acme.com"
+
+
+@pytest.mark.asyncio
+async def test_streaming_restores_refusal():
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    def _chunk(refusal, finish=None):
+        return types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(
+                    index=0,
+                    delta=types.SimpleNamespace(content=None, tool_calls=None, function_call=None, refusal=refusal),
+                    finish_reason=finish,
+                )
+            ]
+        )
+
+    async def _source():
+        yield _chunk("I won't reach <PER")  # placeholder split across chunks
+        yield _chunk("SON_1>", finish="stop")
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    refusal = "".join(getattr(c.choices[0].delta, "refusal", None) or "" for c in chunks)
+    assert refusal == "I won't reach Marie Dupont"
+
+
+@pytest.mark.asyncio
+async def test_streaming_restores_audio_transcript():
+    # streamed audio transcript fragments are de-anonymized with a placeholder
+    # split across chunks reassembled in the audio-segment buffer.
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    def _chunk(transcript, finish=None):
+        return types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(
+                    index=0,
+                    delta=types.SimpleNamespace(
+                        content=None,
+                        tool_calls=None,
+                        function_call=None,
+                        audio=types.SimpleNamespace(transcript=transcript),
+                    ),
+                    finish_reason=finish,
+                )
+            ]
+        )
+
+    async def _source():
+        yield _chunk("Hi <PER")
+        yield _chunk("SON_1>", finish="stop")
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    transcript = "".join(c.choices[0].delta.audio.transcript or "" for c in chunks if c.choices[0].delta.audio)
+    assert transcript == "Hi Marie Dupont"
