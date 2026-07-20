@@ -727,6 +727,11 @@ class OrgNewResponse(BaseModel):
     organization_id: str
 
 
+class OrgUpdateBody(BaseModel):
+    organization_id: str
+    organization_alias: str
+
+
 class OrgInfoParams(BaseModel):
     organization_id: str
 

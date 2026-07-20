@@ -23,7 +23,7 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
+from models import KeyGenerateBody, OrgInfoResponse, OrgNewBody, OrgUpdateBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
 
 pytestmark = pytest.mark.e2e
 
@@ -340,6 +340,24 @@ class TestOrganizationRoutes:
         )
         assert info.models == ["gemini-2.5-flash"], (
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
+        )
+
+    @pytest.mark.covers("mgmt.organization.update.persists")
+    def test_update_alias_persists_to_organization_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        org_id = client.create_org(OrgNewBody(organization_alias=f"e2e-mgmt-org-{unique_marker()}"))
+        resources.defer(lambda: client.delete_org(org_id))
+
+        new_alias = f"e2e-mgmt-org-{unique_marker()}"
+        client.update_org(OrgUpdateBody(organization_id=org_id, organization_alias=new_alias))
+
+        def attempt() -> OrgInfoResponse | None:
+            info = client.org_info(org_id)
+            return info if info.organization_alias == new_alias else None
+
+        _ = _poll(
+            client, attempt, f"/organization/info never reflected updated alias {new_alias!r} before the deadline"
         )
 
     @pytest.mark.covers("mgmt.organization.delete.persists")

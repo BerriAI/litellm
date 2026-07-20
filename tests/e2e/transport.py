@@ -55,6 +55,10 @@ class Transport(Protocol):
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]: ...
 
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]: ...
+
     def probe(self, path: str, *, params: BaseModel) -> ProbeResult: ...
 
     def upload[R: BaseModel](
@@ -124,6 +128,17 @@ class HttpTransport:
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]:
         return e2e_http.delete(
+            self._url(path),
+            headers=headers,
+            json=json,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return e2e_http.patch(
             self._url(path),
             headers=headers,
             json=json,
@@ -268,6 +283,13 @@ class SplitTransport:
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]:
         return self._route(path).delete(
+            path, headers=headers, json=json, response_type=response_type
+        )
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).patch(
             path, headers=headers, json=json, response_type=response_type
         )
 
