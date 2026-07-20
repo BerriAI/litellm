@@ -16,6 +16,8 @@ follow-up PR with their seam. Pure v2: no imports from v1.
 
 from __future__ import annotations
 
+import hashlib
+
 import httpx
 from typing_extensions import assert_never
 
@@ -33,6 +35,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
+    ExchangedToken,
+    ExchangedTokenCache,
+    TokenEndpointClient,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
     TokenExchanger,
 )
@@ -42,15 +49,23 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthSpecKind,
     AwsSigV4Config,
     Byok,
+    ClientAuth,
     ClientCredentialsConfig,
+    ClientSecretAuth,
     CredError,
+    IdJagConfig,
     NoneConfig,
     PassthroughConfig,
+    PrivateKeyJwtAuth,
     ServerSpec,
     SharedKey,
     Subject,
     TokenExchangeConfig,
 )
+
+_TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
+_JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+_ID_JAG_REQUESTED_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:id-jag"
 
 
 class _NullOAuthTokenStore:
@@ -87,9 +102,13 @@ class UpstreamCredentialProvider:
         self,
         oauth_token_store: OAuthTokenStore | None = None,
         token_exchanger: TokenExchanger | None = None,
+        token_endpoint: TokenEndpointClient | None = None,
+        exchanged_tokens: ExchangedTokenCache | None = None,
     ) -> None:
         self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
         self._token_exchanger: TokenExchanger = token_exchanger or _NullTokenExchanger()
+        self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
+        self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
 
     async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
         match server.config:
@@ -103,6 +122,8 @@ class UpstreamCredentialProvider:
                 return _not_implemented(AuthSpecKind.client_credentials)
             case TokenExchangeConfig() as config:
                 return await self._token_exchange(subject, server, config)
+            case IdJagConfig() as config:
+                return await self._id_jag(subject, server, config)
             case AuthorizationCodeConfig():
                 return await self._authorization_code(subject, server)
             case AwsSigV4Config():
@@ -141,6 +162,53 @@ class UpstreamCredentialProvider:
                 return Error(CredError.of_not_implemented("api_key BYOK source not implemented yet"))
         assert_never(config.key_source)
 
+    async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx.Auth, CredError]:
+        if subject.inbound_token is None:
+            return Error(
+                CredError.of_precondition_required(
+                    "ID-JAG requires a caller identity token; it asserts the calling "
+                    "user's identity upstream and cannot use a static credential."
+                )
+            )
+        token = subject.inbound_token.get_secret_value()
+        cache_key = _id_jag_cache_key(token, server.server_id, config)
+
+        async def _exchange() -> Result[ExchangedToken, CredError]:
+            leg1_params = {
+                "grant_type": _TOKEN_EXCHANGE_GRANT_TYPE,
+                "requested_token_type": _ID_JAG_REQUESTED_TOKEN_TYPE,
+                "subject_token": token,
+                "subject_token_type": config.subject_token_type,
+                **({"audience": config.audience} if config.audience else {}),
+                **({"resource": config.resource} if config.resource else {}),
+                **({"scope": " ".join(config.scopes)} if config.scopes else {}),
+            }
+            match await self._token_endpoint.fetch(
+                config.org_token_endpoint,
+                config.client_id,
+                leg1_params,
+                config.client_auth,
+            ):
+                case Error(err):
+                    return Error(err)
+                case Ok(id_jag):
+                    leg2_params = {
+                        "grant_type": _JWT_BEARER_GRANT_TYPE,
+                        "assertion": id_jag.access_token,
+                    }
+                    return await self._token_endpoint.fetch(
+                        config.resource_token_endpoint,
+                        config.client_id,
+                        leg2_params,
+                        config.client_auth,
+                    )
+
+        match await self._exchanged_tokens.get_or_compute(cache_key, _exchange):
+            case Ok(access_token):
+                return Ok(StaticHeaderAuth(f"Bearer {access_token}"))
+            case Error(err):
+                return Error(err)
+
     async def _authorization_code(self, subject: Subject, server: ServerSpec) -> Result[StaticHeaderAuth, CredError]:
         token = await self._authz_token(subject, server)
         if token is None:
@@ -176,12 +244,18 @@ class UpstreamCredentialProvider:
         """Drop any cached credential the resolver owns for this `(subject, server)`.
 
         Used after an upstream rejects the injected credential, so the next resolve re-mints rather
-        than serving the same rejected token until TTL. Only `token_exchange` holds a re-mintable
-        cached credential here; other modes are a no-op.
+        than serving the same rejected token until TTL. `token_exchange` and `id_jag` hold a
+        re-mintable cached credential here; other modes are a no-op.
         """
-        if isinstance(server.config, TokenExchangeConfig) and subject.inbound_token is not None:
+        if subject.inbound_token is None:
+            return
+        if isinstance(server.config, TokenExchangeConfig):
             await self._token_exchanger.invalidate(
                 subject.inbound_token.get_secret_value(), server, server.config, tenant_id=subject.tenant_id
+            )
+        if isinstance(server.config, IdJagConfig):
+            self._exchanged_tokens.invalidate(
+                _id_jag_cache_key(subject.inbound_token.get_secret_value(), server.server_id, server.config)
             )
 
     async def _authz_token(self, subject: Subject, server: ServerSpec) -> OAuthToken | None:
@@ -194,6 +268,42 @@ class UpstreamCredentialProvider:
             return await self._oauth_token_store.fetch(subject.subject_id, server.server_id)
         except TokenStoreUnavailable:
             return None
+
+
+def _id_jag_cache_key(subject_token: str, server_id: str, config: IdJagConfig) -> str:
+    """Bind the cached leg-2 bearer to the caller token, the server, AND the config that minted it.
+
+    Every exchange parameter derives from the config (endpoints, audience, resource, scopes, client
+    auth), so a server update that changes any of them must change the key; otherwise the old bearer,
+    authorized under the old policy, keeps being served until its TTL. Everything is hashed, so no
+    secret is held in the key.
+    """
+    material = "\x00".join(
+        (
+            subject_token,
+            server_id,
+            config.org_token_endpoint,
+            config.resource_token_endpoint,
+            config.client_id,
+            _client_auth_fingerprint(config.client_auth),
+            config.subject_token_type,
+            config.audience or "",
+            config.resource or "",
+            " ".join(config.scopes),
+        )
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def _client_auth_fingerprint(client_auth: ClientAuth) -> str:
+    match client_auth:
+        case PrivateKeyJwtAuth() as auth:
+            return "\x00".join(
+                ("private_key_jwt", auth.private_key.get_secret_value(), auth.key_id or "", auth.signing_alg)
+            )
+        case ClientSecretAuth() as auth:
+            return "\x00".join(("client_secret", auth.client_secret.get_secret_value()))
+    assert_never(client_auth)
 
 
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
