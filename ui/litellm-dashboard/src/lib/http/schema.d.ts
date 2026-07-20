@@ -20635,6 +20635,28 @@ export interface components {
          * @enum {string}
          */
         AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        /**
+         * AllowedFailsPolicy
+         * @description Use this to set a custom number of allowed fails/minute before cooling down a deployment
+         *     If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
+         *
+         *     Mapping of Exception type to allowed_fails for each exception
+         *     https://docs.litellm.ai/docs/exception_mapping
+         */
+        AllowedFailsPolicy: {
+            /** Authenticationerrorallowedfails */
+            AuthenticationErrorAllowedFails?: number | null;
+            /** Badrequesterrorallowedfails */
+            BadRequestErrorAllowedFails?: number | null;
+            /** Contentpolicyviolationerrorallowedfails */
+            ContentPolicyViolationErrorAllowedFails?: number | null;
+            /** Internalservererrorallowedfails */
+            InternalServerErrorAllowedFails?: number | null;
+            /** Ratelimiterrorallowedfails */
+            RateLimitErrorAllowedFails?: number | null;
+            /** Timeouterrorallowedfails */
+            TimeoutErrorAllowedFails?: number | null;
+        };
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -30377,6 +30399,13 @@ export interface components {
          * @description A group of models that share a routing strategy.
          */
         RoutingGroup: {
+            /** Allowed Fails */
+            allowed_fails?: number | null;
+            allowed_fails_policy?: components["schemas"]["AllowedFailsPolicy"] | null;
+            /** Cooldown Time */
+            cooldown_time?: number | null;
+            /** Enable Health Check Routing */
+            enable_health_check_routing?: boolean | null;
             /** Group Name */
             group_name: string;
             /** Models */

@@ -1094,6 +1094,46 @@ class Router:
         verbose_router_logger.debug("routing_group=%s model=%s strategy=%s", group_name, model, strategy)
         return strategy, selector
 
+    def _routing_group_for_model_name(self, model_name: str | None) -> RoutingGroup | None:
+        if not model_name:
+            return None
+        group_name = self._model_to_group.get(model_name)
+        if group_name is None:
+            return None
+        return self._routing_groups.get(group_name)
+
+    def _model_name_for_deployment_id(self, model_id: str | None) -> str | None:
+        if not model_id:
+            return None
+        model_info = self.get_model_info(id=model_id)
+        if model_info is None:
+            return None
+        return model_info.get("model_name")
+
+    def _resolve_allowed_fails(self, model_name: str | None) -> int:
+        group = self._routing_group_for_model_name(model_name)
+        if group is not None and group.allowed_fails is not None:
+            return group.allowed_fails
+        return self.allowed_fails
+
+    def _resolve_allowed_fails_policy(self, model_name: str | None) -> AllowedFailsPolicy | None:
+        group = self._routing_group_for_model_name(model_name)
+        if group is not None and group.allowed_fails_policy is not None:
+            return group.allowed_fails_policy
+        return self.allowed_fails_policy
+
+    def _resolve_cooldown_time(self, model_name: str | None) -> float:
+        group = self._routing_group_for_model_name(model_name)
+        if group is not None and group.cooldown_time is not None:
+            return group.cooldown_time
+        return self.cooldown_time
+
+    def _resolve_enable_health_check_routing(self, model_name: str | None) -> bool:
+        group = self._routing_group_for_model_name(model_name)
+        if group is not None and group.enable_health_check_routing is not None:
+            return group.enable_health_check_routing
+        return self.enable_health_check_routing
+
     async def _select_deployment_async(
         self,
         *,
@@ -7028,12 +7068,15 @@ class Router:
             # 2. Check if a cooldown time is set in the response header
             # 3. If no cooldown time is set, use the router default cooldown time
             ##############################################
+            _callback_deployment_id = _model_info.get("id") if isinstance(_model_info, dict) else None
             if deployment_cooldown is not None and deployment_cooldown >= 0:
                 _time_to_cooldown = deployment_cooldown
             elif header_cooldown is not None and header_cooldown >= 0:
                 _time_to_cooldown = header_cooldown
             else:
-                _time_to_cooldown = self.cooldown_time
+                _time_to_cooldown = self._resolve_cooldown_time(
+                    self._model_name_for_deployment_id(_callback_deployment_id)
+                )
 
             if isinstance(_model_info, dict):
                 deployment_id: Optional[str] = _model_info.get("id")
@@ -7302,12 +7345,15 @@ class Router:
                             target=logging_obj.failure_handler,
                             args=(e, traceback.format_exc()),
                         ).start()  # log response
+                    _precall_deployment_id = deployment["model_info"]["id"]
                     _set_cooldown_deployments(
                         litellm_router_instance=self,
                         exception_status=e.status_code,
                         original_exception=e,
-                        deployment=deployment["model_info"]["id"],
-                        time_to_cooldown=self.cooldown_time,
+                        deployment=_precall_deployment_id,
+                        time_to_cooldown=self._resolve_cooldown_time(
+                            self._model_name_for_deployment_id(_precall_deployment_id)
+                        ),
                     )
                     raise e
                 except Exception as e:
@@ -9660,8 +9706,6 @@ class Router:
               request for it still be attempted?". A hidden model can still be
               called directly.
         """
-        if self.allowed_fails_policy is not None:
-            return set()
         unhealthy_ids = await self.health_state_cache.async_get_unhealthy_deployment_ids()
         if not unhealthy_ids:
             return set()
@@ -9681,7 +9725,11 @@ class Router:
                     unhealthy_by_name[name] = unhealthy_by_name[name] and is_unhealthy
                 else:
                     unhealthy_by_name[name] = is_unhealthy
-        return {name for name, fully_unhealthy in unhealthy_by_name.items() if fully_unhealthy}
+        return {
+            name
+            for name, fully_unhealthy in unhealthy_by_name.items()
+            if fully_unhealthy and self._resolve_allowed_fails_policy(name) is None
+        }
 
     def _get_team_specific_model(self, deployment: DeploymentTypedDict, team_id: Optional[str] = None) -> Optional[str]:
         """
@@ -10576,7 +10624,11 @@ class Router:
         # Safety net: only bypass cooldown filter when health-check routing is
         # driving cooldown (i.e. allowed_fails_policy is set). Without a policy,
         # cooldowns are from real request failures and must not be bypassed.
-        if not healthy_deployments and self.enable_health_check_routing and self.allowed_fails_policy is not None:
+        if (
+            not healthy_deployments
+            and self._resolve_enable_health_check_routing(model)
+            and self._resolve_allowed_fails_policy(model) is not None
+        ):
             verbose_router_logger.warning(
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
@@ -11099,7 +11151,11 @@ class Router:
             healthy_deployments=healthy_deployments,
             cooldown_deployments=cooldown_deployments,
         )
-        if not healthy_deployments and self.enable_health_check_routing and self.allowed_fails_policy is not None:
+        if (
+            not healthy_deployments
+            and self._resolve_enable_health_check_routing(model)
+            and self._resolve_allowed_fails_policy(model) is not None
+        ):
             verbose_router_logger.warning(
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
@@ -11382,13 +11438,17 @@ class Router:
         Returns all deployments if health state is unavailable, stale, or would
         exclude every candidate (safety net).
         """
-        if not self.enable_health_check_routing:
+        if not healthy_deployments:
+            return healthy_deployments
+
+        model_name = healthy_deployments[0].get("model_name")
+        if not self._resolve_enable_health_check_routing(model_name):
             return healthy_deployments
 
         # When allowed_fails_policy is set, cooldown is the sole routing exclusion
         # mechanism -- skip the binary health check filter so the policy threshold
         # is respected before any deployment is excluded.
-        if self.allowed_fails_policy is not None:
+        if self._resolve_allowed_fails_policy(model_name) is not None:
             return healthy_deployments
 
         unhealthy_ids = await self.health_state_cache.async_get_unhealthy_deployment_ids(
@@ -11411,10 +11471,14 @@ class Router:
         parent_otel_span: Optional[Span] = None,
     ) -> List[Dict]:
         """Sync version of _async_filter_health_check_unhealthy_deployments."""
-        if not self.enable_health_check_routing:
+        if not healthy_deployments:
             return healthy_deployments
 
-        if self.allowed_fails_policy is not None:
+        model_name = healthy_deployments[0].get("model_name")
+        if not self._resolve_enable_health_check_routing(model_name):
+            return healthy_deployments
+
+        if self._resolve_allowed_fails_policy(model_name) is not None:
             return healthy_deployments
 
         unhealthy_ids = self.health_state_cache.get_unhealthy_deployment_ids(parent_otel_span=parent_otel_span)
@@ -11474,7 +11538,7 @@ class Router:
             retry_policy=self.retry_policy,
         )
 
-    def get_allowed_fails_from_policy(self, exception: Exception):
+    def get_allowed_fails_from_policy(self, exception: Exception, model_name: str | None = None):
         """
         BadRequestErrorRetries: Optional[int] = None
         AuthenticationErrorRetries: Optional[int] = None
@@ -11483,7 +11547,7 @@ class Router:
         ContentPolicyViolationErrorRetries: Optional[int] = None
         """
         # if we can find the exception then in the retry policy -> return the number of retries
-        allowed_fails_policy: Optional[AllowedFailsPolicy] = self.allowed_fails_policy
+        allowed_fails_policy: AllowedFailsPolicy | None = self._resolve_allowed_fails_policy(model_name)
 
         if allowed_fails_policy is None:
             return None

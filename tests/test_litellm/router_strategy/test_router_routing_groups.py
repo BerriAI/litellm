@@ -726,3 +726,92 @@ def test_strategy_reinit_unregisters_override_selectors():
     assert router._override_selectors == {}
     assert not any(id(cb) == id(override_selector) for cb in litellm.callbacks)
     assert router._get_override_strategy_selector("latency-based-routing") is router.lowestlatency_logger
+
+
+def _reliability_router(**group_overrides):
+    return _build_router(
+        routing_strategy="simple-shuffle",
+        routing_groups=[
+            {
+                "group_name": "fast",
+                "models": ["filtered-model"],
+                "routing_strategy": "simple-shuffle",
+                **group_overrides,
+            }
+        ],
+    )
+
+
+def test_resolve_allowed_fails_uses_group_override_else_router_scalar():
+    router = _reliability_router(allowed_fails=1)
+    router.allowed_fails = 9
+    assert router._resolve_allowed_fails("filtered-model") == 1
+    assert router._resolve_allowed_fails("other-model") == 9
+    assert router._resolve_allowed_fails(None) == 9
+
+
+def test_resolve_cooldown_time_uses_group_override_else_router_scalar():
+    router = _reliability_router(cooldown_time=7)
+    router.cooldown_time = 60
+    assert router._resolve_cooldown_time("filtered-model") == 7
+    assert router._resolve_cooldown_time("other-model") == 60
+
+
+def test_resolve_enable_health_check_routing_uses_group_override_else_router_flag():
+    router = _reliability_router(enable_health_check_routing=True)
+    assert router.enable_health_check_routing is False
+    assert router._resolve_enable_health_check_routing("filtered-model") is True
+    assert router._resolve_enable_health_check_routing("other-model") is False
+
+
+def test_resolve_allowed_fails_policy_uses_group_override_else_router_value():
+    router = _reliability_router(allowed_fails_policy={"RateLimitErrorAllowedFails": 9})
+    assert router.allowed_fails_policy is None
+    grouped = router._resolve_allowed_fails_policy("filtered-model")
+    assert grouped is not None and grouped.RateLimitErrorAllowedFails == 9
+    assert router._resolve_allowed_fails_policy("other-model") is None
+
+
+def test_model_name_for_deployment_id_maps_back_to_model_name():
+    router = _reliability_router()
+    assert router._model_name_for_deployment_id("deploy-1") == "filtered-model"
+    assert router._model_name_for_deployment_id("deploy-3") == "other-model"
+    assert router._model_name_for_deployment_id("missing") is None
+    assert router._model_name_for_deployment_id(None) is None
+
+
+def test_group_allowed_fails_override_changes_cooldown_threshold():
+    from litellm.router_utils.cooldown_handlers import (
+        should_cooldown_based_on_allowed_fails_policy,
+    )
+
+    router = _reliability_router(allowed_fails=1)
+    router.allowed_fails = 5
+    exc = Exception("boom")
+
+    assert should_cooldown_based_on_allowed_fails_policy(router, "deploy-1", exc) is False
+    assert should_cooldown_based_on_allowed_fails_policy(router, "deploy-1", exc) is True
+
+    for _ in range(5):
+        assert should_cooldown_based_on_allowed_fails_policy(router, "deploy-3", exc) is False
+    assert should_cooldown_based_on_allowed_fails_policy(router, "deploy-3", exc) is True
+
+
+@pytest.mark.asyncio
+async def test_async_health_filter_honors_per_group_enable_flag():
+    from unittest.mock import AsyncMock
+
+    router = _reliability_router(enable_health_check_routing=True)
+
+    with patch.object(
+        router.health_state_cache,
+        "async_get_unhealthy_deployment_ids",
+        new=AsyncMock(return_value={"deploy-1"}),
+    ):
+        grouped = list(router.get_model_list(model_name="filtered-model") or [])
+        filtered = await router._async_filter_health_check_unhealthy_deployments(grouped)
+        assert {d["model_info"]["id"] for d in filtered} == {"deploy-2"}
+
+        ungrouped = list(router.get_model_list(model_name="other-model") or [])
+        unfiltered = await router._async_filter_health_check_unhealthy_deployments(ungrouped)
+        assert {d["model_info"]["id"] for d in unfiltered} == {"deploy-3"}
