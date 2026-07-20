@@ -189,6 +189,19 @@ class TestTeamRoutes:
             f"key generated under team {team_id} carries team_id {key_info.team_id!r} in /key/info"
         )
 
+    @pytest.mark.covers("mgmt.team.list.happy_path")
+    def test_created_team_appears_in_team_list(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        alias = f"e2e-mgmt-team-{unique_marker()}"
+        team_id = _create_team(client, resources, alias, ["gemini-2.5-flash"])
+
+        _ = _poll(
+            client,
+            lambda: team_id if team_id in client.team_list_ids() else None,
+            f"/team/list never included the created team {team_id}",
+        )
+
     @pytest.mark.covers("mgmt.team.member_add.persists")
     def test_member_add_and_delete_persist_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
