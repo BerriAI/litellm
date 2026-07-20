@@ -654,6 +654,15 @@ class TeamDeleteBody(BaseModel):
     team_ids: list[str]
 
 
+class TeamListEntry(BaseModel):
+    team_id: str
+
+
+class TeamListResponse(RootModel[list[TeamListEntry]]):
+    """GET /team/list answers with a bare array of team objects (not an object
+    wrapping them). Only team_id is read; pydantic ignores the rest."""
+
+
 UserRole = Literal["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"]
 
 
