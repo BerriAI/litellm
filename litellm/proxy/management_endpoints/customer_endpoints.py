@@ -621,7 +621,12 @@ async def update_end_user(
                 try:
                     validate_model_max_budget(model_max_budget)
                 except ValueError as e:
-                    raise HTTPException(status_code=400, detail={"error": str(e)})
+                    raise ProxyException(
+                        message={"error": str(e)},
+                        type="bad_request",
+                        param="model_max_budget",
+                        code=400,
+                    )
 
             # Mirror /budget/new and /budget/update: when budget_duration is set and
             # budget_reset_at is not, compute the next reset so reset_budget_job can
