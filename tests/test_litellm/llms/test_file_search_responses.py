@@ -3,7 +3,7 @@ Unit tests for file_search / vector_store support in the Responses API.
 
 Coverage:
   A1-A7  _decode_vector_store_ids_in_tools()
-  B1-B3  update_responses_tools_with_model_file_ids()
+  B1-B5  update_responses_tools_with_model_file_ids()
   C1,D1  supports_native_file_search()
   E1-E4  file_search guard in responses/main.py
   F1-F6  ManagedFiles hook access control
@@ -161,6 +161,51 @@ class TestUpdateResponsesToolsWithModelFileIds:
         assert result is not None
         assert result[0]["vector_store_ids"] == ["vs_decoded"]
         assert result[1]["container"]["file_ids"] == ["provider_file_xyz"]
+
+    def test_B4_code_interpreter_model_embedded_id_decodes_without_mapping(self):
+        """x-litellm-model file IDs decode even without managed-file state."""
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            encode_file_id_with_model,
+        )
+
+        provider_file_id = "file-provider-native"
+        encoded_file_id = encode_file_id_with_model(
+            file_id=provider_file_id,
+            model="gpt-5.1",
+        )
+        tools = [_code_interpreter_tool([encoded_file_id])]
+
+        result = update_responses_tools_with_model_file_ids(
+            tools=tools,
+            model_id=None,
+            model_file_id_mapping=None,
+        )
+
+        assert result is not None
+        assert result[0]["container"]["file_ids"] == [provider_file_id]
+
+    def test_B5_code_interpreter_mapping_precedes_model_embedded_decode(self):
+        """A deployment-specific mapping remains authoritative."""
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            encode_file_id_with_model,
+        )
+
+        model_id = "model-abc"
+        encoded_file_id = encode_file_id_with_model(
+            file_id="file-provider-native",
+            model="gpt-5.1",
+        )
+        tools = [_code_interpreter_tool([encoded_file_id])]
+        mapping = {encoded_file_id: {model_id: "file-deployment-specific"}}
+
+        result = update_responses_tools_with_model_file_ids(
+            tools=tools,
+            model_id=model_id,
+            model_file_id_mapping=mapping,
+        )
+
+        assert result is not None
+        assert result[0]["container"]["file_ids"] == ["file-deployment-specific"]
 
 
 # ---------------------------------------------------------------------------

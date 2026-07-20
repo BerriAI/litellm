@@ -649,7 +649,8 @@ def update_responses_tools_with_model_file_ids(
     Updates responses API tools with provider-specific file IDs.
 
     Pass 1 (always): decode unified vector_store_ids in file_search tools.
-    Pass 2 (needs mapping): map code_interpreter container file_ids to provider IDs.
+    Pass 2 (always): map managed code_interpreter file IDs when a mapping is
+    available, otherwise decode IDs produced by the x-litellm-model upload path.
 
     Args:
         tools: The responses API tools parameter
@@ -660,13 +661,15 @@ def update_responses_tools_with_model_file_ids(
     if not tools or not isinstance(tools, list):
         return tools
 
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_original_file_id,
+        is_model_embedded_id,
+    )
+
     # Pass 1: decode unified vector_store_ids (no mapping needed)
     tools = _decode_vector_store_ids_in_tools(tools) or tools
 
-    # Pass 2: map code_interpreter file IDs (requires mapping)
-    if not model_file_id_mapping or not model_id:
-        return tools
-
+    # Pass 2: map or decode code_interpreter file IDs.
     updated_tools = []
     for tool in tools:
         if not isinstance(tool, dict):
@@ -684,13 +687,14 @@ def update_responses_tools_with_model_file_ids(
                     updated_file_ids = []
                     for file_id in container_file_ids:
                         if isinstance(file_id, str):
-                            # Check if we have a mapping for this file ID
-                            if file_id in model_file_id_mapping:
-                                # Map to provider-specific file ID
-                                provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
-                                updated_file_ids.append(provider_file_id)
-                            else:
-                                updated_file_ids.append(file_id)
+                            provider_file_id = (
+                                model_file_id_mapping.get(file_id, {}).get(model_id)
+                                if model_file_id_mapping and model_id
+                                else None
+                            )
+                            if not provider_file_id and is_model_embedded_id(file_id):
+                                provider_file_id = get_original_file_id(file_id)
+                            updated_file_ids.append(provider_file_id or file_id)
                         else:
                             updated_file_ids.append(file_id)
 
