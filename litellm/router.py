@@ -7446,6 +7446,100 @@ class Router:
                 if backend_value is not None:
                     model_info[field] = backend_value
 
+    def _register_deployment_in_model_cost(self, deployment: Deployment, model_info: dict) -> None:
+        """Register a deployment's model_info into ``litellm.model_cost``.
+
+        Registers under the deployment's unique ``model_id`` (full pricing) and
+        under the shared provider/model backend key (custom pricing stripped so
+        one alias can't pollute another). The shared registration preserves an
+        existing ``mode == "responses"`` backend so last-write-wins alias
+        registration can't silently downgrade it to ``chat``.
+
+        Written to be idempotent so it can be replayed to restore deployment
+        overrides after ``litellm.model_cost`` is replaced wholesale (e.g. a
+        remote cost-map reload).
+        """
+        for field in CustomPricingLiteLLMParams.model_fields.keys():
+            if deployment.litellm_params.get(field) is not None:
+                model_info[field] = deployment.litellm_params[field]
+
+        if model_info.get("input_cost_per_token") is not None:
+            Router._inherit_builtin_cache_pricing(
+                model_info=model_info,
+                backend_model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
+
+        ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
+        model_id = deployment.model_info.id
+        if model_id is not None:
+            litellm.register_model(model_cost={model_id: model_info})
+
+        ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
+        backend_model_name = deployment.litellm_params.model
+        if deployment.litellm_params.custom_llm_provider is not None:
+            backend_model_name = deployment.litellm_params.custom_llm_provider + "/" + backend_model_name
+
+        # For the shared backend key, strip custom pricing fields so that
+        # one deployment's pricing overrides don't pollute another
+        # deployment sharing the same backend model name.
+        # Each deployment's full pricing is already stored under its
+        # unique model_id above.
+        _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(model_info)
+        _existing_shared_mode = (cast(Optional[dict], litellm.model_cost.get(backend_model_name, {})) or {}).get("mode")
+        _deployment_mode = _shared_model_info.get("mode")
+        # Keep the built-in bridge mode stable for shared backend keys.
+        # Multiple aliases can point at the same provider/model backend,
+        # but their deployment-level overrides should not downgrade the
+        # backend from responses -> chat via last-write-wins registration.
+        # Only preserve in that specific direction so legitimate upgrades
+        # (e.g. chat -> responses) and unrelated mode changes still apply,
+        # and so a missing deployment mode does not silently clear the
+        # existing shared backend mode.
+        _is_responses_to_chat_downgrade = _existing_shared_mode == "responses" and _deployment_mode == "chat"
+        _would_clear_existing_mode = _existing_shared_mode is not None and _deployment_mode is None
+        if _is_responses_to_chat_downgrade or _would_clear_existing_mode:
+            if _deployment_mode is not None:
+                verbose_router_logger.warning(
+                    "Router: preserving existing mode=%s for shared backend "
+                    "key %s instead of the deployment-specified mode=%s "
+                    "(prevents alias registration from downgrading the "
+                    "shared backend mode).",
+                    _existing_shared_mode,
+                    backend_model_name,
+                    _deployment_mode,
+                )
+            _shared_model_info["mode"] = _existing_shared_mode
+
+        # Always register the (possibly mode-preserved) shared backend info.
+        _backend_alias_cost = {backend_model_name: _shared_model_info}
+        if "responses/" in backend_model_name:
+            _backend_alias_cost[backend_model_name.replace("responses/", "")] = _shared_model_info
+        litellm.register_model(model_cost=_backend_alias_cost)
+
+    def re_register_deployments_in_model_cost(self) -> None:
+        """Replay per-deployment ``model_cost`` registration for all deployments.
+
+        ``litellm.model_cost`` is a process-global dict that the proxy replaces
+        wholesale when it reloads the remote cost map. That drops the overrides
+        (custom pricing, ``mode``, ``supported_endpoints``, ...) previously
+        layered on top from the model_list, which e.g. reverts a configured
+        ``mode: responses`` back to the built-in ``mode: chat`` and breaks the
+        chat -> responses bridge on the next request. Replaying registration
+        restores the deployment overrides on top of the fresh cost map.
+        """
+        for deployment_dict in self.model_list:
+            litellm_params = deployment_dict.get("litellm_params") or {}
+            deployment = Deployment(
+                model_name=deployment_dict["model_name"],
+                litellm_params=LiteLLM_Params(**litellm_params),
+                model_info=dict(deployment_dict.get("model_info") or {}),
+            )
+            self._register_deployment_in_model_cost(
+                deployment=deployment,
+                model_info=deployment.model_info.model_dump(exclude_none=True),
+            )
+
     def _create_deployment(
         self,
         deployment_info: dict,
@@ -7470,68 +7564,7 @@ class Router:
                 litellm_params=litellm_params,
                 model_info=_model_info,
             )
-            for field in CustomPricingLiteLLMParams.model_fields.keys():
-                if deployment.litellm_params.get(field) is not None:
-                    _model_info[field] = deployment.litellm_params[field]
-
-            if _model_info.get("input_cost_per_token") is not None:
-                Router._inherit_builtin_cache_pricing(
-                    model_info=_model_info,
-                    backend_model=deployment.litellm_params.model,
-                    custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-                )
-
-            ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
-            model_id = deployment.model_info.id
-            if model_id is not None:
-                litellm.register_model(
-                    model_cost={
-                        model_id: _model_info,
-                    }
-                )
-
-            ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
-            _model_name = deployment.litellm_params.model
-            if deployment.litellm_params.custom_llm_provider is not None:
-                _model_name = deployment.litellm_params.custom_llm_provider + "/" + _model_name
-
-            # For the shared backend key, strip custom pricing fields so that
-            # one deployment's pricing overrides don't pollute another
-            # deployment sharing the same backend model name.
-            # Each deployment's full pricing is already stored under its
-            # unique model_id above.
-            _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info)
-            _existing_shared_mode = (cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}).get("mode")
-            _deployment_mode = _shared_model_info.get("mode")
-            # Keep the built-in bridge mode stable for shared backend keys.
-            # Multiple aliases can point at the same provider/model backend,
-            # but their deployment-level overrides should not downgrade the
-            # backend from responses -> chat via last-write-wins registration.
-            # Only preserve in that specific direction so legitimate upgrades
-            # (e.g. chat -> responses) and unrelated mode changes still apply,
-            # and so a missing deployment mode does not silently clear the
-            # existing shared backend mode.
-            _is_responses_to_chat_downgrade = _existing_shared_mode == "responses" and _deployment_mode == "chat"
-            _would_clear_existing_mode = _existing_shared_mode is not None and _deployment_mode is None
-            if _is_responses_to_chat_downgrade or _would_clear_existing_mode:
-                if _deployment_mode is not None:
-                    verbose_router_logger.warning(
-                        "Router: preserving existing mode=%s for shared backend "
-                        "key %s instead of the deployment-specified mode=%s "
-                        "(prevents alias registration from downgrading the "
-                        "shared backend mode).",
-                        _existing_shared_mode,
-                        _model_name,
-                        _deployment_mode,
-                    )
-                _shared_model_info["mode"] = _existing_shared_mode
-
-            # Always register the (possibly mode-preserved) shared backend info.
-            _backend_alias_cost = {_model_name: _shared_model_info}
-            if "responses/" in _model_name:
-                _stripped_model_name = _model_name.replace("responses/", "")
-                _backend_alias_cost[_stripped_model_name] = _shared_model_info
-            litellm.register_model(model_cost=_backend_alias_cost)
+            self._register_deployment_in_model_cost(deployment=deployment, model_info=_model_info)
 
             ## Check if LLM Deployment is allowed for this deployment
             if self.deployment_is_active_for_environment(deployment=deployment) is not True:

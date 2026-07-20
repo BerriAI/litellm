@@ -6351,12 +6351,15 @@ class ProxyConfig:
 
                 model_cost_map_url = litellm.model_cost_map_url
                 new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+                models_count = len(new_model_cost_map) if new_model_cost_map else 0
                 litellm.model_cost = new_model_cost_map
                 # Invalidate case-insensitive lookup map since model_cost was replaced
                 _invalidate_model_cost_lowercase_map()
                 # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
                 # wildcard patterns like "anthropic/*" include any newly added models.
                 litellm.add_known_models(model_cost_map=new_model_cost_map)
+                if llm_router is not None:
+                    llm_router.re_register_deployments_in_model_cost()
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -6386,9 +6389,7 @@ class ProxyConfig:
                 )
                 await invalidate_config_param("model_cost_map_reload_config")
 
-                verbose_proxy_logger.info(
-                    f"Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}"
-                )
+                verbose_proxy_logger.info(f"Model cost map reloaded successfully. Models count: {models_count}")
 
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in _check_and_reload_model_cost_map: {str(e)}")
@@ -15519,12 +15520,15 @@ async def reload_model_cost_map(
 
         model_cost_map_url = litellm.model_cost_map_url
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+        models_count = len(new_model_cost_map) if new_model_cost_map else 0
         litellm.model_cost = new_model_cost_map
         # Invalidate case-insensitive lookup map since model_cost was replaced
         _invalidate_model_cost_lowercase_map()
         # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
         # wildcard patterns like "anthropic/*" include any newly added models.
         litellm.add_known_models(model_cost_map=new_model_cost_map)
+        if llm_router is not None:
+            llm_router.re_register_deployments_in_model_cost()
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
@@ -15551,7 +15555,6 @@ async def reload_model_cost_map(
         )
         await invalidate_config_param("model_cost_map_reload_config")
 
-        models_count = len(new_model_cost_map) if new_model_cost_map else 0
         verbose_proxy_logger.info(f"Model cost map reloaded successfully in current pod. Models count: {models_count}")
 
         return {

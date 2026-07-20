@@ -404,6 +404,76 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         _restore_model_cost_entries(model_keys)
 
 
+def test_deployment_mode_persists_across_model_cost_map_reload():
+    """Regression for #32736.
+
+    The proxy periodically replaces ``litellm.model_cost`` wholesale with a
+    fresh remote cost map. That drops the per-deployment overrides the router
+    layered on top, so a deployment configured with ``mode: responses`` would
+    silently revert to the built-in ``mode: chat`` and break the chat ->
+    responses bridge on the next request. ``re_register_deployments_in_model_cost``
+    replays registration so the override survives the reload.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    backend_key = "gpt-5.6"
+    original = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.6",
+                    "litellm_params": {
+                        "model": "gpt-5.6",
+                        "custom_llm_provider": "openai",
+                        "api_key": "fake-key-reload",
+                    },
+                    "model_info": {
+                        "id": "gpt-56-responses-reload",
+                        "mode": "responses",
+                    },
+                }
+            ],
+        )
+        assert litellm.model_cost[backend_key]["mode"] == "responses"
+
+        # Simulate the proxy reload: swap in a fresh map that only knows the
+        # built-in mode=chat and carries none of the router's registrations.
+        litellm.model_cost = {"gpt-5.6": {"litellm_provider": "openai", "mode": "chat"}}
+        _invalidate_model_cost_lowercase_map()
+        assert litellm.model_cost[backend_key]["mode"] == "chat"
+
+        router.re_register_deployments_in_model_cost()
+
+        assert litellm.model_cost[backend_key]["mode"] == "responses"
+
+        deployment = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(
+                model="gpt-5.6",
+                custom_llm_provider="openai",
+                api_key="fake-key-reload",
+            ),
+            model_info={"id": "gpt-56-responses-reload", "mode": "responses"},
+        )
+        router._register_deployment_in_model_cost(
+            deployment=deployment,
+            model_info=deployment.model_info.model_dump(exclude_none=True),
+        )
+        assert litellm.model_cost["gpt-56-responses-reload"]["mode"] == "responses"
+        assert litellm.model_cost[backend_key]["mode"] == "responses"
+
+        bridge_model_info, bridge_model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+        )
+        assert bridge_model == "gpt-5.6"
+        assert bridge_model_info["mode"] == "responses"
+    finally:
+        litellm.model_cost = original
+        _invalidate_model_cost_lowercase_map()
+
+
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():
     """A deployment that overrides only input/output cost on a cache-supporting
     model must still bill cache_read and cache_creation tokens. Before the
