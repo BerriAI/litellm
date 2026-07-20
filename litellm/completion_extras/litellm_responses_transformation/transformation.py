@@ -119,7 +119,11 @@ def _tool_call_dict_from_output_item(item: dict[str, Any]) -> dict[str, Any]:
         "type": "function",
     }
     provider_specific_fields = item.get("provider_specific_fields")
-    if isinstance(provider_specific_fields, dict) and provider_specific_fields:
+    if provider_specific_fields and not isinstance(provider_specific_fields, dict):
+        provider_specific_fields = (
+            dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else None
+        )
+    if provider_specific_fields:
         tool_call_dict["provider_specific_fields"] = provider_specific_fields
         tool_call_dict["function"]["provider_specific_fields"] = provider_specific_fields
     return tool_call_dict
@@ -1180,39 +1184,26 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         elif event_type == "response.output_item.added":
             # New output item added
             output_item = parsed_chunk.get("item", {})
-            if output_item.get("type") == "function_call":
-                # Extract provider_specific_fields if present
-                provider_specific_fields = output_item.get("provider_specific_fields")
-                if provider_specific_fields and not isinstance(provider_specific_fields, dict):
-                    provider_specific_fields = (
-                        dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                    )
+            if output_item.get("type") in ("function_call", "custom_tool_call"):
+                converted = _tool_call_dict_from_output_item(output_item)
+                provider_specific_fields = converted.get("provider_specific_fields")
 
                 function_chunk = ChatCompletionToolCallFunctionChunk(
-                    name=output_item.get("name", None),
-                    arguments=output_item.get("arguments") or parsed_chunk.get("arguments") or "",
+                    name=converted["function"]["name"] or None,
+                    arguments=converted["function"]["arguments"] or parsed_chunk.get("arguments") or "",
                 )
-
                 if provider_specific_fields:
                     function_chunk["provider_specific_fields"] = provider_specific_fields
-
-                from litellm.responses.litellm_completion_transformation.transformation import (
-                    LiteLLMCompletionResponsesConfig,
-                )
 
                 tool_call_index = OpenAiResponsesToChatCompletionStreamIterator._sequential_tool_call_index(
                     tool_call_index_map, parsed_chunk.get("output_index", 0)
                 )
                 tool_call_chunk = ChatCompletionToolCallChunk(
-                    id=LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(
-                        output_item.get("id"), output_item.get("call_id")
-                    ),
+                    id=converted["id"],
                     index=tool_call_index,
                     type="function",
                     function=function_chunk,
                 )
-
-                # Add provider_specific_fields if present
                 if provider_specific_fields:
                     tool_call_chunk.provider_specific_fields = provider_specific_fields  # type: ignore
 
@@ -1221,32 +1212,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         StreamingChoices(
                             index=0,
                             delta=Delta(tool_calls=[tool_call_chunk]),
-                            finish_reason=None,
-                        )
-                    ]
-                )
-            elif output_item.get("type") == "custom_tool_call":
-                tool_call_index = OpenAiResponsesToChatCompletionStreamIterator._sequential_tool_call_index(
-                    tool_call_index_map, parsed_chunk.get("output_index", 0)
-                )
-                converted = _tool_call_dict_from_output_item(output_item)
-                return ModelResponseStream(
-                    choices=[
-                        StreamingChoices(
-                            index=0,
-                            delta=Delta(
-                                tool_calls=[
-                                    ChatCompletionToolCallChunk(
-                                        id=converted["id"],
-                                        index=tool_call_index,
-                                        type="function",
-                                        function=ChatCompletionToolCallFunctionChunk(
-                                            name=converted["function"]["name"],
-                                            arguments=converted["function"]["arguments"],
-                                        ),
-                                    )
-                                ]
-                            ),
                             finish_reason=None,
                         )
                     ]
