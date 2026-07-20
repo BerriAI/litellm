@@ -9,7 +9,7 @@ Pins (PR2):
 from __future__ import annotations
 
 import asyncio
-import time
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -167,28 +167,29 @@ async def test_transform_request_does_not_block_event_loop(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(proxy_server, "is_request_body_safe", lambda **kwargs: True)
 
-    def slow_return_raw_request(endpoint, kwargs):
-        time.sleep(0.2)
+    event_loop_progressed = threading.Event()
+
+    def blocking_return_raw_request(endpoint, kwargs):
+        if not event_loop_progressed.wait(timeout=1):
+            raise AssertionError("event loop was blocked")
         return {
             "raw_request_api_base": "https://example.com/v1/chat/completions",
             "raw_request_body": kwargs,
             "raw_request_headers": {},
         }
 
-    monkeypatch.setattr("litellm.utils.return_raw_request", slow_return_raw_request)
+    monkeypatch.setattr(
+        "litellm.utils.return_raw_request", blocking_return_raw_request
+    )
 
     async def heartbeat():
-        start = asyncio.get_running_loop().time()
-        await asyncio.sleep(0.01)
-        return asyncio.get_running_loop().time() - start
+        event_loop_progressed.set()
 
-    tick = asyncio.create_task(heartbeat())
-    await asyncio.sleep(0)
+    heartbeat_task = asyncio.create_task(heartbeat())
     await proxy_server.transform_request(
         proxy_server.TransformRequestBody(
             call_type="completion",
             request_body={"model": "openai/test-model"},
         )
     )
-
-    assert await tick < 0.1
+    await heartbeat_task
