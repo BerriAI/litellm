@@ -504,3 +504,39 @@ async def test_update_customer_updates_existing_budget_with_duration_and_reset_a
     assert update_data["budget_duration"] == "1mo"
     assert update_data["budget_reset_at"] is not None
     assert not mock_prisma_client.db.litellm_budgettable.create.called
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+@patch("litellm.proxy.proxy_server.premium_user", False)
+async def test_update_customer_rejects_model_max_budget_without_premium(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Mirror /budget/new: model_max_budget requires premium entitlement via
+    validate_model_max_budget. Without it, /customer/update must 400 before
+    writing a budget row.
+    """
+    from litellm.proxy._types import ProxyException
+
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-mmb@example.com",
+        "blocked": False,
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-mmb@example.com",
+        max_budget=50.0,
+        model_max_budget={"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_end_user(update_request, mock_user_api_key_dict)
+
+    assert int(exc_info.value.code) == 400
+    assert not mock_prisma_client.db.litellm_budgettable.create.called

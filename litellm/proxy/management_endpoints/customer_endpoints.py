@@ -612,6 +612,17 @@ async def update_end_user(
 
         ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
+            model_max_budget = budget_table_data.get("model_max_budget")
+            if model_max_budget is not None and len(model_max_budget) > 0:
+                from litellm.proxy.management_endpoints.key_management_endpoints import (
+                    validate_model_max_budget,
+                )
+
+                try:
+                    validate_model_max_budget(model_max_budget)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail={"error": str(e)})
+
             # Mirror /budget/new and /budget/update: when budget_duration is set and
             # budget_reset_at is not, compute the next reset so reset_budget_job can
             # renew spend. budget_reset_at is server-managed (not on LiteLLM_BudgetTable
