@@ -14,7 +14,7 @@ litellm.return_response_headers = False
 
 
 @pytest.fixture(autouse=True)
-def clear_client_cache():
+async def clear_client_cache():
     """
     Clear the HTTP client cache before each test to ensure mocks are used.
     This prevents cached real clients from being reused across tests.
@@ -25,6 +25,13 @@ def clear_client_cache():
     yield
     if cache is not None:
         cache.flush_cache()
+
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    try:
+        await GLOBAL_LOGGING_WORKER.clear_queue()
+    except Exception:
+        pass
 
 
 @pytest.mark.asyncio
