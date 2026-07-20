@@ -184,7 +184,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         content_filter_threshold: float | None = 0.5,
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
-        outputScope: Optional[Literal["INTERVENTIONS", "FULL"]] = None,
+        outputScope: Literal["INTERVENTIONS", "FULL"] | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -210,7 +210,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 f"BedrockGuardrail: outputScope must be one of {sorted(_BEDROCK_OUTPUT_SCOPE_VALUES)} "
                 f"or omitted; got {outputScope!r}."
             )
-        self.output_scope: Optional[Literal["INTERVENTIONS", "FULL"]] = outputScope
+        self.output_scope: Literal["INTERVENTIONS", "FULL"] | None = outputScope
 
         # store kwargs as optional_params
         self.optional_params = kwargs
