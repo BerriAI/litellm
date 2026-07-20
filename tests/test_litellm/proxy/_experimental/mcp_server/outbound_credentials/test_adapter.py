@@ -21,6 +21,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
+    ClientCredentialsConfig,
     ClientSecretAuth,
     CredError,
     IdJagConfig,
@@ -107,7 +108,6 @@ def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
     [
         _server(auth_type=MCPAuth.api_key),  # no token configured
         _server(auth_type=MCPAuth.bearer_token),  # no token configured
-        _server(auth_type=MCPAuth.oauth2, oauth2_flow="client_credentials"),  # M2M -> v1
         _server(auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True),  # delegated upstream OAuth -> v1
         _server(auth_type=MCPAuth.oauth2_token_exchange),  # no endpoint/client creds -> incomplete -> v1
         _server(
@@ -122,6 +122,74 @@ def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
 def test_unmigrated_modes_defer_to_v1(server):
     # A None spec is the defer signal; the caller falls back to v1.
     assert to_server_spec(server) is None
+
+
+def test_client_credentials_maps_full_config():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            url="https://up.example.com/mcp",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            scopes=["read", "write"],
+            audience="https://up.example.com",
+            token_endpoint_auth_method="client_secret_basic",
+        )
+    )
+    assert spec is not None
+    config = spec.config
+    assert isinstance(config, ClientCredentialsConfig)
+    assert config.client_id == "cid"
+    assert config.client_secret is not None
+    assert config.client_secret.get_secret_value() == "csec"
+    assert config.token_url == "https://idp.example.com/token"
+    assert config.scopes == ("read", "write")
+    assert config.audience == "https://up.example.com"
+    assert config.token_endpoint_auth_method == "client_secret_basic"
+
+
+def test_client_credentials_omits_audience_when_unset():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.audience is None
+
+
+def test_client_credentials_with_incomplete_grant_fields_is_owned_for_fail_closed():
+    # An M2M server missing its grant fields is still owned by v2 (spec, not None) so it fails
+    # closed at the source (misconfigured, 500) rather than deferring to v1, which would connect
+    # unauthenticated and mask the upstream 401 as an empty tool list.
+    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2, oauth2_flow="client_credentials", client_id="cid"))
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.token_url is None
+    assert spec.config.client_secret is None
+
+
+def test_client_credentials_wins_over_delegate_flag():
+    # v1 never delegates for M2M servers; the explicit oauth2_flow opt-in outranks the delegate flag.
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            delegate_auth_to_upstream=True,
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
 
 
 def test_token_exchange_maps_full_config():
