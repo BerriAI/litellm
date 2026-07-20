@@ -210,7 +210,7 @@ async def test_vector_store_file_list_resolves_single_openai_team_deployment():
     assert result["model"] == "openai/gpt-4o-mini"
     assert "custom_llm_provider" not in result
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
-        model_id="team-openai"
+        model_id="team-openai", team_id=None
     )
 
 

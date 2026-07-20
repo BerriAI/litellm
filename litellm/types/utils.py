@@ -266,6 +266,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "responses",
             "ocr",
+            "realtime",
         ]
     ]
     tpm: Optional[int]
@@ -401,6 +402,11 @@ class CallTypes(str, Enum):
     avector_store_create = "avector_store_create"
     vector_store_search = "vector_store_search"
     avector_store_search = "avector_store_search"
+
+    ingest = "ingest"
+    aingest = "aingest"
+    query = "query"
+    aquery = "aquery"
 
     #########################################################
     # Container Call Types

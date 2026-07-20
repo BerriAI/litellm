@@ -28,6 +28,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TypedDict,
     Union,
     cast,
     get_args,
@@ -39,6 +40,7 @@ import anyio
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json, JsonValue
+from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -289,6 +291,7 @@ from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
+    _should_return_raw_model_name,
     create_response,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
@@ -363,14 +366,14 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
-    get_persisted_coordination_redis_settings,
-    router as coordination_redis_settings_router,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     _user_has_admin_view,
     admin_can_invite_user,
+)
+from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
+    get_persisted_coordination_redis_settings,
+    router as coordination_redis_settings_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -1393,19 +1396,25 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
     if open_telemetry_logger is None:
         return
     # Under OTel V2 the FastAPI instrumentor owns the server span (parent_otel_span
-    # is that same span), and it records the error + ends it itself. Ending it here
-    # would end it early — losing the http.* attributes the instrumentor stamps on
-    # completion — and double-end it. Leave it to the instrumentor.
+    # is that same span) and ends it itself with the http.* attributes stamped on
+    # completion. The instrumentor only records an error when the exception reaches
+    # it uncaught, but these handlers swallow it into a JSONResponse, so it never
+    # does; stamp the error.* attributes here (without ending or re-statusing the
+    # span, which the instrumentor still owns) so pre-call failures carry the error
+    # like v1 did. Otherwise close and annotate the dangling span ourselves.
     try:
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
-        if is_otel_v2_enabled():
-            return
+        v2_enabled = is_otel_v2_enabled()
     except Exception:
-        pass
+        v2_enabled = False
     try:
         from opentelemetry.trace import Status, StatusCode
 
+        if v2_enabled:
+            if status_code >= 400:
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
+            return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
         if status_code >= 400:
             open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
@@ -1414,7 +1423,8 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
     finally:
-        request.state.parent_otel_span = None
+        if not v2_enabled:
+            request.state.parent_otel_span = None
 
 
 @app.exception_handler(RequestValidationError)
@@ -3708,22 +3718,22 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     litellm_config_cache.redis_cache = redis_cache
 
 
-def resolve_complexity_router_plugins(
-    model_name: str,
-    complexity_router_config: dict,
+def resolve_routing_plugins(
+    plugin_paths: list,
     config_file_path: str | None,
-) -> None:
+    source_label: str,
+) -> list:
     """
-    Resolves `complexity_router_config["plugins"]` dotted-path strings to live
-    instances via `get_instance_fn` (the same convention `litellm_settings.callbacks`
-    uses), in place. Raises at config-load time if a path resolves to something that
-    doesn't implement `RoutingPlugin`, rather than deferring to a confusing
-    `AttributeError` on the first request that reaches the plugin pipeline.
+    Resolves a list of routing-plugin entries to live `RoutingPlugin` instances.
+    Each string entry is resolved through `get_instance_fn` (the same dotted-path
+    convention `litellm_settings.callbacks` uses, which resolves both local module
+    files next to the config and modules installed as Python packages); non-string
+    entries are assumed to already be instances and passed through. Raises at
+    config-load time if any entry resolves to something that doesn't implement
+    `RoutingPlugin`, rather than deferring to a confusing `AttributeError` on the
+    first request that reaches the plugin pipeline. `source_label` names the config
+    key being resolved so the error points the operator at the right place.
     """
-    plugin_paths = complexity_router_config.get("plugins")
-    if not isinstance(plugin_paths, list):
-        return
-
     resolved_plugins = [
         get_instance_fn(value=plugin_path, config_file_path=config_file_path)
         if isinstance(plugin_path, str)
@@ -3739,12 +3749,31 @@ def resolve_complexity_router_plugins(
             getattr(resolved_plugin, "run", None)
         ):
             raise ValueError(
-                f"complexity_router_config.plugins entry {plugin_path!r} on model {model_name!r} "
-                f"resolved to {resolved_plugin!r}, which does not implement the RoutingPlugin "
-                "interface (an async `run(context)` method). Fix the referenced module before "
-                "starting the proxy."
+                f"{source_label} entry {plugin_path!r} resolved to {resolved_plugin!r}, which does "
+                "not implement the RoutingPlugin interface (an async `run(context)` method). Fix the "
+                "referenced module before starting the proxy."
             )
-    complexity_router_config["plugins"] = resolved_plugins
+    return resolved_plugins
+
+
+def resolve_complexity_router_plugins(
+    model_name: str,
+    complexity_router_config: dict,
+    config_file_path: str | None,
+) -> None:
+    """
+    Resolves `complexity_router_config["plugins"]` dotted-path strings to live
+    instances in place, via `resolve_routing_plugins`.
+    """
+    plugin_paths = complexity_router_config.get("plugins")
+    if not isinstance(plugin_paths, list):
+        return
+
+    complexity_router_config["plugins"] = resolve_routing_plugins(
+        plugin_paths=plugin_paths,
+        config_file_path=config_file_path,
+        source_label=f"complexity_router_config.plugins on model {model_name!r}",
+    )
 
 
 class ProxyConfig:
@@ -4874,6 +4903,12 @@ class ProxyConfig:
 
             for k, v in router_settings.items():
                 if k in available_args:
+                    if k == "plugins" and isinstance(v, list):
+                        v = resolve_routing_plugins(
+                            plugin_paths=v,
+                            config_file_path=config_file_path,
+                            source_label="router_settings.plugins",
+                        )
                     router_params[k] = v
                 elif k in {"health_check_interval", "health_check_concurrency"}:
                     raise ValueError(
@@ -7042,6 +7077,9 @@ def _restamp_streaming_chunk_model(
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
 ) -> tuple[Any, bool]:
+    if _should_return_raw_model_name(request_data):
+        return chunk, model_mismatch_logged
+
     target_model = fallback_model_from_metadata if fallback_was_attempted else requested_model_from_client
     # Always return the client-requested model name (not provider-prefixed internal identifiers)
     # on streaming chunks.
@@ -7376,12 +7414,13 @@ async def async_data_generator(
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
         # BaseException, so they bypass the success/failure logging callbacks
-        # that normally release the pre-call max_parallel_requests +1; release
-        # it here. This is the outermost generator Starlette closes on
+        # that normally release the pre-call max_parallel_requests +1. Flag the
+        # disconnect; the shielded cleanup in `finally` owns the slot release
+        # so it can coordinate with disconnect-time success billing and release
+        # exactly once. This is the outermost generator Starlette closes on
         # disconnect, so it fires reliably regardless of needs_iterator_wrap
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
             client_disconnected = True
         raise
     except Exception as e:
@@ -7427,6 +7466,8 @@ async def async_data_generator(
             response=response,
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
 
@@ -14800,7 +14841,17 @@ async def get_config_general_settings(
             )
 
 
-_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
+GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
+
+
+class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
+    type: Literal["Float", "Boolean", "Select"]
+    description: str
+    options: NotRequired[tuple[str, ...]]
+    tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
+
+
+_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec] = {
     "budget_exceeded_throttle_percentage": {
         "type": "Float",
         "description": (
@@ -14809,18 +14860,60 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
             "over-budget keys."
         ),
     },
+    "enable_anthropic_prompt_caching": {
+        "type": "Boolean",
+        "tab": "prompt_caching",
+        "description": (
+            "Auto-adds cache_control to the system prompt and trailing turn for supported Anthropic "
+            "and Bedrock Claude models. The cache is shared across callers on the same upstream credentials."
+        ),
+    },
+    "anthropic_prompt_caching_ttl": {
+        "type": "Select",
+        "options": ("5m", "1h"),
+        "tab": "prompt_caching",
+        "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
+    },
 }
 
 
-def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> Optional[float]:
+def _general_settings_ui_litellm_default(
+    field_type: Literal["Float", "Boolean", "Select"],
+) -> GeneralSettingsUILiteLLMValue:
+    """The value a field falls back to when it is cleared or reset."""
+    return False if field_type == "Boolean" else None
+
+
+def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
+    spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
+    field_type = spec["type"]
     if value is None or value == "":
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
-        )
-    return float(value)
+        return _general_settings_ui_litellm_default(field_type)
+    match field_type:
+        case "Boolean":
+            if not isinstance(value, bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be true or false"},
+                )
+            return value
+        case "Select":
+            options = spec.get("options", ())
+            if value not in options:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be one of: {', '.join(options)}, or empty"},
+                )
+            return cast(str, value)  # cast-ok: membership in options proves it is one of the option strings
+        case "Float":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
+                )
+            return float(value)
+        case _:
+            assert_never(field_type)
 
 
 async def _persist_general_settings_ui_litellm_field(
@@ -14841,11 +14934,12 @@ async def _persist_general_settings_ui_litellm_field(
 async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
     config = await proxy_config.get_config()
     before_value = config.get("litellm_settings", {}).get(field_name)
-    setattr(litellm, field_name, None)
+    default_value = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]["type"])
+    setattr(litellm, field_name, default_value)
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
     await proxy_config.save_config(new_config=config)
-    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, None, user_api_key_dict))
+    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict))
     return {"message": f"Field {field_name} reset", "status": "success"}
 
 
@@ -15013,11 +15107,12 @@ async def get_config_list(
         else {}
     )
     for litellm_field_name, spec in _GENERAL_SETTINGS_UI_LITELLM_FIELDS.items():
-        current_value: Optional[float] = getattr(litellm, litellm_field_name, None)
+        current_value: GeneralSettingsUILiteLLMValue = getattr(litellm, litellm_field_name, None)
+        default_value = _general_settings_ui_litellm_default(spec["type"])
         stored_in_db_litellm: Optional[bool]
         if litellm_field_name in db_litellm_settings:
             stored_in_db_litellm = True
-        elif current_value is not None:
+        elif current_value != default_value:
             stored_in_db_litellm = False
         else:
             stored_in_db_litellm = None
@@ -15028,7 +15123,9 @@ async def get_config_list(
                 field_description=spec["description"],
                 field_value=current_value,
                 stored_in_db=stored_in_db_litellm,
-                field_default_value=None,
+                field_default_value=default_value,
+                field_options=list(spec.get("options", ())) or None,
+                field_tab=spec.get("tab"),
                 nested_fields=None,
             )
         )

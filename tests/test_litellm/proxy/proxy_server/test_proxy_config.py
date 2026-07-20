@@ -22,6 +22,7 @@ from litellm.proxy.proxy_server import (
     _scrub_db_overlay_remote_module_loads,
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
+    resolve_routing_plugins,
 )
 
 from .conftest import normalize
@@ -182,6 +183,75 @@ def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_pa
             model_name="smart-router",
             complexity_router_config=config,
             config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# resolve_routing_plugins
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_routing_plugins_resolves_dotted_paths(tmp_path):
+    plugin_file = tmp_path / "rs_plugin.py"
+    plugin_file.write_text(
+        "class _Plugin:\n"
+        "    async def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "rs_plugin_instance = _Plugin()\n"
+    )
+
+    resolved = resolve_routing_plugins(
+        plugin_paths=["rs_plugin.rs_plugin_instance"],
+        config_file_path=str(tmp_path / "config.yaml"),
+        source_label="router_settings.plugins",
+    )
+
+    assert len(resolved) == 1
+    assert type(resolved[0]).__name__ == "_Plugin"
+
+
+def test_resolve_routing_plugins_passes_through_instances(tmp_path):
+    class _Plugin:
+        async def run(self, context):
+            return context
+
+    instance = _Plugin()
+    resolved = resolve_routing_plugins(
+        plugin_paths=[instance],
+        config_file_path=None,
+        source_label="router_settings.plugins",
+    )
+    assert resolved == [instance]
+
+
+def test_resolve_routing_plugins_rejects_non_routing_plugin(tmp_path):
+    plugin_file = tmp_path / "bad_rs_plugin.py"
+    plugin_file.write_text("not_a_plugin = object()\n")
+
+    with pytest.raises(ValueError, match="router_settings.plugins"):
+        resolve_routing_plugins(
+            plugin_paths=["bad_rs_plugin.not_a_plugin"],
+            config_file_path=str(tmp_path / "config.yaml"),
+            source_label="router_settings.plugins",
+        )
+
+
+def test_resolve_routing_plugins_rejects_synchronous_run(tmp_path):
+    plugin_file = tmp_path / "sync_rs_plugin.py"
+    plugin_file.write_text(
+        "class _SyncPlugin:\n"
+        "    def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "sync_plugin_instance = _SyncPlugin()\n"
+    )
+
+    with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
+        resolve_routing_plugins(
+            plugin_paths=["sync_rs_plugin.sync_plugin_instance"],
+            config_file_path=str(tmp_path / "config.yaml"),
+            source_label="router_settings.plugins",
         )
 
 
@@ -791,6 +861,62 @@ async def test_ProxyConfig_load_config_minimal_yaml(tmp_path, monkeypatch):
         "config_loaded": True,
         "model_list_key_present": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
+    """Regression: router_settings.plugins dotted-path strings must be resolved to
+    live RoutingPlugin instances on the created Router. Previously they were passed
+    through as raw strings and only blew up at request time when the pipeline tried
+    to `await "some.string".run(context)`."""
+    plugin_file = tmp_path / "rs_plugin.py"
+    plugin_file.write_text(
+        "class _Plugin:\n"
+        "    async def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "rs_plugin_instance = _Plugin()\n"
+    )
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "litellm_settings: {}\n"
+        "router_settings:\n"
+        "  plugins:\n"
+        "    - rs_plugin.rs_plugin_instance\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    router, _model_list, _general_settings = await ProxyConfig().load_config(
+        router=None, config_file_path=str(f)
+    )
+
+    assert len(router.routing_plugins) == 1
+    assert type(router.routing_plugins[0]).__name__ == "_Plugin"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_rejects_bad_router_settings_plugin(tmp_path, monkeypatch):
+    plugin_file = tmp_path / "bad_rs_plugin.py"
+    plugin_file.write_text("not_a_plugin = object()\n")
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "litellm_settings: {}\n"
+        "router_settings:\n"
+        "  plugins:\n"
+        "    - bad_rs_plugin.not_a_plugin\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
 
 @pytest.mark.asyncio

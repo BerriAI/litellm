@@ -48,7 +48,7 @@ class TestComplexityRouterLlmClassifier:
         self, client: ComplexityRouterClient, complexity_key: str
     ) -> None:
         chat = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 complexity_key,
                 ChatBody(
                     model=ROUTER_MODEL,
@@ -59,7 +59,7 @@ class TestComplexityRouterLlmClassifier:
         )
         assert chat.choices, f"router returned no choices: {chat}"
 
-        rows = client.gateway.poll_logs_for_key(complexity_key, min_rows=1)
+        rows = client.proxy.poll_logs_for_key(complexity_key, min_rows=1)
         served = [row.model for row in rows]
         # Exactly one spend row for the routed completion (not the classifier sub-call).
         # Membership allows alias vs provider-prefixed forms across compose and stage.

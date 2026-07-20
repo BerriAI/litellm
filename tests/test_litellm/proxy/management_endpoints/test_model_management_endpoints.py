@@ -1727,6 +1727,7 @@ class TestModelInfoEndpoint:
                 "gpt-3.5-turbo",
             ]
             mock_router.get_model_access_groups.return_value = {}
+            mock_router.get_configured_token_limits.return_value = (None, None)
             mock_get_key_models.return_value = ["gpt-4", "claude-3"]
             mock_get_team_models.return_value = ["gpt-3.5-turbo"]
             mock_get_complete_models.return_value = [
@@ -1812,6 +1813,7 @@ class TestModelInfoEndpoint:
             # Setup mocks
             mock_router.get_model_names.return_value = ["team-model-1"]
             mock_router.get_model_access_groups.return_value = {}
+            mock_router.get_configured_token_limits.return_value = (None, None)
             mock_get_key_models.return_value = []
             mock_get_team_models.return_value = ["team-model-1"]
             mock_get_complete_models.return_value = ["team-model-1"]

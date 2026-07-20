@@ -115,6 +115,7 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            compression_savings=None,
             litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(
@@ -373,6 +374,12 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             if isinstance(v, BaseModel):
                 v = v.model_dump()
             additional_usage_values.update({k: v})
+    if "cache_read_input_tokens" not in additional_usage_values:
+        prompt_tokens_details = additional_usage_values.get("prompt_tokens_details")
+        if isinstance(prompt_tokens_details, dict):
+            cached_tokens = prompt_tokens_details.get("cached_tokens")
+            if isinstance(cached_tokens, int) and cached_tokens > 0:
+                additional_usage_values["cache_read_input_tokens"] = cached_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
 
     if litellm.cache is not None:
@@ -903,14 +910,45 @@ _PROMPT_CARRYING_GUARDRAIL_FIELDS = (
     "classification",
 )
 
+_NUMERIC_COMPRESSION_STAT_KEYS = (
+    "tokens_before",
+    "tokens_after",
+    "tokens_saved",
+    "compression_ratio",
+)
+
+
+def _numeric_compression_stats_from_guardrail_response(
+    guardrail_response: object,
+) -> dict[str, int | float] | None:
+    if not isinstance(guardrail_response, dict):
+        return None
+    stats = {
+        key: value
+        for key, value in guardrail_response.items()
+        if key in _NUMERIC_COMPRESSION_STAT_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    return stats or None
+
 
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
-    return {
+    """
+    Replace prompt-carrying fields with the redaction marker. Purely numeric
+    compression stats inside ``guardrail_response`` (e.g. Headroom's
+    ``tokens_saved``) cannot carry prompt content, so they are preserved as a
+    stats-only dict; spend aggregation reads them via
+    ``extract_compression_saved_tokens``.
+    """
+    preserved_stats = _numeric_compression_stats_from_guardrail_response(entry.get("guardrail_response"))
+    redacted: StandardLoggingGuardrailInformation = {
         **entry,
         **{key: REDACTED_BY_LITELM_STRING for key in _PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
     }
+    if preserved_stats is None:
+        return redacted
+    return {**redacted, "guardrail_response": preserved_stats}
 
 
 def _sanitize_error_information_for_spend_logs(
