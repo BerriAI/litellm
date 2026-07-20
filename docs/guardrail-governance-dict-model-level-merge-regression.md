@@ -179,8 +179,9 @@ The request-side contracts retained are:
    Assert that the original governance mapping type, its `false` entry, and the
    enabled deployment key survive. Confirm it fails on the base implementation
    with the reported `TypeError`.
-2. Replace the obsolete direct test that codifies governance mappings as an
-   expected unhashable error with assertions for map-preserving merge behavior.
+2. Keep the existing direct test for a list containing an unhashable mapping.
+   That shape is distinct from a governance mapping stored directly at
+   `metadata.guardrails` and remains outside this change.
 3. Update `litellm/proxy/utils.py::_merge_guardrails_with_existing()`:
    normalize model-level values, branch on an existing mapping, preserve and
    overlay it with enabled names, and use `dict.fromkeys()` for ordered list
@@ -280,7 +281,7 @@ outside this regression.
 | current source and lifecycle contract audit | Done |
 | direct pre-fix TypeError reproduction | Done |
 | design document | Done in this docs-only commit |
-| thought-experiment gate | Planned after the document commit |
+| thought-experiment gate | Done; retained the distinct list-containing-dict error contract |
 | failing regression test | Planned |
 | implementation | Planned |
 | focused/static/full validation | Planned |
