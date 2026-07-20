@@ -165,6 +165,12 @@ class TestSearchTools:
         repeated = [t["name"] for t in search_tools("github github issue", SAMPLE_TOOLS)]
         assert single == repeated
 
+    def test_query_tokens_capped_at_32(self) -> None:
+        filler = " ".join(f"junk{i}" for i in range(32))
+        assert search_tools(f"{filler} github", SAMPLE_TOOLS) == []
+        capped = [t["name"] for t in search_tools(f"github {filler}", SAMPLE_TOOLS)]
+        assert "github-create_issue" in capped
+
 
 class TestGetVirtualToolDefinitions:
     def test_returns_two_tools(self) -> None:

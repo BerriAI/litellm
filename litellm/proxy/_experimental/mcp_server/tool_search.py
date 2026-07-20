@@ -20,6 +20,7 @@ _BM25_K1 = 1.5
 _BM25_B = 0.75
 _NAME_WEIGHT = 3.0
 _PREFIX_WEIGHT = 0.3
+_MAX_QUERY_TOKENS = 32
 
 
 def coerce_top_k(value: Any, default: int = 5) -> int:
@@ -41,7 +42,7 @@ def _field_tf(query_token: str, field_tokens: tuple[str, ...]) -> float:
 
 
 def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
-    query_tokens = tuple(dict.fromkeys(_tokenize(query)))
+    query_tokens = tuple(dict.fromkeys(_tokenize(query)))[:_MAX_QUERY_TOKENS]
     if not query_tokens or not tools or top_k <= 0:
         return []
     docs = tuple(
