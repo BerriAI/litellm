@@ -412,8 +412,6 @@ class TestModelRoutes:
             "after /model/update",
         )
 
-
-class TestModelRoutes:
     @pytest.mark.covers("mgmt.model.add.persists")
     def test_new_persists_to_model_info_catalog(
         self, client: ManagementClient, resources: ResourceManager
