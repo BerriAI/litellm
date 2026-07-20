@@ -365,6 +365,16 @@ class updateDeployment(BaseModel):
     model_info: Optional[ModelInfo] = None
     blocked: Optional[bool] = None
 
+    # Explicit key removal for the free-form JSON editors on the admin UI.
+    # `litellm_params`/`model_info` are merged (not replaced) against the stored
+    # blob so that sparse partial updates (e.g. rotating just `api_key`) don't
+    # wipe out unrelated fields. That merge means a key dropped from the raw
+    # JSON textarea silently survives, since "absent" and "removed" look the
+    # same to a merge. These let a caller name keys to delete explicitly
+    # instead of relying on absence.
+    litellm_params_keys_to_delete: Optional[List[str]] = None
+    model_info_keys_to_delete: Optional[List[str]] = None
+
     model_config = ConfigDict(protected_namespaces=())
 
 

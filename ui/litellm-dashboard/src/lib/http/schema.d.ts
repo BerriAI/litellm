@@ -33423,7 +33423,11 @@ export interface components {
             /** Blocked */
             blocked?: boolean | null;
             litellm_params?: components["schemas"]["updateLiteLLMParams"] | null;
+            /** Litellm Params Keys To Delete */
+            litellm_params_keys_to_delete?: string[] | null;
             model_info?: components["schemas"]["litellm__types__router__ModelInfo"] | null;
+            /** Model Info Keys To Delete */
+            model_info_keys_to_delete?: string[] | null;
             /** Model Name */
             model_name?: string | null;
         };
