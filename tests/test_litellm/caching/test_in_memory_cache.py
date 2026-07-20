@@ -43,6 +43,13 @@ def test_increment_cache_is_atomic_under_thread_concurrency():
     assert cache.get_cache("counter") == seed + thread_count
 
 
+async def test_async_increment_delegates_to_locked_sync_path():
+    cache = InMemoryCache()
+    assert await cache.async_increment("counter", 2) == 2
+    assert await cache.async_increment("counter", 3) == 5
+    assert cache.get_cache("counter") == 5
+
+
 def test_in_memory_openai_obj_cache():
     from openai import OpenAI
 
