@@ -986,13 +986,24 @@ class ResponseAPILoggingUtils:
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if response_api_usage.input_tokens_details:
             if isinstance(response_api_usage.input_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(**response_api_usage.input_tokens_details)
+                # Map OpenAI's cache_write_tokens to cache_creation_tokens so the
+                # cost engine prices cache-write at the cache-creation rate.
+                input_details = dict(response_api_usage.input_tokens_details)
+                if "cache_write_tokens" in input_details and "cache_creation_tokens" not in input_details:
+                    input_details["cache_creation_tokens"] = input_details.pop("cache_write_tokens")
+                prompt_tokens_details = PromptTokensDetailsWrapper(**input_details)
             else:
+                # Map OpenAI's cache_write_tokens -> cache_creation_tokens for cost calc.
+                # OpenAI Responses API reports cache writes under
+                # input_tokens_details.cache_write_tokens; the cost engine reads
+                # cache_creation_tokens (Anthropic's field name).
+                _cache_write = getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None)
                 prompt_tokens_details = PromptTokensDetailsWrapper(
                     cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
                     audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
                     text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
                     image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
+                    cache_creation_tokens=_cache_write,
                 )
         completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
