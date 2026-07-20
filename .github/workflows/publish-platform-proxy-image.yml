@@ -1,0 +1,108 @@
+name: Publish platform proxy image
+
+# Platform releases only: build + ECR push + self-commit the image tag into
+# this repo's own deploy/values.yaml (platform-deploy branch). Branch pushes
+# and PRs run .github/workflows/test.yml instead.
+# Triggers on v* tags (local git tag push, GitHub Release, or UI tag creation).
+#
+# Role ARN and ECR URI come from ESO (External Secrets Operator), pushed as
+# Actions secrets on this repo by bitovi-platform-services'
+# charts/platform-app-resources (gated on this repo's own deploy/values.yaml
+# app.repo: bitovi/litellm) - same secrets.ECR_PUSH_ROLE_ARN /
+# secrets.ECR_REPOSITORY convention every other platform container app reads
+# (see bitovi-platform-services .github/skills/add-app/assets/
+# workflow-container-deploy.yml). Nothing to derive or hardcode here.
+# Auth is GitHub OIDC; trust is iam.oidcSubjects in this repo's own
+# deploy/values.yaml (repo:bitovi/litellm:ref:refs/tags/v*).
+#
+# deploy/values.yaml lives on platform-deploy, NOT litellm_internal_staging
+# (that branch tracks upstream fork sync) - created once, then only ever
+# receives these automated image.tag commits. The Argo CD Application
+# (bitovi-platform-services gitops/apps/claude-usage-proxy.yaml) reads it
+# from there as its $values source.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-proxy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  DEPLOY_BRANCH: platform-deploy
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push proxy image
+        env:
+          IMAGE: ${{ secrets.ECR_REPOSITORY }}:${{ github.ref_name }}
+        run: |
+          docker build -f docker/Dockerfile.database -t "$IMAGE" .
+          docker push "$IMAGE"
+
+  update-deploy-values:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    # GITHUB_TOKEN pushes to this same repo (different branch), so
+    # contents: write suffices - no PAT needed, unlike the previous
+    # clone-claude-usage-proxy-and-open-a-PR approach.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_BRANCH }}
+
+      - name: Write image tag into deploy values
+        run: yq -i '.image.tag = "${{ github.ref_name }}"' deploy/values.yaml
+
+      - name: Commit and push (rebase-and-retry on races)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add deploy/values.yaml
+          if git diff --cached --quiet; then
+            echo "::notice::image.tag is already ${{ github.ref_name }} — nothing to deploy; cancelling this run."
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+            gh run watch "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
+            exit 1
+          fi
+
+          git commit -m "chore(release): deploy ${{ github.ref_name }} [skip ci]"
+
+          for attempt in 1 2 3 4 5; do
+            if git push origin "HEAD:${DEPLOY_BRANCH}"; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing and retrying..."
+            git fetch origin "$DEPLOY_BRANCH"
+            git rebase "origin/${DEPLOY_BRANCH}"
+            sleep $((attempt * 2))
+          done
+          echo "Failed to push tag write-back after 5 attempts." >&2
+          exit 1
