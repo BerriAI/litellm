@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
+    CHECK_BATCH_COST_JOB_NAME,
+    CHECK_BATCH_COST_LOCK_TTL_SECONDS,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
@@ -15,6 +17,7 @@ from litellm.constants import (
 if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import LiteLLM_ManagedObjectTable
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
     from litellm.types.utils import LiteLLMBatch
@@ -30,6 +33,7 @@ class CheckBatchCost:
         prisma_client: "PrismaClient",
         llm_router: "Router",
         track_unmanaged_batch_cost: bool = False,
+        pod_lock_manager: "PodLockManager | None" = None,
     ):
         from litellm.proxy.utils import PrismaClient, ProxyLogging
         from litellm.router import Router
@@ -38,6 +42,11 @@ class CheckBatchCost:
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
         self._track_unmanaged_batch_cost = track_unmanaged_batch_cost
+        self.pod_lock_manager: "PodLockManager | None" = (
+            pod_lock_manager
+            if pod_lock_manager is not None
+            else proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+        )
         # Cached after the first poll cycle. Once we know the column is absent we skip
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
@@ -316,8 +325,7 @@ class CheckBatchCost:
         job unprocessed and retry it on a later poll.
         """
         from litellm.batches.batch_utils import (
-            _get_file_content_as_dictionary,
-            calculate_batch_cost_and_usage,
+            calculate_batch_cost_and_usage_from_content,
         )
         from litellm.files.main import afile_content
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -369,10 +377,6 @@ class CheckBatchCost:
             content_bytes = await _file_content.read()  # type: ignore[misc]
         else:
             content_bytes = _file_content  # type: ignore[assignment]
-
-        file_content_as_dict = _get_file_content_as_dictionary(
-            content_bytes  # type: ignore[arg-type]
-        )
 
         # Record output file size
         if prom_logger and content_bytes:
@@ -441,11 +445,11 @@ class CheckBatchCost:
         # (input_cost_per_token_batches etc.) is used for cost calc
         deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
         batch_cost, batch_usage, batch_models = (
-            await calculate_batch_cost_and_usage(
-                file_content_dictionary=file_content_as_dict,
-                custom_llm_provider=llm_provider,  # type: ignore
+            await calculate_batch_cost_and_usage_from_content(
+                file_content=content_bytes,  # pyright: ignore[reportArgumentType]  # provider file union, bytes at runtime
+                custom_llm_provider=llm_provider,  # pyright: ignore[reportArgumentType]  # str narrowed to supported provider
                 model_name=model_name,
-                model_info=deployment_model_info,  # type: ignore[arg-type]
+                model_info=deployment_model_info,  # pyright: ignore[reportArgumentType]  # model_dump() dict matches ModelInfo
             )
         )
         logging_obj = LiteLLMLogging(
@@ -497,6 +501,35 @@ class CheckBatchCost:
         return model_name, str(llm_provider) if llm_provider else None
 
     async def check_batch_cost(self):
+        """
+        Scheduled poll entry point. When a Redis-backed lock is available only the
+        pod that acquires it runs the poll this cycle, so workers don't all
+        download and buffer the same batch output files at once. With no Redis
+        configured it runs unlocked (unchanged single-pod behavior).
+        """
+        lock_manager = self.pod_lock_manager
+        use_lock = lock_manager is not None and lock_manager.redis_cache is not None
+        lock_acquired = False
+        try:
+            if use_lock and lock_manager is not None:
+                lock_acquired = (
+                    await lock_manager.acquire_lock(
+                        cronjob_id=CHECK_BATCH_COST_JOB_NAME,
+                        ttl=CHECK_BATCH_COST_LOCK_TTL_SECONDS,
+                    )
+                    or False
+                )
+                if not lock_acquired:
+                    verbose_proxy_logger.debug(
+                        "CheckBatchCost: another pod holds the poll lock, skipping this cycle"
+                    )
+                    return
+            await self._poll_and_track_batches()
+        finally:
+            if lock_acquired and lock_manager is not None:
+                await lock_manager.release_lock(cronjob_id=CHECK_BATCH_COST_JOB_NAME)
+
+    async def _poll_and_track_batches(self):
         """
         Check if the batch JOB has been tracked.
         - get all status="validating" and file_purpose="batch" jobs

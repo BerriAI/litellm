@@ -1,5 +1,8 @@
 import json
-from typing import Any, Iterator, List, Literal, Optional, Tuple
+import logging
+from dataclasses import dataclass
+from functools import reduce
+from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -38,6 +41,118 @@ async def calculate_batch_cost_and_usage(
     batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name, custom_llm_provider)
 
     return batch_cost, batch_usage, batch_models
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchTotals:
+    cost: float = 0.0
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    models: tuple[str, ...] = ()
+
+
+def _line_cost(
+    response_body: dict,
+    usage: Usage,
+    custom_llm_provider: str,
+    model_name: str | None,
+    model_info: ModelInfo | None,
+) -> float:
+    """Cost of a single successful batch output line, mirroring the per-item
+    branch in ``_get_batch_job_cost_from_file_content``."""
+    from litellm.cost_calculator import batch_cost_calculator
+
+    if model_info is not None or custom_llm_provider in ("anthropic", "bedrock"):
+        if custom_llm_provider == "bedrock" and model_name:
+            model = model_name
+        else:
+            model = response_body.get("model") or model_name or ""
+        prompt_cost, completion_cost = batch_cost_calculator(
+            usage=usage,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_info=model_info,
+        )
+        return prompt_cost + completion_cost
+    return litellm.completion_cost(
+        completion_response=response_body,
+        custom_llm_provider=custom_llm_provider,
+        call_type=CallTypes.aretrieve_batch.value,
+    )
+
+
+def _fold_batch_totals(
+    totals: _BatchTotals,
+    item: dict,
+    custom_llm_provider: str,
+    model_name: str | None,
+    model_info: ModelInfo | None,
+) -> _BatchTotals:
+    """Accumulate one output line into the running totals. Unsuccessful lines are
+    skipped, matching the list-based cost/usage/model helpers."""
+    if not _batch_response_was_successful(item, custom_llm_provider):
+        return totals
+    response_body = _get_response_from_batch_job_output_file(item, custom_llm_provider)
+    usage = _get_batch_job_usage_from_response_body(response_body, custom_llm_provider)
+    prompt_details = _parse_prompt_tokens_details(usage)
+    line_model = response_body.get("model")
+    return _BatchTotals(
+        cost=totals.cost + _line_cost(response_body, usage, custom_llm_provider, model_name, model_info),
+        total_tokens=totals.total_tokens + usage.total_tokens,
+        prompt_tokens=totals.prompt_tokens + usage.prompt_tokens,
+        completion_tokens=totals.completion_tokens + usage.completion_tokens,
+        cache_read_tokens=totals.cache_read_tokens + prompt_details["cache_hit_tokens"],
+        cache_creation_tokens=totals.cache_creation_tokens + prompt_details["cache_creation_tokens"],
+        models=totals.models + ((line_model,) if (line_model and not model_name) else ()),
+    )
+
+
+def _stream_vertex_ai_cost_and_usage(file_content: bytes, model_name: str) -> tuple[float, Usage, list[str]]:
+    cost, usage = calculate_vertex_ai_batch_cost_and_usage(_iter_jsonl_entries(file_content), model_name)
+    return cost, usage, [model_name]
+
+
+async def calculate_batch_cost_and_usage_from_content(
+    file_content: bytes,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
+    model_name: str | None = None,
+    model_info: ModelInfo | None = None,
+) -> tuple[float, Usage, list[str]]:
+    """Single-pass, memory-bounded equivalent of ``calculate_batch_cost_and_usage``.
+
+    The list-based path parses the whole JSONL output into a ``List[dict]`` and
+    then iterates it three times. For image-generation batches each row embeds a
+    large base64 payload, so that list can transiently hold hundreds of MB to low
+    GB on top of the raw bytes. This parses one row at a time and folds it into
+    running totals, so peak memory stays bounded to the raw bytes plus a single row.
+    """
+    if custom_llm_provider == "vertex_ai" and model_name and litellm.disable_vertex_batch_output_transformation:
+        return _stream_vertex_ai_cost_and_usage(file_content, model_name)
+
+    totals = reduce(
+        lambda acc, item: _fold_batch_totals(acc, item, custom_llm_provider, model_name, model_info),
+        _iter_jsonl_entries(file_content),
+        _BatchTotals(),
+    )
+    cache_token_params = {
+        key: tokens
+        for key, tokens in (
+            ("cache_read_input_tokens", totals.cache_read_tokens),
+            ("cache_creation_input_tokens", totals.cache_creation_tokens),
+        )
+        if tokens > 0
+    }
+    usage = Usage(
+        total_tokens=totals.total_tokens,
+        prompt_tokens=totals.prompt_tokens,
+        completion_tokens=totals.completion_tokens,
+        **cache_token_params,
+    )
+    models = [model_name] if model_name else list(totals.models)
+    return totals.cost, usage, models
 
 
 async def _handle_completed_batch(
@@ -126,7 +241,7 @@ def _batch_cost_calculator(
 
 
 def calculate_vertex_ai_batch_cost_and_usage(
-    vertex_ai_batch_responses: List[dict],
+    vertex_ai_batch_responses: Iterable[dict],
     model_name: Optional[str] = None,
 ) -> Tuple[float, Usage]:
     """
@@ -291,13 +406,14 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
         for line in _file_content_str.strip().split("\n"):
             if line:  # Skip empty lines
                 json_objects.append(json.loads(line))
-        verbose_logger.debug("json_objects=%s", json.dumps(json_objects, indent=4))
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug("json_objects=%s", json.dumps(json_objects, indent=4))
         return json_objects
     except Exception as e:
         raise e
 
 
-def _iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
+def _iter_jsonl_lines(file_content: bytes) -> Iterator[bytes]:
     """
     Yield non-empty JSONL lines (unparsed) one at a time, so a caller can parse
     each row in its own try/except and a single malformed line cannot abort the
@@ -315,14 +431,14 @@ def _iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
             yield line
 
 
-def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
+def _iter_jsonl_entries(file_content: bytes) -> Iterator[dict]:
     """
-    Yield parsed batch input JSONL entries one at a time without materializing the
-    whole file as a list, so peak memory stays bounded. Raises on a malformed line;
-    callers that must survive bad rows should iterate ``_iter_batch_input_lines``
+    Yield parsed JSONL entries one at a time without materializing the whole file
+    as a list, so peak memory stays bounded. Raises on a malformed line;
+    callers that must survive bad rows should iterate ``_iter_jsonl_lines``
     and parse per-row instead.
     """
-    for line in _iter_batch_input_lines(file_content):
+    for line in _iter_jsonl_lines(file_content):
         yield json.loads(line)
 
 
@@ -375,7 +491,8 @@ def _get_batch_job_cost_from_file_content(
     try:
         total_cost: float = 0.0
         # parse the file content as json
-        verbose_logger.debug("file_content_dictionary=%s", json.dumps(file_content_dictionary, indent=4))
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug("file_content_dictionary=%s", json.dumps(file_content_dictionary, indent=4))
         for _item in file_content_dictionary:
             if _batch_response_was_successful(_item, custom_llm_provider):
                 _response_body = _get_response_from_batch_job_output_file(_item, custom_llm_provider)

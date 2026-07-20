@@ -41,7 +41,7 @@ from litellm.batches.batch_utils import (
     _count_entry_tokens,
     _estimate_batch_entry_tokens,
     _extract_file_access_credentials,
-    _iter_batch_input_lines,
+    _iter_jsonl_lines,
 )
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
@@ -558,7 +558,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             models: set = set()
             total_tokens = 0
             request_count = 0
-            for raw_line in _iter_batch_input_lines(file_content_bytes):
+            for raw_line in _iter_jsonl_lines(file_content_bytes):
                 request_count += 1
                 try:
                     entry = json.loads(raw_line)
