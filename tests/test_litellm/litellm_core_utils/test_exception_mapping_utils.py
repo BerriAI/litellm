@@ -728,6 +728,8 @@ def test_openai_genuine_500_still_maps_to_internal_server_error():
         ("Connection refused", True),
         ("The server had an error processing your request.", False),
         ("invalid_request_error", False),
+        (None, False),
+        (123, False),
     ],
 )
 def test_is_error_str_connection_error(error_str, expected):
