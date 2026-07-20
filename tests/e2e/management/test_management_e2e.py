@@ -170,6 +170,17 @@ class TestKeyRoutes:
         _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
 
 
+    @pytest.mark.covers("mgmt.key.block.persists")
+    def test_block_persists_to_key_info(self, client: ManagementClient, resources: ResourceManager) -> None:
+        key = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"]))
+        assert not client.proxy.key_info(key).blocked, "/key/info reports the key blocked before /key/block ran"
+
+        client.block_key(key)
+
+        def blocked() -> bool | None:
+            return True if client.proxy.key_info(key).blocked else None
+
+        _ = _poll(client, blocked, "/key/info never reported the key blocked after /key/block before the deadline")
 class TestKeyRegeneration:
     @pytest.mark.covers("mgmt.key.regenerate.happy_path")
     def test_regenerate_rotates_to_a_working_new_key(
