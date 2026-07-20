@@ -1711,32 +1711,23 @@ class TestModelInfoEndpoint:
             team_models=["gpt-3.5-turbo"],
         )
 
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.model = "gpt-4"
+
         with (
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
-            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
-            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
             patch(
-                "litellm.proxy.proxy_server.get_complete_model_list"
-            ) as mock_get_complete_models,
+                "litellm.proxy.utils.get_available_models_for_user",
+                new_callable=AsyncMock,
+                return_value=["gpt-4", "claude-3", "gpt-3.5-turbo"],
+            ),
             patch("litellm.get_llm_provider") as mock_get_provider,
         ):
-            # Setup mocks
-            mock_router.get_model_names.return_value = [
-                "gpt-4",
-                "claude-3",
-                "gpt-3.5-turbo",
-            ]
-            mock_router.get_model_access_groups.return_value = {}
-            mock_get_key_models.return_value = ["gpt-4", "claude-3"]
-            mock_get_team_models.return_value = ["gpt-3.5-turbo"]
-            mock_get_complete_models.return_value = [
-                "gpt-4",
-                "claude-3",
-                "gpt-3.5-turbo",
-            ]
+            mock_router.get_fully_blocked_model_names.return_value = set()
+            mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
+            mock_router.get_configured_token_limits.return_value = (None, None)
             mock_get_provider.return_value = (None, "openai", None, None)
 
-            # Test accessible model
             result = await model_info(
                 model_id="gpt-4", user_api_key_dict=user_api_key_dict
             )
@@ -1800,24 +1791,23 @@ class TestModelInfoEndpoint:
             team_models=["team-model-1"],
         )
 
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.model = "team-model-1"
+
         with (
             patch("litellm.proxy.proxy_server.llm_router") as mock_router,
-            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
-            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
             patch(
-                "litellm.proxy.proxy_server.get_complete_model_list"
-            ) as mock_get_complete_models,
+                "litellm.proxy.utils.get_available_models_for_user",
+                new_callable=AsyncMock,
+                return_value=["team-model-1"],
+            ),
             patch("litellm.get_llm_provider") as mock_get_provider,
         ):
-            # Setup mocks
-            mock_router.get_model_names.return_value = ["team-model-1"]
-            mock_router.get_model_access_groups.return_value = {}
-            mock_get_key_models.return_value = []
-            mock_get_team_models.return_value = ["team-model-1"]
-            mock_get_complete_models.return_value = ["team-model-1"]
+            mock_router.get_fully_blocked_model_names.return_value = set()
+            mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
+            mock_router.get_configured_token_limits.return_value = (None, None)
             mock_get_provider.return_value = (None, "custom", None, None)
 
-            # Test team model access
             result = await model_info(
                 model_id="team-model-1", user_api_key_dict=user_api_key_dict
             )
