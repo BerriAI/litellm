@@ -1244,7 +1244,8 @@ def test_ProxyConfig_get_model_info_with_id_returns_router_model_info():
     assert snapshot == {"id": "m-1", "db_model": True, "blocked": False}
 
 
-def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises():
+def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     pc = ProxyConfig()
     # model with no model_id, no model_info — accessing .model_id will fail.
     bad = SimpleNamespace(model_info=None)

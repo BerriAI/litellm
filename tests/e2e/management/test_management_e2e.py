@@ -23,7 +23,7 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
+from models import KeyGenerateBody, OrgInfoResponse, OrgNewBody, OrgUpdateBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
 
 pytestmark = pytest.mark.e2e
 
@@ -169,6 +169,24 @@ class TestKeyRoutes:
 
         _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
 
+    @pytest.mark.covers("mgmt.key.list.happy_path")
+    def test_created_key_appears_in_key_list_inventory(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        alias = f"e2e-mgmt-keylist-{unique_marker()}"
+        assert client.key_alias_count(alias) == 0, (
+            f"/key/list already reports a key under the unused alias {alias!r} before it is created"
+        )
+
+        _ = _generate_key(client, resources, KeyGenerateBody(key_alias=alias))
+
+        def listed() -> bool | None:
+            return True if client.key_alias_count(alias) == 1 else None
+
+        _ = _poll(
+            client, listed, f"created key with alias {alias!r} never appeared in /key/list before the deadline"
+        )
+
 
     @pytest.mark.covers("mgmt.key.block.persists")
     def test_block_persists_to_key_info(self, client: ManagementClient, resources: ResourceManager) -> None:
@@ -251,6 +269,37 @@ class TestTeamRoutes:
             f"/team/list never included the created team {team_id}",
         )
 
+    @pytest.mark.covers("mgmt.team.delete.persists")
+    def test_delete_persists_and_revokes_team_bound_key(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete_team/delete_key fire again on the already-
+        deleted team and key by design: both are warn-only no-ops, and the deferred
+        cleanup must survive this test failing before the in-body delete."""
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", ["gpt-5.5"])
+        key = _generate_key(client, resources, KeyGenerateBody(team_id=team_id))
+
+        def accepted() -> bool | None:
+            outcome = client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code != 401 else None
+
+        _ = _poll(client, accepted, "team-bound key was never accepted at auth before team deletion")
+
+        client.delete_team(team_id)
+
+        probe = client.team_info_status(team_id)
+        assert probe.status_code == 404, (
+            f"deleted team {team_id} still resolves: /team/info returned {probe.status_code}: {probe.body[:300]}"
+        )
+
+        def rejected() -> bool | None:
+            outcome = client.chat_status(key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code == 401 else None
+
+        _ = _poll(
+            client, rejected, "team-bound key was still accepted on chat (never rejected 401) after team deletion"
+        )
+
     @pytest.mark.covers("mgmt.team.member_add.persists")
     def test_member_add_and_delete_persist_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
@@ -304,6 +353,28 @@ class TestUserRoutes:
         assert info.user_role == "internal_user_viewer", (
             f"/user/info reports user_role {info.user_role!r} after /user/update to 'internal_user_viewer'"
         )
+    @pytest.mark.covers("mgmt.user.delete.persists")
+    def test_delete_removes_the_user_from_inventory(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete fires again on the already-deleted user by
+        design: the deferred cleanup must survive this test failing before the
+        in-body delete, and a repeat /user/delete is a cheap no-op the warn-only
+        teardown absorbs."""
+        user_id = _create_user(
+            client,
+            resources,
+            UserNewBody(user_email=f"e2e-mgmt-{unique_marker()}@example.com", user_role="internal_user"),
+        )
+        assert client.user_count(user_id) == 1, f"user {user_id} was not created before deletion"
+
+        client.delete_user_strict(user_id)
+
+        def removed() -> bool | None:
+            return True if client.user_count(user_id) == 0 else None
+
+        _ = _poll(client, removed, f"user {user_id} still present in /user/list after /user/delete at the deadline")
+
     @pytest.mark.covers("mgmt.user.list.happy_path")
     def test_created_users_appear_in_user_list(
         self, client: ManagementClient, resources: ResourceManager
@@ -340,6 +411,24 @@ class TestOrganizationRoutes:
         )
         assert info.models == ["gemini-2.5-flash"], (
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
+        )
+
+    @pytest.mark.covers("mgmt.organization.update.persists")
+    def test_update_alias_persists_to_organization_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        org_id = client.create_org(OrgNewBody(organization_alias=f"e2e-mgmt-org-{unique_marker()}"))
+        resources.defer(lambda: client.delete_org(org_id))
+
+        new_alias = f"e2e-mgmt-org-{unique_marker()}"
+        client.update_org(OrgUpdateBody(organization_id=org_id, organization_alias=new_alias))
+
+        def attempt() -> OrgInfoResponse | None:
+            info = client.org_info(org_id)
+            return info if info.organization_alias == new_alias else None
+
+        _ = _poll(
+            client, attempt, f"/organization/info never reflected updated alias {new_alias!r} before the deadline"
         )
 
     @pytest.mark.covers("mgmt.organization.delete.persists")
@@ -438,6 +527,28 @@ class TestModelRoutes:
             f"/model/info never reported input_cost_per_token {_UPDATED_INPUT_COST} for {model_name} "
             "after /model/update",
         )
+
+    @pytest.mark.covers("mgmt.model.delete.persists")
+    def test_delete_removes_from_model_info_catalog(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete fires again on the already-deleted model by
+        design: it is the safety net if this test fails before the in-body delete, and
+        a repeat /model/delete is a warn-only no-op the teardown absorbs."""
+        model_name = f"e2e-mgmt-model-{unique_marker()}"
+        model_id = client.proxy.create_model(model_name, LiteLLMParamsBody(model="openai/gpt-5.5", api_key="dummy"))
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        assert model_name in [entry.model_name for entry in client.proxy.model_info()], (
+            f"{model_name} absent from /model/info right after /model/new; cannot prove deletion removes it"
+        )
+
+        client.delete_model_strict(model_id)
+
+        def absent() -> bool | None:
+            return True if model_name not in [entry.model_name for entry in client.proxy.model_info()] else None
+
+        _ = _poll(client, absent, f"{model_name} still present in /model/info after /model/delete at the deadline")
 
     @pytest.mark.covers("mgmt.model.add.persists")
     def test_new_persists_to_model_info_catalog(

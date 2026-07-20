@@ -22,11 +22,13 @@ from models import (
     KeyListResponse,
     KeyRegenerateBody,
     KeyUpdateBody,
+    ModelDeleteBody,
     OrgDeleteBody,
     OrgInfoParams,
     OrgInfoResponse,
     OrgNewBody,
     OrgNewResponse,
+    OrgUpdateBody,
     TagDeleteBody,
     TagListEntry,
     TagListResponse,
@@ -43,6 +45,7 @@ from models import (
     TeamNewResponse,
     TeamUpdateBody,
     UserDeleteBody,
+    UserDeleteResponse,
     UserInfoParams,
     UserInfoResponse,
     UserListParams,
@@ -95,6 +98,18 @@ class ManagementClient:
                 "/key/delete",
                 headers=self.proxy.transport.master,
                 json=KeyDeleteBody(keys=[key]),
+                response_type=NoBody,
+            )
+        )
+
+    def delete_model_strict(self, model_id: str) -> None:
+        """Strict delete for the act phase of a test: a failed delete is a hard
+        failure, unlike the warn-only ProxyClient.delete_model used at teardown."""
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/model/delete",
+                headers=self.proxy.transport.master,
+                json=ModelDeleteBody(id=model_id),
                 response_type=NoBody,
             )
         )
@@ -273,6 +288,18 @@ class ManagementClient:
             response_type=NoBody,
         )
 
+    def delete_user_strict(self, user_id: str) -> None:
+        """Strict delete for the act phase of a test: a failed delete is a hard
+        failure, unlike the warn-only delete_user used at teardown."""
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/user/delete",
+                headers=self.proxy.transport.master,
+                json=UserDeleteBody(user_ids=[user_id]),
+                response_type=UserDeleteResponse,
+            )
+        )
+
     def user_info(self, user_id: str) -> UserInfoResponse:
         return unwrap(
             self.proxy.transport.get(
@@ -313,6 +340,16 @@ class ManagementClient:
                 response_type=OrgNewResponse,
             )
         ).organization_id
+
+    def update_org(self, body: OrgUpdateBody) -> None:
+        _ = unwrap(
+            self.proxy.transport.patch(
+                "/organization/update",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
 
     def delete_org(self, organization_id: str) -> None:
         _ = self.proxy.transport.delete(

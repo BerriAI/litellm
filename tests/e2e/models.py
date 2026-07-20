@@ -728,6 +728,10 @@ class UserDeleteBody(BaseModel):
     user_ids: list[str]
 
 
+class UserDeleteResponse(RootModel[int]):
+    pass
+
+
 class UserListParams(BaseModel):
     user_ids: str
 
@@ -748,6 +752,11 @@ class OrgNewBody(BaseModel):
 
 class OrgNewResponse(BaseModel):
     organization_id: str
+
+
+class OrgUpdateBody(BaseModel):
+    organization_id: str
+    organization_alias: str
 
 
 class OrgInfoParams(BaseModel):
