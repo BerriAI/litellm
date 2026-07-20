@@ -1,8 +1,8 @@
 """
 Tests for the Rubrik LiteLLM plugin.
 
-Covers initialization, apply_guardrail tool blocking (all allowed, all blocked,
-partial blocking, fail-open), batch logging, and Anthropic format handling.
+Covers initialization, apply_guardrail (prompt moderation + response/tool
+blocking), batch logging, and Anthropic format handling.
 """
 
 import os
@@ -13,8 +13,10 @@ import httpx
 import pytest
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.integrations.rubrik import RubrikLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.integrations.rubrik import (
+    RubrikLogger,
+    _MalformedToolBlockingResponseError,
+)
 
 from tests.test_litellm.integrations.rubrik_test_helpers import (
     make_inputs_with_tools,
@@ -50,19 +52,19 @@ class TestInitialization:
         with patch("asyncio.create_task", Mock()):
             handler = RubrikLogger()
             assert (
-                handler.tool_blocking_endpoint
+                handler.response_moderation_endpoint
                 == "http://localhost:8080/v1/after_completion/openai/v1"
             )
             assert handler.logging_endpoint == "http://localhost:8080/v1/litellm/batch"
             assert handler.key == "test-api-key"
-            assert isinstance(handler.tool_blocking_client, AsyncHTTPHandler)
+            assert isinstance(handler.moderation_client, httpx.AsyncClient)
 
     def test_init_with_constructor_params(self):
         with patch("asyncio.create_task", Mock()):
             handler = RubrikLogger(api_key="ctor-key", api_base="http://ctor-host:9090")
             assert handler.key == "ctor-key"
             assert (
-                handler.tool_blocking_endpoint
+                handler.response_moderation_endpoint
                 == "http://ctor-host:9090/v1/after_completion/openai/v1"
             )
 
@@ -82,7 +84,7 @@ class TestInitialization:
         with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://localhost:8080/"}):
             with patch("asyncio.create_task", Mock()):
                 assert (
-                    RubrikLogger().tool_blocking_endpoint
+                    RubrikLogger().response_moderation_endpoint
                     == "http://localhost:8080/v1/after_completion/openai/v1"
                 )
 
@@ -90,13 +92,13 @@ class TestInitialization:
         with patch("asyncio.create_task", Mock()):
             with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host/v1"}):
                 assert (
-                    RubrikLogger().tool_blocking_endpoint
+                    RubrikLogger().response_moderation_endpoint
                     == "http://host/v1/after_completion/openai/v1"
                 )
 
             with patch.dict(os.environ, {"RUBRIK_WEBHOOK_URL": "http://host/v11"}):
                 assert (
-                    RubrikLogger().tool_blocking_endpoint
+                    RubrikLogger().response_moderation_endpoint
                     == "http://host/v11/v1/after_completion/openai/v1"
                 )
 
@@ -155,10 +157,10 @@ class TestInitialization:
             # Do NOT patch asyncio.create_task — the real call should be
             # guarded and fall back gracefully when there is no event loop.
             handler = RubrikLogger()
-            assert handler.tool_blocking_endpoint.startswith("http://localhost:8080")
+            assert handler.response_moderation_endpoint.startswith("http://localhost:8080")
             # Without a running loop at init, the periodic flush task should be
             # deferred so batches still get drained once a log event arrives.
-            assert handler._flush_task is None
+            assert handler._periodic_flush_task is None
 
     @pytest.mark.asyncio
     async def test_periodic_flush_task_started_lazily_on_first_log(self, mock_env):
@@ -170,7 +172,7 @@ class TestInitialization:
             side_effect=RuntimeError("no running loop"),
         ):
             handler = RubrikLogger()
-        assert handler._flush_task is None
+        assert handler._periodic_flush_task is None
 
         kwargs = {
             "standard_logging_object": {
@@ -183,8 +185,8 @@ class TestInitialization:
         with patch.object(handler, "_log_batch_to_rubrik", AsyncMock()):
             await handler.async_log_success_event(kwargs, None, None, None)
 
-        assert handler._flush_task is not None
-        handler._flush_task.cancel()
+        assert handler._periodic_flush_task is not None
+        handler._periodic_flush_task.cancel()
 
     def test_event_hook_defaults_to_post_call_when_none_passed(self, mock_env):
         """`initialize_guardrail` always passes ``event_hook=litellm_params.mode``
@@ -444,7 +446,10 @@ class TestBatchLogging:
         )
         assert handler.log_queue[0]["id"] == "litellm-call-123"
 
-    async def test_non_anthropic_id_unchanged(self, handler):
+    async def test_litellm_call_id_always_used_as_correlation_key(self, handler):
+        """The merged plugin always uses litellm_call_id as the log ID for all
+        providers (not just Anthropic) so that logs correlate with the
+        moderation (_blocking) and failure logs for the same request."""
         kwargs = {
             "standard_logging_object": {
                 "id": "chatcmpl-original",
@@ -461,7 +466,7 @@ class TestBatchLogging:
         await handler.async_log_success_event(
             kwargs=kwargs, response_obj=None, start_time=None, end_time=None
         )
-        assert handler.log_queue[0]["id"] == "chatcmpl-original"
+        assert handler.log_queue[0]["id"] == "litellm-call-123"
 
     async def test_payload_deep_copied_not_mutated(self, handler):
         """Verify the shared standard_logging_object is not mutated."""
@@ -536,7 +541,7 @@ class TestApplyGuardrail:
         tc2 = make_tool_call_dict("call_2", "get_time")
         inputs = make_inputs_with_tools([tc1, tc2])
 
-        handler.tool_blocking_client = _echo_service()
+        handler.moderation_client = _echo_service()
 
         result = await handler.apply_guardrail(
             inputs=inputs, request_data={}, input_type="response"
@@ -548,7 +553,7 @@ class TestApplyGuardrail:
         tc2 = make_tool_call_dict("call_2", "drop_database")
         inputs = make_inputs_with_tools([tc1, tc2])
 
-        handler.tool_blocking_client = _mock_service_response(
+        handler.moderation_client = _mock_service_response(
             {
                 "choices": [
                     {
@@ -594,7 +599,7 @@ class TestApplyGuardrail:
 
         mock_client = AsyncMock()
         mock_client.post = mock_post
-        handler.tool_blocking_client = mock_client
+        handler.moderation_client = mock_client
 
         with pytest.raises(ModifyResponseException):
             await handler.apply_guardrail(
@@ -607,7 +612,7 @@ class TestApplyGuardrail:
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
-        handler.tool_blocking_client = mock_client
+        handler.moderation_client = mock_client
 
         result = await handler.apply_guardrail(
             inputs=inputs, request_data={}, input_type="response"
@@ -618,7 +623,7 @@ class TestApplyGuardrail:
         tc1 = make_tool_call_dict("call_1", "test_tool")
         inputs = make_inputs_with_tools([tc1])
 
-        handler.tool_blocking_client = _mock_service_response({"choices": []})
+        handler.moderation_client = _mock_service_response({"choices": []})
 
         result = await handler.apply_guardrail(
             inputs=inputs, request_data={}, input_type="response"
@@ -641,7 +646,7 @@ class TestApplyGuardrail:
 
         mock_client = AsyncMock()
         mock_client.post = mock_post
-        handler.tool_blocking_client = mock_client
+        handler.moderation_client = mock_client
 
         await handler.apply_guardrail(
             inputs=inputs, request_data={}, input_type="response"
@@ -675,7 +680,7 @@ class TestApplyGuardrail:
 
         mock_client = AsyncMock()
         mock_client.post = mock_post
-        handler.tool_blocking_client = mock_client
+        handler.moderation_client = mock_client
 
         logging_obj = Mock()
         logging_obj.model_call_details = {
@@ -697,7 +702,10 @@ class TestApplyGuardrail:
         assert req["model"] == "gpt-4"
         assert req["messages"] == [{"role": "user", "content": "hi"}]
 
-    async def test_proxy_server_request_headers_stripped(self, handler):
+    async def test_proxy_server_request_not_forwarded(self, handler):
+        """proxy_server_request is intentionally NOT included in the request
+        envelope: in litellm >=1.83 its ``body`` carries a UserAPIKeyAuth
+        instance that breaks json.dumps, silently fail-opening the guardrail."""
         tc = make_tool_call_dict("call_1", "test_tool")
         inputs = make_inputs_with_tools([tc])
 
@@ -712,7 +720,7 @@ class TestApplyGuardrail:
 
         mock_client = AsyncMock()
         mock_client.post = mock_post
-        handler.tool_blocking_client = mock_client
+        handler.moderation_client = mock_client
 
         logging_obj = Mock()
         logging_obj.model_call_details = {
@@ -739,8 +747,8 @@ class TestApplyGuardrail:
             logging_obj=logging_obj,
         )
 
-        forwarded = captured_payload["request"]["proxy_server_request"]
-        assert forwarded == {"url": "/chat/completions", "method": "POST"}
+        # proxy_server_request is deliberately excluded from the forwarded envelope
+        assert "proxy_server_request" not in captured_payload["request"]
 
 
 # -- Anthropic format ----------------------------------------------------------
@@ -760,7 +768,7 @@ class TestApplyGuardrailAnthropicFormat:
         )
         inputs = make_inputs_with_tools([tc], texts=["I'll check the weather."])
 
-        handler.tool_blocking_client = _echo_service()
+        handler.moderation_client = _echo_service()
 
         result = await handler.apply_guardrail(
             inputs=inputs, request_data={}, input_type="response"
@@ -771,7 +779,7 @@ class TestApplyGuardrailAnthropicFormat:
         tc = make_tool_call_dict("toolu_123", "dangerous_tool", '{"arg": "value"}')
         inputs = make_inputs_with_tools([tc])
 
-        handler.tool_blocking_client = _mock_service_response(
+        handler.moderation_client = _mock_service_response(
             {
                 "choices": [
                     {
@@ -790,21 +798,21 @@ class TestApplyGuardrailAnthropicFormat:
                 inputs=inputs, request_data={}, input_type="response"
             )
 
-    async def test_text_only_response_no_blocking(self, handler):
+    async def test_text_only_response_sent_to_moderation(self, handler):
+        """Text-only responses (no tool calls) are sent to the response
+        moderation service to check the assistant's text content."""
         from litellm.types.utils import GenericGuardrailAPIInputs
 
         inputs = GenericGuardrailAPIInputs(texts=["Hello! I'm Claude."])
 
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock()
-        handler.tool_blocking_client = mock_client
+        # Service allows the response (returns the content unchanged)
+        handler.moderation_client = _echo_service()
 
         result = await handler.apply_guardrail(
             inputs=inputs, request_data={}, input_type="response"
         )
 
         assert result is inputs
-        mock_client.post.assert_not_called()
 
     async def test_service_failure_preserves_tools(self, handler):
         tc = make_tool_call_dict("toolu_123", "get_weather", '{"location": "SF"}')
@@ -812,7 +820,7 @@ class TestApplyGuardrailAnthropicFormat:
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
-        handler.tool_blocking_client = mock_client
+        handler.moderation_client = mock_client
 
         result = await handler.apply_guardrail(
             inputs=inputs, request_data={}, input_type="response"
@@ -850,10 +858,13 @@ class TestNormalizeToolCalls:
             RubrikLogger._normalize_tool_calls(["not_a_tool_call"])
 
 
-# -- Extract blocked tools -----------------------------------------------------
+# -- Extract response block ----------------------------------------------------
 
 
-class TestExtractBlockedTools:
+class TestExtractResponseBlock:
+    """Tests for _extract_response_block, which replaces the upstream
+    _extract_blocked_tools and handles both text blocks and tool blocks."""
+
     def test_all_allowed_returns_none(self):
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -870,7 +881,7 @@ class TestExtractBlockedTools:
                 }
             ]
         }
-        result = RubrikLogger._extract_blocked_tools(service_resp, [tc])
+        result = RubrikLogger._extract_response_block(service_resp, [tc], "")
         assert result is None
 
     def test_some_blocked_returns_explanation(self):
@@ -896,13 +907,13 @@ class TestExtractBlockedTools:
                 }
             ]
         }
-        result = RubrikLogger._extract_blocked_tools(service_resp, [tc1, tc2])
+        result = RubrikLogger._extract_response_block(service_resp, [tc1, tc2], "")
         assert result is not None
-        assert "blocked fn2" in result
+        assert "blocked fn2" in result.explanation
 
     def test_empty_choices_raises(self):
-        with pytest.raises(Exception, match="empty response"):
-            RubrikLogger._extract_blocked_tools({"choices": []}, [])
+        with pytest.raises(_MalformedToolBlockingResponseError):
+            RubrikLogger._extract_response_block({"choices": []}, [], "")
 
     def test_null_tool_calls_treated_as_all_blocked(self):
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
@@ -920,36 +931,55 @@ class TestExtractBlockedTools:
                 }
             ]
         }
-        result = RubrikLogger._extract_blocked_tools(service_resp, [tc])
+        result = RubrikLogger._extract_response_block(service_resp, [tc], "")
         assert result is not None
-        assert "blocked everything" in result
+        assert "blocked everything" in result.explanation
 
-    def test_duplicate_ids_block_when_only_one_returned(self):
+    def test_text_block_detected(self):
+        """When the service replaces the response text wholesale, it's a text block."""
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
-        tc1 = ChatCompletionMessageToolCall(
-            id="call_dup",
-            type="function",
-            function=Function(name="fn", arguments="{}"),
-        )
-        tc2 = ChatCompletionMessageToolCall(
-            id="call_dup",
-            type="function",
-            function=Function(name="fn", arguments="{}"),
-        )
         service_resp = {
             "choices": [
                 {
                     "message": {
-                        "tool_calls": [{"id": "call_dup"}],
-                        "content": "blocked duplicate",
+                        "tool_calls": [],
+                        "content": "This content violates policy.",
                     }
                 }
             ]
         }
-        result = RubrikLogger._extract_blocked_tools(service_resp, [tc1, tc2])
+        result = RubrikLogger._extract_response_block(
+            service_resp, [], "Original assistant text."
+        )
         assert result is not None
-        assert "blocked duplicate" in result
+        assert "violates policy" in result.explanation
+
+    def test_tool_block_with_appended_explanation(self):
+        """When the service appends an explanation to the original text, only the
+        appended part is returned as the explanation."""
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        tc = ChatCompletionMessageToolCall(
+            id="call_1", type="function", function=Function(name="fn", arguments="{}")
+        )
+        original_text = "Here is my response."
+        appended_explanation = "Tool call was blocked."
+        service_resp = {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [],
+                        "content": original_text + "\n\n" + appended_explanation,
+                    }
+                }
+            ]
+        }
+        result = RubrikLogger._extract_response_block(
+            service_resp, [tc], original_text
+        )
+        assert result is not None
+        assert appended_explanation in result.explanation
 
 
 # -- Sanitize proxy server request -------------------------------------------
