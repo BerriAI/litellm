@@ -742,6 +742,16 @@ def _reliability_router(**group_overrides):
     )
 
 
+def test_routing_group_for_model_name_resolves_explicit_group_else_none():
+    router = _reliability_router(allowed_fails=1)
+    group = router._routing_group_for_model_name("filtered-model")
+    assert group is not None
+    assert group.group_name == "fast"
+    assert group.allowed_fails == 1
+    assert router._routing_group_for_model_name("other-model") is None
+    assert router._routing_group_for_model_name(None) is None
+
+
 def test_resolve_allowed_fails_uses_group_override_else_router_scalar():
     router = _reliability_router(allowed_fails=1)
     router.allowed_fails = 9
