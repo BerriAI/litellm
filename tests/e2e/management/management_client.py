@@ -219,6 +219,17 @@ class ManagementClient:
             )
         ).total
 
+    def user_list_ids(self, user_id: str) -> tuple[str, ...]:
+        listing = unwrap(
+            self.proxy.transport.get(
+                "/user/list",
+                headers=self.proxy.transport.master,
+                params=UserListParams(user_ids=user_id),
+                response_type=UserListResponse,
+            )
+        )
+        return tuple(row.user_id for row in listing.users)
+
     def create_org(self, body: OrgNewBody) -> str:
         return unwrap(
             self.proxy.transport.post(

@@ -670,7 +670,12 @@ class UserListParams(BaseModel):
     user_ids: str
 
 
+class UserListRow(BaseModel):
+    user_id: str
+
+
 class UserListResponse(BaseModel):
+    users: list[UserListRow]
     total: int
 
 
