@@ -9302,7 +9302,26 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
 
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-    litellm_logging_obj = Logging(
+    class RawRequestCapturedError(Exception):
+        pass
+
+    class RawRequestCaptureLogging(Logging):
+        def pre_call(
+            self,
+            input: Any,
+            api_key: Any,
+            model: str | None = None,
+            additional_args: dict[str, Any] | None = None,
+        ) -> None:
+            super().pre_call(
+                input=input,
+                api_key=api_key,
+                model=model,
+                additional_args=additional_args or {},
+            )
+            raise RawRequestCapturedError()
+
+    litellm_logging_obj = RawRequestCaptureLogging(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
@@ -9319,9 +9338,12 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
 
     try:
         llm_api_endpoint(
-            **kwargs,
-            litellm_logging_obj=litellm_logging_obj,
-            api_key="my-fake-api-key",  # 👈 ensure the request fails
+            **{
+                **kwargs,
+                "litellm_logging_obj": litellm_logging_obj,
+                "api_key": "my-fake-api-key",
+                "num_retries": 0,
+            }
         )
     except Exception as e:
         received_exception = str(e)

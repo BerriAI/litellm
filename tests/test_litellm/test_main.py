@@ -705,10 +705,12 @@ def test_return_raw_request_does_not_contact_provider(respx_mock: respx.MockRout
             "model": "openai/test-model",
             "messages": [{"role": "user", "content": "hi"}],
             "api_base": api_base,
+            "stream": True,
         },
     )
 
     assert request["raw_request_body"]["model"] == "test-model"
+    assert request["raw_request_body"]["stream"] is True
     assert request["raw_request_api_base"] == f"{api_base}/"
     assert provider_route.called is False
 
