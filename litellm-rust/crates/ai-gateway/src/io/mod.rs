@@ -1,3 +1,4 @@
+pub mod audio_transcription;
 pub mod messages;
 pub mod ocr;
 pub mod realtime;
