@@ -742,6 +742,30 @@ def _warn_internal_delegate_pkce_if_applicable(server: MCPServer, *, source: str
     )
 
 
+def _warn_response_headers_unsupported_transport_if_applicable(server: MCPServer, *, source: str) -> None:
+    """Surface an ``allowed_response_headers`` config that the server's transport cannot honor.
+
+    Only the streamable-HTTP transport exposes the upstream ``tools/call`` HTTP response. stdio has no
+    HTTP at all, and the SSE transport delivers the result over a stream whose headers are committed
+    before the tool runs (its POST returns only an ack), so on both the setting is inert. Without this
+    line an operator would see no headers, no error, and no explanation.
+    """
+    if not server.allowed_response_headers:
+        return
+    if server.transport == MCPTransport.http:
+        return
+    label = get_server_prefix(server)
+    verbose_logger.warning(
+        "MCP server %r (id=%s, source=%s): allowed_response_headers is set but the transport is %s. "
+        "Upstream response headers are only observable on the streamable-HTTP transport, so no headers "
+        "will be surfaced on the tool result's _meta.",
+        label,
+        server.server_id,
+        source,
+        server.transport,
+    )
+
+
 def _deserialize_json_dict(data: Any) -> Optional[dict[str, str]]:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -1347,6 +1371,7 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                allowed_response_headers=server_config.get("allowed_response_headers", None),
                 env_vars=server_config.get("env_vars", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(server_config.get("available_on_public_internet", True)),
@@ -1383,6 +1408,7 @@ class MCPServerManager:
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
+            _warn_response_headers_unsupported_transport_if_applicable(new_server, source="config")
             self.config_mcp_servers[server_id] = new_server
 
             # Check if this is an OpenAPI-based server
@@ -1798,6 +1824,7 @@ class MCPServerManager:
             authentication_token=auth_value,
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
+            allowed_response_headers=getattr(mcp_server, "allowed_response_headers", None),
             static_headers=static_headers_dict,
             env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
@@ -1870,6 +1897,7 @@ class MCPServerManager:
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
+        _warn_response_headers_unsupported_transport_if_applicable(new_server, source="database")
         if persist_discovered_endpoints:
             await self._persist_discovered_obo_token_url(
                 server_id=mcp_server.server_id,
@@ -2939,6 +2967,7 @@ class MCPServerManager:
                     resolved_auth=resolved_auth,
                     sampling_callback=sampling_cb,
                     elicitation_callback=elicitation_cb,
+                    allowed_response_headers=server.allowed_response_headers,
                 )
 
             # Create SigV4 auth if configured
@@ -2964,6 +2993,7 @@ class MCPServerManager:
                 aws_auth=aws_auth,
                 sampling_callback=sampling_cb,
                 elicitation_callback=elicitation_cb,
+                allowed_response_headers=server.allowed_response_headers,
             )
 
     async def _get_tools_from_server(

@@ -983,6 +983,44 @@ def test_prepare_mcp_server_data_create_carries_token_exchange_columns():
     assert data["token_exchange_profile"] == "entra_obo"
 
 
+def test_prepare_mcp_server_data_create_carries_allowed_response_headers():
+    """The create path must emit allowed_response_headers as a column value, or a server registered
+    through the REST API / dashboard could never surface upstream response headers."""
+    request = NewMCPServerRequest(
+        server_name="hdr_write",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        allowed_response_headers=["X-Example-Header"],
+    )
+
+    data = _prepare_mcp_server_data(request)
+
+    assert data["allowed_response_headers"] == ["X-Example-Header"]
+
+
+def test_prepare_mcp_server_data_update_maps_cleared_allowed_response_headers_to_empty_list():
+    """The column is a Prisma String[], which rejects null. The edit form clears the field to null,
+    so an explicit null must become [] rather than reaching the DB and failing the update."""
+    request = UpdateMCPServerRequest(
+        server_id="hdr-1",
+        allowed_response_headers=None,
+    )
+
+    data = _prepare_mcp_server_data(request, exclude_unset=True)
+
+    assert data["allowed_response_headers"] == []
+
+
+def test_prepare_mcp_server_data_update_omits_allowed_response_headers_when_untouched():
+    """A partial update that never mentions the field must not write it, so an edit to an unrelated
+    field cannot silently wipe a configured allowlist."""
+    request = UpdateMCPServerRequest(server_id="hdr-1", alias="renamed")
+
+    data = _prepare_mcp_server_data(request, exclude_unset=True)
+
+    assert "allowed_response_headers" not in data
+
+
 def test_prepare_mcp_server_data_update_carries_token_exchange_columns():
     """The partial-update path (PUT /v1/mcp/server, exclude_unset) must carry the three
     token-exchange columns when the caller provides them."""

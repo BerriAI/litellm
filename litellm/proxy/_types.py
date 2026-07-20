@@ -1259,6 +1259,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
+    allowed_response_headers: list[str] | None = None
     static_headers: Optional[Dict[str, str]] = None
     env_vars: Optional[List[MCPEnvVar]] = None
     instructions: Optional[str] = None
@@ -1365,6 +1366,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
+    allowed_response_headers: list[str] | None = None
     static_headers: Optional[Dict[str, str]] = None
     env_vars: Optional[List[MCPEnvVar]] = None
     instructions: Optional[str] = None

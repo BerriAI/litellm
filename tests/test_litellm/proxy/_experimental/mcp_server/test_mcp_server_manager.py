@@ -6601,6 +6601,136 @@ class TestInternalDelegatePkceWarningLog:
         assert "internal-only" not in combined
 
 
+class TestWarnResponseHeadersUnsupportedTransport:
+    """allowed_response_headers is inert off streamable-HTTP, so loading such a server must say so."""
+
+    def _server(self, transport, allowed):
+        return MCPServer(
+            server_id="hdr-1",
+            name="hdr_server",
+            url="https://example.com/mcp",
+            transport=transport,
+            allowed_response_headers=allowed,
+        )
+
+    def _warn(self, server, caplog):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _warn_response_headers_unsupported_transport_if_applicable,
+        )
+
+        _warn_response_headers_unsupported_transport_if_applicable(server, source="test")
+        return " ".join(r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize("transport", [MCPTransport.sse, MCPTransport.stdio])
+    def test_warns_on_every_non_http_transport(self, caplog, transport):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+
+        combined = self._warn(self._server(transport, ["X-Example-Header"]), caplog)
+
+        assert "allowed_response_headers is set but the transport is" in combined
+        assert "hdr-1" in combined
+        assert transport.value in combined
+
+    def test_no_warning_on_http_where_the_feature_works(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+
+        combined = self._warn(self._server(MCPTransport.http, ["X-Example-Header"]), caplog)
+
+        assert "allowed_response_headers" not in combined
+
+    @pytest.mark.parametrize("allowed", [None, []])
+    def test_no_warning_when_the_feature_is_not_configured(self, caplog, allowed):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+
+        combined = self._warn(self._server(MCPTransport.sse, allowed), caplog)
+
+        assert "allowed_response_headers" not in combined
+
+    @pytest.mark.asyncio
+    async def test_loading_such_a_server_from_config_emits_the_warning(self, caplog):
+        """Pins the call site: the check is only useful if config load actually runs it."""
+        manager = MCPServerManager()
+        config = {
+            "sse_server": {
+                "url": "https://example.com/sse",
+                "transport": MCPTransport.sse,
+                "allowed_response_headers": ["X-Example-Header"],
+            }
+        }
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        assert any("allowed_response_headers is set but the transport is" in m for m in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_loading_an_http_server_from_config_stays_quiet(self, caplog):
+        manager = MCPServerManager()
+        config = {
+            "http_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "allowed_response_headers": ["X-Example-Header"],
+            }
+        }
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        assert not any("allowed_response_headers" in m for m in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_loading_such_a_server_from_the_database_emits_the_warning(self, caplog):
+        """The field is DB-backed, so the dashboard can create the same misconfiguration as config.yaml."""
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="hdr-sse-db",
+            server_name="hdr_sse_db",
+            url="https://example.com/sse",
+            transport=MCPTransport.sse,
+            allowed_response_headers=["X-Example-Header"],
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.build_mcp_server_from_table(table_record)
+
+        assert any("allowed_response_headers is set but the transport is" in m for m in caplog.messages)
+
+
+class TestAllowedResponseHeadersFromDatabase:
+    """The DB row is the dashboard's storage, so the field must survive the row -> MCPServer build."""
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_carries_allowed_response_headers(self):
+        """Without this the dashboard could save the allowlist and the gateway would silently ignore it."""
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="hdr-db-1",
+            server_name="hdr_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            allowed_response_headers=["X-Example-Header"],
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.allowed_response_headers == ["X-Example-Header"]
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_defaults_to_no_headers(self):
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="hdr-db-2",
+            server_name="hdr_db_none",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert not mcp_server.allowed_response_headers
+
+
 class TestHasClientCredentialsOAuth2Flow:
     """
     Regression tests for the M2M auto-detection bug.

@@ -290,8 +290,9 @@ def _prepare_mcp_server_data(
             data_dict.pop("alias", None)
         # Prisma ``allowed_tools`` is a required String[]; ``null`` is invalid.
         # The UI sends null to clear a whitelist — treat that as ``[]``.
-        if "allowed_tools" in data_dict and data_dict["allowed_tools"] is None:
-            data_dict["allowed_tools"] = []
+        for list_field in ("allowed_tools", "allowed_response_headers"):
+            if list_field in data_dict and data_dict[list_field] is None:
+                data_dict[list_field] = []
         # Json map fields use ``@default("{}")``; explicit null means clear overrides.
         for json_map_field in (
             "tool_name_to_display_name",

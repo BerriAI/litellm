@@ -121,6 +121,25 @@ MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 
+MCP_RESPONSE_HEADERS_META_KEY = "ai.litellm/responseHeaders"
+MCP_RESPONSE_HEADER_DENYLIST = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "www-authenticate",
+        "proxy-authenticate",
+        "set-cookie",
+        "cookie",
+        "mcp-session-id",
+        "connection",
+        "keep-alive",
+        "transfer-encoding",
+        "upgrade",
+        "te",
+        "trailer",
+    }
+)
+
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
 # Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").

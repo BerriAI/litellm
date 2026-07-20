@@ -294,6 +294,16 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     </div>
                   </div>
                   <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Allowed Response Headers</Text>
+                    <div className="col-span-2 text-sm text-gray-900">
+                      {mcpServer.allowed_response_headers && mcpServer.allowed_response_headers.length > 0 ? (
+                        mcpServer.allowed_response_headers.join(", ")
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
                     <Text className="text-sm font-medium text-gray-500">Allow All Keys</Text>
                     <div className="col-span-2">
                       {mcpServer.allow_all_keys ? (

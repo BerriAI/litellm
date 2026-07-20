@@ -533,6 +533,7 @@ if MCP_AVAILABLE:
         sanitized.spec_path = None
         sanitized.static_headers = None
         sanitized.extra_headers = []
+        sanitized.allowed_response_headers = []
         sanitized.env = {}
         sanitized.command = None
         sanitized.args = []
@@ -577,6 +578,7 @@ if MCP_AVAILABLE:
         sanitized.command = None
         sanitized.args = []
         sanitized.extra_headers = []
+        sanitized.allowed_response_headers = []
         sanitized.allowed_tools = []
         sanitized.mcp_access_groups = []
         sanitized.teams = []
@@ -683,6 +685,7 @@ if MCP_AVAILABLE:
             mcp_access_groups=payload.mcp_access_groups,
             allowed_tools=payload.allowed_tools or [],
             extra_headers=payload.extra_headers or [],
+            allowed_response_headers=payload.allowed_response_headers or [],
             mcp_info=payload.mcp_info,
             static_headers=payload.static_headers,
             command=payload.command,

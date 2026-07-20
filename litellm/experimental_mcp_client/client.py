@@ -4,6 +4,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
+import json
 import os
 from typing import (
     Any,
@@ -41,7 +42,12 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_NPM_CACHE_DIR,
+    MCP_RESPONSE_HEADER_DENYLIST,
+    MCP_RESPONSE_HEADERS_META_KEY,
+)
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -56,6 +62,35 @@ from litellm.types.mcp import (
 def to_basic_auth(auth_value: str) -> str:
     """Convert auth value to Basic Auth format."""
     return base64.b64encode(auth_value.encode("utf-8")).decode()
+
+
+def normalize_allowed_response_headers(names: list[str] | None) -> frozenset[str]:
+    """Lowercase the configured upstream response-header allowlist, dropping blanks and denylisted names.
+
+    Normalizing in one place keeps a single notion of "blank" (None, "", whitespace) and guarantees a
+    denylisted header can never be surfaced to the caller even when an admin configures it explicitly.
+    """
+    if not names:
+        return frozenset()
+    return frozenset(
+        stripped
+        for stripped in (name.strip().lower() for name in names if isinstance(name, str))
+        if stripped and stripped not in MCP_RESPONSE_HEADER_DENYLIST
+    )
+
+
+def _is_tool_call_request(request: httpx.Request) -> bool:
+    """True when this HTTP request carries the JSON-RPC ``tools/call`` that produced the response.
+
+    A streamable-HTTP session also POSTs ``initialize`` and notifications, and may DELETE the session
+    on close, so the tool call is identified by its JSON-RPC method rather than by being the last
+    response observed on the connection.
+    """
+    try:
+        payload = json.loads(request.content)
+    except (httpx.RequestNotRead, ValueError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("method") == "tools/call"
 
 
 def _strip_header_whitespace(headers: Dict[str, str]) -> Dict[str, str]:
@@ -217,6 +252,7 @@ class MCPClient:
         sampling_callback: Optional[Callable] = None,
         elicitation_callback: Optional[Callable] = None,
         logging_callback: Optional[Callable] = None,
+        allowed_response_headers: list[str] | None = None,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -234,9 +270,34 @@ class MCPClient:
         self._sampling_callback: Optional[Callable] = sampling_callback
         self._elicitation_callback: Optional[Callable] = elicitation_callback
         self._logging_callback: Optional[Callable] = logging_callback
+        self._allowed_response_headers: frozenset[str] = normalize_allowed_response_headers(allowed_response_headers)
+        self._tool_call_response_headers: dict[str, str] | None = None
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
+
+    def _response_event_hooks(
+        self,
+    ) -> dict[str, list[Callable[[httpx.Response], Awaitable[None]]]] | None:
+        """An httpx response hook recording the allowlisted upstream ``tools/call`` headers, when configured.
+
+        This is the only seam that sees the upstream HTTP response: the MCP SDK's transport keeps just
+        the session id and content-type and hands back a headerless ``CallToolResult``. Reading only
+        ``response.headers`` leaves the (possibly streamed) body untouched.
+        """
+        if not self._allowed_response_headers:
+            return None
+
+        async def _capture(response: httpx.Response) -> None:
+            if not _is_tool_call_request(response.request):
+                return
+            self._tool_call_response_headers = {
+                name.lower(): value
+                for name, value in response.headers.items()
+                if name.lower() in self._allowed_response_headers
+            }
+
+        return {"response": [_capture]}
 
     def _create_transport_context(
         self,
@@ -278,6 +339,7 @@ class MCPClient:
         http_client = httpx_client_factory(
             headers=headers,
             timeout=httpx.Timeout(self.timeout),
+            event_hooks=self._response_event_hooks(),
         )
         transport_ctx = streamable_http_client(
             url=self.server_url,
@@ -396,6 +458,7 @@ class MCPClient:
         http_client: Optional[httpx.AsyncClient] = None
         try:
             self._last_initialize_instructions = None
+            self._tool_call_response_headers = None
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception:
@@ -465,6 +528,7 @@ class MCPClient:
             headers: Optional[Dict[str, str]] = None,
             timeout: Optional[httpx.Timeout] = None,
             auth: Optional[httpx.Auth] = None,
+            event_hooks: dict[str, list[Callable[[httpx.Response], Awaitable[None]]]] | None = None,
         ) -> httpx.AsyncClient:
             """Create an httpx.AsyncClient with LiteLLM's SSL configuration."""
             # Get unified SSL configuration using the same logic as http_handler.py
@@ -481,6 +545,7 @@ class MCPClient:
                 auth=effective_auth,
                 verify=ssl_config,
                 follow_redirects=True,
+                event_hooks=event_hooks,
             )
 
         return factory
@@ -537,6 +602,20 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return []
 
+    def _with_response_headers_meta(self, result: MCPCallToolResult) -> MCPCallToolResult:
+        """Surface the captured upstream response headers on the result's MCP ``_meta``.
+
+        ``_meta`` is the protocol's reserved slot for out-of-band metadata and the only channel that
+        reaches the caller, since the gateway re-serializes the result over its own transport and
+        commits its HTTP headers before the tool runs. The key carries litellm's reverse-DNS prefix
+        because the spec reserves ``mcp``/``modelcontextprotocol`` prefixes for protocol use.
+        """
+        headers = self._tool_call_response_headers
+        if not headers:
+            return result
+        merged_meta = {**(result.meta or {}), MCP_RESPONSE_HEADERS_META_KEY: headers}
+        return result.model_copy(update={"meta": merged_meta})
+
     @staticmethod
     def error_tool_result(exc: Exception) -> MCPCallToolResult:
         """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
@@ -586,7 +665,7 @@ class MCPClient:
         try:
             tool_result = await self.run_with_session(_call_tool_operation, quiet_on_error=raise_on_error)
             verbose_logger.info(f"MCP client tool call '{call_tool_request_params.name}' completed successfully")
-            return tool_result
+            return self._with_response_headers_meta(tool_result)
         except asyncio.CancelledError:
             verbose_logger.warning(f"MCP client tool call timed out after {self.timeout}s for {self.server_url}")
             raise
