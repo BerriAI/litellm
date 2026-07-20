@@ -41,6 +41,7 @@ from models import (
     TeamMemberEntry,
     TeamNewBody,
     TeamNewResponse,
+    TeamUpdateBody,
     UserDeleteBody,
     UserInfoParams,
     UserInfoResponse,
@@ -138,6 +139,28 @@ class ManagementClient:
         ).team_id
         self._wait_for_team(team_id)
         return team_id
+
+    def update_team(self, body: TeamUpdateBody) -> None:
+        last: Result[NoBody] | None = None
+        for attempt in range(5):
+            last = self.proxy.transport.post(
+                "/team/update",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+            match last:
+                case Success():
+                    return
+                case UnknownApiError(body=body_text) if (
+                    "connecting to redis" in body_text.lower() or "name resolution" in body_text.lower()
+                ):
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                case _:
+                    break
+        assert last is not None
+        raise AssertionError(last)
 
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
