@@ -297,17 +297,18 @@ class PrivaiteGuardrail(CustomGuardrail):
     def _collect_data_value(self, batch: list, setters: list, value: Any, setter: Callable[[str], None]) -> None:
         """Walk a tool payload (a string, a list of parts, or arbitrary nested
         JSON) registering every string leaf, but relay binary parts whole. Object
-        keys are never scanned, matching the documented boundary."""
-        if isinstance(value, str):
-            self._add_leaf(batch, setters, value, setter)
-            return
-        if isinstance(value, list):
-            for idx, part in enumerate(value):
-                self._collect_data_value(batch, setters, part, self._make_setter(value, idx))
-            return
-        if isinstance(value, dict) and value.get("type") not in _BINARY_PART_TYPES:
-            for key, sub in value.items():
-                self._collect_data_value(batch, setters, sub, self._make_setter(value, key))
+        keys are never scanned, matching the documented boundary. Iterative
+        worklist, no recursion; children are pushed reversed so leaves register
+        in the same depth-first order as the recursive walk they replace."""
+        stack: list[tuple[Any, Callable[[str], None]]] = [(value, setter)]
+        while stack:
+            node, write_back = stack.pop()
+            if isinstance(node, str):
+                self._add_leaf(batch, setters, node, write_back)
+            elif isinstance(node, list):
+                stack.extend((node[idx], self._make_setter(node, idx)) for idx in range(len(node) - 1, -1, -1))
+            elif isinstance(node, dict) and node.get("type") not in _BINARY_PART_TYPES:
+                stack.extend((sub, self._make_setter(node, key)) for key, sub in reversed(node.items()))
 
     def _collect_responses_item(self, batch: list, setters: list, container: list, idx: int, item: Any) -> None:
         """Register the scannable text on ONE Responses `input` list item, by its
