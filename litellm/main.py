@@ -520,7 +520,7 @@ async def acompletion(
         non_default_params=kwargs,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
         model=model,
-        custom_llm_provider=cast(Optional[str], custom_llm_provider),  # cast-ok: read from untyped kwargs
+        custom_llm_provider=cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
     )
 
@@ -5078,7 +5078,7 @@ def completion(  # type: ignore
         non_default_params=non_default_params,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
         model=model,
-        custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
+        custom_llm_provider=cast(str | None, kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
     )
 
