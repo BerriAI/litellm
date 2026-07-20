@@ -91,7 +91,7 @@
   },
   "overrides": {
     "prismjs": "1.30.0",
-    "js-yaml": "4.2.0",
+    "js-yaml": "4.3.0",
     "glob": "13.0.0",
     "minimatch": "10.2.4",
     "ws": "8.21.0",
