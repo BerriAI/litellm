@@ -22,6 +22,7 @@ from models import (
     KeyListResponse,
     KeyRegenerateBody,
     KeyUpdateBody,
+    ModelDeleteBody,
     OrgDeleteBody,
     OrgInfoParams,
     OrgInfoResponse,
@@ -95,6 +96,18 @@ class ManagementClient:
                 "/key/delete",
                 headers=self.proxy.transport.master,
                 json=KeyDeleteBody(keys=[key]),
+                response_type=NoBody,
+            )
+        )
+
+    def delete_model_strict(self, model_id: str) -> None:
+        """Strict delete for the act phase of a test: a failed delete is a hard
+        failure, unlike the warn-only ProxyClient.delete_model used at teardown."""
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/model/delete",
+                headers=self.proxy.transport.master,
+                json=ModelDeleteBody(id=model_id),
                 response_type=NoBody,
             )
         )
