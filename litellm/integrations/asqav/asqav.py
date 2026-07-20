@@ -22,6 +22,7 @@ hash chain, unchanged.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -29,7 +30,7 @@ import threading
 import time
 import traceback
 from datetime import datetime, timezone
-from typing import Any, BinaryIO, Optional
+from typing import Any, BinaryIO
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -56,7 +57,7 @@ _SENSITIVE_KEYS = frozenset(
         "authorization",
         "token",
         "api_key",
-    }
+    },
 )
 _PROXY_IDENTITY_KEYS = frozenset(
     {
@@ -67,7 +68,7 @@ _PROXY_IDENTITY_KEYS = frozenset(
         "user_id",
         "team_id",
         "org_id",
-    }
+    },
 )
 
 
@@ -87,7 +88,8 @@ def _canonical_bytes(record: dict[str, Any]) -> bytes:
 def _read_tail(fh: BinaryIO, size: int) -> bytes:
     """Read backwards from the end of fh until the buffer contains the entire
     last line, doubling the window each pass so records of any length survive
-    a restart."""
+    a restart.
+    """
     chunk_size = 4096
     while True:
         read_size = min(chunk_size, size)
@@ -98,7 +100,7 @@ def _read_tail(fh: BinaryIO, size: int) -> bytes:
         chunk_size *= 2
 
 
-def _content_digest(value: Any) -> Optional[str]:
+def _content_digest(value: Any) -> str | None:
     """Return a SHA-256 hex digest of a content value, or None if empty."""
     if value is None:
         return None
@@ -124,7 +126,7 @@ def _merge_proxy_identity(metadata: dict[str, Any], kwargs: dict[str, Any]) -> d
     return metadata
 
 
-def _compute_latency_ms(start_time: Any, end_time: Any) -> Optional[int]:
+def _compute_latency_ms(start_time: Any, end_time: Any) -> int | None:
     try:
         if start_time is not None and end_time is not None:
             return int((end_time - start_time).total_seconds() * 1000)
@@ -135,12 +137,12 @@ def _compute_latency_ms(start_time: Any, end_time: Any) -> Optional[int]:
 
 def _extract_usage_fields(
     response_obj: Any,
-) -> tuple[Optional[int], Optional[int], Optional[int], Optional[str], Optional[str]]:
-    prompt_tokens: Optional[int] = None
-    completion_tokens: Optional[int] = None
-    total_tokens: Optional[int] = None
-    finish_reason: Optional[str] = None
-    provider_request_id: Optional[str] = None
+) -> tuple[int | None, int | None, int | None, str | None, str | None]:
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    finish_reason: str | None = None
+    provider_request_id: str | None = None
     try:
         if hasattr(response_obj, "usage") and response_obj.usage:
             prompt_tokens = response_obj.usage.prompt_tokens
@@ -150,14 +152,14 @@ def _extract_usage_fields(
             finish_reason = response_obj.choices[0].finish_reason
         if hasattr(response_obj, "_hidden_params"):
             provider_request_id = response_obj._hidden_params.get("x-request-id") or response_obj._hidden_params.get(
-                "cf-ray"
+                "cf-ray",
             )
     except (AttributeError, IndexError, TypeError):
         pass
     return prompt_tokens, completion_tokens, total_tokens, finish_reason, provider_request_id
 
 
-def _extract_response_content_digest(response_obj: Any) -> Optional[str]:
+def _extract_response_content_digest(response_obj: Any) -> str | None:
     try:
         if hasattr(response_obj, "choices") and response_obj.choices:
             return _content_digest(response_obj.choices[0].message.content)
@@ -278,7 +280,7 @@ class AsqavLogger(CustomLogger):
 
     def __init__(
         self,
-        log_path: Optional[str] = None,
+        log_path: str | None = None,
         redact_content: bool = True,
     ) -> None:
         super().__init__()
@@ -424,10 +426,8 @@ class AsqavLogger(CustomLogger):
             except Exception:
                 # fdopen owns fd; if it raises before returning the context
                 # manager the fd may still be open - close defensively.
-                try:
+                with contextlib.suppress(OSError):
                     os.close(fd)
-                except OSError:
-                    pass
                 raise
             return True
         except (OSError, TypeError, ValueError):
@@ -487,7 +487,7 @@ class AsqavLogger(CustomLogger):
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
     async def async_log_success_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any,
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -499,7 +499,7 @@ class AsqavLogger(CustomLogger):
         )
 
     async def async_log_failure_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any,
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -514,7 +514,7 @@ class AsqavLogger(CustomLogger):
     # Chain verification (utility; not called on the hot path)
     # ------------------------------------------------------------------
 
-    def verify_chain(self, log_path: Optional[str] = None) -> tuple[bool, str]:
+    def verify_chain(self, log_path: str | None = None) -> tuple[bool, str]:
         """Verify the integrity of the audit log at log_path.
 
         Returns (True, "ok") when every record's hash matches its content and
