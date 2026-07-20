@@ -4937,3 +4937,38 @@ class TestRemoveForeignThoughtSignaturesFromMessages:
         result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
 
         assert result == messages
+
+    def test_strips_matching_tool_response_id_so_it_still_pairs_with_the_tool_call(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123__thought__VERTEX_SIG",
+                        "type": "function",
+                        "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123__thought__VERTEX_SIG",
+                "content": "72 degrees",
+            },
+        ]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        stripped_tool_call_id = result[0]["tool_calls"][0]["id"]
+        stripped_tool_response_id = result[1]["tool_call_id"]
+        assert stripped_tool_call_id == "call_abc123"
+        assert stripped_tool_response_id == stripped_tool_call_id
+
+    def test_ignores_tool_messages_without_a_signature_suffix(self):
+        messages = [{"role": "tool", "tool_call_id": "call_abc123", "content": "72 degrees"}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result[0]["tool_call_id"] == "call_abc123"

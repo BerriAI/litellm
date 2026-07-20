@@ -208,6 +208,13 @@ class TestCrossesGeminiEndpointBoundary:
         assert _crosses_gemini_endpoint_boundary("vertex_ai", "gemini") is True
         assert _crosses_gemini_endpoint_boundary("gemini", "vertex_ai") is True
 
+    def test_true_between_vertex_ai_beta_and_gemini(self):
+        """vertex_ai_beta is a distinct custom_llm_provider from vertex_ai in
+        this codebase; a deployment configured with it must still be caught
+        falling back to Google AI Studio."""
+        assert _crosses_gemini_endpoint_boundary("vertex_ai_beta", "gemini") is True
+        assert _crosses_gemini_endpoint_boundary("gemini", "vertex_ai_beta") is True
+
     def test_false_when_providers_match(self):
         assert _crosses_gemini_endpoint_boundary("vertex_ai", "vertex_ai") is False
 
@@ -270,3 +277,48 @@ async def test_run_async_fallback_does_not_strip_signature_within_same_provider(
     tool_call = router.received_kwargs["messages"][0]["tool_calls"][0]
     assert tool_call["id"] == tool_call_id
     assert tool_call["provider_specific_fields"]["thought_signature"] == "VERTEX_SIG"
+
+
+class CountingRouter(RecordingRouter):
+    """Fails on the first fallback candidate and succeeds on the second, so
+    tests can prove the original model group's provider is only looked up
+    once even when the loop iterates over multiple fallback candidates."""
+
+    def __init__(self, deployments_by_model_group=None):
+        super().__init__(deployments_by_model_group)
+        self.get_model_list_calls = []
+
+    def get_model_list(self, model_name=None, team_id=None):
+        self.get_model_list_calls.append(model_name)
+        return super().get_model_list(model_name=model_name, team_id=team_id)
+
+    async def async_function_with_fallbacks(self, *args, **kwargs):
+        if kwargs.get("model") == "fallback-model-1":
+            raise RuntimeError("first fallback also failed")
+        self.received_kwargs = kwargs
+        return StreamingWrapper()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_looks_up_original_provider_only_once_across_candidates():
+    router = CountingRouter(
+        deployments_by_model_group={
+            "primary-model": [{"litellm_params": {"custom_llm_provider": "vertex_ai", "model": "vertex_ai/gemini-3-pro-preview"}}],
+            "fallback-model-1": [{"litellm_params": {"custom_llm_provider": "vertex_ai", "model": "vertex_ai/gemini-3-flash"}}],
+            "fallback-model-2": [{"litellm_params": {"custom_llm_provider": "gemini", "model": "gemini/gemini-3-pro-preview"}}],
+        }
+    )
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model-1", "fallback-model-2"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("upstream limited request"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        messages=[_gemini_tool_call_message("call_abc123__thought__VERTEX_SIG")],
+    )
+
+    assert router.get_model_list_calls.count("primary-model") == 1
+    assert router.get_model_list_calls.count("fallback-model-1") == 1
+    assert router.get_model_list_calls.count("fallback-model-2") == 1

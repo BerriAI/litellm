@@ -19,10 +19,10 @@ else:
     LitellmRouter = Any
 
 
-_GEMINI_ENDPOINT_PROVIDERS = ("vertex_ai", "gemini")
+_GEMINI_ENDPOINT_PROVIDERS = ("vertex_ai", "vertex_ai_beta", "gemini")
 
 
-def _get_model_group_custom_llm_provider(litellm_router: LitellmRouter, model_group: str) -> Optional[str]:
+def _get_model_group_custom_llm_provider(litellm_router: LitellmRouter, model_group: str) -> str | None:
     """
     Best-effort lookup of the custom_llm_provider for a model group's first deployment.
     """
@@ -45,7 +45,7 @@ def _get_model_group_custom_llm_provider(litellm_router: LitellmRouter, model_gr
         return None
 
 
-def _crosses_gemini_endpoint_boundary(original_provider: Optional[str], fallback_provider: Optional[str]) -> bool:
+def _crosses_gemini_endpoint_boundary(original_provider: str | None, fallback_provider: str | None) -> bool:
     """
     True when a fallback switches between Vertex AI and Google AI Studio for
     the same Gemini model family. Thought signatures minted by one endpoint
@@ -160,6 +160,12 @@ async def run_async_fallback(
 
     error_from_fallbacks = original_exception
     fallback_errors = (get_fallback_error_info(original_exception),)
+    original_messages = kwargs.get("messages")
+    original_provider = (
+        _get_model_group_custom_llm_provider(litellm_router, original_model_group)
+        if isinstance(original_messages, list)
+        else None
+    )
 
     for mg in fallback_model_group:
         if mg == original_model_group:
@@ -178,7 +184,6 @@ async def run_async_fallback(
             fallback_model_name = kwargs.get("model")
             messages = kwargs.get("messages")
             if isinstance(fallback_model_name, str) and isinstance(messages, list):
-                original_provider = _get_model_group_custom_llm_provider(litellm_router, original_model_group)
                 fallback_provider = _get_model_group_custom_llm_provider(litellm_router, fallback_model_name)
                 if _crosses_gemini_endpoint_boundary(original_provider, fallback_provider):
                     from litellm.litellm_core_utils.prompt_templates.factory import (

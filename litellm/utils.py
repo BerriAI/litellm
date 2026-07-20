@@ -749,13 +749,16 @@ def _strip_foreign_thought_signature_from_tool_call(tool_call: dict, thought_sig
 
 def _remove_foreign_thought_signatures_from_messages(messages: list, thought_signature_separator: str) -> list:
     """
-    Remove Gemini thought signatures from tool calls in replayed messages.
+    Remove Gemini thought signatures from tool calls and matching tool
+    response messages in replayed messages.
 
     Thought signatures are endpoint-bound: a signature minted by Vertex AI is
     rejected as corrupted by Google AI Studio, and vice versa. When the Router
     falls back across this boundary, the foreign signature must be stripped so
     the receiving endpoint treats it as missing and re-fills its own dummy
-    placeholder, instead of replaying an incompatible value.
+    placeholder, instead of replaying an incompatible value. The assistant
+    tool call's id and the matching role="tool" message's tool_call_id must
+    be stripped together, or they no longer match each other.
 
     See: https://ai.google.dev/gemini-api/docs/thought-signatures
     """
@@ -785,6 +788,10 @@ def _remove_foreign_thought_signatures_from_messages(messages: list, thought_sig
                     _strip_foreign_thought_signature_from_tool_call(tc_dict, thought_signature_separator)
                 )
             msg_dict["tool_calls"] = new_tool_calls
+
+        tool_call_id = msg_dict.get("tool_call_id")
+        if msg_dict.get("role") == "tool" and isinstance(tool_call_id, str):
+            msg_dict["tool_call_id"] = _remove_thought_signature_from_id(tool_call_id, thought_signature_separator)
 
         processed_messages.append(msg_dict)
 
