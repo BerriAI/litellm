@@ -100,7 +100,7 @@ def _load_persisted_master_key(config_path: Path) -> str | None:
         return None
     try:
         raw = _RAW_CONFIG_ADAPTER.validate_python(yaml.safe_load(config_path.read_text()))
-    except (yaml.YAMLError, ValidationError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValidationError):
         return None
     return master_key_from_config(raw)
 

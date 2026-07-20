@@ -160,6 +160,14 @@ class TestRunConfigureWizardMasterKeyCarryForward:
         assert result.exit_code == 0, result.output
         assert "general_settings" not in yaml.safe_load(config_path.read_text())
 
+    def test_undecodable_prior_config_does_not_block_reconfigure(self, tmp_path):
+        (tmp_path / "config.yaml").write_bytes(b"\xff\xfe\x00 not utf-8")
+
+        result, config_path = _run(tmp_path, CHAT_AND_EMBEDDING_GROUPS, _SIMPLE_TIER_PICKS, input_str="n\nn\nn\n")
+
+        assert result.exit_code == 0, result.output
+        assert "general_settings" not in yaml.safe_load(config_path.read_text())
+
     def test_no_embedding_pool_skips_semantic_prompt_entirely(self, tmp_path):
         result, config_path = _run(tmp_path, CHAT_ONLY_GROUPS, _SIMPLE_TIER_PICKS, input_str="n\nn\n")
 
