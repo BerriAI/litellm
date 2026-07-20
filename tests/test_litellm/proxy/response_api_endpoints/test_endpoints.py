@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm.proxy.proxy_server import app
 
 
@@ -711,3 +712,149 @@ class TestManagedResponsesSameProvider:
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs
+
+
+def _auth_override():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    return UserAPIKeyAuth(api_key="sk-test-cursor", user_id="cursor-user")
+
+
+def test_cursor_chat_completions_messages_body_uses_chat_pipeline():
+    """A genuine chat-completions body (``messages`` present; what Cursor sends for
+    models whose BYOK it already fixed) must run through the standard chat pipeline
+    untouched: multi-turn tool history (assistant tool_calls + role="tool" results)
+    and nested chat-format tool defs are valid there, while blindly renaming
+    ``messages`` to ``input`` (the pre-fix behavior) produced items the Responses API
+    rejects. Asserts acompletion is called with the exact messages and aresponses is
+    never touched."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    import litellm.proxy.proxy_server as ps
+
+    messages = [
+        {"role": "user", "content": "read a file"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_hist1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_hist1", "content": "file contents"},
+        {"role": "user", "content": "now summarize"},
+    ]
+
+    mock_router = MagicMock()
+    mock_router.acompletion = AsyncMock(
+        return_value=litellm.ModelResponse(
+            id="chatcmpl-cursor-1",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "summary"},
+                    "finish_reason": "stop",
+                }
+            ],
+            model="gpt-4o",
+        )
+    )
+    mock_router.aresponses = AsyncMock()
+    mock_router.get_available_deployment = MagicMock(return_value=None)
+
+    app.dependency_overrides[user_api_key_auth] = _auth_override
+    try:
+        with patch.object(ps, "llm_router", mock_router):
+            client = TestClient(app)
+            response = client.post(
+                "/cursor/chat/completions",
+                json={
+                    "model": "gpt-4o",
+                    "messages": messages,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {"name": "read_file", "parameters": {"type": "object"}},
+                        }
+                    ],
+                },
+                headers={"Authorization": "Bearer sk-test-cursor"},
+            )
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["choices"][0]["message"]["content"] == "summary"
+    assert "output" not in body
+
+    mock_router.acompletion.assert_called_once()
+    called_kwargs = mock_router.acompletion.call_args.kwargs
+    assert called_kwargs["messages"] == messages
+    assert "input" not in called_kwargs
+    mock_router.aresponses.assert_not_called()
+
+
+def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_stream_options():
+    """A Responses-shaped body (``input``, no ``messages``; what Cursor agent mode
+    sends) must run through the Responses pipeline with chat-completions output, and
+    ``stream_options`` (chat-completions-only; Cursor sends include_usage) must be
+    stripped before the Responses call since OpenAI's Responses API rejects it."""
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    import litellm.proxy.proxy_server as ps
+
+    mock_router = MagicMock()
+    mock_router.aresponses = AsyncMock(
+        return_value=ResponsesAPIResponse(
+            id="resp_cursor_agent1",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            output=[
+                ResponseOutputMessage(
+                    id="msg_agent1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[
+                        ResponseOutputText(type="output_text", text="agent reply", annotations=[])
+                    ],
+                )
+            ],
+        )
+    )
+    mock_router.acompletion = AsyncMock()
+
+    app.dependency_overrides[user_api_key_auth] = _auth_override
+    try:
+        with patch.object(ps, "llm_router", mock_router):
+            client = TestClient(app)
+            response = client.post(
+                "/cursor/chat/completions",
+                json={
+                    "model": "gpt-4o",
+                    "input": [{"role": "user", "content": "hello"}],
+                    "stream_options": {"include_usage": True},
+                },
+                headers={"Authorization": "Bearer sk-test-cursor"},
+            )
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["choices"][0]["message"]["content"] == "agent reply"
+    assert "output" not in body
+
+    mock_router.aresponses.assert_called_once()
+    called_kwargs = mock_router.aresponses.call_args.kwargs
+    assert "stream_options" not in called_kwargs
+    mock_router.acompletion.assert_not_called()

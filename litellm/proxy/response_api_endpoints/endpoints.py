@@ -294,11 +294,15 @@ async def cursor_chat_completions(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Cursor-specific endpoint that accepts Responses API input format but returns chat completions format.
-    
-    This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-    but expects chat completions format response (`choices`, `messages`, etc.).
-    
+    Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible
+    base URL and always answers in chat completions format.
+
+    Cursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,
+    custom tools) to the chat/completions path while expecting chat completions responses;
+    those are routed through the Responses API pipeline and converted back. Genuine chat
+    completions bodies (`messages` present) are routed through the standard chat completions
+    pipeline untouched.
+
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
     -H "Content-Type: application/json" \
@@ -317,6 +321,7 @@ async def cursor_chat_completions(
     from litellm.proxy.proxy_server import (
         _read_request_body,
         async_data_generator,
+        chat_completion,
         general_settings,
         llm_router,
         proxy_config,
@@ -328,20 +333,28 @@ async def cursor_chat_completions(
         user_temperature,
         version,
     )
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
 
     data = await _read_request_body(request=request)
 
-    # Convert 'messages' to 'input' for Responses API compatibility
-    # Cursor sends 'messages' but Responses API expects 'input'
-    if "messages" in data and "input" not in data:
-        data["input"] = data.pop("messages")
+    if "messages" in data:
+        # Genuine chat completions body (Cursor sends these for models whose BYOK it
+        # already fixed); delegate so behavior matches /chat/completions exactly
+        return await chat_completion(
+            request=request,
+            fastapi_response=fastapi_response,
+            model=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    # OpenAI's Responses API rejects chat-completions-only stream_options
+    # (Cursor sends include_usage); usage arrives via response.completed anyway
+    data.pop("stream_options", None)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
-    def cursor_data_generator(response, user_api_key_dict, request_data):
+    def cursor_data_generator(response, user_api_key_dict, request_data, request=None):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
 
@@ -349,17 +362,21 @@ async def cursor_chat_completions(
         to chat completion format that Cursor IDE expects.
 
         Args:
-            response: The streaming response (BaseResponsesAPIStreamingIterator or other)
+            response: The streaming Responses API event iterator (router-wrapped or not)
             user_api_key_dict: User API key authentication dict
             request_data: Request data containing model, logging_obj, etc.
+            request: The originating FastAPI request, forwarded for disconnect handling
 
         Returns:
             Async generator that yields SSE-formatted chat completion chunks
         """
-        # If response is a BaseResponsesAPIStreamingIterator, transform it first
-        if isinstance(response, BaseResponsesAPIStreamingIterator):
+        # Any async-iterable here is a Responses API event stream needing conversion.
+        # Class-identity checks miss router-wrapped streams (e.g.
+        # HiddenParamsAsyncIteratorWrapper around LiteLLMCompletionStreamingIterator),
+        # which previously leaked raw Responses events to the client.
+        if hasattr(response, "__anext__"):
             # Transform Responses API iterator to chat completion iterator
-            # Cast to AsyncIterator[str] since BaseResponsesAPIStreamingIterator implements __aiter__/__anext__
+            # Cast to AsyncIterator[str] since the stream implements __aiter__/__anext__
             completion_stream = responses_api_bridge.transformation_handler.get_model_response_iterator(
                 streaming_response=cast(AsyncIterator[str], response),
                 sync_stream=False,
@@ -378,12 +395,14 @@ async def cursor_chat_completions(
                 response=streamwrapper,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
+                request=request,
             )
         # Otherwise, use the default generator
         return async_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+            request=request,
         )
 
     try:
