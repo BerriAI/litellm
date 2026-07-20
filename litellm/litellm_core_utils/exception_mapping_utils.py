@@ -100,7 +100,6 @@ class ExceptionCheckers:
 
         return False
 
-
     @staticmethod
     def is_error_str_connection_error(error_str: str) -> bool:
         if not isinstance(error_str, str):
@@ -775,7 +774,6 @@ def _map_openai_like_exception(
             llm_provider=custom_llm_provider,
             model=model,
             litellm_debug_info=extra_information,
-            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
         )
     elif hasattr(original_exception, "status_code"):
         if original_exception.status_code == 500:
