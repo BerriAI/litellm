@@ -1,5 +1,0 @@
-{
-  "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_model_armor.py::test_model_armor_api_error_detail_sanitized_by_default": true,
-  "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_model_armor.py::test_model_armor_success_debug_log_omits_body_by_default": true,
-  "tests/test_litellm/proxy/guardrails/guardrail_hooks/test_model_armor.py::test_model_armor_sanitize_error_detail_wired_through_litellm_params": true
-}
