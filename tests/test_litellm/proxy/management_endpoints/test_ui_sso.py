@@ -2186,6 +2186,36 @@ class TestCLIKeyRegenerationFlow:
         assert not _is_valid_cli_sso_login_id("cli-test\x001234567890")
         assert not _is_valid_cli_sso_login_id("sk-test1234567890")
 
+    def test_cli_sso_flow_lookup_tells_legacy_clients_to_upgrade(self):
+        """Legacy CLIs send self-generated sk-<uuid> login ids; the 400 must say the CLI is outdated"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _get_cli_sso_flow_or_raise,
+        )
+
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = None
+
+        with pytest.raises(HTTPException) as legacy_exc:
+            _get_cli_sso_flow_or_raise(
+                login_id="sk-85c789af-fc21-474c-9dc9-b5d794fe07ec",
+                cache=mock_cache,
+            )
+        assert legacy_exc.value.status_code == 400
+        assert "out of date" in legacy_exc.value.detail
+        assert "pip install" in legacy_exc.value.detail
+        mock_cache.get_cache.assert_not_called()
+
+        with pytest.raises(HTTPException) as generic_exc:
+            _get_cli_sso_flow_or_raise(login_id="not-a-valid-id", cache=mock_cache)
+        assert generic_exc.value.status_code == 400
+        assert generic_exc.value.detail == "Invalid CLI login session id"
+
+        with pytest.raises(HTTPException) as expired_exc:
+            _get_cli_sso_flow_or_raise(login_id="cli-test_1234567890", cache=mock_cache)
+        assert expired_exc.value.status_code == 400
+        assert "session not found or expired" in expired_exc.value.detail
+        assert "enable_redis_auth_cache" in expired_exc.value.detail
+
     @pytest.mark.asyncio
     async def test_cli_sso_start_creates_bound_flow(self):
         """Test CLI SSO start creates a polling secret bound flow"""
@@ -3092,9 +3122,11 @@ class TestCLIKeyRegenerationFlow:
         assert mock_get_jwt.call_args.kwargs["max_budget"] is None
 
     @pytest.mark.asyncio
-    async def test_cli_poll_key_caps_session_when_user_and_team_have_no_budget(self):
-        """With no user and no team budget, the session falls back to max_ui_session_budget."""
-        from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
+    async def test_cli_poll_key_does_not_cap_session_even_without_user_or_team_budget(self):
+        """Regression: a CLI session token must not inherit the UI chat-pane budget
+        (max_ui_session_budget). Even when the user and team have no budget of their
+        own, the minted token carries max_budget=None and is governed only by the
+        real user/team budgets at request time."""
         from litellm.proxy.management_endpoints.ui_sso import (
             _hash_cli_sso_secret,
             cli_poll_key,
@@ -3108,14 +3140,6 @@ class TestCLIKeyRegenerationFlow:
             "models": ["gpt-4"],
             "user_email": "unbudgeted@example.com",
         }
-        mock_user_info = LiteLLM_UserTable(
-            user_id="unbudgeted-user",
-            user_role="internal_user",
-            teams=["team-x"],
-            models=["gpt-4"],
-            max_budget=None,
-        )
-        mock_team = LiteLLM_TeamTableCachedObj(team_id="team-x", max_budget=None)
         mock_cache = MagicMock()
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
@@ -3127,19 +3151,10 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client"),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value=mock_jwt_token,
             ) as mock_get_jwt,
-            patch(
-                "litellm.proxy.auth.auth_checks.get_user_object",
-                new=AsyncMock(return_value=mock_user_info),
-            ),
-            patch(
-                "litellm.proxy.auth.auth_checks.get_team_object",
-                new=AsyncMock(return_value=mock_team),
-            ),
         ):
             result = await cli_poll_key(
                 key_id="cli-session-unbudgeted",
@@ -3149,9 +3164,7 @@ class TestCLIKeyRegenerationFlow:
 
         assert result["status"] == "ready"
         mock_get_jwt.assert_called_once()
-        assert (
-            mock_get_jwt.call_args.kwargs["max_budget"] == litellm.max_ui_session_budget
-        )
+        assert mock_get_jwt.call_args.kwargs["max_budget"] is None
 
 
 class TestGetAppRolesFromIdToken:

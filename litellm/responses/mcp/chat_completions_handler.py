@@ -12,7 +12,7 @@ from typing import (
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -114,20 +114,13 @@ async def acompletion_with_mcp(
             **kwargs,
         )
 
-    # Extract user_api_key_auth from metadata or kwargs
-    user_api_key_auth = kwargs.get("user_api_key_auth") or ((kwargs.get("metadata", {}) or {}).get("user_api_key_auth"))
-    request_tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs)
-
-    # Extract MCP auth headers before fetching tools (needed for dynamic auth)
-    (
-        mcp_auth_header,
-        mcp_server_auth_headers,
-        oauth2_headers,
-        raw_headers,
-    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-        secret_fields=kwargs.get("secret_fields"),
-        tools=tools,
-    )
+    context = MCPRequestContext.resolve(kwargs=kwargs, tools=tools)
+    user_api_key_auth = context.user_api_key_auth
+    request_tags = list(context.request_tags) if context.request_tags else None
+    mcp_auth_header = context.mcp_auth_header
+    mcp_server_auth_headers = context.mcp_server_auth_headers
+    oauth2_headers = context.oauth2_headers
+    raw_headers = context.raw_headers
 
     # Process MCP tools (pass auth headers for dynamic auth)
     (

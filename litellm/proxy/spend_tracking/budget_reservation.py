@@ -4,7 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence, cast
+from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -12,6 +12,7 @@ from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
+    Litellm_EntityType,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -34,6 +35,17 @@ class _BudgetCounter:
     source_cache_key: Optional[str] = None
     spend_log_entity_id: Optional[str] = None
     window_start: Optional[datetime] = None
+
+
+_COUNTER_ENTITY_TYPES: Mapping[str, str] = {
+    "Key": Litellm_EntityType.KEY.value,
+    "Team": Litellm_EntityType.TEAM.value,
+    "TeamMember": Litellm_EntityType.TEAM_MEMBER.value,
+    "User": Litellm_EntityType.USER.value,
+    "EndUser": Litellm_EntityType.END_USER.value,
+    "Tag": Litellm_EntityType.TAG.value,
+    "Organization": Litellm_EntityType.ORGANIZATION.value,
+}
 
 
 class _CounterReservationUnavailable(Exception):
@@ -108,6 +120,8 @@ async def _apply_over_budget_reservation_policy(
             f"Current cost: {current_spend}, "
             f"Max budget: {counter.max_budget}"
         ),
+        entity_type=_COUNTER_ENTITY_TYPES.get(counter.entity_type),
+        entity_id=counter.spend_log_entity_id or counter.entity_id,
     )
 
 
@@ -123,6 +137,7 @@ async def reserve_budget_for_request(
     proxy_logging_obj: ProxyLogging,
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
+    skip_user_budget_on_team_key: bool = False,
 ) -> Optional[dict]:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
@@ -141,6 +156,7 @@ async def reserve_budget_for_request(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
+        skip_user_budget_on_team_key=skip_user_budget_on_team_key,
     )
     if not counters:
         return None
@@ -296,6 +312,7 @@ async def _get_budget_counters(
     proxy_logging_obj: ProxyLogging,
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
+    skip_user_budget_on_team_key: bool = False,
 ) -> List[_BudgetCounter]:
     counters: List[_BudgetCounter] = []
 
@@ -344,8 +361,9 @@ async def _get_budget_counters(
             )
         )
 
+    is_team_key = team_object is not None and team_object.team_id is not None
     if (
-        (team_object is None or team_object.team_id is None)
+        not (is_team_key and skip_user_budget_on_team_key)
         and user_object is not None
         and user_object.user_id is not None
         and user_object.max_budget is not None

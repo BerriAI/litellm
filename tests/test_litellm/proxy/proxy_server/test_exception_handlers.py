@@ -124,6 +124,47 @@ def test_close_dangling_otel_server_span_records_status_and_ends(monkeypatch):
     }
 
 
+def test_close_dangling_otel_server_span_v2_stamps_error_without_ending(monkeypatch):
+    """LIT-4179: under OTel v2 the FastAPI instrumentor owns the SERVER span, so
+    the handler must only stamp error.* on it (via record_error_attributes_on_span)
+    and must NOT set status, end the span, or clear request state — otherwise the
+    instrumentor's http.* attributes and span close are lost."""
+    import litellm.integrations.otel.model.config as otel_config
+    import litellm.proxy.proxy_server as ps
+
+    span = MagicMock()
+    fake_logger = MagicMock()
+    monkeypatch.setattr(ps, "open_telemetry_logger", fake_logger, raising=False)
+    monkeypatch.setattr(otel_config, "is_otel_v2_enabled", lambda: True)
+    request = _make_request(parent_otel_span=span)
+    exc = ProxyException(message="bad", type="bad_request_error", param=None, code=400)
+
+    _close_dangling_otel_server_span(request=request, status_code=422, exc=exc)
+
+    fake_logger.record_error_attributes_on_span.assert_called_once_with(span, exc, 422)
+    assert not span.end.called
+    assert not span.set_status.called
+    assert not fake_logger.set_response_status_code_attribute.called
+    assert request.state.parent_otel_span is span
+
+
+def test_close_dangling_otel_server_span_v2_success_does_not_stamp(monkeypatch):
+    """Under v2 a sub-400 status must not stamp an error onto the SERVER span."""
+    import litellm.integrations.otel.model.config as otel_config
+    import litellm.proxy.proxy_server as ps
+
+    span = MagicMock()
+    fake_logger = MagicMock()
+    monkeypatch.setattr(ps, "open_telemetry_logger", fake_logger, raising=False)
+    monkeypatch.setattr(otel_config, "is_otel_v2_enabled", lambda: True)
+    request = _make_request(parent_otel_span=span)
+
+    _close_dangling_otel_server_span(request=request, status_code=200)
+
+    assert not fake_logger.record_error_attributes_on_span.called
+    assert not span.end.called
+
+
 def test_close_dangling_otel_server_span_missing_span_is_noop_error():
     """When parent_otel_span is missing the call short-circuits — no error."""
     request = _make_request(parent_otel_span=None)

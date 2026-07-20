@@ -3,30 +3,14 @@
  *
  */
 
-import {
-  Button,
-  Card,
-  Tab,
-  TabGroup,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-} from "@tremor/react";
+import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
 import React, { useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { useBudgets, useDeleteBudget, budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
-import { MoneyCell } from "@/components/shared/table_cells";
 import BudgetModal from "./budget_modal";
+import BudgetTable from "./BudgetTable";
 import EditBudgetModal from "./edit_budget_modal";
 import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -46,7 +30,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   // Admin Viewer follows the read-parity rule: see budgets, no writes.
   const canModify = isProxyAdminRole(userRole ?? "");
 
-  const { data: budgetList = [] } = useBudgets();
+  const { data: budgetList = [], isLoading } = useBudgets();
   const deleteBudget = useDeleteBudget();
 
   const handleEditCall = async (budget: budgetItem) => {
@@ -109,51 +93,14 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                   existingBudget={selectedBudget}
                 />
               )}
-              <Card>
-                <Text>Create a budget to assign to customers.</Text>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>Budget ID</TableHeaderCell>
-                      <TableHeaderCell>Max Budget</TableHeaderCell>
-                      <TableHeaderCell>TPM</TableHeaderCell>
-                      <TableHeaderCell>RPM</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-
-                  <TableBody>
-                    {budgetList
-                      .slice()
-                      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-                      .map((value: budgetItem) => (
-                        <TableRow key={value.budget_id}>
-                          <TableCell>{value.budget_id}</TableCell>
-                          <TableCell>
-                            <MoneyCell value={value.max_budget} decimals={2} showZero emptyText="Unlimited" />
-                          </TableCell>
-                          <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
-                          <TableCell>{value.rpm_limit ? value.rpm_limit : "n/a"}</TableCell>
-                          {canModify && (
-                            <>
-                              <TableIconActionButton
-                                variant="Edit"
-                                tooltipText="Edit budget"
-                                onClick={() => handleEditCall(value)}
-                                dataTestId="edit-budget-button"
-                              />
-                              <TableIconActionButton
-                                variant="Delete"
-                                tooltipText="Delete budget"
-                                onClick={() => handleDeleteClick(value)}
-                                dataTestId="delete-budget-button"
-                              />
-                            </>
-                          )}
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </Card>
+              <Text className="mb-4">Create a budget to assign to customers.</Text>
+              <BudgetTable
+                budgets={budgetList}
+                isLoading={isLoading}
+                canModify={canModify}
+                onEditClick={handleEditCall}
+                onDeleteClick={handleDeleteClick}
+              />
               <DeleteResourceModal
                 isOpen={isDeleteModalVisible}
                 title="Delete Budget?"
