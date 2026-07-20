@@ -101,7 +101,7 @@ class ExceptionCheckers:
         return False
 
     @staticmethod
-    def is_error_str_connection_error(error_str: str) -> bool:
+    def is_error_str_connection_error(error_str: object) -> bool:
         if not isinstance(error_str, str):
             return False
         _error_str_lower = error_str.lower()
