@@ -2621,10 +2621,14 @@ export interface paths {
         put?: never;
         /**
          * Cursor Chat Completions
-         * @description Cursor-specific endpoint that accepts Responses API input format but returns chat completions format.
+         * @description Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible
+         *     base URL and always answers in chat completions format.
          *
-         *     This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-         *     but expects chat completions format response (`choices`, `messages`, etc.).
+         *     Cursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,
+         *     custom tools) to the chat/completions path while expecting chat completions responses;
+         *     those are routed through the Responses API pipeline and converted back. Genuine chat
+         *     completions bodies (`messages` present) are routed through the standard chat completions
+         *     pipeline untouched.
          *
          *     ```bash
          *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
