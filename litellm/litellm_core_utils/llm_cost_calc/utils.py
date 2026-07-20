@@ -454,8 +454,17 @@ class PromptTokensDetailsResult(TypedDict):
 
 def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     cache_hit_tokens = cast(Optional[int], getattr(usage.prompt_tokens_details, "cached_tokens", 0)) or 0
+    # OpenAI reports cache-write tokens under `cache_write_tokens` (chat) /
+    # `input_tokens_details.cache_write_tokens` (responses), while Anthropic uses
+    # `cache_creation_tokens`.  Read the OpenAI field first, falling back to the
+    # Anthropic field, so cache-write tokens are priced at the model's
+    # cache-creation rate (typically 1.25x input) regardless of provider.
     cache_creation_tokens = (
         cast(
+            Optional[int],
+            getattr(usage.prompt_tokens_details, "cache_write_tokens", 0),
+        )
+        or cast(
             Optional[int],
             getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
         )
