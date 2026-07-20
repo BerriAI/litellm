@@ -247,6 +247,9 @@ class ManagementClient:
             )
         )
 
+    def org_info_status(self, organization_id: str) -> ProbeResult:
+        return self.proxy.transport.probe("/organization/info", params=OrgInfoParams(organization_id=organization_id))
+
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/chat/completions",
