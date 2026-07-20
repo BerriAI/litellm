@@ -1036,7 +1036,7 @@ if MCP_AVAILABLE:
                 "status": server.status,
             }
 
-        if user_mcp_management_mode == "view_all":
+        if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
             return [_health_entry(server) for server in servers]
 

@@ -5291,17 +5291,10 @@ def test_stamp_oauth2_flow_ignores_non_oauth2():
 
 
 class TestHealthCheckServersIncludesNames:
-    """`GET /v1/mcp/server/health` must include human-readable identifiers
-    (server_name, alias) alongside the opaque hashed server_id, so operators
-    can tell which server is unhealthy without reverse-engineering hashes.
-
-    https://github.com/BerriAI/litellm/issues/31233
-    """
-
     @pytest.mark.asyncio
     async def test_health_view_all_includes_server_name_and_alias(self):
-        server = generate_mock_mcp_server_db_record(server_id="server-1", alias="github_onprem")
-        server.server_name = "github_onprem"
+        server = generate_mock_mcp_server_db_record(server_id="server-1", alias="server_one")
+        server.server_name = "server_one"
         server.status = "healthy"
 
         mock_manager = MagicMock()
@@ -5328,11 +5321,51 @@ class TestHealthCheckServersIncludesNames:
         assert result == [
             {
                 "server_id": "server-1",
-                "server_name": "github_onprem",
-                "alias": "github_onprem",
+                "server_name": "server_one",
+                "alias": "server_one",
                 "status": "healthy",
             }
         ]
+
+    @pytest.mark.asyncio
+    async def test_health_restricted_virtual_key_does_not_get_unfiltered_names(self):
+        scoped = generate_mock_mcp_server_db_record(server_id="server-1", alias="scoped_one")
+        scoped.server_name = "scoped_one"
+        scoped.status = "healthy"
+        hidden = generate_mock_mcp_server_db_record(server_id="server-2", alias="hidden_two")
+        hidden.server_name = "hidden_two"
+        hidden.status = "healthy"
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_unfiltered = AsyncMock(return_value=[scoped, hidden])
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(return_value=[scoped])
+
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        mock_user_auth.allowed_routes = ["/v1/mcp/server/health"]
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                health_check_servers,
+            )
+
+            result = await health_check_servers(server_ids=None, user_api_key_dict=mock_user_auth)
+
+        mock_manager.get_all_mcp_servers_with_health_unfiltered.assert_not_awaited()
+        assert [entry["server_id"] for entry in result] == ["server-1"]
+        assert all("hidden_two" not in str(entry.values()) for entry in result)
 
     @pytest.mark.asyncio
     async def test_health_scoped_mode_includes_server_name_and_alias(self):
