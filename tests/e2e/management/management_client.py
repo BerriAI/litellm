@@ -50,6 +50,7 @@ from models import (
     UserListResponse,
     UserNewBody,
     UserNewResponse,
+    UserUpdateBody,
 )
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
@@ -266,6 +267,16 @@ class ManagementClient:
                 response_type=UserNewResponse,
             )
         ).user_id
+
+    def update_user(self, body: UserUpdateBody) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/user/update",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
 
     def delete_user(self, user_id: str) -> None:
         _ = self.proxy.transport.post(

@@ -23,7 +23,7 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, LiteLLMParamsBody, ModelInfoEntry
+from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
 
 pytestmark = pytest.mark.e2e
 
@@ -288,6 +288,22 @@ class TestUserRoutes:
             f"/user/info reports user_role {info.user_role!r}, configured 'internal_user'"
         )
 
+    @pytest.mark.covers("mgmt.user.update.persists")
+    def test_update_persists_to_user_info(self, client: ManagementClient, resources: ResourceManager) -> None:
+        email = f"e2e-mgmt-{unique_marker()}@example.com"
+        user_id = _create_user(client, resources, UserNewBody(user_email=email, user_role="internal_user"))
+
+        before = client.user_info(user_id).user_info
+        assert before.user_role == "internal_user", (
+            f"/user/info reports pre-update user_role {before.user_role!r}, expected 'internal_user'"
+        )
+
+        client.update_user(UserUpdateBody(user_id=user_id, user_role="internal_user_viewer"))
+
+        info = client.user_info(user_id).user_info
+        assert info.user_role == "internal_user_viewer", (
+            f"/user/info reports user_role {info.user_role!r} after /user/update to 'internal_user_viewer'"
+        )
     @pytest.mark.covers("mgmt.user.list.happy_path")
     def test_created_users_appear_in_user_list(
         self, client: ManagementClient, resources: ResourceManager
@@ -444,6 +460,23 @@ class TestModelRoutes:
             return True if model_name not in [entry.model_name for entry in client.proxy.model_info()] else None
 
         _ = _poll(client, absent, f"{model_name} still present in /model/info after /model/delete at the deadline")
+
+    @pytest.mark.covers("mgmt.model.add.persists")
+    def test_new_persists_to_model_info_catalog(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        model_name = f"e2e-mgmt-model-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model_name,
+            LiteLLMParamsBody(model="openai/gpt-5.5", api_key="e2e-dummy-key"),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        cataloged = [entry.model_name for entry in client.proxy.model_info()]
+        assert model_name in cataloged, (
+            f"/model/info does not list {model_name!r} after /model/new; registration did not persist "
+            f"into the routing catalog: {cataloged}"
+        )
 
 
 def _assert_route_forbidden(route: str, outcome: StreamingResponse) -> None:
