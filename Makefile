@@ -9,7 +9,8 @@
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety pre-commit \
-	lint-install lint-fetch-base
+	lint-install lint-fetch-base \
+	fork-branch fork-sync-status upstream-branch
 
 # Default target
 help:
@@ -50,6 +51,9 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+	@echo "  make fork-branch NAME=litellm_foo - Create Bitovi feature branch from litellm_internal_staging"
+	@echo "  make fork-sync-status   - Show latest upstream stable tag vs staging"
+	@echo "  make upstream-branch NAME=litellm_foo - Rare: branch from upstream/main for BerriAI PRs"
 
 UV := uv
 UV_RUN := $(UV) run --no-sync
@@ -287,3 +291,16 @@ test-llm-translation-single: install-test-deps
 
 test-llm-translation-flush-vcr-cache:
 	$(UV_RUN) python tests/_flush_vcr_cache.py
+
+# Bitovi fork helpers (see FORK.md)
+fork-branch:
+	@chmod +x scripts/fork_helpers.sh
+	@NAME="$(NAME)" ./scripts/fork_helpers.sh fork-branch
+
+fork-sync-status:
+	@chmod +x scripts/fork_helpers.sh
+	@./scripts/fork_helpers.sh fork-sync-status
+
+upstream-branch:
+	@chmod +x scripts/fork_helpers.sh
+	@NAME="$(NAME)" ./scripts/fork_helpers.sh upstream-branch

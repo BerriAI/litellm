@@ -235,6 +235,59 @@ describe("TeamInfoView", () => {
       });
     });
 
+    it("should display per-model budgets on the overview tab", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue({
+        ...createMockTeamData({
+          model_max_budget: {
+            "claude-sonnet-4-6": { budget_limit: 20, time_period: "1d" },
+          },
+        }),
+        team_memberships: [
+          {
+            user_id: "user1@test.com",
+            team_id: "123",
+            budget_id: "budget1",
+            spend: 0,
+            total_spend: 0,
+            litellm_budget_table: {
+              budget_id: "budget1",
+              soft_budget: null,
+              max_budget: null,
+              max_parallel_requests: null,
+              tpm_limit: null,
+              rpm_limit: null,
+              model_max_budget: {
+                "claude-opus-4-8": { budget_limit: 50, time_period: "1d" },
+              },
+              budget_duration: null,
+              budget_reset_at: null,
+            },
+          },
+        ],
+        keys: [
+          {
+            token_id: "key-1",
+            key_alias: "dev-key",
+            model_max_budget: {
+              "claude-sonnet-4-6": { budget_limit: 5, time_period: "1d" },
+            },
+          },
+        ],
+      });
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Per-Model Budgets")).toBeInTheDocument();
+      });
+
+      expect(screen.getByText("Team defaults")).toBeInTheDocument();
+      expect(screen.getByText(/claude-sonnet-4-6: \$20\.00 \/ day/)).toBeInTheDocument();
+      expect(screen.getByText("Member overrides (1)")).toBeInTheDocument();
+      expect(screen.getByText("Virtual key overrides (1)")).toBeInTheDocument();
+      expect(screen.getByText("dev-key")).toBeInTheDocument();
+    });
+
     it("should display loading state while fetching team data", () => {
       vi.mocked(networking.teamInfoCall).mockImplementation(() => new Promise(() => {}));
 
@@ -270,7 +323,7 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
       await waitFor(() => {
-        expect(screen.getByText("Budget Status")).toBeInTheDocument();
+        expect(screen.getByText("Team Spend")).toBeInTheDocument();
       });
     });
 
@@ -322,8 +375,10 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
       await waitFor(() => {
-        expect(screen.getByText("Budget Status")).toBeInTheDocument();
+        expect(screen.getByText("Per-User Budget")).toBeInTheDocument();
       });
+      expect(screen.getByText(/\$500(\.00)?/)).toBeInTheDocument();
+      expect(screen.getByText(/monthly per user/i)).toBeInTheDocument();
     });
 
     it("should display virtual keys information", async () => {
@@ -381,7 +436,7 @@ describe("TeamInfoView", () => {
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
 
-      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+      expect(screen.getByText("Team Spend")).toBeInTheDocument();
     });
 
     it("should open Overview tab by default when editTeam is true but user cannot edit", async () => {
@@ -396,7 +451,7 @@ describe("TeamInfoView", () => {
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
 
-      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+      expect(screen.getByText("Team Spend")).toBeInTheDocument();
     });
   });
 
@@ -615,6 +670,70 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
       });
+    });
+
+    it("should show Config badge and disable budget fields for config teams", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          is_from_config: true,
+          team_member_budget_table: {
+            max_budget: 100,
+            budget_duration: "30d",
+            tpm_limit: null,
+            rpm_limit: null,
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Test Team")).toBeInTheDocument();
+      });
+
+      const settingsTab = screen.getByRole("tab", { name: "Settings" });
+      await user.click(settingsTab);
+
+      await waitFor(() => {
+        expect(screen.getAllByText("Config").length).toBeGreaterThan(0);
+      });
+
+      const editButton = screen.getByRole("button", { name: /edit settings/i });
+      await user.click(editButton);
+
+      await waitFor(() => {
+        const maxBudget = screen.getByLabelText("Max Budget (USD)");
+        expect(maxBudget).toBeDisabled();
+      });
+    });
+
+    it("should enable per-model budget editor when team has all proxy models", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ models: ["all-proxy-models"] }),
+      );
+
+      renderWithProviders(
+        <TeamInfoView
+          {...defaultProps}
+          userModels={["claude-sonnet-4-6", "claude-opus-4-8"]}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      const addBudgetButton = await screen.findByTestId("add-model-budget-button");
+      expect(addBudgetButton).toBeEnabled();
+
+      await user.click(addBudgetButton);
+
+      expect(await screen.findByText("claude-sonnet-4-6")).toBeInTheDocument();
     });
 
     it("should close edit mode when cancel button is clicked", async () => {

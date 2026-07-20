@@ -1,8 +1,10 @@
 import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Card, Col, Row, Space, Tag, Tooltip, Typography } from "antd";
+import { Card, Col, Progress, Row, Space, Tag, Tooltip, Typography } from "antd";
 import React from "react";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
+import { ModelMaxBudgetUsageOverview } from "../key_team_helpers/ModelMaxBudgetUsageOverview";
 import { useMyTeamMember } from "./useMyTeamMember";
 
 interface MyUserTabProps {
@@ -27,6 +29,23 @@ const formatRateLimit = (value: number | null | undefined): string => {
   if (value === null || value === undefined) return "Unlimited";
   return formatNumberWithCommas(value, 0);
 };
+
+function budgetProgressPercent(spend: number, maxBudget: number | null): number | null {
+  if (maxBudget === null || maxBudget <= 0) return null;
+  return Math.min(Math.round((spend / maxBudget) * 1000) / 10, 999.9);
+}
+
+function progressStatus(percent: number): "success" | "normal" | "exception" {
+  if (percent >= 100) return "exception";
+  if (percent >= 80) return "normal";
+  return "success";
+}
+
+function progressStrokeColor(percent: number): string {
+  if (percent >= 100) return "#ff4d4f";
+  if (percent >= 80) return "#faad14";
+  return "#52c41a";
+}
 
 export default function MyUserTab({ teamId }: MyUserTabProps) {
   const { data, isLoading, error } = useMyTeamMember(teamId);
@@ -53,7 +72,8 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
     return (
       <Card>
         <Typography.Text type="secondary">
-          No membership info available for the current user in this team.
+          You are not a member of this team, so there is no personal budget to show. Ask a team admin
+          to add you on the Members tab (role: user), then refresh this page.
         </Typography.Text>
       </Card>
     );
@@ -67,6 +87,11 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
   const rpmLimit = budgetTable?.rpm_limit ?? null;
   const budgetReset = formatBudgetReset(budgetTable?.budget_reset_at);
   const allowedModels = budgetTable?.allowed_models ?? null;
+  const percentUsed = budgetProgressPercent(spend, maxBudget);
+  const remaining = maxBudget !== null ? Math.max(maxBudget - spend, 0) : null;
+  const durationLabel = getBudgetDurationLabel(budgetTable?.budget_duration);
+  const hasModelUsage =
+    data.model_max_budget_usage != null && Object.keys(data.model_max_budget_usage).length > 0;
 
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
@@ -94,17 +119,36 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
         <Col xs={24} md={12}>
           <Card>
             {labelWithTooltip(
-              "Current Cycle Spend (USD)",
-              "Spend for the current budget cycle. Resets to $0 when the budget window rolls over.",
+              "Your Budget This Cycle",
+              "Spend across all your virtual keys on this team for the current budget window. This is what enforcement checks.",
             )}
             <div style={{ marginTop: 8 }}>
               <Typography.Title level={3} style={{ margin: 0 }}>
                 ${formatNumber(spend, 4)}
               </Typography.Title>
               <Typography.Text type="secondary">
-                of {maxBudget === null ? "Unlimited" : `$${formatNumber(maxBudget, 4)}`}
+                of {maxBudget === null ? "Unlimited" : `$${formatNumber(maxBudget, 2)}`}
+                {maxBudget !== null && budgetTable?.budget_duration ? ` (${durationLabel})` : ""}
               </Typography.Text>
+              {data.using_team_default_budget && (
+                <div style={{ marginTop: 4 }}>
+                  <Tag>Team default</Tag>
+                </div>
+              )}
             </div>
+            {percentUsed !== null && (
+              <div style={{ marginTop: 12 }}>
+                <Progress
+                  percent={Math.min(percentUsed, 100)}
+                  status={progressStatus(percentUsed)}
+                  strokeColor={progressStrokeColor(percentUsed)}
+                  format={() => `${percentUsed}%`}
+                />
+                <Typography.Text type="secondary">
+                  ${formatNumber(remaining, 2)} remaining
+                </Typography.Text>
+              </div>
+            )}
             {budgetReset && (
               <div style={{ marginTop: 4 }}>
                 <Typography.Text type="secondary">Resets {budgetReset}</Typography.Text>
@@ -120,6 +164,22 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
               <Typography.Text>TPM: {formatRateLimit(tpmLimit)}</Typography.Text>
               <br />
               <Typography.Text>RPM: {formatRateLimit(rpmLimit)}</Typography.Text>
+            </div>
+          </Card>
+        </Col>
+
+        <Col xs={24}>
+          <Card>
+            {labelWithTooltip(
+              "Per-Model Budgets",
+              "Model-specific caps still count toward your overall per-user budget. Spend is shared across your keys on this team.",
+            )}
+            <div style={{ marginTop: 12 }}>
+              {hasModelUsage ? (
+                <ModelMaxBudgetUsageOverview usage={data.model_max_budget_usage} />
+              ) : (
+                <Typography.Text type="secondary">No per-model budgets configured for you</Typography.Text>
+              )}
             </div>
           </Card>
         </Col>

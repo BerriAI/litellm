@@ -4,12 +4,12 @@
 
 
     Invalid Permissions:
-    - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions 
     - User tries editing a key with team_id = team_id -> expect to fail. Invalid Permissions 
     - User tries deleting a key with team_id = team_id -> expect to fail. Invalid Permissions 
     - User tries regenerating a key with team_id = team_id -> expect to fail. Invalid Permissions 
 
     Valid Permissions:
+    - User tries creating a key for themselves with team_id = team_id -> expect to pass (self-serve)
     - User tries calling /key/info with team_id, expect to get valid response 
 
 
@@ -20,12 +20,12 @@
 
     Valid Permissions:
     - User tries editing a key with team_id = team_id -> expect to pass. Valid Permissions
+    - User tries creating a key for themselves with team_id = team_id -> expect to pass (self-serve)
     - Note: Delete/regenerate require key ownership or team admin status, not just team member permissions
     - User tries deleting a key with team_id = team_id -> expect to fail (403) unless user owns the key or is team admin
     - User tries regenerating a key with team_id = team_id -> expect to fail (403) unless user owns the key or is team admin
 
     Invalid Permissions:
-    - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions
     - User tries calling /key/info with team_id, expect to get valid response 
 
 
@@ -256,25 +256,20 @@ async def test_default_member_permissions():
         print("new user key: ", user_key_data)
         user_key = user_key_data["key"]
 
-        # Test invalid permissions
-        # User tries creating a key with team_id
+        # Test valid self-serve key generation
+        # User creates a key for themselves on their team (no /key/generate permission required)
         print(
-            "Regular team member trying to create a key with team_id. Expecting error."
+            "Regular team member creating a key for themselves with team_id. Expecting success."
         )
         create_result = await generate_key(
-            session=session, key=user_key, team_id=team_id
+            session=session, key=user_key, team_id=team_id, user_id=user_id
         )
         print("result: ", create_result)
-        assert (
-            "status" in create_result and create_result["status"] == 401
-        ), "User should not be able to create keys for team"
-        error_data = json.loads(create_result["error"])
-        print("error response =", json.dumps(error_data, indent=4))
-        assert (
-            error_data["error"]["type"]
-            == ProxyErrorTypes.team_member_permission_error.value
-        ), "Error should be a team member permission error"
+        assert "key" in create_result, "User should be able to create keys for themselves"
+        assert create_result["team_id"] == team_id
+        assert "status" not in create_result
 
+        # Test invalid permissions
         # User tries editing a key with team_id
         print("Regular team member trying to edit a key with team_id. Expecting error.")
         update_result = await update_key(
@@ -341,7 +336,7 @@ async def test_default_member_permissions():
 @pytest.mark.asyncio()
 async def test_edit_delete_permissions():
     """
-    Test permissions - members allowed to edit, delete keys but not allowed to create keys
+    Test permissions - members allowed to edit/delete via permissions; self-serve create still works
     """
     async with aiohttp.ClientSession() as session:
         master_key = LITELLM_MASTER_KEY
@@ -390,14 +385,12 @@ async def test_edit_delete_permissions():
             "status" in delete_result and delete_result["status"] == 403
         ), "User should not be able to delete keys they don't own (even with /key/delete permission, ownership is required)"
 
-        # Test invalid permissions
-        # User tries creating a key with team_id
+        # Self-serve: user can create a key for themselves even without /key/generate
         create_result = await generate_key(
-            session=session, key=user_key, team_id=team_id
+            session=session, key=user_key, team_id=team_id, user_id=user_id
         )
-        assert (
-            "status" in create_result and create_result["status"] != 200
-        ), "User should not be able to create keys for team"
+        assert "key" in create_result, "User should be able to create keys for themselves"
+        assert create_result["team_id"] == team_id
 
         # User tries regenerating a key with team_id
         # Note: Even with /key/regenerate permission, users can only regenerate keys they own or if they're team admin

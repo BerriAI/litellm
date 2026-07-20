@@ -6802,8 +6802,6 @@ export interface paths {
          *         "models": ["gpt-4", "gpt-3.5-turbo"]
          *     }'
          *     ```
-         *
-         *     Note: This is an Enterprise feature. It requires a premium license to use.
          */
         post: operations["regenerate_key_fn_key_regenerate_post"];
         delete?: never;
@@ -7061,8 +7059,6 @@ export interface paths {
          *         "models": ["gpt-4", "gpt-3.5-turbo"]
          *     }'
          *     ```
-         *
-         *     Note: This is an Enterprise feature. It requires a premium license to use.
          */
         post: operations["regenerate_key_fn_key__key__regenerate_post"];
         delete?: never;
@@ -28117,6 +28113,10 @@ export interface components {
             model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -31306,6 +31306,13 @@ export interface components {
              */
             member: components["schemas"]["Member"][] | components["schemas"]["Member"];
             /**
+             * Model Max Budget In Team
+             * @description Per-model budgets for this team member. Example: {"claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"}}
+             */
+            model_max_budget_in_team?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Team Id
              * @description The ID of the team to add the member to
              */
@@ -31351,6 +31358,10 @@ export interface components {
             budget_id?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Model Max Budget Usage */
+            model_max_budget_usage?: {
+                [key: string]: unknown;
+            } | null;
             /** Role */
             role?: string | null;
             /**
@@ -31371,6 +31382,11 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+            /**
+             * Using Team Default Budget
+             * @default false
+             */
+            using_team_default_budget: boolean;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -31386,6 +31402,13 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
+            /**
+             * Model Max Budget In Team
+             * @description Per-model budgets for this team member. Overrides team defaults per model. Example: {"claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"}}
+             */
+            model_max_budget_in_team?: {
+                [key: string]: unknown;
+            } | null;
             /** Role */
             role?: ("admin" | "user") | null;
             /**
@@ -31413,6 +31436,10 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
+            /** Model Max Budget In Team */
+            model_max_budget_in_team?: {
+                [key: string]: unknown;
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Team Id */
@@ -32334,6 +32361,10 @@ export interface components {
             model_aliases?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Model Rpm Limit */
             model_rpm_limit?: {
                 [key: string]: number;
@@ -32927,6 +32958,10 @@ export interface components {
             /** Team Max Budget */
             team_max_budget?: number | null;
             team_member?: components["schemas"]["Member"] | null;
+            /** Team Member Model Max Budget */
+            team_member_model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Spend */
@@ -33354,6 +33389,10 @@ export interface components {
             base_model?: string | null;
             /** Blocked */
             blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limit */
+            budget_limit?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */

@@ -213,6 +213,7 @@ async def _resolve_member_budget_id(
     allowed_models: Optional[list[str]],
     budget_duration: Optional[str],
     default_team_budget_id: Optional[str],
+    model_max_budget: Optional[dict] = None,
 ) -> Optional[str]:
     """
     Resolve the budget a new team member should be linked to.
@@ -223,7 +224,7 @@ async def _resolve_member_budget_id(
     with no team default creates a window-only budget. With nothing set the
     member gets no budget.
     """
-    has_explicit_limit = max_budget_in_team is not None or allowed_models is not None
+    has_explicit_limit = max_budget_in_team is not None or allowed_models is not None or model_max_budget is not None
 
     if not has_explicit_limit and default_team_budget_id is not None:
         return await _clone_team_default_budget_for_member(
@@ -245,6 +246,8 @@ async def _resolve_member_budget_id(
         budget_data["max_budget"] = max_budget_in_team
     if allowed_models is not None:
         budget_data["allowed_models"] = allowed_models
+    if model_max_budget is not None:
+        budget_data["model_max_budget"] = model_max_budget
     if budget_duration is not None:
         budget_data["budget_duration"] = budget_duration
         budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
@@ -262,6 +265,7 @@ async def add_new_member(
     default_team_budget_id: Optional[str] = None,
     allowed_models: Optional[List[str]] = None,
     budget_duration: Optional[str] = None,
+    model_max_budget_in_team: Optional[dict] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -322,6 +326,7 @@ async def add_new_member(
         allowed_models=allowed_models,
         budget_duration=budget_duration,
         default_team_budget_id=default_team_budget_id,
+        model_max_budget=model_max_budget_in_team,
     )
 
     if _budget_id and returned_user is not None and returned_user.user_id is not None:

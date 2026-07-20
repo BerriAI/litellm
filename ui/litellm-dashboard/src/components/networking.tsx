@@ -2730,6 +2730,7 @@ export interface Member {
   rpm_limit?: number | null;
   budget_duration?: string | null;
   allowed_models?: string[] | null;
+  model_max_budget_in_team?: Record<string, { budget_limit: number; time_period: string }> | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -2863,6 +2864,9 @@ export const teamMemberUpdateCall = async (
     }
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;
+    }
+    if ("model_max_budget_in_team" in formValues) {
+      requestBody.model_max_budget_in_team = orNull(formValues.model_max_budget_in_team);
     }
 
     const response = await fetch(url, {

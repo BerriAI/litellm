@@ -3,9 +3,9 @@
 Mantle authenticates with a Bearer token when one is available
 (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the standard
 AWS_BEARER_TOKEN_BEDROCK); otherwise it falls back to AWS SigV4 (service
-"bedrock") over the standard credential chain (IAM role / access key / profile /
-web identity). The Chat Completions and Responses backends share this behaviour
-through BedrockMantleAuthMixin so the two paths can never drift apart.
+"bedrock-mantle") over the standard credential chain (IAM role / access key /
+profile / web identity). The Chat Completions and Responses backends share this
+behaviour through BedrockMantleAuthMixin so the two paths can never drift apart.
 
 The two routing helpers (mantle_supports_responses, mantle_base_segment) are
 pure functions of (model, model_cost) so they can be unit-tested without patching
@@ -84,7 +84,7 @@ class BedrockMantleAuthMixin:
             headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
             return self._aws_signer._sign_request(
-                service_name="bedrock",
+                service_name="bedrock-mantle",
                 headers=headers,
                 optional_params=optional_params,
                 request_data=request_data,

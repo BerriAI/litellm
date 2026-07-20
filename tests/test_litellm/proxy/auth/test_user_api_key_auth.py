@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -249,7 +249,7 @@ async def test_custom_auth_does_not_enforce_key_model_access_by_default():
 async def test_post_custom_auth_expired_key_returns_unauthorized():
     expired_token = UserAPIKeyAuth(
         token="test_token",
-        expires=datetime.now() - timedelta(minutes=1),
+        expires=datetime.now(timezone.utc) - timedelta(minutes=1),
     )
 
     with pytest.raises(ProxyException) as exc_info:
@@ -3679,6 +3679,12 @@ def _proxy_attrs_for_db_lookup():
     ``_user_api_key_auth_builder`` down to the DB key lookup."""
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock(
+        return_value=None
+    )
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock(
+        return_value=None
+    )
     return {
         "prisma_client": MagicMock(),
         "user_api_key_cache": DualCache(),

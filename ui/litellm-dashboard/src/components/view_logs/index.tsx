@@ -162,44 +162,48 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
       {},
     );
 
-    // Build a single-pass map of session_id → representative request_id.
-    // Prefers an LLM row over an MCP row as the representative.
-    const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
+    const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean; startTimeMs: number }>();
     for (const log of searchedLogs) {
       if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
       const isMcp = MCP_CALL_TYPES.includes(log.call_type);
+      const startTimeMs = Date.parse(log.startTime) || 0;
       const existing = sessionRepresentativeMap.get(log.session_id);
-      if (!existing || (existing.isMcp && !isMcp)) {
-        sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
+      if (
+        !existing ||
+        startTimeMs > existing.startTimeMs ||
+        (startTimeMs === existing.startTimeMs && existing.isMcp && !isMcp)
+      ) {
+        sessionRepresentativeMap.set(log.session_id, {
+          requestId: log.request_id,
+          isMcp,
+          startTimeMs,
+        });
       }
     }
 
-    return (
-      searchedLogs
-        .map((log) => {
-          const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
-          return {
-            ...log,
-            request_duration_ms: log.request_duration_ms,
-            session_llm_count: sessionComposition?.llm ?? undefined,
-            session_mcp_count: sessionComposition?.mcp ?? undefined,
-            session_agent_count: sessionComposition?.agent ?? undefined,
-            onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-            onSessionClick: (sessionId: string) => {
-              if (sessionId) {
-                setSelectedSessionId(sessionId);
-                setSelectedLog(log);
-                setIsDrawerOpen(true);
-              }
-            },
-          };
-        })
-        // Deduplicate multi-call sessions using the pre-built map (O(1) per row).
-        .filter((log) => {
-          if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
-          return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
-        })
-    );
+    return searchedLogs
+      .map((log) => {
+        const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
+        return {
+          ...log,
+          request_duration_ms: log.request_duration_ms,
+          session_llm_count: sessionComposition?.llm ?? undefined,
+          session_mcp_count: sessionComposition?.mcp ?? undefined,
+          session_agent_count: sessionComposition?.agent ?? undefined,
+          onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
+          onSessionClick: (sessionId: string) => {
+            if (sessionId) {
+              setSelectedSessionId(sessionId);
+              setSelectedLog(log);
+              setIsDrawerOpen(true);
+            }
+          },
+        };
+      })
+      .filter((log) => {
+        if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
+        return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
+      });
   }, [filteredLogs.data, searchTerm]);
 
   // Keep the Fetch button busy until the table has actually committed the new
@@ -220,14 +224,12 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   }
 
   const handleRowClick = (log: LogEntry) => {
-    // Multi-call session row: open in the same right-side drawer (session mode)
     if (log.session_id && (log.session_total_count || 1) > 1) {
       setSelectedSessionId(log.session_id);
       setSelectedLog(log);
       setIsDrawerOpen(true);
       return;
     }
-    // Single-call row: open the detail drawer
     setSelectedSessionId(null);
     setSelectedLog(log);
     setIsDrawerOpen(true);
@@ -283,6 +285,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     isButtonLoading={isButtonLoading}
                     onRefetch={() => logsQuery.refetch()}
                     filteredLogs={filteredLogs}
+                    displayedCount={deferredData.length}
                   />
                   <DataTable
                     columns={columns}

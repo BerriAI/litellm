@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_BudgetTable,
     LiteLLM_DeletedTeamTable,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
@@ -70,6 +71,7 @@ from litellm.proxy.auth.auth_checks import (
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
+    get_team_member_default_budget,
     get_team_membership,
     get_team_object,
     get_user_object,
@@ -202,6 +204,36 @@ async def _verify_team_access(
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="You do not have access to this team",
+    )
+
+
+def _reject_config_team_budget_mutation(
+    *,
+    team_metadata: Optional[dict],
+    payload: dict,
+    field_names: frozenset,
+) -> None:
+    from litellm.proxy.management_helpers.config_teams_sync import (
+        budget_fields_in_payload,
+        is_config_team_sync_active,
+        team_is_from_config,
+    )
+
+    if is_config_team_sync_active():
+        return
+    if not team_is_from_config(team_metadata):
+        return
+    locked = budget_fields_in_payload(payload, field_names)
+    if not locked:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": (
+                "Budget fields for this team are managed in the proxy config file and cannot be "
+                f"edited via the API/UI. Locked fields: {', '.join(locked)}"
+            )
+        },
     )
 
 
@@ -1026,6 +1058,11 @@ async def new_team(
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
 
+        if "model_max_budget" in data.model_dump(exclude_unset=True):
+            from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+            validate_model_max_budget(data.model_max_budget)
+
         if data.soft_budget is not None:
             if data.max_budget is not None:
                 # If max_budget is set, soft_budget must be strictly lower than max_budget
@@ -1109,6 +1146,11 @@ async def new_team(
                 default_budget = litellm.default_team_settings[0].get("max_budget")
                 if default_budget is not None:
                     data.max_budget = default_budget
+
+        # Config teams never use a shared team pool; member budgets are per-user/SA.
+        if isinstance(data.metadata, dict) and data.metadata.get("is_from_config"):
+            data.max_budget = None
+            data.budget_duration = None
 
         if (
             user_api_key_dict.user_role is None or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
@@ -1692,6 +1734,11 @@ async def update_team(
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
 
+        if "model_max_budget" in data.model_dump(exclude_unset=True):
+            from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+            validate_model_max_budget(data.model_max_budget)
+
         existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": data.team_id})
 
         if existing_team_row is None:
@@ -1699,6 +1746,20 @@ async def update_team(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
+
+        from litellm.proxy.management_helpers.config_teams_sync import CONFIG_TEAM_BUDGET_FIELDS
+
+        existing_metadata = existing_team_row.metadata
+        if isinstance(existing_metadata, str):
+            try:
+                existing_metadata = json.loads(existing_metadata)
+            except Exception:
+                existing_metadata = {}
+        _reject_config_team_budget_mutation(
+            team_metadata=existing_metadata if isinstance(existing_metadata, dict) else None,
+            payload=data.model_dump(exclude_unset=True),
+            field_names=CONFIG_TEAM_BUDGET_FIELDS,
+        )
 
         # Verify caller has access to manage this team
         await _verify_team_access(
@@ -1810,6 +1871,19 @@ async def update_team(
         # be written by the same code path that creates the underlying rows.
         if isinstance(updated_kv.get("metadata"), dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
+            from litellm.proxy.management_helpers.config_teams_sync import (
+                CONFIG_TEAM_METADATA_KEY,
+                team_is_from_config,
+            )
+
+            existing_meta = existing_team_row.metadata
+            if isinstance(existing_meta, str):
+                try:
+                    existing_meta = json.loads(existing_meta)
+                except Exception:
+                    existing_meta = {}
+            if team_is_from_config(existing_meta if isinstance(existing_meta, dict) else None):
+                updated_kv["metadata"][CONFIG_TEAM_METADATA_KEY] = True
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
@@ -2267,6 +2341,7 @@ async def _process_team_members(
                 default_team_budget_id=default_team_budget_id,
                 allowed_models=member_allowed_models,
                 budget_duration=data.budget_duration,
+                model_max_budget_in_team=data.model_max_budget_in_team,
             )
         except Exception as e:
             raise HTTPException(
@@ -2293,6 +2368,7 @@ async def _process_team_members(
                     default_team_budget_id=default_team_budget_id,
                     allowed_models=member_allowed_models,
                     budget_duration=data.budget_duration,
+                    model_max_budget_in_team=data.model_max_budget_in_team,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2555,6 +2631,11 @@ async def team_member_add(
 
     _validate_budget_duration(data.budget_duration)
 
+    if data.model_max_budget_in_team is not None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+        validate_model_max_budget(data.model_max_budget_in_team)
+
     prisma_client = cast(PrismaClient, prisma_client)
 
     existing_team_row = await get_team_object(
@@ -2615,6 +2696,13 @@ async def team_member_add(
     if updated_team is None:
         raise HTTPException(status_code=404, detail={"error": f"Team with id {data.team_id} not found"})
 
+    # Keep auth/members/me in sync: stale cache can still omit newly added members
+    await _refresh_cached_team(
+        team_row=updated_team,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     _emit_team_members_metric(complete_team_data)
 
     return TeamAddMemberResponse(
@@ -2640,6 +2728,24 @@ def _cleanup_members_with_roles(
             continue
         new_team_members.append(m)
     return is_member_in_team, new_team_members
+
+
+def _reject_non_admin_team_self_removal(
+    data: TeamMemberDeleteRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    is_self_removal = (data.user_id is not None and data.user_id == user_api_key_dict.user_id) or (
+        data.user_email is not None
+        and user_api_key_dict.user_email is not None
+        and data.user_email == user_api_key_dict.user_email
+    )
+    if is_self_removal:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Users cannot remove themselves from a team."},
+        )
 
 
 @router.post(
@@ -2671,7 +2777,7 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -2709,6 +2815,8 @@ async def team_member_delete(
                 )
             },
         )
+
+    _reject_non_admin_team_self_removal(data=data, user_api_key_dict=user_api_key_dict)
 
     ## DELETE MEMBER FROM TEAM
     is_member_in_team, new_team_members = _cleanup_members_with_roles(
@@ -2801,6 +2909,13 @@ async def team_member_delete(
             }
         )
 
+    # Keep auth/members/me in sync: stale cache can still treat a removed user as a member
+    await _refresh_cached_team(
+        team_row=existing_team_row,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     return existing_team_row
 
 
@@ -2810,6 +2925,7 @@ _MEMBER_BUDGET_PATCH_FIELDS = {
     "rpm_limit": "rpm_limit",
     "budget_duration": "budget_duration",
     "allowed_models": "allowed_models",
+    "model_max_budget_in_team": "model_max_budget",
 }
 
 
@@ -2889,6 +3005,11 @@ async def team_member_update(
 
     _validate_budget_duration(data.budget_duration)
 
+    if "model_max_budget_in_team" in data.model_dump(exclude_unset=True):
+        from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+        validate_model_max_budget(data.model_max_budget_in_team)
+
     _existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": data.team_id})
 
     if _existing_team_row is None:
@@ -2897,6 +3018,14 @@ async def team_member_update(
             detail={"error": "Team id={} does not exist in db".format(data.team_id)},
         )
     existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
+    from litellm.proxy.management_helpers.config_teams_sync import CONFIG_MEMBER_BUDGET_FIELDS
+
+    _reject_config_team_budget_mutation(
+        team_metadata=existing_team_row.metadata,
+        payload=data.model_dump(exclude_unset=True),
+        field_names=CONFIG_MEMBER_BUDGET_FIELDS,
+    )
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
 
@@ -2999,6 +3128,7 @@ async def team_member_update(
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
+        model_max_budget_in_team=data.model_max_budget_in_team,
     )
 
 
@@ -3616,6 +3746,10 @@ async def team_info(
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
 
+        from litellm.proxy.management_helpers.config_teams_sync import team_is_from_config
+
+        _team_info.is_from_config = team_is_from_config(_team_info.metadata)
+
         response_object = TeamInfoResponseObject(
             team_id=team_id,
             team_info=_team_info,
@@ -3645,6 +3779,70 @@ async def team_info(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+async def _resolve_effective_budget_for_member_me(
+    *,
+    team_table: LiteLLM_TeamTableCachedObj,
+    membership: Optional[LiteLLM_TeamMembership],
+    prisma_client: PrismaClient,
+    user_api_key_cache: Any,
+) -> Tuple[Optional[LiteLLM_BudgetTable], bool]:
+    """
+    Prefer the membership's own budget when it has a max_budget; otherwise fall
+    back to the team's default per-member budget (team_member_budget_id).
+    """
+    membership_budget = membership.litellm_budget_table if membership is not None else None
+    if membership_budget is not None and membership_budget.max_budget is not None:
+        return membership_budget, False
+
+    team_metadata = team_table.metadata if isinstance(team_table.metadata, dict) else None
+    default_budget_id = team_metadata.get("team_member_budget_id") if team_metadata is not None else None
+    if not isinstance(default_budget_id, str):
+        return membership_budget, False
+
+    default_budget = await get_team_member_default_budget(
+        budget_id=default_budget_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if default_budget is None:
+        return membership_budget, False
+    return default_budget, True
+
+
+async def _build_model_max_budget_usage_for_member_me(
+    *,
+    team_table: LiteLLM_TeamTableCachedObj,
+    user_id: str,
+    team_id: str,
+    effective_budget: Optional[LiteLLM_BudgetTable],
+) -> Optional[Dict[str, Any]]:
+    from litellm.proxy.hooks.model_max_budget_limiter import build_effective_model_max_budget_usage
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    if model_max_budget_limiter is None:
+        return None
+
+    team_model_max_budget = team_table.model_max_budget if isinstance(team_table.model_max_budget, dict) else None
+    team_member_model_max_budget: Optional[dict] = None
+    if effective_budget is not None and isinstance(effective_budget.model_max_budget, dict):
+        if len(effective_budget.model_max_budget) > 0:
+            team_member_model_max_budget = effective_budget.model_max_budget
+
+    if not team_model_max_budget and not team_member_model_max_budget:
+        return None
+
+    usage = await build_effective_model_max_budget_usage(
+        model_max_budget_limiter,
+        api_key_hash="",
+        team_id=team_id,
+        user_id=user_id,
+        key_model_max_budget=None,
+        team_model_max_budget=team_model_max_budget,
+        team_member_model_max_budget=team_member_model_max_budget,
+    )
+    return usage or None
 
 
 @router.get(
@@ -3696,6 +3894,7 @@ async def team_member_me(
         team_id=team_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        check_db_only=True,
     )
 
     caller_user_email = user_api_key_dict.user_email
@@ -3733,9 +3932,23 @@ async def team_member_me(
     )
     user_email = getattr(user_row, "user_email", None) if user_row is not None else None
 
+    effective_budget, using_team_default_budget = await _resolve_effective_budget_for_member_me(
+        team_table=team_table,
+        membership=membership,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    model_max_budget_usage = await _build_model_max_budget_usage_for_member_me(
+        team_table=team_table,
+        user_id=caller_user_id,
+        team_id=team_id,
+        effective_budget=effective_budget,
+    )
+
     if membership is None:
         # Member is in members_with_roles but has no membership row yet
-        # (no per-member budget/limits configured). Return defaults.
+        # (no per-member budget/limits configured). Return defaults, with
+        # team default member budget filled in when configured.
         return TeamMemberInfoResponse(
             user_id=caller_user_id,
             team_id=team_id,
@@ -3744,8 +3957,10 @@ async def team_member_me(
             user_email=user_email,
             spend=0.0,
             total_spend=0.0,
-            budget_id=None,
-            litellm_budget_table=None,
+            budget_id=getattr(effective_budget, "budget_id", None),
+            litellm_budget_table=effective_budget,
+            model_max_budget_usage=model_max_budget_usage,
+            using_team_default_budget=using_team_default_budget,
         )
 
     return TeamMemberInfoResponse(
@@ -3756,8 +3971,12 @@ async def team_member_me(
         user_email=user_email,
         spend=membership.spend,
         total_spend=membership.total_spend,
-        budget_id=membership.budget_id,
-        litellm_budget_table=membership.litellm_budget_table,
+        budget_id=membership.budget_id
+        if membership.budget_id is not None
+        else getattr(effective_budget, "budget_id", None),
+        litellm_budget_table=effective_budget,
+        model_max_budget_usage=model_max_budget_usage,
+        using_team_default_budget=using_team_default_budget,
     )
 
 

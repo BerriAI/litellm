@@ -15,9 +15,10 @@ import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { ModelMaxBudgetUsageOverview } from "../key_team_helpers/ModelMaxBudgetUsageOverview";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
-import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
+import { getPolicyInfoWithGuardrails, keyDeleteCall, keyInfoV1Call, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useQueryClient } from "@tanstack/react-query";
@@ -58,6 +59,7 @@ const isEmptyValue = (v: unknown): boolean =>
  * ─────────────────────────────────────────────────────────────────────────
  */
 export default function KeyInfoView({
+  keyId,
   onClose,
   keyData,
   teams,
@@ -93,6 +95,40 @@ export default function KeyInfoView({
       setCurrentKeyData(keyData);
     }
   }, [keyData]);
+
+  useEffect(() => {
+    const fetchKeyInfo = async () => {
+      const keyRef = keyData?.token_id || keyId || keyData?.token;
+      if (!accessToken || !keyRef) {
+        return;
+      }
+
+      try {
+        const response = await keyInfoV1Call(accessToken, keyRef);
+        if (!response?.info) {
+          return;
+        }
+
+        setCurrentKeyData((prev) => {
+          const base = prev ?? keyData;
+          if (!base) {
+            return undefined;
+          }
+
+          return {
+            ...base,
+            ...response.info,
+            token: base.token ?? keyRef,
+            token_id: base.token_id ?? keyRef,
+          };
+        });
+      } catch (error) {
+        console.error("Failed to fetch key info:", error);
+      }
+    };
+
+    fetchKeyInfo();
+  }, [accessToken, keyId, keyData?.token_id, keyData?.token]);
 
   // Fetch resolved guardrails for all policies
   useEffect(() => {
@@ -449,10 +485,6 @@ export default function KeyInfoView({
         onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
         canModifyKey={canModifyKey}
         backButtonText={backButtonText}
-        regenerateDisabled={!premiumUser}
-        regenerateTooltip={
-          !premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : undefined
-        }
       />
 
       {/* Add RegenerateKeyModal */}
@@ -534,6 +566,13 @@ export default function KeyInfoView({
                 <div className="mt-2">
                   <Title>${formatNumberWithCommas(currentKeyData.spend, 4)}</Title>
                   <Text>of {budgetDisplay}</Text>
+                </div>
+              </Card>
+
+              <Card>
+                <Text>Per-Model Budget Usage</Text>
+                <div className="mt-2">
+                  <ModelMaxBudgetUsageOverview usage={currentKeyData.model_max_budget_usage} />
                 </div>
               </Card>
 

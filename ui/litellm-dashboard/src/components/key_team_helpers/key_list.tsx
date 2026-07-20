@@ -48,6 +48,16 @@ export interface KeyResponse {
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
   model_max_budget: Record<string, number>;
+  model_max_budget_usage?: Record<
+    string,
+    {
+      current_spend: number;
+      budget_limit: number;
+      time_period: string;
+      scope?: "key" | "team_member" | "team";
+      percent_used?: number;
+    }
+  >;
   soft_budget_cooldown: boolean;
   blocked: boolean;
   litellm_budget_table: Record<string, unknown>;

@@ -78,6 +78,16 @@ class LiteLLMBudgetTable(BaseModel):
     budget_reset_at: str | None = None
 
 
+class ModelMaxBudgetUsageEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    current_spend: float
+    budget_limit: float
+    time_period: str | None = None
+    scope: str
+    percent_used: float | None = None
+
+
 class KeyInfo(BaseModel):
     key_alias: str | None = None
     models: list[str] = []
@@ -88,6 +98,7 @@ class KeyInfo(BaseModel):
     budget_reset_at: str | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
+    model_max_budget_usage: dict[str, ModelMaxBudgetUsageEntry] | None = None
 
 
 class KeyInfoResponse(BaseModel):

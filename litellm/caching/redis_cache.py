@@ -16,7 +16,7 @@ import inspect
 import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
 import litellm
@@ -28,6 +28,27 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
 )
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+
+
+def _redis_json_default(obj: Any) -> Any:
+    """JSON default for Redis values that may contain datetimes or Pydantic models.
+
+    Call sites often pass Prisma ``.dict()`` / ``model_dump()`` payloads that still
+    contain ``datetime`` objects. ``json.dumps`` rejects those by default, which
+    silently drops cross-pod cache writes (DualCache keeps the local memory copy).
+    """
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    model_dump = getattr(obj, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json", exclude_none=True)
+    return str(obj)
+
+
+def _dumps_redis_cache_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, default=_redis_json_default)
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
@@ -635,7 +656,7 @@ class RedisCache(BaseCache):
                 raise Exception("Redis client cannot set cache. Attribute not found.")
             result = await _redis_client.set(
                 name=key,
-                value=json.dumps(value),
+                value=_dumps_redis_cache_value(value),
                 nx=nx,
                 ex=ttl,
             )
@@ -689,7 +710,7 @@ class RedisCache(BaseCache):
         for cache_key, cache_value in cache_list:
             cache_key = self.check_and_fix_namespace(key=cache_key)
             print_verbose(f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}")
-            json_cache_value = json.dumps(cache_value)
+            json_cache_value = _dumps_redis_cache_value(cache_value)
             # Set the value with a TTL if it's provided.
             _td: Optional[timedelta] = None
             if ttl is not None:

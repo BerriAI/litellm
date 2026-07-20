@@ -37,8 +37,12 @@ import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
+import {
+  resolveModelBudgetOptions,
+  unfurlWildcardModelsInList,
+} from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -53,6 +57,8 @@ import SearchToolSelector from "../search_tools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
+import { ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
+import { ModelMaxBudgetOverview } from "../key_team_helpers/ModelMaxBudgetOverview";
 import MemberPermissions from "./member_permissions";
 import MyUserTab from "./MyUserTab";
 import {
@@ -77,7 +83,7 @@ export interface TeamMembership {
     max_parallel_requests: number | null;
     tpm_limit: number | null;
     rpm_limit: number | null;
-    model_max_budget: Record<string, number> | null;
+    model_max_budget: Record<string, { budget_limit: number; time_period: string }> | null;
     budget_duration: string | null;
     budget_reset_at: string | null;
     allowed_models?: string[] | null;
@@ -97,6 +103,7 @@ export interface TeamData {
     tpm_limit: number | null;
     rpm_limit: number | null;
     max_budget: number | null;
+    model_max_budget?: Record<string, { budget_limit: number; time_period: string }> | null;
     soft_budget?: number | null;
     budget_duration: string | null;
     models: string[];
@@ -134,6 +141,7 @@ export interface TeamData {
       tpm_limit: number | null;
       rpm_limit: number | null;
     } | null;
+    is_from_config?: boolean;
   };
   keys: any[];
   team_memberships: TeamMembership[];
@@ -224,13 +232,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // rate limit dropdown to models this team actually has access to.
   const selectedModelsInForm = Form.useWatch("models", form) as string[] | undefined;
   const killSwitchOn = Form.useWatch("disable_global_guardrails", form) as boolean | undefined;
-  const availableRateLimitModels = useMemo(() => {
-    const selected = selectedModelsInForm ?? teamData?.team_info?.models ?? [];
-    if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
-      return userModels;
-    }
-    return unfurlWildcardModelsInList(selected, userModels);
-  }, [selectedModelsInForm, teamData, userModels]);
+  const availableRateLimitModels = useMemo(
+    () => resolveModelBudgetOptions(selectedModelsInForm ?? teamData?.team_info?.models, userModels),
+    [selectedModelsInForm, teamData, userModels],
+  );
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
@@ -385,11 +390,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-        max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
-        budget_duration: values.budget_duration,
         allowed_models: values.allowed_models,
+        ...(teamData?.team_info?.is_from_config
+          ? {}
+          : {
+              max_budget_in_team: values.max_budget_in_team,
+              budget_duration: values.budget_duration,
+              model_max_budget_in_team: values.model_max_budget_in_team,
+            }),
       };
       MessageManager.destroy(); // Remove all existing toasts
 
@@ -521,9 +531,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         model_tpm_limit: modelTpmLimit,
         model_rpm_limit: modelRpmLimit,
-        max_budget: values.max_budget,
-        soft_budget: sanitizeNumeric(values.soft_budget),
-        budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
           ...passthroughRoutesMetadata,
@@ -544,20 +551,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
       };
 
-      updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
-      updateData.team_member_budget_duration = values.team_member_budget_duration;
+      if (!teamData?.team_info?.is_from_config) {
+        updateData.max_budget = mapEmptyStringToNull(values.max_budget);
+        updateData.model_max_budget = values.model_max_budget;
+        updateData.soft_budget = sanitizeNumeric(values.soft_budget);
+        updateData.budget_duration = values.budget_duration;
+        updateData.team_member_budget_duration = values.team_member_budget_duration;
 
-      if (values.team_member_budget !== undefined) {
-        updateData.team_member_budget = Number(values.team_member_budget);
+        if (values.team_member_budget !== undefined) {
+          updateData.team_member_budget = Number(values.team_member_budget);
+        }
+
+        if (values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined) {
+          updateData.team_member_tpm_limit = sanitizeNumeric(values.team_member_tpm_limit);
+          updateData.team_member_rpm_limit = sanitizeNumeric(values.team_member_rpm_limit);
+        }
       }
 
       if (values.team_member_key_duration !== undefined) {
         updateData.team_member_key_duration = values.team_member_key_duration;
-      }
-
-      if (values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined) {
-        updateData.team_member_tpm_limit = sanitizeNumeric(values.team_member_tpm_limit);
-        updateData.team_member_rpm_limit = sanitizeNumeric(values.team_member_rpm_limit);
       }
 
       // Handle object_permission updates
@@ -660,6 +672,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+  const isFromConfig = info.is_from_config === true;
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
   const optedOutGlobals = new Set<string>(
@@ -738,18 +751,60 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             children: (
               <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
                 <Card>
-                  <Text>Budget Status</Text>
+                  <Text>Per-User Budget</Text>
+                  <div className="mt-2">
+                    {info.team_member_budget_table?.max_budget != null ? (
+                      <>
+                        <Title>
+                          ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
+                        </Title>
+                        <Text>
+                          {info.team_member_budget_table.budget_duration
+                            ? getBudgetDurationLabel(info.team_member_budget_table.budget_duration)
+                            : "per cycle"}{" "}
+                          per user
+                        </Text>
+                        <Text className="text-gray-500 text-xs mt-1 block">
+                          Applies to each human user (all their keys) and each service-account key
+                        </Text>
+                        {isFromConfig && (
+                          <Badge color="gray" className="mt-2">
+                            Config
+                          </Badge>
+                        )}
+                      </>
+                    ) : (
+                      <Text className="text-gray-500">No per-user budget configured</Text>
+                    )}
+                  </div>
+                </Card>
+
+                <Card>
+                  <Text>Per-Model Budgets</Text>
+                  <ModelMaxBudgetOverview
+                    teamModelMaxBudget={info.model_max_budget}
+                    memberships={teamData.team_memberships}
+                    keys={teamData.keys}
+                    variant="card"
+                  />
+                  {isFromConfig && info.model_max_budget && Object.keys(info.model_max_budget).length > 0 && (
+                    <Badge color="gray" className="mt-2">
+                      Config
+                    </Badge>
+                  )}
+                </Card>
+
+                <Card>
+                  <Text>Team Spend</Text>
                   <div className="mt-2">
                     <Title>${formatNumberWithCommas(info.spend, 4)}</Title>
-                    <Text>
-                      of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 4)}`}
-                    </Text>
-                    {info.budget_duration && <Text className="text-gray-500">Reset: {info.budget_duration}</Text>}
-                    <br />
-                    {info.team_member_budget_table && (
-                      <Text className="text-gray-500">
-                        Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 4)}
-                      </Text>
+                    {info.max_budget === null || info.max_budget === undefined ? (
+                      <Text className="text-gray-500">No shared team pool</Text>
+                    ) : (
+                      <Text>of ${formatNumberWithCommas(info.max_budget, 4)} team-wide</Text>
+                    )}
+                    {info.budget_duration && info.max_budget != null && (
+                      <Text className="text-gray-500">Reset: {info.budget_duration}</Text>
                     )}
                   </div>
                 </Card>
@@ -903,7 +958,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             children: (
               <Card className="overflow-y-auto max-h-[65vh]">
                 <div className="flex justify-between items-center mb-4">
-                  <Title>Team Settings</Title>
+                  <div className="flex items-center gap-2">
+                    <Title>Team Settings</Title>
+                    {isFromConfig && (
+                      <Tooltip title="Budgets for this team are managed in the proxy config file and cannot be edited here.">
+                        <Tag color="default">Config</Tag>
+                      </Tooltip>
+                    )}
+                  </div>
                   {canEditTeam && !isEditing && (
                     <Button icon={<EditOutlined className="h-4 w-4" />} onClick={() => setIsEditing(true)}>
                       Edit Settings
@@ -946,6 +1008,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         rpm: info.metadata?.model_rpm_limit?.[model],
                       })),
                       max_budget: info.max_budget,
+                      model_max_budget: info.model_max_budget,
                       soft_budget: info.soft_budget,
                       budget_duration: info.budget_duration,
                       team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -1027,11 +1090,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Max Budget (USD)" name="max_budget">
-                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} disabled={isFromConfig} />
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span>
+                          Per-Model Budgets{" "}
+                          <Tooltip title="Default per-model spend limits for all team members. Members and keys can override these limits with higher values.">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                    >
+                      <Form.Item name="model_max_budget" noStyle>
+                        <ModelMaxBudgetEditor modelOptions={availableRateLimitModels} disabled={isFromConfig} />
+                      </Form.Item>
                     </Form.Item>
 
                     <Form.Item label="Soft Budget (USD)" name="soft_budget">
-                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} disabled={isFromConfig} />
                     </Form.Item>
 
                     <Form.Item
@@ -1082,12 +1160,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           name="team_member_budget"
                           tooltip="Default spend budget for each member in this team."
                         >
-                          <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                          <NumericalInput
+                            step={0.01}
+                            precision={2}
+                            style={{ width: "100%" }}
+                            disabled={isFromConfig}
+                          />
                         </Form.Item>
                         <Form.Item label="Default Budget Duration" name="team_member_budget_duration">
                           <DurationSelect
                             onChange={(value) => form.setFieldValue("team_member_budget_duration", value)}
                             value={form.getFieldValue("team_member_budget_duration")}
+                            disabled={isFromConfig}
                           />
                         </Form.Item>
                         <Form.Item
@@ -1115,7 +1199,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </Accordion>
 
                     <Form.Item label="Reset Budget" name="budget_duration">
-                      <Select placeholder="n/a">
+                      <Select placeholder="n/a" disabled={isFromConfig}>
                         <Select.Option value="24h">daily</Select.Option>
                         <Select.Option value="7d">weekly</Select.Option>
                         <Select.Option value="30d">monthly</Select.Option>
@@ -1542,7 +1626,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       })()}
                     </div>
                     <div>
-                      <Text className="font-medium">Team Budget</Text>
+                      <Text className="font-medium">
+                        Team Budget{" "}
+                        {isFromConfig && (
+                          <Tooltip title="Budgets for this team are managed in the proxy config file.">
+                            <Tag color="default" className="ml-1">
+                              Config
+                            </Tag>
+                          </Tooltip>
+                        )}
+                      </Text>
                       <div>
                         Max Budget:{" "}
                         {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : "No Limit"}
@@ -1560,6 +1653,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           <div>Soft Budget Alerting Emails: {info.metadata.soft_budget_alerting_emails.join(", ")}</div>
                         )}
                     </div>
+                    <ModelMaxBudgetOverview
+                      teamModelMaxBudget={info.model_max_budget}
+                      memberships={teamData.team_memberships}
+                      keys={teamData.keys}
+                      variant="inline"
+                    />
                     <div>
                       <Text className="font-medium">
                         Team Member Settings{" "}
@@ -1676,33 +1775,37 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             { label: "User", value: "user" },
           ],
           additionalFields: [
-            {
-              name: "max_budget_in_team",
-              label: (
-                <span>
-                  Team Member Budget (USD){" "}
-                  <Tooltip title="Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              ),
-              type: "numerical" as const,
-              step: 0.01,
-              min: 0,
-              placeholder: "Budget limit for this member within this team",
-            },
-            {
-              name: "budget_duration",
-              label: (
-                <span>
-                  Budget Reset Period{" "}
-                  <Tooltip title="How often this member's budget resets within the team. Leave unset and the budget never resets.">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              ),
-              type: "budget-duration" as const,
-            },
+            ...(!isFromConfig
+              ? [
+                  {
+                    name: "max_budget_in_team",
+                    label: (
+                      <span>
+                        Team Member Budget (USD){" "}
+                        <Tooltip title="Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    ),
+                    type: "numerical" as const,
+                    step: 0.01,
+                    min: 0,
+                    placeholder: "Budget limit for this member within this team",
+                  },
+                  {
+                    name: "budget_duration",
+                    label: (
+                      <span>
+                        Budget Reset Period{" "}
+                        <Tooltip title="How often this member's budget resets within the team. Leave unset and the budget never resets.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    ),
+                    type: "budget-duration" as const,
+                  },
+                ]
+              : []),
             {
               name: "tpm_limit",
               label: (
@@ -1747,6 +1850,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               options: (info.models || []).map((m: string) => ({ label: m, value: m })),
               placeholder: "Leave empty to inherit all team models",
             },
+            ...(!isFromConfig
+              ? [
+                  {
+                    name: "model_max_budget_in_team",
+                    label: (
+                      <span>
+                        Per-Model Budgets{" "}
+                        <Tooltip title="Override team per-model budgets for this member. Use this to give a member higher limits on specific models.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    ),
+                    type: "model-max-budget" as const,
+                    modelOptions: resolveModelBudgetOptions(info.models, userModels),
+                  },
+                ]
+              : []),
           ],
         }}
       />

@@ -10,11 +10,11 @@ export interface SpendMetrics {
   cache_creation_input_tokens: number;
 }
 
-export type DailyData = {
+export interface DailyData {
   date: string;
   metrics: SpendMetrics;
   breakdown: BreakdownMetrics;
-};
+}
 
 export interface BreakdownMetrics {
   models: { [key: string]: MetricWithMetadata };

@@ -793,8 +793,7 @@ def test_sagemaker_embedding(client_no_auth):
 #### IMAGE GENERATION
 
 
-@mock_patch_aimage_generation()
-def test_img_gen(mock_aimage_generation, client_no_auth):
+def test_img_gen(client_no_auth):
     global headers
     from litellm.proxy.proxy_server import user_custom_auth
 
@@ -807,7 +806,11 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             "imageConfig": {"aspectRatio": "9:16", "imageSize": "1K"},
         }
 
-        response = client_no_auth.post("/v1/images/generations", json=test_data)
+        with patch(
+            "litellm.proxy.proxy_server.llm_router.aimage_generation",
+            new=AsyncMock(return_value=example_image_generation_result),
+        ) as mock_aimage_generation:
+            response = client_no_auth.post("/v1/images/generations", json=test_data)
 
         mock_aimage_generation.assert_called_once_with(
             model="dall-e-3",

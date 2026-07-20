@@ -1,10 +1,10 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { uiSpendLogsCall } from "../networking";
+import { sessionSpendLogsCall, uiSpendLogsCall } from "../networking";
 import { useLogFilterLogic } from "./log_filter_logic";
 
 const mockHandleFilterResetFromHook = vi.fn();
@@ -33,11 +33,25 @@ vi.mock("../networking", async (importOriginal) => {
       page_size: 50,
       total_pages: 0,
     }),
+    sessionSpendLogsCall: vi.fn().mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      page_size: 100,
+      total_pages: 0,
+    }),
     keyListCall: vi.fn().mockResolvedValue({ keys: [] }),
     keyInfoV1Call: vi.fn().mockResolvedValue({ info: {} }),
     allEndUsersCall: vi.fn().mockResolvedValue([]),
   };
 });
+
+vi.mock("@/app/(dashboard)/hooks/logDetails/useLogDetails", () => ({
+  useLogDetails: () => ({
+    data: { messages: [], response: {} },
+    isLoading: false,
+  }),
+}));
 
 vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllTeams: vi.fn().mockResolvedValue([]),
@@ -116,6 +130,153 @@ describe("SpendLogsTable", () => {
 
       expect(document.querySelector(".ant-spin")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
+    });
+  });
+
+  describe("unique session rows", () => {
+    const makeLog = (overrides: Partial<{
+      request_id: string;
+      session_id: string;
+      call_type: string;
+      session_total_count: number;
+      model: string;
+      startTime: string;
+    }>) => ({
+      request_id: overrides.request_id ?? "req-1",
+      api_key: "key-hash",
+      team_id: "team-1",
+      model: overrides.model ?? "gpt-4o",
+      model_id: "model-1",
+      call_type: overrides.call_type ?? "acompletion",
+      spend: 0.01,
+      total_tokens: 10,
+      prompt_tokens: 5,
+      completion_tokens: 5,
+      startTime: overrides.startTime ?? "2026-07-13 20:00:00",
+      endTime: "2026-07-13 20:00:01",
+      user: "user-1",
+      cache_hit: "None",
+      messages: [],
+      response: {},
+      session_id: overrides.session_id,
+      session_total_count: overrides.session_total_count,
+      status: "success",
+    });
+
+    const sessionALogs = [
+      makeLog({
+        request_id: "req-session-a-old",
+        session_id: "session-a",
+        session_total_count: 3,
+        call_type: "acompletion",
+        model: "claude-sonnet-4-6",
+        startTime: "2026-07-13 20:00:00",
+      }),
+      makeLog({
+        request_id: "req-session-a-mcp",
+        session_id: "session-a",
+        session_total_count: 3,
+        call_type: "call_mcp_tool",
+        model: "mcp:jira/search",
+        startTime: "2026-07-13 20:00:30",
+      }),
+      makeLog({
+        request_id: "req-session-a-latest",
+        session_id: "session-a",
+        session_total_count: 3,
+        call_type: "acompletion",
+        model: "claude-sonnet-5",
+        startTime: "2026-07-13 20:01:00",
+      }),
+    ];
+
+    beforeEach(() => {
+      vi.mocked(useLogFilterLogic).mockReturnValue({
+        logsQuery: {
+          isLoading: false,
+          isFetching: false,
+          isPlaceholderData: false,
+          refetch: vi.fn(),
+        },
+        filteredLogs: {
+          data: [
+            ...sessionALogs,
+            makeLog({
+              request_id: "req-session-b-1",
+              session_id: "session-b",
+              session_total_count: 2,
+              call_type: "acompletion",
+              startTime: "2026-07-13 19:00:00",
+            }),
+            makeLog({
+              request_id: "req-session-b-2",
+              session_id: "session-b",
+              session_total_count: 2,
+              call_type: "acompletion",
+              startTime: "2026-07-13 19:01:00",
+            }),
+          ],
+          total: 5,
+          page: 1,
+          page_size: 50,
+          total_pages: 1,
+        },
+        allTeams: [],
+        handleFilterChange: vi.fn(),
+        handleFilterReset: mockHandleFilterResetFromHook,
+      } as unknown as ReturnType<typeof useLogFilterLogic>);
+
+      vi.mocked(sessionSpendLogsCall).mockResolvedValue({
+        data: sessionALogs,
+        total: 3,
+        page: 1,
+        page_size: 100,
+        total_pages: 1,
+      });
+    });
+
+    it("collapses multi-call sessions to one latest row per session_id", async () => {
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("req-session-a-latest")).toBeInTheDocument();
+      });
+      expect(screen.getByText("req-session-b-2")).toBeInTheDocument();
+      expect(screen.queryByText("req-session-a-old")).not.toBeInTheDocument();
+      expect(screen.queryByText("req-session-a-mcp")).not.toBeInTheDocument();
+      expect(screen.queryByText("req-session-b-1")).not.toBeInTheDocument();
+      expect(screen.getByText(/Showing 1 - 2 of 5 results/)).toBeInTheDocument();
+    });
+
+    it("opens the session drawer focused on the latest request when a session row is clicked", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("req-session-a-latest")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByText("req-session-a-latest"));
+
+      await waitFor(() => {
+        expect(sessionSpendLogsCall).toHaveBeenCalledWith(
+          "test-token",
+          "session-a",
+          1,
+          100,
+        );
+      });
+
+      const drawer = await screen.findByRole("dialog");
+      await waitFor(() => {
+        expect(within(drawer).getByText("req-session-a-latest")).toBeInTheDocument();
+      });
+      const selectedSessionItem = within(drawer)
+        .getAllByRole("button")
+        .find((button) => button.className.includes("bg-blue-50"));
+      expect(selectedSessionItem).toBeTruthy();
+      expect(selectedSessionItem).toHaveTextContent("claude-sonnet-5");
+      expect(selectedSessionItem).not.toHaveTextContent("claude-sonnet-4-6");
     });
   });
 

@@ -810,6 +810,127 @@ describe("KeyEditView", () => {
     }
   });
 
+  describe("per-model budgets (admin only)", () => {
+    const KEY_WITH_MODEL_BUDGET = {
+      ...MOCK_KEY_DATA,
+      model_max_budget: {
+        "gpt-4": { budget_limit: 5, time_period: "1d" },
+      } as unknown as KeyResponse["model_max_budget"],
+    };
+
+    it("should not render the Per-Model Budgets editor for non-admin users", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={KEY_WITH_MODEL_BUDGET}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="Internal User"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Max Budget (USD)")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Per-Model Budgets")).not.toBeInTheDocument();
+    });
+
+    it("should render the Per-Model Budgets editor for proxy admins", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={KEY_WITH_MODEL_BUDGET}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Per-Model Budgets")).toBeInTheDocument();
+      });
+    });
+
+    it("should send the key's model_max_budget on submit for admins", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={KEY_WITH_MODEL_BUDGET}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      const submitButton = await screen.findByRole("button", { name: /save changes/i });
+      await userEvent.click(submitButton);
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+        const callArgs = onSubmitMock.mock.calls[0][0];
+        expect(callArgs.model_max_budget).toEqual({ "gpt-4": { budget_limit: 5, time_period: "1d" } });
+      });
+    });
+
+    it("should never send model_max_budget on submit for non-admins", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={KEY_WITH_MODEL_BUDGET}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="Internal User"
+          premiumUser={false}
+        />,
+      );
+
+      const submitButton = await screen.findByRole("button", { name: /save changes/i });
+      await userEvent.click(submitButton);
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+        const callArgs = onSubmitMock.mock.calls[0][0];
+        expect(callArgs.model_max_budget).toBeUndefined();
+      });
+    });
+
+    it("should send an empty model_max_budget when an admin removes the last override", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={KEY_WITH_MODEL_BUDGET}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      const removeButton = await screen.findByRole("button", { name: "✕" });
+      await userEvent.click(removeButton);
+
+      const submitButton = screen.getByRole("button", { name: /save changes/i });
+      await userEvent.click(submitButton);
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+        const callArgs = onSubmitMock.mock.calls[0][0];
+        expect(callArgs.model_max_budget).toEqual({});
+      });
+    });
+  });
+
   describe("organization dropdown", () => {
     it("should render the organization dropdown", async () => {
       renderWithProviders(

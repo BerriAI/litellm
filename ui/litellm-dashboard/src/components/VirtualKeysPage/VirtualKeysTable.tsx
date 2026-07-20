@@ -13,17 +13,31 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { Badge, Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text } from "@tremor/react";
+import {
+  Badge,
+  Button,
+  Icon,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  Text,
+} from "@tremor/react";
 import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button as AntButton, Popover, Skeleton, Typography } from "antd";
-import { DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
-import React, { useDeferredValue, useMemo, useState } from "react";
+import { Button as AntButton, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import KeyInfoView from "../templates/key_info_view";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { transformKeyInfo } from "../key_team_helpers/transform_key_info";
+import { keyInfoV1Call } from "../networking";
+import { useVirtualKeySearchParam } from "./useVirtualKeySearchParam";
 
 type KeyFilterState = {
   "Team ID": string;
@@ -55,9 +69,13 @@ const toKeyListFilters = (filters: KeyFilterState): KeyListFilterOptions => ({
 });
 
 export function VirtualKeysTable() {
+  const { accessToken } = useAuthorized();
+  const { virtualKeyId, setVirtualKeyId } = useVirtualKeySearchParam();
   const { data: fetchedOrganizations, isLoading: isOrgsLoading } = useOrganizations();
   const resolvedOrganizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const dismissedVirtualKeyRef = useRef<string | null>(null);
+  const previousVirtualKeyIdRef = useRef<string | null>(null);
   const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
   const [tablePagination, setTablePagination] = React.useState<PaginationState>({
     pageIndex: 0,
@@ -65,6 +83,45 @@ export function VirtualKeysTable() {
   });
   const [filters, setFilters] = useState<KeyFilterState>(DEFAULT_KEY_FILTERS);
   const [debouncedFilters] = useDebouncedValue(filters, { wait: 300 });
+
+  const openKeyDetail = useCallback(
+    async (token: string, keyFromList: KeyResponse | null, syncUrl: boolean) => {
+      if (keyFromList) {
+        setSelectedKey(keyFromList);
+        if (syncUrl) {
+          setVirtualKeyId(token);
+        }
+        return;
+      }
+      if (!accessToken) {
+        return;
+      }
+      try {
+        const keyInfo = await keyInfoV1Call(accessToken, token);
+        setSelectedKey(transformKeyInfo(keyInfo));
+        if (syncUrl) {
+          setVirtualKeyId(token);
+        }
+      } catch (error) {
+        console.error("Error fetching virtual key info:", error);
+      }
+    },
+    [accessToken, setVirtualKeyId],
+  );
+
+  const handleSelectKey = useCallback(
+    (key: KeyResponse) => {
+      dismissedVirtualKeyRef.current = null;
+      void openKeyDetail(key.token, key, true);
+    },
+    [openKeyDetail],
+  );
+
+  const handleCloseKeyDetail = useCallback(() => {
+    dismissedVirtualKeyRef.current = virtualKeyId;
+    setSelectedKey(null);
+    setVirtualKeyId(null);
+  }, [setVirtualKeyId, virtualKeyId]);
 
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
@@ -84,6 +141,29 @@ export function VirtualKeysTable() {
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
+
+  useEffect(() => {
+    const previousVirtualKeyId = previousVirtualKeyIdRef.current;
+    previousVirtualKeyIdRef.current = virtualKeyId;
+
+    if (!virtualKeyId) {
+      dismissedVirtualKeyRef.current = null;
+      // Only close when the URL param was removed (back/replace), not while
+      // router.replace is still catching up after a local key click.
+      if (previousVirtualKeyId && selectedKey) {
+        setSelectedKey(null);
+      }
+      return;
+    }
+    if (dismissedVirtualKeyRef.current === virtualKeyId) {
+      return;
+    }
+    if (selectedKey?.token === virtualKeyId) {
+      return;
+    }
+    const fromList = keyList.find((key) => key.token === virtualKeyId) ?? null;
+    void openKeyDetail(virtualKeyId, fromList, false);
+  }, [keyList, openKeyDetail, selectedKey, virtualKeyId]);
 
   const { data: fetchedTeams, isLoading: isTeamsLoading } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
@@ -135,7 +215,23 @@ export function VirtualKeysTable() {
         header: "Key ID",
         size: 100,
         enableSorting: true,
-        cell: (info) => <IdCell value={info.getValue() as string} onClick={() => setSelectedKey(info.row.original)} />,
+        cell: (info) => {
+          const value = info.getValue() as string;
+          const width = info.cell.column.getSize();
+          return (
+            <Tooltip title={value}>
+              <Button
+                size="xs"
+                variant="light"
+                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
+                style={{ maxWidth: width, overflow: "hidden" }}
+                onClick={() => handleSelectKey(info.row.original)}
+              >
+                {value ?? "-"}
+              </Button>
+            </Tooltip>
+          );
+        },
       },
       {
         id: "key_alias",
@@ -161,14 +257,22 @@ export function VirtualKeysTable() {
         cell: ({ row }) => {
           const key = row.original;
           if (key.blocked !== true) {
-            return <StatusBadge tone="success" label="Active" dataTestId={`key-status-${key.token_id}`} />;
+            return (
+              <Tag color="green" data-testid={`key-status-${key.token_id}`}>
+                Active
+              </Tag>
+            );
           }
           const isScimBlocked = (key.metadata as Record<string, unknown> | null | undefined)?.scim_blocked === true;
           const reason = isScimBlocked
             ? "Blocked by SCIM (external identity provider deactivated or deleted the owning user)."
             : "Blocked. Requests using this key will be rejected with 401.";
           return (
-            <StatusBadge tone="error" label="Blocked" tooltip={reason} dataTestId={`key-status-${key.token_id}`} />
+            <Tooltip title={reason}>
+              <Tag color="red" data-testid={`key-status-${key.token_id}`}>
+                Blocked
+              </Tag>
+            </Tooltip>
           );
         },
       },
@@ -289,7 +393,10 @@ export function VirtualKeysTable() {
         header: "Created At",
         size: 120,
         enableSorting: true,
-        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" />,
+        cell: (info) => {
+          const value = info.getValue();
+          return value ? new Date(value as string).toLocaleDateString() : "-";
+        },
       },
       {
         id: "created_by",
@@ -357,7 +464,10 @@ export function VirtualKeysTable() {
         header: "Updated At",
         size: 120,
         enableSorting: true,
-        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
+        cell: (info) => {
+          const value = info.getValue();
+          return value ? new Date(value as string).toLocaleDateString() : "Never";
+        },
       },
       {
         id: "last_active",
@@ -375,7 +485,16 @@ export function VirtualKeysTable() {
         ),
         size: 130,
         enableSorting: false,
-        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Unknown" />,
+        cell: (info) => {
+          const value = info.getValue();
+          if (!value) return "Unknown";
+          const date = new Date(value as string);
+          return (
+            <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
+              <span>{date.toLocaleDateString()}</span>
+            </Tooltip>
+          );
+        },
       },
       {
         id: "expires",
@@ -383,7 +502,10 @@ export function VirtualKeysTable() {
         header: "Expires",
         size: 120,
         enableSorting: false,
-        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" fallback="Never" />,
+        cell: (info) => {
+          const value = info.getValue();
+          return value ? new Date(value as string).toLocaleDateString() : "Never";
+        },
       },
       {
         id: "spend",
@@ -391,7 +513,7 @@ export function VirtualKeysTable() {
         header: "Spend (USD)",
         size: 100,
         enableSorting: true,
-        cell: (info) => <MoneyCell value={info.getValue() as number} decimals={4} />,
+        cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
       },
       {
         id: "max_budget",
@@ -418,7 +540,10 @@ export function VirtualKeysTable() {
         header: "Budget Reset",
         size: 130,
         enableSorting: false,
-        cell: (info) => <DateCell value={info.getValue() as string | null} fallback="Never" />,
+        cell: (info) => {
+          const value = info.getValue();
+          return value ? new Date(value as string).toLocaleString() : "Never";
+        },
       },
       {
         id: "models",
@@ -522,7 +647,7 @@ export function VirtualKeysTable() {
         },
       },
     ],
-    [allTeams, resolvedOrganizations],
+    [allTeams, handleSelectKey, resolvedOrganizations],
   );
 
   const filterOptions: FilterOption[] = [
@@ -578,7 +703,7 @@ export function VirtualKeysTable() {
     },
     {
       name: "Key Hash",
-      label: "Key ID",
+      label: "Key Hash",
       isSearchable: false,
     },
   ];
@@ -614,7 +739,7 @@ export function VirtualKeysTable() {
       {selectedKey ? (
         <KeyInfoView
           keyId={selectedKey.token}
-          onClose={() => setSelectedKey(null)}
+          onClose={handleCloseKeyDetail}
           keyData={selectedKey}
           teams={allTeams}
         />

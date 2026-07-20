@@ -62,6 +62,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    resolve_effective_model_max_budget,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
@@ -274,6 +275,13 @@ def _team_key_operation_team_member_check(
             detail=f"Team member role {team_member_object.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
         )
 
+    if (
+        route == KeyManagementRoutes.KEY_GENERATE
+        and assigned_user_id is not None
+        and assigned_user_id == user_api_key_dict.user_id
+    ):
+        return True
+
     TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
         team_member_object=team_member_object,
         team_table=team_table,
@@ -294,6 +302,100 @@ def _key_generation_required_param_check(data: GenerateKeyRequest, required_para
                 detail=f"Required param {param} not in data",
             )
     return True
+
+
+def _user_membership_team_ids(teams: Optional[list[str]]) -> tuple[str, ...]:
+    return tuple(
+        team_id
+        for team_id in (teams or [])
+        if isinstance(team_id, str) and team_id and team_id != UI_SESSION_TOKEN_TEAM_ID
+    )
+
+
+async def _apply_key_generation_ownership_defaults(
+    *,
+    data: GenerateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    is_proxy_admin: bool,
+) -> None:
+    if not is_proxy_admin and data.user_id is None:
+        data.user_id = user_api_key_dict.user_id
+        verbose_proxy_logger.warning(
+            "key/generate: auto-assigning user_id=%s for non-admin caller",
+            user_api_key_dict.user_id,
+        )
+
+    await _apply_user_team_id_from_membership(
+        data=data,
+        prisma_client=prisma_client,
+    )
+
+    _apply_default_team_id_if_configured(
+        data=data,
+        caller_user_id=user_api_key_dict.user_id,
+        is_proxy_admin=is_proxy_admin,
+    )
+
+
+async def _apply_user_team_id_from_membership(
+    *,
+    data: GenerateKeyRequest,
+    prisma_client: PrismaClient,
+) -> None:
+    if data.team_id is not None and data.team_id != "":
+        return
+    data.team_id = None
+    target_user_id = data.user_id
+    if target_user_id is None:
+        return
+
+    try:
+        user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": target_user_id})
+    except TypeError:
+        return
+    if user_row is None:
+        return
+
+    team_ids = _user_membership_team_ids(getattr(user_row, "teams", None))
+    if len(team_ids) == 0:
+        return
+    if len(team_ids) == 1:
+        data.team_id = team_ids[0]
+        verbose_proxy_logger.info(
+            "key/generate: auto-assigning team_id=%s from user membership for user_id=%s",
+            team_ids[0],
+            target_user_id,
+        )
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"User={target_user_id} belongs to multiple teams. "
+            f"Specify team_id when generating a key. teams={list(team_ids)}"
+        ),
+    )
+
+
+def _apply_default_team_id_if_configured(
+    *,
+    data: GenerateKeyRequest,
+    caller_user_id: Optional[str],
+    is_proxy_admin: bool,
+) -> None:
+    if is_proxy_admin or data.team_id is not None or litellm.key_generation_settings is None:
+        return
+    personal_key_generation = litellm.key_generation_settings.get("personal_key_generation") or {}
+    default_team_id = personal_key_generation.get("default_team_id")
+    if not isinstance(default_team_id, str) or not default_team_id:
+        return
+    data.team_id = default_team_id
+    verbose_proxy_logger.info(
+        "key/generate: applying default_team_id=%s for caller user_id=%s",
+        default_team_id,
+        caller_user_id,
+    )
 
 
 def _team_key_generation_check(
@@ -527,6 +629,27 @@ def _validate_caller_can_change_key_ownership(
         )
 
 
+def _validate_caller_can_change_key_team(
+    data: Optional[BaseModel],
+    existing_key_row: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if data is None:
+        return
+    fields_set = getattr(data, "model_fields_set", None) or set()
+    if "team_id" not in fields_set:
+        return
+    incoming_team_id = getattr(data, "team_id", None)
+    existing_team_id = getattr(existing_key_row, "team_id", None)
+    if (incoming_team_id is None or incoming_team_id == "") and existing_team_id is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="Non-admin users cannot remove the team_id from a key.",
+        )
+
+
 def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
@@ -590,6 +713,88 @@ def _check_permissions_caller_permission(
         status_code=403,
         detail={"error": "Only proxy admins can set `permissions`."},
     )
+
+
+def _model_max_budget_is_nonempty(model_max_budget: Optional[dict]) -> bool:
+    return model_max_budget is not None and len(model_max_budget) > 0
+
+
+def _team_has_model_max_budget(team_table: Optional[LiteLLM_TeamTableCachedObj]) -> bool:
+    return team_table is not None and team_table.model_max_budget is not None and len(team_table.model_max_budget) > 0
+
+
+def _caller_can_set_key_model_max_budget(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> bool:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
+    if team_table is not None and _is_user_team_admin(
+        user_api_key_dict=user_api_key_dict,
+        team_obj=team_table,
+    ):
+        return True
+    return False
+
+
+def _enforce_model_max_budget_caller_permission(
+    data: GenerateRequestBase,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> None:
+    if _caller_can_set_key_model_max_budget(user_api_key_dict, team_table):
+        return
+    if "model_max_budget" in data.model_fields_set:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins or team admins can set `model_max_budget` on a key."},
+        )
+
+
+def _apply_model_max_budget_generation_policy(
+    data: GenerateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> None:
+    can_set_key_model_max_budget = _caller_can_set_key_model_max_budget(
+        user_api_key_dict,
+        team_table,
+    )
+    _enforce_model_max_budget_caller_permission(
+        data,
+        user_api_key_dict,
+        team_table,
+    )
+
+    if litellm.default_key_generate_params is not None:
+        for elem in data:
+            key, value = elem
+            if value is None and key in [
+                "max_budget",
+                "user_id",
+                "team_id",
+                "max_parallel_requests",
+                "tpm_limit",
+                "rpm_limit",
+                "budget_duration",
+                "duration",
+            ]:
+                setattr(data, key, litellm.default_key_generate_params.get(key, None))
+            elif key == "models" and value == []:
+                setattr(data, key, litellm.default_key_generate_params.get(key, []))
+            elif key == "metadata" and value == {}:
+                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+            elif key == "model_max_budget" and (value is None or value == {}):
+                if can_set_key_model_max_budget or not _team_has_model_max_budget(team_table):
+                    setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+
+    if not can_set_key_model_max_budget and _team_has_model_max_budget(team_table):
+        data.model_max_budget = {}
+    elif can_set_key_model_max_budget and team_table is not None and team_table.model_max_budget:
+        data.model_max_budget = resolve_effective_model_max_budget(
+            key_model_max_budget=data.model_max_budget,
+            team_model_max_budget=team_table.model_max_budget,
+        )
 
 
 def _check_budget_limits_delegation_ceiling(
@@ -750,6 +955,7 @@ async def _common_key_generation_helper(
         llm_router,
         premium_user,
         prisma_client,
+        user_api_key_cache,
     )
 
     common_key_access_checks(
@@ -778,25 +984,20 @@ async def _common_key_generation_helper(
     _requested_max_budget = data.max_budget
     _requested_team_id = data.team_id
 
-    # check if user set default key/generate params on config.yaml
-    if litellm.default_key_generate_params is not None:
-        for elem in data:
-            key, value = elem
-            if value is None and key in [
-                "max_budget",
-                "user_id",
-                "team_id",
-                "max_parallel_requests",
-                "tpm_limit",
-                "rpm_limit",
-                "budget_duration",
-                "duration",
-            ]:
-                setattr(data, key, litellm.default_key_generate_params.get(key, None))
-            elif key == "models" and value == []:
-                setattr(data, key, litellm.default_key_generate_params.get(key, []))
-            elif key == "metadata" and value == {}:
-                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+    from litellm.proxy.management_helpers.config_teams_sync import apply_team_member_budget_to_sa_key
+
+    await apply_team_member_budget_to_sa_key(
+        data=data,
+        team_table=team_table,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    _apply_model_max_budget_generation_policy(
+        data,
+        user_api_key_dict,
+        team_table,
+    )
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
@@ -1596,12 +1797,12 @@ async def generate_key_fn(
             user_api_key_dict.user_role is not None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not _is_proxy_admin and data.user_id is None:
-            data.user_id = user_api_key_dict.user_id
-            verbose_proxy_logger.warning(
-                "key/generate: auto-assigning user_id=%s for non-admin caller",
-                user_api_key_dict.user_id,
-            )
+        await _apply_key_generation_ownership_defaults(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            is_proxy_admin=_is_proxy_admin,
+        )
 
         team_table: Optional[LiteLLM_TeamTableCachedObj] = None
         if data.team_id is not None:
@@ -2272,6 +2473,11 @@ async def _validate_update_key_data(
         existing_key_row=existing_key_row,
         user_api_key_dict=user_api_key_dict,
     )
+    _validate_caller_can_change_key_team(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
@@ -2386,6 +2592,12 @@ async def _validate_update_key_data(
                 data=data,
                 prisma_client=prisma_client,
             )
+
+    _enforce_model_max_budget_caller_permission(
+        data,
+        user_api_key_dict,
+        team_obj,
+    )
 
     TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
         user_api_key_dict=user_api_key_dict,
@@ -3257,17 +3469,24 @@ async def _get_model_max_budget_current_spend(
     budget_config: BudgetConfig,
     user_api_key_cache: UserApiKeyCache,
 ) -> float:
-    virtual_key_model_spend_cache_key = (
-        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{api_key_hash}:{model}:{budget_config.budget_duration}"
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        current_model_budget_window,
+        _windowed_cache_key,
+    )
+
+    window_epoch = current_model_budget_window(str(budget_config.budget_duration)).epoch
+    virtual_key_model_spend_cache_key = _windowed_cache_key(
+        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{api_key_hash}:{model}:{budget_config.budget_duration}",
+        window_epoch,
     )
     current_spend: float | None = await user_api_key_cache.async_get_cache(
         key=virtual_key_model_spend_cache_key,
     )
     if current_spend is None:
         model_without_prefix = model.split("/")[-1] if "/" in model else model
-        virtual_key_model_spend_cache_key = (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
-            f"{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}"
+        virtual_key_model_spend_cache_key = _windowed_cache_key(
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}",
+            window_epoch,
         )
         current_spend = await user_api_key_cache.async_get_cache(
             key=virtual_key_model_spend_cache_key,
@@ -3307,6 +3526,86 @@ async def _build_model_max_budget_usage(
             "time_period": budget_config.budget_duration,
         }
     return result
+
+
+async def _attach_model_max_budget_usage_to_key_info(
+    key_info: dict[str, object],
+    *,
+    api_key_hash: str,
+    user_api_key_cache: UserApiKeyCache | None,
+) -> None:
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget, get_team_membership
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        build_effective_model_max_budget_usage,
+        log_key_info_usage_reads,
+    )
+    from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
+
+    if user_api_key_cache is None or model_max_budget_limiter is None or not api_key_hash:
+        return
+
+    key_model_max_budget = key_info.get("model_max_budget") or {}
+    budget_table = key_info.get("litellm_budget_table") or {}
+    if not key_model_max_budget and isinstance(budget_table, dict):
+        key_model_max_budget = budget_table.get("model_max_budget") or {}
+
+    team_model_max_budget: Optional[dict] = None
+    team_member_model_max_budget: Optional[dict] = None
+    team_id = key_info.get("team_id")
+    user_id = key_info.get("user_id")
+
+    if team_id and prisma_client is not None:
+        team_table = await get_team_object(
+            team_id=str(team_id),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if team_table is not None and isinstance(team_table.model_max_budget, dict):
+            team_model_max_budget = team_table.model_max_budget
+
+        if user_id is not None:
+            membership = await get_team_membership(
+                user_id=str(user_id),
+                team_id=str(team_id),
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if membership is not None and membership.litellm_budget_table is not None:
+                membership_budget = membership.litellm_budget_table.model_max_budget
+                if isinstance(membership_budget, dict) and len(membership_budget) > 0:
+                    team_member_model_max_budget = membership_budget
+
+            team_metadata = team_table.metadata if team_table is not None else None
+            if team_member_model_max_budget is None and isinstance(team_metadata, dict):
+                default_budget_id = team_metadata.get("team_member_budget_id")
+                if isinstance(default_budget_id, str):
+                    default_budget = await get_team_member_default_budget(
+                        budget_id=default_budget_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                    )
+                    if default_budget is not None and isinstance(default_budget.model_max_budget, dict):
+                        if len(default_budget.model_max_budget) > 0:
+                            team_member_model_max_budget = default_budget.model_max_budget
+
+    usage = await build_effective_model_max_budget_usage(
+        model_max_budget_limiter,
+        api_key_hash=api_key_hash,
+        team_id=str(team_id) if team_id is not None else None,
+        user_id=str(user_id) if user_id is not None else None,
+        key_model_max_budget=key_model_max_budget if isinstance(key_model_max_budget, dict) else None,
+        team_model_max_budget=team_model_max_budget,
+        team_member_model_max_budget=team_member_model_max_budget,
+    )
+    if usage:
+        key_info["model_max_budget_usage"] = usage
+        log_key_info_usage_reads(
+            api_key_hash=api_key_hash,
+            usage=usage,
+            limiter=model_max_budget_limiter,
+            team_id=str(team_id) if team_id is not None else None,
+            user_id=str(user_id) if user_id is not None else None,
+        )
 
 
 @router.post(
@@ -3380,14 +3679,10 @@ async def info_key_fn_v2(
                 k_dict = k.dict()
             k_token_hash = k_dict.pop("token", None)
 
-            model_max_budget = k_dict.get("model_max_budget") or {}
-            budget_table = k_dict.get("litellm_budget_table") or {}
-            if not model_max_budget and isinstance(budget_table, dict):
-                model_max_budget = budget_table.get("model_max_budget") or {}
-            if model_max_budget and k_token_hash:
-                k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
+            if k_token_hash:
+                await _attach_model_max_budget_usage_to_key_info(
+                    k_dict,
                     api_key_hash=k_token_hash,
-                    model_max_budget=model_max_budget,
                     user_api_key_cache=user_api_key_cache,
                 )
 
@@ -3471,16 +3766,11 @@ async def info_key_fn(
             key_info = key_info.dict()
         key_token_hash = key_info.pop("token")
 
-        model_max_budget = key_info.get("model_max_budget") or {}
-        budget_table = key_info.get("litellm_budget_table") or {}
-        if not model_max_budget and isinstance(budget_table, dict):
-            model_max_budget = budget_table.get("model_max_budget") or {}
-        if model_max_budget and key_token_hash:
-            key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
-                api_key_hash=key_token_hash,
-                model_max_budget=model_max_budget,
-                user_api_key_cache=user_api_key_cache,
-            )
+        await _attach_model_max_budget_usage_to_key_info(
+            key_info,
+            api_key_hash=key_token_hash,
+            user_api_key_cache=user_api_key_cache,
+        )
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
@@ -4443,6 +4733,11 @@ async def _execute_virtual_key_regeneration(
         existing_key_row=key_in_db,
         user_api_key_dict=user_api_key_dict,
     )
+    _validate_caller_can_change_key_team(
+        data=data,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # Apply the same membership rule used on /key/update: when the caller
     # asks to point the regenerated key at a different organization_id,
@@ -4467,6 +4762,19 @@ async def _execute_virtual_key_regeneration(
 
     non_default_values = {}
     if data is not None:
+        regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+        if key_in_db.team_id is not None:
+            regenerate_team_table = await get_team_object(
+                team_id=key_in_db.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
+        _enforce_model_max_budget_caller_permission(
+            data,
+            user_api_key_dict,
+            regenerate_team_table,
+        )
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
         non_default_values = await prepare_key_update_data(data=data, existing_key_row=key_in_db)
@@ -4582,14 +4890,11 @@ async def regenerate_key_fn(
         "models": ["gpt-4", "gpt-3.5-turbo"]
     }'
     ```
-
-    Note: This is an Enterprise feature. It requires a premium license to use.
     """
     try:
         from litellm.proxy.proxy_server import (
             hash_token,
             master_key,
-            premium_user,
             prisma_client,
             proxy_logging_obj,
             user_api_key_cache,
@@ -4622,25 +4927,6 @@ async def regenerate_key_fn(
                 allowed_routes=handle_key_type(data, {}).get("allowed_routes"),
                 user_api_key_dict=user_api_key_dict,
                 allow_safe_presets=True,
-            )
-
-        # Premium-gate bypass for master-key rotation must verify the
-        # caller actually holds the master key, not just that the request
-        # body has a ``new_master_key`` field. A presence-only check let
-        # any non-premium caller skip the enterprise gate by sending any
-        # value in that field.
-        regenerate_target_key = data.key if data and data.key else key
-        is_master_key_regeneration = (
-            data is not None
-            and data.new_master_key is not None
-            and _is_master_key(api_key=regenerate_target_key, _master_key=master_key)
-        )
-
-        if (
-            premium_user is not True and not is_master_key_regeneration
-        ):  # allow master key regeneration for non-premium users
-            raise ValueError(
-                f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
             )
 
         # Check if key exists, raise exception if key is not in the DB
@@ -6391,7 +6677,7 @@ async def _enforce_unique_key_alias(
 
 def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
     """
-    Validate the model_max_budget is GenericBudgetConfigType + enforce user has an enterprise license
+    Validate the model_max_budget is GenericBudgetConfigType
 
     Raises:
         Exception: If model_max_budget is not a valid GenericBudgetConfigType
@@ -6402,12 +6688,6 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         if len(model_max_budget) == 0:
             return
         if model_max_budget is not None:
-            from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
-            if premium_user is not True:
-                raise ValueError(
-                    f"You must have an enterprise license to set model_max_budget. {CommonProxyErrors.not_premium_user.value}"
-                )
             for _model, _budget_info in model_max_budget.items():
                 assert isinstance(_model, str)
 

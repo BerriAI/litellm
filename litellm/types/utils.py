@@ -3226,6 +3226,7 @@ class TeamUIKeyGenerationConfig(KeyGenerationConfig):
 
 class PersonalUIKeyGenerationConfig(KeyGenerationConfig):
     allowed_user_roles: List[str]
+    default_team_id: str
 
 
 class StandardKeyGenerationConfig(TypedDict, total=False):

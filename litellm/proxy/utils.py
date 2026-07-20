@@ -191,9 +191,7 @@ def print_verbose(print_statement):
     :param print_statement: The statement to be printed and logged.
     :type print_statement: Any
     """
-    import traceback
-
-    verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
+    verbose_proxy_logger.debug("%s", print_statement)
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa: T201
 
@@ -3467,6 +3465,7 @@ class PrismaClient:
                             tm.spend AS team_member_spend,
                             b_tm.tpm_limit AS team_member_tpm_limit,
                             b_tm.rpm_limit AS team_member_rpm_limit,
+                            b_tm.model_max_budget AS litellm_team_member_budget_table_model_max_budget,
                             m.aliases AS team_model_aliases,
                             -- Added comma to separate b.* columns
                             b.max_budget AS litellm_budget_table_max_budget,

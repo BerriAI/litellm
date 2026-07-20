@@ -56,6 +56,17 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   }),
 }));
 
+const mockSetVirtualKeyId = vi.fn();
+vi.mock("./useVirtualKeySearchParam", () => ({
+  useVirtualKeySearchParam: vi.fn(() => ({
+    virtualKeyId: null,
+    setVirtualKeyId: mockSetVirtualKeyId,
+  })),
+  VIRTUAL_KEY_PARAM: "virtual_key",
+}));
+
+import { useVirtualKeySearchParam } from "./useVirtualKeySearchParam";
+
 const mockKey: KeyResponse = {
   token: "sk-1234567890abcdef",
   token_id: "key-1",
@@ -137,6 +148,7 @@ const mockTeam: Team = {
 
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
 const mockUseTeams = useTeams as MockedFunction<typeof useTeams>;
+const mockUseVirtualKeySearchParam = useVirtualKeySearchParam as MockedFunction<typeof useVirtualKeySearchParam>;
 
 const keysResult = (keys: KeyResponse[], data: Partial<KeysResponse> = {}, extra: Record<string, unknown> = {}) =>
   ({
@@ -162,6 +174,11 @@ beforeEach(() => {
   mockUseTeams.mockReturnValue({
     teams: [mockTeam],
     setTeams: vi.fn(),
+  });
+
+  mockUseVirtualKeySearchParam.mockReturnValue({
+    virtualKeyId: null,
+    setVirtualKeyId: mockSetVirtualKeyId,
   });
 });
 
@@ -261,6 +278,42 @@ it("should open KeyInfoView when clicking on a key ID button", async () => {
   });
 
   expect(screen.queryByText(/Showing.*results/)).not.toBeInTheDocument();
+  expect(mockSetVirtualKeyId).toHaveBeenCalledWith("sk-1234567890abcdef");
+});
+
+it("should open KeyInfoView from ?virtual_key= without rewriting the URL", async () => {
+  mockUseVirtualKeySearchParam.mockReturnValue({
+    virtualKeyId: "sk-1234567890abcdef",
+    setVirtualKeyId: mockSetVirtualKeyId,
+  });
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Back to Keys")).toBeInTheDocument();
+  });
+  expect(mockSetVirtualKeyId).not.toHaveBeenCalled();
+});
+
+it("should clear ?virtual_key= when closing key detail", async () => {
+  renderWithProviders(<VirtualKeysTable />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+
+  fireEvent.click(screen.getByText("sk-1234567890abcdef"));
+
+  await waitFor(() => {
+    expect(screen.getByText("Back to Keys")).toBeInTheDocument();
+  });
+
+  fireEvent.click(screen.getByText("Back to Keys"));
+
+  await waitFor(() => {
+    expect(screen.getByText(/Showing.*results/)).toBeInTheDocument();
+  });
+  expect(mockSetVirtualKeyId).toHaveBeenCalledWith(null);
 });
 
 it("should display 'Default Proxy Admin' for user_id when value is 'default_user_id'", async () => {

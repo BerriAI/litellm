@@ -16,15 +16,16 @@ from dataclasses import dataclass
 from pydantic import AliasPath, BaseModel, Field, RootModel
 
 from e2e_gateway import Gateway, build_gateway
-from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
+from e2e_http import AuthHeaders, NoBody, Result, StreamingResponse, Success, unwrap
 from models import (
-    AnthropicMessagesBody,
     BudgetWindow,
     ChatBody,
     ChatMessage,
     ChatMetadata,
     KeyGenerateBody,
+    KeyInfo,
     ModelBudgetEntry,
+    ModelMaxBudgetUsageEntry,
 )
 
 _TEAM_READY_ATTEMPTS = 15
@@ -69,8 +70,19 @@ class TeamMember(BaseModel):
 class TeamNewBody(BaseModel):
     team_alias: str
     max_budget: float | None = None
+    team_member_budget: float | None = None
+    team_member_budget_duration: str | None = None
     organization_id: str | None = None
     budget_limits: list[BudgetWindow] | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    metadata: dict[str, object] | None = None
+
+
+class TeamUpdateBody(BaseModel):
+    team_id: str
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    team_member_budget: float | None = None
+    max_budget: float | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -85,6 +97,7 @@ class TeamMemberAddBody(BaseModel):
     team_id: str
     member: TeamMember
     max_budget_in_team: float | None = None
+    model_max_budget_in_team: dict[str, ModelBudgetEntry] | None = None
 
 
 class TeamMemberUpdateBody(BaseModel):
@@ -92,6 +105,7 @@ class TeamMemberUpdateBody(BaseModel):
     user_id: str
     max_budget_in_team: float | None = None
     budget_duration: str | None = None
+    model_max_budget_in_team: dict[str, ModelBudgetEntry] | None = None
 
 
 class TeamMembershipRow(BaseModel):
@@ -106,7 +120,21 @@ class TeamInfoParams(BaseModel):
     team_id: str
 
 
+class TeamMemberBudgetTable(BaseModel):
+    max_budget: float | None = None
+    budget_duration: str | None = None
+
+
+class TeamInfoDetail(BaseModel):
+    team_id: str
+    model_max_budget: dict[str, ModelBudgetEntry | dict[str, float | str]] | None = None
+    is_from_config: bool = False
+    team_member_budget_table: TeamMemberBudgetTable | None = None
+    metadata: dict[str, object] | None = None
+
+
 class TeamInfoResponse(BaseModel):
+    team_info: TeamInfoDetail | None = None
     team_memberships: list[TeamMembershipRow] = []
 
 
@@ -149,6 +177,16 @@ class BudgetInfoResponse(RootModel[list[BudgetRow]]):
     pass
 
 
+class AnthropicV1Headers(AuthHeaders):
+    anthropic_version: str = Field(default="2023-06-01", alias="anthropic-version")
+
+
+class AnthropicV1MessageBody(BaseModel):
+    model: str
+    max_tokens: int
+    messages: list[ChatMessage]
+
+
 def is_budget_block(result: StreamingResponse) -> bool:
     """True if the call was rejected for being over budget (vs a provider error)."""
     return not result.ok and "budget_exceeded" in result.body
@@ -157,6 +195,33 @@ def is_budget_block(result: StreamingResponse) -> bool:
 def model_budget(model: str, limit: float, period: str = "30d") -> dict[str, ModelBudgetEntry]:
     """A model_max_budget entry: per-model cap with a reset window."""
     return {model: ModelBudgetEntry(budget_limit=limit, time_period=period)}
+
+
+def model_usage_entry(key_info: KeyInfo, model: str) -> ModelMaxBudgetUsageEntry | None:
+    if key_info.model_max_budget_usage is None:
+        return None
+    return key_info.model_max_budget_usage.get(model)
+
+
+def assert_model_usage(
+    key_info: KeyInfo,
+    model: str,
+    *,
+    min_spend: float = 0.0,
+    scope: str | None = None,
+) -> ModelMaxBudgetUsageEntry:
+    entry = model_usage_entry(key_info, model)
+    assert entry is not None, (
+        f"no model_max_budget_usage for {model!r}; got {key_info.model_max_budget_usage!r}"
+    )
+    assert entry.current_spend >= min_spend, (
+        f"expected current_spend >= {min_spend} for {model!r}, got {entry.current_spend}"
+    )
+    if scope is not None:
+        assert entry.scope == scope, (
+            f"expected scope {scope!r} for {model!r}, got {entry.scope!r}"
+        )
+    return entry
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +241,6 @@ class BudgetClient:
         user_id: str | None = None,
         team_id: str | None = None,
         model_max_budget: dict[str, ModelBudgetEntry] | None = None,
-        budget_fallbacks: dict[str, list[str]] | None = None,
         budget_limits: list[BudgetWindow] | None = None,
     ) -> str:
         return self.gateway.generate_key(
@@ -189,13 +253,15 @@ class BudgetClient:
                 user_id=user_id,
                 team_id=team_id,
                 model_max_budget=model_max_budget,
-                budget_fallbacks=budget_fallbacks,
                 budget_limits=budget_limits,
             )
         )
 
     def delete_key(self, key: str) -> None:
         self.gateway.delete_key(key)
+
+    def key_info(self, key: str) -> KeyInfo:
+        return self.gateway.key_info(key)
 
     def delete_customers(self, user_ids: list[str]) -> None:
         self.gateway.delete_customers(user_ids)
@@ -224,7 +290,7 @@ class BudgetClient:
             ),
         )
 
-    def messages(
+    def anthropic_messages(
         self,
         key: str,
         model: str,
@@ -234,11 +300,11 @@ class BudgetClient:
     ) -> StreamingResponse:
         return self.gateway.transport.send(
             "/v1/messages",
-            headers=self.gateway.transport.bearer(key),
-            json=AnthropicMessagesBody(
+            headers=AnthropicV1Headers(authorization=f"Bearer {key}"),
+            json=AnthropicV1MessageBody(
                 model=model,
-                messages=[ChatMessage(role="user", content=content)],
                 max_tokens=max_tokens,
+                messages=[ChatMessage(role="user", content=content)],
             ),
         )
 
@@ -300,8 +366,12 @@ class BudgetClient:
         *,
         alias: str,
         max_budget: float | None = None,
+        team_member_budget: float | None = None,
+        team_member_budget_duration: str | None = None,
         organization_id: str | None = None,
         budget_limits: list[BudgetWindow] | None = None,
+        model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> str:
         team_id = unwrap(
             self.gateway.transport.post(
@@ -310,14 +380,72 @@ class BudgetClient:
                 json=TeamNewBody(
                     team_alias=alias,
                     max_budget=max_budget,
+                    team_member_budget=team_member_budget,
+                    team_member_budget_duration=team_member_budget_duration,
                     organization_id=organization_id,
                     budget_limits=budget_limits,
+                    model_max_budget=model_max_budget,
+                    metadata=metadata,
                 ),
                 response_type=TeamNewResponse,
             )
         ).team_id
         self._wait_for_team(team_id)
         return team_id
+
+    def update_team(
+        self,
+        team_id: str,
+        *,
+        model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+        team_member_budget: float | None = None,
+        max_budget: float | None = None,
+    ) -> None:
+        resp = self.gateway.transport.send(
+            "/team/update",
+            headers=self.gateway.transport.master,
+            json=TeamUpdateBody(
+                team_id=team_id,
+                model_max_budget=model_max_budget,
+                team_member_budget=team_member_budget,
+                max_budget=max_budget,
+            ),
+        )
+        assert resp.ok, resp.body
+
+    def update_team_raw(
+        self,
+        team_id: str,
+        *,
+        model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+        team_member_budget: float | None = None,
+        max_budget: float | None = None,
+    ):
+        return self.gateway.transport.send(
+            "/team/update",
+            headers=self.gateway.transport.master,
+            json=TeamUpdateBody(
+                team_id=team_id,
+                model_max_budget=model_max_budget,
+                team_member_budget=team_member_budget,
+                max_budget=max_budget,
+            ),
+        )
+
+    def team_model_max_budget(self, team_id: str) -> dict[str, ModelBudgetEntry | dict[str, float | str]] | None:
+        result = self.gateway.transport.get(
+            "/team/info",
+            headers=self.gateway.transport.master,
+            params=TeamInfoParams(team_id=team_id),
+            response_type=TeamInfoResponse,
+        )
+        match result:
+            case Success(data=data):
+                if data.team_info is None:
+                    return None
+                return data.team_info.model_max_budget
+            case _:
+                return None
 
     def delete_team(self, team_id: str) -> None:
         _ = self.gateway.transport.post(
@@ -344,7 +472,14 @@ class BudgetClient:
         assert last is not None
         raise AssertionError(last)
 
-    def add_team_member(self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None) -> None:
+    def add_team_member(
+        self,
+        team_id: str,
+        user_id: str,
+        *,
+        max_budget_in_team: float | None = None,
+        model_max_budget_in_team: dict[str, ModelBudgetEntry] | None = None,
+    ) -> None:
         last_body = ""
         for attempt in range(_TEAM_READY_ATTEMPTS):
             resp = self.gateway.transport.send(
@@ -354,6 +489,7 @@ class BudgetClient:
                     team_id=team_id,
                     member=TeamMember(role="user", user_id=user_id),
                     max_budget_in_team=max_budget_in_team,
+                    model_max_budget_in_team=model_max_budget_in_team,
                 ),
             )
             if resp.ok:
@@ -372,6 +508,7 @@ class BudgetClient:
         *,
         max_budget_in_team: float | None = None,
         budget_duration: str | None = None,
+        model_max_budget_in_team: dict[str, ModelBudgetEntry] | None = None,
     ) -> None:
         resp = self.gateway.transport.send(
             "/team/member_update",
@@ -381,6 +518,7 @@ class BudgetClient:
                 user_id=user_id,
                 max_budget_in_team=max_budget_in_team,
                 budget_duration=budget_duration,
+                model_max_budget_in_team=model_max_budget_in_team,
             ),
         )
         assert resp.ok, resp.body

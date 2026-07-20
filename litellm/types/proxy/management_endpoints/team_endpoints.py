@@ -123,3 +123,7 @@ class TeamMemberInfoResponse(LiteLLM_TeamMembership):
     role: Optional[str] = None
     user_email: Optional[str] = None
     team_alias: Optional[str] = None
+    # Effective per-model spend vs limits for this user on the team (team/member layer)
+    model_max_budget_usage: Optional[Dict[str, Any]] = None
+    # True when litellm_budget_table was filled from the team's default member budget
+    using_team_default_budget: bool = False

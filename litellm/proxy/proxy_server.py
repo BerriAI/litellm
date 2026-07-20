@@ -1040,6 +1040,8 @@ async def proxy_startup_event(app: FastAPI):
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        await ProxyStartupEvent._sync_config_teams()
+
         await ProxyStartupEvent._update_default_team_member_budget()
 
         ## SYNC UI SETTINGS ##
@@ -1901,6 +1903,8 @@ config_passthrough_endpoints: Optional[List[Dict[str, Any]]] = None
 log_file = "api_log.json"
 worker_config = None
 master_key: Optional[str] = None
+config_teams: tuple = ()
+config_teams_model_list: Optional[list] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
@@ -4175,7 +4179,9 @@ class ProxyConfig:
             open_telemetry_logger, \
             health_check_details, \
             proxy_batch_polling_interval, \
-            config_passthrough_endpoints
+            config_passthrough_endpoints, \
+            config_teams, \
+            config_teams_model_list
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -4725,6 +4731,16 @@ class ProxyConfig:
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:
                     run_ollama_serve()
+
+        ## DECLARATIVE TEAMS (synced to DB on startup)
+        from litellm.proxy.management_helpers.config_teams_sync import parse_config_teams
+
+        config_teams = parse_config_teams(config.get("teams"))
+        config_teams_model_list = model_list
+        if config_teams:
+            print(  # noqa: T201
+                f"\033[32mLiteLLM: Config declares {len(config_teams)} team(s) for DB sync\033[0m"
+            )
 
         ## ASSISTANT SETTINGS
         assistants_config: Optional[AssistantsTypedDict] = None
@@ -7610,6 +7626,21 @@ class ProxyStartupEvent:
             )
         except Exception as e:
             verbose_proxy_logger.debug("Global spend cache warm-up at startup skipped or failed: %s", e)
+
+    @classmethod
+    async def _sync_config_teams(cls):
+        """Create/update teams declared in the proxy YAML `teams:` list."""
+        global config_teams, config_teams_model_list, master_key, prisma_client
+        if not config_teams:
+            return
+        from litellm.proxy.management_helpers.config_teams_sync import sync_config_teams
+
+        await sync_config_teams(
+            config_teams=config_teams,
+            model_list=config_teams_model_list,
+            prisma_client=prisma_client,
+            master_key=master_key,
+        )
 
     @classmethod
     async def _update_default_team_member_budget(cls):

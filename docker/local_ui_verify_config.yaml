@@ -1,0 +1,45 @@
+# Self-contained config for local UI verification via docker-compose.local.yml
+# Login: username admin, password sk-1234
+
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: claude-opus-4-8
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      budget_limit: 20
+      budget_duration: 1d
+
+teams:
+  - team_id: local-demo-team
+    team_alias: Local Demo
+    team_member_budget: 100
+    team_member_budget_duration: 30d
+    models:
+      - gpt-4o-mini
+      - claude-opus-4-8
+
+litellm_settings:
+  drop_params: true
+  cache: true
+  cache_params:
+    type: redis
+    host: redis
+    port: 6379
+  enable_redis_auth_cache: true
+  default_internal_user_params:
+    user_role: internal_user
+    teams:
+      - local-demo-team
+
+general_settings:
+  master_key: sk-1234
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  ui_access_mode: all
+  default_team_disabled: true

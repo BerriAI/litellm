@@ -34,6 +34,58 @@ from litellm.types.utils import (
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
+async def _log_postgres_spend_and_maybe_increment_model_max_budget(
+    *,
+    kwargs: dict,
+    metadata: dict,
+    user_api_key: object,
+    response_cost: float,
+) -> None:
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _budget_map_model_count,
+        _hash_prefix,
+        _log_model_max_budget_spend_trace,
+    )
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    _log_model_max_budget_spend_trace(
+        "postgres_spend_tracked",
+        litellm_call_id=kwargs.get("litellm_call_id"),
+        user_api_key=_hash_prefix(user_api_key if isinstance(user_api_key, str) else None),
+        response_cost=response_cost,
+        model=kwargs.get("model"),
+        call_type=kwargs.get("call_type"),
+        has_key_budget_metadata=_budget_map_model_count(
+            metadata.get("user_api_key_model_max_budget")
+            if isinstance(metadata.get("user_api_key_model_max_budget"), dict)
+            else None
+        )
+        > 0,
+        has_team_budget_metadata=_budget_map_model_count(
+            metadata.get("user_api_key_team_model_max_budget")
+            if isinstance(metadata.get("user_api_key_team_model_max_budget"), dict)
+            else None
+        )
+        > 0,
+    )
+
+    if model_max_budget_limiter is None or response_cost <= 0:
+        return
+    try:
+        await model_max_budget_limiter.increment_model_max_budget_from_success(
+            kwargs,
+            response_cost=float(response_cost),
+            source="piggyback",
+        )
+    except Exception:
+        verbose_proxy_logger.exception("model_max_budget_spend_trace piggyback_increment_failed")
+        _log_model_max_budget_spend_trace(
+            "piggyback_increment_skipped",
+            litellm_call_id=kwargs.get("litellm_call_id"),
+            skip_reason="exception",
+        )
+
+
 class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
@@ -241,6 +293,12 @@ class _ProxyDBLogger(CustomLogger):
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
                         request_tags=tags,
+                    )
+                    await _log_postgres_spend_and_maybe_increment_model_max_budget(
+                        kwargs=kwargs,
+                        metadata=metadata,
+                        user_api_key=user_api_key,
+                        response_cost=float(response_cost),
                     )
 
                     # update cache (fire-and-forget for backward compat:

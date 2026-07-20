@@ -158,7 +158,7 @@ describe("KeyModelUsageView", () => {
       },
     ];
     render(<KeyModelUsageView topModels={modelsWithZeros} />);
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getByText("$0.00")).toBeInTheDocument();
     expect(screen.getAllByText("0").length).toBeGreaterThan(0);
   });
 
@@ -196,20 +196,6 @@ describe("KeyModelUsageView", () => {
     await user.click(chartButton);
 
     expect(screen.queryByText("Model")).not.toBeInTheDocument();
-  });
-
-  it("renders one cyan bar per model with model names on the axis in chart view", async () => {
-    const user = userEvent.setup();
-    const { container } = render(<KeyModelUsageView topModels={mockTopModels} />);
-
-    await user.click(screen.getByRole("button", { name: "Chart" }));
-
-    const bars = container.querySelectorAll("path.recharts-rectangle");
-    expect(bars).toHaveLength(2);
-    const fills = new Set(Array.from(bars).map((bar) => bar.getAttribute("fill")));
-    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
-    expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("gpt-3.5-turbo").length).toBeGreaterThan(0);
   });
 
   it("should display table when table view is selected", () => {

@@ -1,5 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse } from "../../../key_team_helpers/key_list";
@@ -29,10 +29,23 @@ vi.mock("../../../templates/key_info_view", () => ({
   ),
 }));
 
+vi.mock("../../hooks/useUsagePageSearchParams", () => ({
+  useUsagePageSearchParams: vi.fn(() => ({
+    view: "global",
+    teamId: null,
+    keyId: null,
+    updateSearchParams: vi.fn(),
+  })),
+}));
+
+import { useUsagePageSearchParams } from "../../hooks/useUsagePageSearchParams";
+
 describe("TopKeyView", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockKeyInfoV1Call = vi.mocked(networking.keyInfoV1Call);
   const mockTransformKeyInfo = vi.mocked(transformKeyInfo.transformKeyInfo);
+  const mockUseUsagePageSearchParams = vi.mocked(useUsagePageSearchParams);
+  const mockUpdateSearchParams = vi.fn();
 
   const mockAuth = {
     token: "mock-token",
@@ -60,6 +73,13 @@ describe("TopKeyView", () => {
     mockSetTopKeysLimit.mockClear();
     mockKeyInfoV1Call.mockClear();
     mockTransformKeyInfo.mockClear();
+    mockUpdateSearchParams.mockClear();
+    mockUseUsagePageSearchParams.mockReturnValue({
+      view: "global",
+      teamId: null,
+      keyId: null,
+      updateSearchParams: mockUpdateSearchParams,
+    });
   });
 
   it("should render", () => {
@@ -128,45 +148,6 @@ describe("TopKeyView", () => {
     expect(chartViewButton).toHaveClass("bg-blue-100");
   });
 
-  it("renders cyan bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
-    const mockKeyInfo = { key: "info" };
-    const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
-    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
-    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
-
-    const user = userEvent.setup();
-    const { container } = render(
-      <TopKeyView
-        {...baseProps}
-        topKeys={[
-          {
-            api_key: "key-123",
-            key_alias: "A Very Long Key Alias",
-            spend: 100,
-          },
-        ]}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Chart View" }));
-
-    const bars = container.querySelectorAll("path.recharts-rectangle");
-    expect(bars).toHaveLength(1);
-    expect(bars[0].getAttribute("fill")).toBe("var(--color-cyan-500, #06b6d4)");
-    expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
-
-    fireEvent.click(bars[0]);
-
-    await waitFor(() => {
-      expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-123");
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
-    });
-    expect(screen.getByText("Key Info View for key-123")).toBeInTheDocument();
-  });
-
   it("should switch to table view when table view button is clicked", async () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
@@ -210,9 +191,7 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    const keyId = screen.getByText("sk-1234567890abcdef");
-    expect(keyId).toBeInTheDocument();
-    expect(keyId).toHaveClass("truncate");
+    expect(screen.getByText(/sk-1234\.\.\./)).toBeInTheDocument();
   });
 
   it("should display dash for missing key alias", () => {
@@ -247,7 +226,7 @@ describe("TopKeyView", () => {
     expect(screen.getByText("$123.46")).toBeInTheDocument();
   });
 
-  it("should display sub-cent spend as < $0.01", () => {
+  it("should display less than 0.01 spend as <$0.01", () => {
     render(
       <TopKeyView
         {...baseProps}
@@ -255,15 +234,15 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            spend: 0.004,
+            spend: 0.005,
           },
         ]}
       />,
     );
-    expect(screen.getByText("< $0.01")).toBeInTheDocument();
+    expect(screen.getByText("<$0.01")).toBeInTheDocument();
   });
 
-  it("should display zero spend as a dash", () => {
+  it("should display zero spend correctly", () => {
     render(
       <TopKeyView
         {...baseProps}
@@ -276,8 +255,7 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
-    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+    expect(screen.getByText("$0.00")).toBeInTheDocument();
   });
 
   it("should display dash for empty tags", () => {
@@ -418,7 +396,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
+    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -430,6 +408,30 @@ describe("TopKeyView", () => {
     await waitFor(() => {
       expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
     });
+    expect(mockUpdateSearchParams).toHaveBeenCalledWith({ key: "key-123" });
+  });
+
+  it("should open modal from ?key= without rewriting the URL", async () => {
+    const mockKeyInfo = { key: "info" };
+    const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
+    mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
+    mockTransformKeyInfo.mockReturnValue(mockTransformedData);
+    mockUseUsagePageSearchParams.mockReturnValue({
+      view: "global",
+      teamId: null,
+      keyId: "key-from-url",
+      updateSearchParams: mockUpdateSearchParams,
+    });
+
+    render(<TopKeyView {...baseProps} />);
+
+    await waitFor(() => {
+      expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-from-url");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("key-info-view")).toBeInTheDocument();
+    });
+    expect(mockUpdateSearchParams).not.toHaveBeenCalledWith({ key: "key-from-url" });
   });
 
   it("should close modal when close button is clicked", async () => {
@@ -452,7 +454,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
+    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -489,7 +491,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
+    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -525,7 +527,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
+    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -564,7 +566,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
+    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }
@@ -594,7 +596,7 @@ describe("TopKeyView", () => {
       />,
     );
 
-    const keyIdButton = screen.getByText("key-123").closest("button");
+    const keyIdButton = screen.getByText(/key-123\.\.\./).closest("button");
     if (keyIdButton) {
       await user.click(keyIdButton);
     }

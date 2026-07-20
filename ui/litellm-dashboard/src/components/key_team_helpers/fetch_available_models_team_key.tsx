@@ -52,6 +52,21 @@ export const getModelDisplayName = (model: string) => {
   return model;
 };
 
+export const resolveModelBudgetOptions = (
+  teamModels: string[] | null | undefined,
+  allProxyModels: string[],
+): string[] => {
+  const selected = teamModels ?? [];
+  if (
+    selected.length === 0 ||
+    selected.includes("all-proxy-models") ||
+    selected.includes("all-team-models")
+  ) {
+    return allProxyModels;
+  }
+  return unfurlWildcardModelsInList(selected, allProxyModels);
+};
+
 export const unfurlWildcardModelsInList = (teamModels: string[], allModels: string[]): string[] => {
   const wildcardDisplayNames: string[] = [];
   const expandedModels: string[] = [];

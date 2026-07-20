@@ -789,31 +789,25 @@ def test_update_internal_user_params_reset_spend_and_max_budget():
 
 
 @pytest.mark.asyncio
-async def test_new_user_license_over_limit(mocker):
+async def test_new_user_license_over_limit_allows_creation(mocker):
     """
-    Test that /user/new endpoint raises an error when license is over the user limit
+    User creation is not blocked by license seat limits in the Bitovi fork.
     """
-    from fastapi import HTTPException
-
     from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 
-    # Mock the prisma client
     mock_prisma_client = mocker.MagicMock()
 
-    # 1000 billable users (no SCIM-deactivated rows): the filtered count used
-    # for "deactivated" returns 0, so billable == total == 1000
     async def mock_count(*args, where=None, **kwargs):
         return 0 if where is not None else 1000
 
     mock_prisma_client.db.litellm_usertable.count = mock_count
 
-    # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
-        return None  # No duplicate found
+        return None
 
     async def mock_check_duplicate_user_id(*args, **kwargs):
-        return None  # No duplicate found
+        return None
 
     mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
@@ -824,41 +818,34 @@ async def test_new_user_license_over_limit(mocker):
         mock_check_duplicate_user_id,
     )
 
-    # Mock the license check to return True (over limit)
+    key_gen = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        new=mocker.AsyncMock(side_effect=RuntimeError("reached key generation")),
+    )
+
     mock_license_check = mocker.MagicMock()
     mock_license_check.is_over_limit.return_value = True
 
-    # Patch the imports in the endpoint
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
 
-    # Create test request data
     user_request = NewUserRequest(
         user_email="test@example.com", user_role="internal_user"
     )
-
-    # Mock user_api_key_dict
     mock_user_api_key_dict = UserAPIKeyAuth(user_id="test_admin")
 
-    # Call new_user function and expect HTTPException
     with pytest.raises(ProxyException) as exc_info:
         await new_user(data=user_request, user_api_key_dict=mock_user_api_key_dict)
 
-    # Verify the exception details
-    assert exc_info.value.code == 403 or exc_info.value.code == "403"
-    assert "License is over limit" in str(exc_info.value.message)
-    assert "support@berri.ai" in str(exc_info.value.message)
-
-    # Verify that the license check was called with the correct user count
-    mock_license_check.is_over_limit.assert_called_once_with(total_users=1000)
+    assert key_gen.call_count == 1
+    assert "License is over limit" not in str(exc_info.value.message)
+    mock_license_check.is_over_limit.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_new_user_license_gate_counts_only_billable_users(mocker):
     """
-    The /user/new license gate must count billable users only (excluding
-    SCIM-deactivated rows). Deactivated users that push the raw total over
-    max_users must not block creation, while active users over the limit must.
+    License seat limits are not enforced on /user/new in the Bitovi fork.
     """
     from litellm.proxy.auth.litellm_license import LicenseCheck
 
@@ -895,25 +882,20 @@ async def test_new_user_license_gate_counts_only_billable_users(mocker):
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     request = NewUserRequest(user_role="internal_user")
 
-    # 2 active + 3 deactivated -> billable 2, not over max_users 2: gate passes
     mocker.patch(
         "litellm.proxy.proxy_server.prisma_client", _prisma(total=5, deactivated=3)
     )
-    with pytest.raises(ProxyException) as passed:
+    with pytest.raises(ProxyException):
         await new_user(data=request, user_api_key_dict=admin)
     assert key_gen.call_count == 1
-    assert "License is over limit" not in str(passed.value.message)
 
-    # 3 active, 0 deactivated -> billable 3, over max_users 2: gate blocks
     key_gen.reset_mock()
     mocker.patch(
         "litellm.proxy.proxy_server.prisma_client", _prisma(total=3, deactivated=0)
     )
-    with pytest.raises(ProxyException) as blocked:
+    with pytest.raises(ProxyException):
         await new_user(data=request, user_api_key_dict=admin)
-    assert blocked.value.code == 403 or blocked.value.code == "403"
-    assert "License is over limit" in str(blocked.value.message)
-    assert key_gen.call_count == 0
+    assert key_gen.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -3550,3 +3532,39 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
     assert result == {}
     find_many.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_update_single_user_non_admin_cannot_modify_team_id(mocker):
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_user = mocker.MagicMock()
+    mock_user.model_dump.return_value = {
+        "user_id": "alice",
+        "user_email": "alice@example.com",
+        "teams": ["team-1"],
+        "user_role": LitellmUserRoles.INTERNAL_USER.value,
+    }
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=mock_user
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    data = UpdateUserRequest(user_id="alice", team_id=None)
+    caller = UserAPIKeyAuth(
+        user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _update_single_user_helper(
+            user_request=data, user_api_key_dict=caller
+        )
+    assert exc_info.value.status_code == 403
+    assert "cannot modify team_id" in str(exc_info.value.detail)
+

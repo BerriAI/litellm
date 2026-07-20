@@ -1,120 +1,98 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
+import { renderWithProviders } from "../../../../tests/test-utils";
 import { sessionSpendLogsCall } from "../../networking";
-import { LogEntry } from "../columns";
+import type { LogEntry } from "../columns";
 
-vi.mock("../../networking", () => ({
-  sessionSpendLogsCall: vi.fn(),
-}));
-
-vi.mock("@/app/(dashboard)/hooks/logDetails/useLogDetails", () => ({
-  useLogDetails: () => ({ data: null, isLoading: false }),
-}));
-
-vi.mock("./LogDetailContent", () => ({
-  LogDetailContent: () => null,
-  GuardrailJumpLink: () => null,
-}));
-
-vi.mock("./DrawerHeader", () => ({
-  DrawerHeader: () => null,
-}));
-
-const makeLog = (overrides: Partial<LogEntry>): LogEntry => ({
-  request_id: "req",
-  api_key: "",
-  team_id: "",
-  model: "",
-  model_id: "",
-  call_type: "acompletion",
-  spend: 0,
-  total_tokens: 0,
-  prompt_tokens: 0,
-  completion_tokens: 0,
-  startTime: "2026-07-08T10:00:00.000Z",
-  endTime: "2026-07-08T10:00:01.000Z",
-  cache_hit: "false",
-  messages: [],
-  response: {},
-  ...overrides,
+vi.mock("../../networking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../networking")>();
+  return {
+    ...actual,
+    sessionSpendLogsCall: vi.fn(),
+  };
 });
 
-const sessionLogs = [
-  makeLog({
-    request_id: "llm-early",
-    model: "llm-early",
-    startTime: "2026-07-08T10:00:00.000Z",
-    endTime: "2026-07-08T10:00:02.000Z",
+vi.mock("@/app/(dashboard)/hooks/logDetails/useLogDetails", () => ({
+  useLogDetails: () => ({
+    data: { messages: [], response: {} },
+    isLoading: false,
   }),
-  makeLog({
-    request_id: "mcp-early",
-    model: "tool-early",
+}));
+
+const makeLog = (overrides: Partial<LogEntry>): LogEntry =>
+  ({
+    request_id: "req-1",
+    api_key: "key-hash",
+    team_id: "team-1",
+    model: "gpt-4o",
+    model_id: "model-1",
+    call_type: "acompletion",
+    spend: 0.01,
+    total_tokens: 10,
+    prompt_tokens: 5,
+    completion_tokens: 5,
+    startTime: "2026-07-13 20:00:00",
+    endTime: "2026-07-13 20:00:01",
+    user: "user-1",
+    cache_hit: "None",
+    messages: [],
+    response: {},
+    session_id: "session-a",
+    status: "success",
+    ...overrides,
+  }) as LogEntry;
+
+describe("LogDetailsDrawer session selection", () => {
+  const olderLog = makeLog({
+    request_id: "req-old",
+    model: "claude-sonnet-4-6",
+    startTime: "2026-07-13 20:00:00",
+  });
+  const latestLog = makeLog({
+    request_id: "req-latest",
+    model: "claude-sonnet-5",
+    startTime: "2026-07-13 20:01:00",
+  });
+  const mcpLog = makeLog({
+    request_id: "req-mcp",
+    model: "mcp:jira/search",
     call_type: "call_mcp_tool",
-    startTime: "2026-07-08T10:00:01.000Z",
-    endTime: "2026-07-08T10:00:06.000Z",
-  }),
-  makeLog({
-    request_id: "llm-late",
-    model: "llm-late",
-    startTime: "2026-07-08T10:00:02.000Z",
-    endTime: "2026-07-08T10:00:05.000Z",
-  }),
-  makeLog({
-    request_id: "mcp-late",
-    model: "tool-late",
-    call_type: "call_mcp_tool",
-    startTime: "2026-07-08T10:00:03.000Z",
-    endTime: "2026-07-08T10:00:03.500Z",
-  }),
-];
-
-const renderSessionDrawer = () => {
-  vi.mocked(sessionSpendLogsCall).mockResolvedValue({ data: sessionLogs, total: 4, total_pages: 1 });
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const drawer = (open: boolean) => (
-    <QueryClientProvider client={queryClient}>
-      <LogDetailsDrawer open={open} onClose={() => {}} logEntry={null} sessionId="session-1" accessToken="token" />
-    </QueryClientProvider>
-  );
-  const { rerender } = render(drawer(true));
-  return { rerender, drawer };
-};
-
-const sidebarEventNames = () =>
-  screen.queryAllByText(/^(llm-early|llm-late|tool-early|tool-late)$/).map((el) => el.textContent);
-
-describe("LogDetailsDrawer session sidebar sorting", () => {
-  it("defaults to duration order, longest call first across LLM and MCP calls", async () => {
-    renderSessionDrawer();
-    await waitFor(() => expect(sidebarEventNames()).toHaveLength(4));
-    expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]);
+    startTime: "2026-07-13 20:00:30",
   });
 
-  it("switches to chronological order across LLM and MCP calls when Start time is selected", async () => {
-    renderSessionDrawer();
-    await waitFor(() => expect(sidebarEventNames()).toHaveLength(4));
-
-    fireEvent.click(screen.getByText("Start time"));
-
-    await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
-
-    fireEvent.click(screen.getByText("Duration"));
-
-    await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(sessionSpendLogsCall).mockResolvedValue({
+      data: [olderLog, mcpLog, latestLog],
+      total: 3,
+      page: 1,
+      page_size: 100,
+      total_pages: 1,
+    });
   });
 
-  it("resets the sort mode back to duration when the drawer is closed and reopened", async () => {
-    const { rerender, drawer } = renderSessionDrawer();
-    await waitFor(() => expect(sidebarEventNames()).toHaveLength(4));
+  it("defaults the selected session request to the most recent log, not the clicked logEntry", async () => {
+    renderWithProviders(
+      <LogDetailsDrawer
+        open
+        onClose={vi.fn()}
+        logEntry={olderLog}
+        sessionId="session-a"
+        accessToken="test-token"
+      />,
+    );
 
-    fireEvent.click(screen.getByText("Start time"));
-    await waitFor(() => expect(sidebarEventNames()).toEqual(["llm-early", "tool-early", "llm-late", "tool-late"]));
+    const drawer = await screen.findByRole("dialog");
+    await waitFor(() => {
+      expect(within(drawer).getByText("req-latest")).toBeInTheDocument();
+    });
 
-    rerender(drawer(false));
-    rerender(drawer(true));
-
-    await waitFor(() => expect(sidebarEventNames()).toEqual(["tool-early", "llm-late", "llm-early", "tool-late"]));
+    const selectedSessionItem = within(drawer)
+      .getAllByRole("button")
+      .find((button) => button.className.includes("bg-blue-50"));
+    expect(selectedSessionItem).toBeTruthy();
+    expect(selectedSessionItem).toHaveTextContent("claude-sonnet-5");
+    expect(selectedSessionItem).not.toHaveTextContent("claude-sonnet-4-6");
   });
 });

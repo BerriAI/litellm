@@ -145,6 +145,11 @@ class ModelInfo(BaseModel):
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: Optional[bool] = None
 
+    # Optional default per-user/SA model budget; merged into config team model_max_budget on sync
+    budget_limit: Optional[float] = None
+    budget_duration: Optional[str] = None
+    # aliases accepted via extra="allow" / model_info dict: max_budget, time_period
+
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided

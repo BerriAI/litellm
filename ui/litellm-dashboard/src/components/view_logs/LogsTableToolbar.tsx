@@ -26,6 +26,7 @@ interface LogsTableToolbarProps {
   isButtonLoading: boolean;
   onRefetch: () => void;
   filteredLogs: PaginatedResponse;
+  displayedCount: number;
 }
 
 export function LogsTableToolbar({
@@ -48,6 +49,7 @@ export function LogsTableToolbar({
   isButtonLoading,
   onRefetch,
   filteredLogs,
+  displayedCount,
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
   const quickSelectRef = useRef<HTMLDivElement>(null);
@@ -193,24 +195,20 @@ export function LogsTableToolbar({
           </div>
 
           <div className="flex items-center space-x-4">
-            <span
-              className="text-sm text-gray-700 whitespace-nowrap"
-              title={
-                !isLoading && filteredLogs?.total_is_capped
-                  ? `Showing the first ${filteredLogs.total.toLocaleString()} results. Narrow the date range or add filters to see more.`
-                  : undefined
-              }
-            >
-              Showing {isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
-              {isLoading ? "..." : filteredLogs ? Math.min(currentPage * pageSize, filteredLogs.total) : 0} of{" "}
-              {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0}
-              {!isLoading && filteredLogs?.total_is_capped ? "+" : ""} results
+            <span className="text-sm text-gray-700 whitespace-nowrap">
+              Showing{" "}
+              {isLoading ? "..." : displayedCount === 0 ? 0 : (currentPage - 1) * pageSize + 1} -{" "}
+              {isLoading
+                ? "..."
+                : displayedCount === 0
+                  ? 0
+                  : (currentPage - 1) * pageSize + displayedCount}{" "}
+              of {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
             </span>
             <div className="flex items-center space-x-2">
               <span className="text-sm text-gray-700 min-w-[90px]">
                 Page {isLoading ? "..." : currentPage} of{" "}
                 {isLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
-                {!isLoading && filteredLogs?.total_is_capped ? "+" : ""}
               </span>
               <button
                 onClick={() => onCurrentPageChange((p: number) => Math.max(1, p - 1))}

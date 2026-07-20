@@ -655,4 +655,55 @@ describe("CreateKey", () => {
       });
     });
   });
+
+  describe("non-admin self key team lock", () => {
+    const soleTeam = {
+      team_id: "team-sole",
+      team_alias: "Sole Team",
+      organization_id: "org-1",
+      models: ["gpt-4o"],
+    };
+
+    it("locks and auto-selects the sole team for Internal User creating a key for themselves", async () => {
+      authorizedState = {
+        ...defaultAuthorizedState,
+        userRole: "Internal User",
+      };
+
+      renderWithProviders(
+        <CreateKey
+          {...defaultProps}
+          teams={[soleTeam as any]}
+          team={soleTeam as any}
+        />,
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("team-dropdown")).toBeDisabled();
+      });
+      expect(formStateRef.current["team_id"]).toBe("team-sole");
+    });
+
+    it("keeps the team dropdown enabled for Admin with a sole team", async () => {
+      renderWithProviders(
+        <CreateKey
+          {...defaultProps}
+          teams={[soleTeam as any]}
+          team={soleTeam as any}
+        />,
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("team-dropdown")).not.toBeDisabled();
+      });
+    });
+  });
 });

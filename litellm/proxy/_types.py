@@ -1848,6 +1848,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: Optional[List[str]] = None
     budget_limits: Optional[List[BudgetLimitEntry]] = None  # multiple concurrent budget windows
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
+    model_max_budget: Optional[GenericBudgetConfigType] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -2502,6 +2503,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_member_spend: Optional[float] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_rpm_limit: Optional[int] = None
+    team_member_model_max_budget: Optional[dict] = None
 
     # End User Params
     end_user_id: Optional[str] = None
@@ -2539,6 +2541,13 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                     attr_name == "model_max_budget" and isinstance(current, dict) and len(current) == 0
                 )
                 if should_apply:
+                    kwargs[attr_name] = value
+            if key.startswith("litellm_team_member_budget_table_") and value is not None:
+                attr_name = "team_member_" + key.replace("litellm_team_member_budget_table_", "")
+                current = kwargs.get(attr_name)
+                if current is None or (
+                    attr_name == "team_member_model_max_budget" and isinstance(current, dict) and len(current) == 0
+                ):
                     kwargs[attr_name] = value
             if key == "end_user_id" and value is not None and isinstance(value, int):
                 kwargs[key] = str(value)
@@ -2578,6 +2587,8 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
     jwt_claims: Optional[Dict] = None
+    auth_team_model_max_budget: Optional[dict] = Field(default=None, exclude=True)
+    auth_team_member_model_max_budget: Optional[dict] = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -3674,6 +3685,10 @@ class TeamMemberAddRequest(MemberAddRequest):
         default=None,
         description="List of models this team member can access. If not set, inherits the team's default_team_member_models or all team models.",
     )
+    model_max_budget_in_team: Optional[dict] = Field(
+        default=None,
+        description='Per-model budgets for this team member. Example: {"claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"}}',
+    )
 
 
 class TeamMemberDeleteRequest(MemberDeleteRequest):
@@ -3693,6 +3708,10 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
         default=None,
         description="List of models this team member can access. Pass an empty list to remove per-member model restrictions.",
     )
+    model_max_budget_in_team: Optional[dict] = Field(
+        default=None,
+        description='Per-model budgets for this team member. Overrides team defaults per model. Example: {"claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"}}',
+    )
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -3702,6 +3721,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_models: Optional[List[str]] = None
+    model_max_budget_in_team: Optional[dict] = None
 
 
 class TeamModelAddRequest(BaseModel):
@@ -3760,6 +3780,7 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_models: Optional[List[str]] = None
     access_group_mcp_server_ids: Optional[List[str]] = None
     access_group_agent_ids: Optional[List[str]] = None
+    is_from_config: bool = False
 
 
 class TeamInfoResponseObject(TypedDict):
