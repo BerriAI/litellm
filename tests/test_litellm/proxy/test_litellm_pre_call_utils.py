@@ -2537,6 +2537,43 @@ def test_add_litellm_metadata_from_request_headers_preserves_body_chain_ids():
     assert data["metadata"]["trace_id"] == "body-trace-id"
 
 
+def test_add_litellm_metadata_from_request_headers_preserves_empty_body_chain_ids():
+    """An explicitly empty body ID must not be replaced by the header chain ID."""
+    headers = {"x-litellm-trace-id": "header-trace-id"}
+    data = {
+        "metadata": {},
+        "litellm_session_id": "",
+        "litellm_trace_id": "",
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+
+    assert data["litellm_session_id"] == ""
+    assert data["litellm_trace_id"] == ""
+    assert data["metadata"]["session_id"] == ""
+    assert data["metadata"]["trace_id"] == ""
+
+
+def test_add_litellm_metadata_from_request_headers_preserves_metadata_chain_ids():
+    """A header chain ID must not overwrite IDs supplied through metadata."""
+    headers = {"x-litellm-trace-id": "header-trace-id"}
+    data = {
+        "metadata": {
+            "session_id": "metadata-session-id",
+            "trace_id": "metadata-trace-id",
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+
+    assert data["litellm_session_id"] == "metadata-session-id"
+    assert data["litellm_trace_id"] == "metadata-trace-id"
+    assert data["metadata"]["session_id"] == "metadata-session-id"
+    assert data["metadata"]["trace_id"] == "metadata-trace-id"
+
+
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
     """x-litellm-session-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
     headers = {"x-litellm-session-id": "bar"}
