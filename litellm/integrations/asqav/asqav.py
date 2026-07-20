@@ -100,7 +100,7 @@ def _read_tail(fh: BinaryIO, size: int) -> bytes:
         chunk_size *= 2
 
 
-def _content_digest(value: Any) -> str | None:  # noqa: ANN401
+def _content_digest(value: Any) -> str | None:
     """Return a SHA-256 hex digest of a content value, or None if empty."""
     if value is None:
         return None
@@ -126,7 +126,7 @@ def _merge_proxy_identity(metadata: dict[str, Any], kwargs: dict[str, Any]) -> d
     return metadata
 
 
-def _compute_latency_ms(start_time: Any, end_time: Any) -> int | None:  # noqa: ANN401
+def _compute_latency_ms(start_time: Any, end_time: Any) -> int | None:
     try:
         if start_time is not None and end_time is not None:
             return int((end_time - start_time).total_seconds() * 1000)
@@ -136,7 +136,7 @@ def _compute_latency_ms(start_time: Any, end_time: Any) -> int | None:  # noqa: 
 
 
 def _extract_usage_fields(
-    response_obj: Any,  # noqa: ANN401
+    response_obj: Any,
 ) -> tuple[int | None, int | None, int | None, str | None, str | None]:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -159,7 +159,7 @@ def _extract_usage_fields(
     return prompt_tokens, completion_tokens, total_tokens, finish_reason, provider_request_id
 
 
-def _extract_response_content_digest(response_obj: Any) -> str | None:  # noqa: ANN401
+def _extract_response_content_digest(response_obj: Any) -> str | None:
     try:
         if hasattr(response_obj, "choices") and response_obj.choices:
             return _content_digest(response_obj.choices[0].message.content)
@@ -171,7 +171,7 @@ def _extract_response_content_digest(response_obj: Any) -> str | None:  # noqa: 
 def _extract_call_id(kwargs: dict[str, Any]) -> str:
     """Prefer standard_logging_object's id, falling back to the raw call id."""
     try:
-        slp: Any = kwargs.get("standard_logging_object"),  # noqa: ANN401
+        slp: Any = kwargs.get("standard_logging_object"),
         if slp and isinstance(slp, dict):
             call_id = slp.get("id") or slp.get("litellm_call_id")
             if call_id:
@@ -183,9 +183,9 @@ def _extract_call_id(kwargs: dict[str, Any]) -> str:
 
 def _extract_loggable(
     kwargs: dict[str, Any],
-    response_obj: Any,  # noqa: ANN401
-    start_time: Any,  # noqa: ANN401
-    end_time: Any,  # noqa: ANN401
+    response_obj: Any,
+    start_time: Any,
+    end_time: Any,
     status: str,
 ) -> dict[str, Any]:
     """Pull metadata + digests out of a callback invocation.
@@ -359,9 +359,9 @@ class AsqavLogger(CustomLogger):
     def _build_and_append(
         self,
         kwargs: dict[str, Any],
-        response_obj: Any,  # noqa: ANN401
-        start_time: Any,  # noqa: ANN401
-        end_time: Any,  # noqa: ANN401
+        response_obj: Any,
+        start_time: Any,
+        end_time: Any,
         status: str,
     ) -> None:
         """Build one audit record and append it to the JSONL log.
@@ -480,14 +480,14 @@ class AsqavLogger(CustomLogger):
     # CustomLogger hooks
     # ------------------------------------------------------------------
 
-    def log_success_event(self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:  # noqa: ANN401
+    def log_success_event(self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "success")
 
-    def log_failure_event(self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:  # noqa: ANN401
+    def log_failure_event(self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any) -> None:
         self._build_and_append(kwargs, response_obj, start_time, end_time, "failure")
 
     async def async_log_success_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any,  # noqa: ANN401
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any,
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
@@ -499,7 +499,7 @@ class AsqavLogger(CustomLogger):
         )
 
     async def async_log_failure_event(
-        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any,  # noqa: ANN401
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any,
     ) -> None:
         await asyncio.to_thread(
             self._build_and_append,
