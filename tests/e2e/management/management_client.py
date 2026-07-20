@@ -263,6 +263,8 @@ class ManagementClient:
             )
         )
 
+    def org_info_status(self, organization_id: str) -> ProbeResult:
+        return self.proxy.transport.probe("/organization/info", params=OrgInfoParams(organization_id=organization_id))
     def create_tag(self, body: TagNewBody) -> None:
         _ = unwrap(
             self.proxy.transport.post(
