@@ -531,7 +531,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "minItems": "minimum number of items: {}",
             "maxItems": "maximum number of items: {}",
             "uniqueItems": "all array items must be unique",
-            "contains": "array must contain an item matching a schema",
+            "contains": "array must contain an item matching: {}",
             "minContains": "minimum number of matching items: {}",
             "maxContains": "maximum number of matching items: {}",
             "minimum": "minimum value: {}",
@@ -550,7 +550,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # real requirement, so don't add a misleading advisory note for it.
                 if isinstance(value, bool) and not value:
                     continue
-                constraint_descriptions.append(constraint_labels[field].format(value))
+                # Sub-schema constraints (e.g. ``contains``) are serialized as JSON so
+                # the advisory note preserves what the constraint actually required,
+                # instead of just noting that it existed.
+                note_value = (
+                    json.dumps(value) if isinstance(value, (dict, list)) else value
+                )
+                constraint_descriptions.append(
+                    constraint_labels[field].format(note_value)
+                )
 
         result: Dict[str, Any] = {}
 

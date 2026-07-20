@@ -199,7 +199,10 @@ class TestFilterAnthropicOutputSchema:
         assert "minContains" not in result
         assert "maxContains" not in result
         assert result["items"] == {"type": "integer"}
-        assert "array must contain an item matching a schema" in result["description"]
+        # The contains sub-schema is serialized into the advisory note so the model
+        # knows what item the array must contain.
+        assert "array must contain an item matching:" in result["description"]
+        assert '"const": 1' in result["description"]
         assert "minimum number of matching items: 1" in result["description"]
         assert "maximum number of matching items: 3" in result["description"]
 
