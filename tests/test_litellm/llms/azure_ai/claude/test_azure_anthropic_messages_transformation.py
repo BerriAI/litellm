@@ -7,7 +7,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -479,10 +479,12 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
     with open(cost_map_path) as f:
         cost_map = json.load(f)
     rules = cost_map["fallback_generalizations"]["rules"]
-    pattern = re.compile(
-        next(r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
-        re.IGNORECASE,
+    rule_pattern = next(
+        (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
+        None,
     )
+    assert rule_pattern is not None, "claude-mid-conversation-system rule not found in fallback_generalizations"
+    pattern = re.compile(rule_pattern, re.IGNORECASE)
     missing = [
         key
         for key, info in cost_map.items()
