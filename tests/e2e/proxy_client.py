@@ -54,6 +54,7 @@ from models import (
     ModelNewBody,
     ModelNewResponse,
     ModelsListResponse,
+    ModelUpdateBody,
     OcrBody,
     OcrResponse,
     SpendLogRow,
@@ -209,6 +210,23 @@ class ProxyClient:
             f"model {model_name!r} was created but never became servable on the data "
             f"plane within {self.poll_timeout}s of /model/new (control/data-plane "
             f"propagation or STORE_MODEL_IN_DB reload issue){last_error}"
+        )
+
+    def update_model(self, model_id: str, litellm_params: LiteLLMParamsBody) -> None:
+        """Merge `litellm_params` over the deployment `model_id`'s stored params via
+        POST /model/update. The proxy overlays only the non-null fields and clears
+        its model cache, so a later /model/info read reflects the change (eventually,
+        after the reload)."""
+        unwrap(
+            self.transport.post(
+                "/model/update",
+                headers=self.transport.master,
+                json=ModelUpdateBody(
+                    litellm_params=litellm_params,
+                    model_info=ModelInfoBody(id=model_id),
+                ),
+                response_type=NoBody,
+            )
         )
 
     def delete_model(self, model_id: str) -> None:
