@@ -103,7 +103,7 @@ def _echo_headers(resp: StreamingResponse) -> dict[str, str]:
 class TestPassthroughHeaders:
     @pytest.mark.covers(
         "other.config.passthrough.headers_forwarded",
-        exercised_on=["chat_completions"],
+        exercised_on=[],
     )
     def test_static_and_x_pass_headers_reach_upstream(
         self, client: PassthroughClient, resources: ResourceManager

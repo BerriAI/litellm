@@ -42,6 +42,7 @@ from capabilities import (
     Capability,
     batch_model_name,
     coverage_cells_for_lifecycle,
+    is_managed_id,
     matches_id_shape,
     raw_id_matches_provider,
 )
@@ -511,7 +512,7 @@ class TestBatchFileContent:
 
 
 BATCH_RL_REQUEST_LINES = 3
-BATCH_RL_RPM_LIMIT = 1
+BATCH_RL_RPM_LIMIT = 2
 
 
 def _multi_request_jsonl(model: str, n: int) -> bytes:
@@ -665,8 +666,9 @@ class TestBedrockBatchAssumeRole:
         resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
 
         assert batch.id, f"assume-role create returned no batch id: {created.body[:200]}"
-        assert batch.id.startswith("arn:aws:bedrock:") or batch.id, (
-            f"bedrock batch id unexpected shape under assume-role: {batch.id!r}"
+        assert is_managed_id(batch.id), (
+            f"assume-role create via target_model_names must return a managed batch id, "
+            f"got {batch.id!r}"
         )
         assert batch.status in CREATED_BATCH_STATUSES, (
             f"assume-role batch has non-transitional status {batch.status!r}"

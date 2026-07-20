@@ -93,8 +93,8 @@ class TestVirtualKeyAuth:
     must reach chat, a forged bearer must be rejected before the provider."""
 
     @pytest.mark.covers(
-        "other.auth.virtual_key.valid_allows",
-        "other.auth.virtual_key.invalid_denied",
+        "mgmt.virtual_key.valid_allows",
+        "mgmt.virtual_key.invalid_denied",
         exercised_on=[],
     )
     def test_valid_key_allows_and_invalid_key_denied(
