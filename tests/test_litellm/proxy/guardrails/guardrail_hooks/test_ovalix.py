@@ -74,6 +74,62 @@ def _guardrail_kwargs():
     }
 
 
+def test_discovery_mode_initializes_without_application_id():
+    guardrail = OvalixGuardrail(
+        tracker_api_base="https://tracker.test",
+        tracker_api_key="key",
+        guardrail_name="ovalix-test",
+        event_hook="pre_call",
+        default_on=True,
+    )
+    assert guardrail._application_id is None
+    assert guardrail._enable_routing_cache is True
+
+
+def test_routing_cache_defaults_true_and_can_disable():
+    on = OvalixGuardrail(
+        tracker_api_base="https://t", tracker_api_key="k", guardrail_name="o", event_hook="pre_call", default_on=True
+    )
+    assert on._enable_routing_cache is True
+    off = OvalixGuardrail(
+        tracker_api_base="https://t",
+        tracker_api_key="k",
+        enable_routing_cache=False,
+        guardrail_name="o",
+        event_hook="pre_call",
+        default_on=True,
+    )
+    assert off._enable_routing_cache is False
+
+
+def test_new_config_fields_from_params():
+    guardrail = OvalixGuardrail(
+        tracker_api_base="https://tracker.test",
+        tracker_api_key="key",
+        application_id="app-1",
+        pre_checkpoint_id="pre-1",
+        file_checkpoint_id="file-1",
+        enable_routing_cache=True,
+        guardrail_name="ovalix-test",
+        event_hook="pre_call",
+        default_on=True,
+    )
+    assert guardrail._file_checkpoint_id == "file-1"
+    assert guardrail._enable_routing_cache is True
+
+
+def test_static_mode_requires_a_checkpoint():
+    with pytest.raises(OvalixGuardrailMissingSecrets):
+        OvalixGuardrail(
+            tracker_api_base="https://tracker.test",
+            tracker_api_key="key",
+            application_id="app-1",
+            guardrail_name="ovalix-test",
+            event_hook="pre_call",
+            default_on=True,
+        )
+
+
 class TestOvalixGuardrailConfigModel:
     """Minimal config model tests: wiring only."""
 

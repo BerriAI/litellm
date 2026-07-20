@@ -7,7 +7,9 @@ post_call (model output) checkpoints with optional correction/blocking.
 import datetime
 import hashlib
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type
+import re
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, NamedTuple, Optional, Type
 
 import httpx
 
@@ -30,6 +32,20 @@ if TYPE_CHECKING:
 
 BLOCKED_BY_OVALIX_FALLBACK_MESSAGE = "This message was blocked by Ovalix"
 BLOCKED_ACTION_TYPE = "block"
+
+
+class ResolvedRouting(NamedTuple):
+    application_id: str
+    checkpoint_id_pre: str | None
+    checkpoint_id_post: str | None
+    checkpoint_id_pre_file: str | None
+    checkpoint_id_post_file: str | None
+
+
+def _coerce_bool(value: bool | str) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 class OvalixGuardrailMissingSecrets(Exception):
@@ -80,6 +96,8 @@ class OvalixGuardrail(CustomGuardrail):
         application_id: Optional[str] = None,
         pre_checkpoint_id: Optional[str] = None,
         post_checkpoint_id: Optional[str] = None,
+        file_checkpoint_id: str | None = None,
+        enable_routing_cache: bool | None = None,
         **kwargs: Any,
     ):
         self._tracker_api_base = tracker_api_base or os.environ.get("OVALIX_TRACKER_API_BASE")
@@ -87,6 +105,16 @@ class OvalixGuardrail(CustomGuardrail):
         self._application_id = application_id or os.environ.get("OVALIX_APPLICATION_ID")
         self._pre_checkpoint_id = pre_checkpoint_id or os.environ.get("OVALIX_PRE_CHECKPOINT_ID")
         self._post_checkpoint_id = post_checkpoint_id or os.environ.get("OVALIX_POST_CHECKPOINT_ID")
+        self._file_checkpoint_id = file_checkpoint_id or os.environ.get("OVALIX_FILE_CHECKPOINT_ID")
+        env_enable_routing_cache = os.environ.get("OVALIX_ENABLE_ROUTING_CACHE")
+        resolved_enable_routing_cache = (
+            enable_routing_cache if enable_routing_cache is not None else env_enable_routing_cache
+        )
+        self._enable_routing_cache = (
+            True if resolved_enable_routing_cache is None else _coerce_bool(resolved_enable_routing_cache)
+        )
+        self._routing_cache: OrderedDict[str, tuple[float, ResolvedRouting]] = OrderedDict()
+        self._app_name_regex: re.Pattern[str] | None = None
 
         if "supported_event_hooks" not in kwargs:
             kwargs["supported_event_hooks"] = []
@@ -113,31 +141,22 @@ class OvalixGuardrail(CustomGuardrail):
         )
 
     def _validate_config(self, supported_event_hooks: List[GuardrailEventHooks]) -> None:
-        """Ensure required secrets and checkpoint IDs are set; auto-add hooks when IDs are present."""
+        """Ensure required Tracker secrets are set; an application_id requires a checkpoint. Auto-adds both hooks."""
         errors: List[str] = []
 
         if not self._tracker_api_base:
             errors.append("Tracker API base, set OVALIX_TRACKER_API_BASE or pass tracker_api_base")
         if not self._tracker_api_key:
             errors.append("Tracker API key, set OVALIX_TRACKER_API_KEY or pass tracker_api_key")
-        if not self._application_id:
-            errors.append("Application ID, set OVALIX_APPLICATION_ID or pass application_id")
-        if not self._pre_checkpoint_id and GuardrailEventHooks.pre_call in supported_event_hooks:
-            errors.append("Pre-checkpoint ID, set OVALIX_PRE_CHECKPOINT_ID or pass pre_checkpoint_id")
-        if not self._post_checkpoint_id and GuardrailEventHooks.post_call in supported_event_hooks:
-            errors.append("Post-checkpoint ID, set OVALIX_POST_CHECKPOINT_ID or pass post_checkpoint_id")
-        if not self._pre_checkpoint_id and not self._post_checkpoint_id:
-            errors.append(
-                "Pre-checkpoint ID or Post-checkpoint ID, set OVALIX_PRE_CHECKPOINT_ID or OVALIX_POST_CHECKPOINT_ID or pass pre_checkpoint_id or post_checkpoint_id"
-            )
+        if self._application_id and not self._pre_checkpoint_id and not self._post_checkpoint_id:
+            errors.append("With application_id set, provide OVALIX_PRE_CHECKPOINT_ID and/or OVALIX_POST_CHECKPOINT_ID")
 
         if errors:
             raise OvalixGuardrailMissingSecrets("Missing Ovalix guardrail configuration errors: " + ". ".join(errors))
 
-        # auto-add hooks when checkpoint IDs are present
-        if self._pre_checkpoint_id and GuardrailEventHooks.pre_call not in supported_event_hooks:
+        if GuardrailEventHooks.pre_call not in supported_event_hooks:
             supported_event_hooks.append(GuardrailEventHooks.pre_call)
-        if self._post_checkpoint_id and GuardrailEventHooks.post_call not in supported_event_hooks:
+        if GuardrailEventHooks.post_call not in supported_event_hooks:
             supported_event_hooks.append(GuardrailEventHooks.post_call)
 
     def _get_actor(self, data: dict) -> str:
