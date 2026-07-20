@@ -11,12 +11,28 @@ from __future__ import annotations
 import pytest
 
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
+from e2e_http import require_successful_call, unwrap
 from endpoints_client import EndpointsClient, MessagesResult
 from lifecycle import ResourceManager
-from models import AnthropicMessagesBody, ChatMessage, LiteLLMParamsBody
+from models import (
+    AnthropicCustomTool,
+    AnthropicMessagesBody,
+    ChatMessage,
+    JsonSchemaProperty,
+    LiteLLMParamsBody,
+    ToolInputSchema,
+)
 
 pytestmark = pytest.mark.e2e
+
+WEATHER_TOOL = AnthropicCustomTool(
+    name="get_weather",
+    description="Get the current weather for a city.",
+    input_schema=ToolInputSchema(
+        properties={"city": JsonSchemaProperty(type="string")},
+        required=["city"],
+    ),
+)
 
 
 class TestAnthropicMessages:
@@ -69,4 +85,28 @@ class TestAnthropicMessages:
         )
         assert any("message_stop" in event for event in result.stream_events), (
             "stream never reached message_stop"
+        )
+
+    @pytest.mark.covers("llm.messages.anthropic.tool_use.nonstream.works")
+    def test_messages_tool_use(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model, key = self._register(endpoints_client, resources)
+
+        response = unwrap(
+            endpoints_client.proxy.messages(
+                key,
+                AnthropicMessagesBody(
+                    model=model,
+                    max_tokens=256,
+                    tools=[WEATHER_TOOL],
+                    messages=[
+                        ChatMessage(role="user", content="What is the weather in Paris? Use the tool.")
+                    ],
+                ),
+            )
+        )
+        assert response.content, f"no content blocks in response: {response}"
+        assert any(block.type == "tool_use" for block in response.content), (
+            f"model did not call the tool: {response}"
         )
