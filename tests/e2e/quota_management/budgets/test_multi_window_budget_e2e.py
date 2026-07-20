@@ -93,14 +93,6 @@ def _assert_short_window_blocks_then_resets(client: BudgetClient, key: str) -> N
     pytest.fail(f"{WINDOW_SECONDS}s window never reset within 150s")
 
 
-@pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
-def test_short_window_blocks_then_resets(client: BudgetClient, resources: ResourceManager) -> None:
-    key = client.generate_key(models=[MODEL], budget_limits=_short_roomy_limits())
-    resources.defer(lambda: client.delete_key(key))
-
-    _assert_short_window_blocks_then_resets(client, key)
-
-
 def _mint_key_of_kind(client: BudgetClient, resources: ResourceManager, kind: str) -> str:
     """A key carrying the tight+roomy budget_limits pair, minted to roomy (100.0)
     surroundings so only the key's own windows can block."""
@@ -128,68 +120,79 @@ def _mint_key_of_kind(client: BudgetClient, resources: ResourceManager, kind: st
     return key
 
 
-@pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
-@pytest.mark.parametrize("kind", ["personal", "team", "team_member"])
-def test_short_window_blocks_then_resets_across_key_kinds(
-    client: BudgetClient, resources: ResourceManager, kind: str
-) -> None:
-    key = _mint_key_of_kind(client, resources, kind)
+class TestKeyMultiWindowBudget:
+    @pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
+    def test_short_window_blocks_then_resets(self, client: BudgetClient, resources: ResourceManager) -> None:
+        key = client.generate_key(models=[MODEL], budget_limits=_short_roomy_limits())
+        resources.defer(lambda: client.delete_key(key))
 
-    _assert_short_window_blocks_then_resets(client, key)
+        _assert_short_window_blocks_then_resets(client, key)
 
 
-@pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
-def test_long_window_blocks_after_short_window_resets(client: BudgetClient, resources: ResourceManager) -> None:
-    key = client.generate_key(
-        models=[MODEL],
-        budget_limits=[
-            BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=TINY_CAP),
-            BudgetWindow(budget_duration=LONG_WINDOW, max_budget=LONG_CAP),
-        ],
-    )
-    resources.defer(lambda: client.delete_key(key))
+    @pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
+    @pytest.mark.parametrize("kind", ["personal", "team", "team_member"])
+    def test_short_window_blocks_then_resets_across_key_kinds(
+        self, client: BudgetClient, resources: ResourceManager, kind: str
+    ) -> None:
+        key = _mint_key_of_kind(client, resources, kind)
 
-    # 1. drive the key to get blocked by SHORT_WINDOW, assert it's budget error
-    blocked = _drive_to_block(client, key)
-    assert blocked.status_code == 429, f"budget block was not a 429: {blocked.status_code} {blocked.body[:200]}"
+        _assert_short_window_blocks_then_resets(client, key)
 
-    # 2. check the reset times of both budget windows after we drove to being blocked
-    blocked_reset_at = window_reset_at(client.key_budget_windows(key), SHORT_WINDOW)
-    assert blocked_reset_at is not None, "short window missing from /key/info budget_limits"
-    blocked_long_reset_at = window_reset_at(client.key_budget_windows(key), LONG_WINDOW)
-    assert blocked_long_reset_at is not None, "long window missing from /key/info budget_limits"
 
-    # 3. poll every 5s for the SHORT_WINDOW reset time until it is past it, fails if it doesnt reset 
-    deadline = time.monotonic() + RESET_DEADLINE_SECONDS
-    while time.monotonic() < deadline:
-        time.sleep(5)
-        current = window_reset_at(client.key_budget_windows(key), SHORT_WINDOW)
-        if current is not None and current > blocked_reset_at:
-            break
-    else:
-        pytest.fail(
-            f"{SHORT_WINDOW} window's reset_at never advanced past {blocked_reset_at} within {RESET_DEADLINE_SECONDS}s"
+    @pytest.mark.covers("quota_management.budget.key_multi_window.blocks_then_resets")
+    def test_long_window_blocks_after_short_window_resets(
+        self, client: BudgetClient, resources: ResourceManager
+    ) -> None:
+        key = client.generate_key(
+            models=[MODEL],
+            budget_limits=[
+                BudgetWindow(budget_duration=SHORT_WINDOW, max_budget=TINY_CAP),
+                BudgetWindow(budget_duration=LONG_WINDOW, max_budget=LONG_CAP),
+            ],
         )
+        resources.defer(lambda: client.delete_key(key))
 
-    # 4. short window just reset in 3, so now make a call, check that its blocked (should be blocked by LONG_WINDOW because short window reset), also make sure its budget error
-    deadline = time.monotonic() + RESET_DEADLINE_SECONDS
-    last_body = ""
-    while time.monotonic() < deadline:
-        result = _call(client, key)
-        if result.ok:
-            rolled = window_reset_at(client.key_budget_windows(key), LONG_WINDOW) != blocked_long_reset_at
+        # 1. drive the key to get blocked by SHORT_WINDOW, assert it's budget error
+        blocked = _drive_to_block(client, key)
+        assert blocked.status_code == 429, f"budget block was not a 429: {blocked.status_code} {blocked.body[:200]}"
+
+        # 2. check the reset times of both budget windows after we drove to being blocked
+        blocked_reset_at = window_reset_at(client.key_budget_windows(key), SHORT_WINDOW)
+        assert blocked_reset_at is not None, "short window missing from /key/info budget_limits"
+        blocked_long_reset_at = window_reset_at(client.key_budget_windows(key), LONG_WINDOW)
+        assert blocked_long_reset_at is not None, "long window missing from /key/info budget_limits"
+
+        # 3. poll every 5s for the SHORT_WINDOW reset time until it is past it, fails if it doesnt reset 
+        deadline = time.monotonic() + RESET_DEADLINE_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(5)
+            current = window_reset_at(client.key_budget_windows(key), SHORT_WINDOW)
+            if current is not None and current > blocked_reset_at:
+                break
+        else:
             pytest.fail(
-                f"{LONG_WINDOW} window failed to block after the {SHORT_WINDOW} window reset"
-                + (f" (the {LONG_WINDOW} window itself rolled mid-test - boundary crossed; rerun)" if rolled else "")
+                f"{SHORT_WINDOW} window's reset_at never advanced past {blocked_reset_at} within {RESET_DEADLINE_SECONDS}s"
             )
-        assert is_budget_block(result), (
-            f"non-budget error while waiting for {LONG_WINDOW} attribution: "
-            f"status={result.status_code} body={result.body[:200]}"
+
+        # 4. short window just reset in 3, so now make a call, check that its blocked (should be blocked by LONG_WINDOW because short window reset), also make sure its budget error
+        deadline = time.monotonic() + RESET_DEADLINE_SECONDS
+        last_body = ""
+        while time.monotonic() < deadline:
+            result = _call(client, key)
+            if result.ok:
+                rolled = window_reset_at(client.key_budget_windows(key), LONG_WINDOW) != blocked_long_reset_at
+                pytest.fail(
+                    f"{LONG_WINDOW} window failed to block after the {SHORT_WINDOW} window reset"
+                    + (f" (the {LONG_WINDOW} window itself rolled mid-test - boundary crossed; rerun)" if rolled else "")
+                )
+            assert is_budget_block(result), (
+                f"non-budget error while waiting for {LONG_WINDOW} attribution: "
+                f"status={result.status_code} body={result.body[:200]}"
+            )
+            if f"over {LONG_WINDOW} budget" in result.body:
+                return
+            last_body = result.body
+            time.sleep(5)
+        pytest.fail(
+            f"block never attributed to the {LONG_WINDOW} window within {RESET_DEADLINE_SECONDS}s: {last_body[:200]}"
         )
-        if f"over {LONG_WINDOW} budget" in result.body:
-            return
-        last_body = result.body
-        time.sleep(5)
-    pytest.fail(
-        f"block never attributed to the {LONG_WINDOW} window within {RESET_DEADLINE_SECONDS}s: {last_body[:200]}"
-    )
