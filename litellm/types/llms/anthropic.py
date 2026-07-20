@@ -25,7 +25,6 @@ AnthropicInputSchema = TypedDict(
         "additionalProperties": Optional[bool],
         "required": Optional[List[str]],
         "$defs": Optional[Dict],
-        "strict": Optional[bool],
     },
     total=False,
 )
@@ -48,6 +47,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     description: str
     input_schema: Optional[AnthropicInputSchema]
     type: Literal["custom"]
+    strict: Optional[bool]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     defer_loading: bool
     allowed_callers: Optional[List[str]]

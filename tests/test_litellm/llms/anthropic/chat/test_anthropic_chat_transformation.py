@@ -4227,6 +4227,99 @@ def test_map_tool_helper_empty_parameters_get_default():
     assert result["input_schema"].get("properties") == {}
 
 
+def test_map_tool_helper_lifts_strict_from_function_to_tool_top_level():
+    """
+    Anthropic only enforces `strict` when set as a sibling of name/input_schema
+    on the tool object; nested inside `input_schema` it is silently ignored.
+
+    When a caller passes `strict: true` at the canonical OpenAI location
+    (`tool.function.strict`), `_map_tool_helper` must place it on the tool
+    top level and NOT inside `input_schema`.
+
+    Regression test for: tools[i].function.strict ending up nested under
+    input_schema, causing Anthropic to silently drop strict-mode enforcement.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result.get("strict") is True, (
+        "strict should be lifted to the tool top level so Anthropic enforces it"
+    )
+    assert "strict" not in result["input_schema"], (
+        "strict must not be nested inside input_schema (Anthropic ignores it there)"
+    )
+
+
+def test_map_tool_helper_lifts_strict_from_legacy_nested_parameters():
+    """
+    Legacy fallback: some callers and earlier code paths placed `strict` inside
+    `tool.function.parameters` (the raw input_schema). Anthropic silently
+    ignores `strict` in that location, so `_map_tool_helper` must also lift it
+    to the tool top level when found there, and strip it from input_schema.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "parameters": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+                "additionalProperties": False,
+                "strict": True,
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result.get("strict") is True
+    assert "strict" not in result["input_schema"]
+
+
+def test_map_tool_helper_omits_strict_when_caller_did_not_set_it():
+    """
+    When no caller-supplied `strict` is present (neither at function level nor
+    nested in parameters), the resulting tool must NOT have a strict key — we
+    don't want to inject `strict: false`/`null` and silently change behavior
+    for callers who never asked for strict mode.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "ping",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert "strict" not in result, (
+        "strict key should be absent unless the caller opted in"
+    )
+    assert "strict" not in result["input_schema"]
+
+
 def test_extract_response_content_thinking_block_null_thinking():
     """
     Test that thinking blocks are not dropped when the 'thinking' field is null

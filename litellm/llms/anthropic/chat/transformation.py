@@ -642,6 +642,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 },
             )
 
+            # Extract `strict` so it can be placed at the tool top level.
+            # Anthropic only enforces `strict` when set as a sibling of
+            # `name`/`input_schema`; nested inside `input_schema` it is
+            # silently ignored. Accept it from the canonical OpenAI location
+            # (`tool.function.strict`) and, as a fallback, from the legacy
+            # nested location (`tool.function.parameters.strict`).
+            _strict: Optional[bool] = tool["function"].get("strict")
+            if _strict is None and isinstance(_input_schema, dict):
+                _strict = _input_schema.get("strict")
+
             # Anthropic requires input_schema.type to be "object". Normalize
             # schemas from external sources (MCP servers, OpenAI callers) that
             # may omit the type field or use a non-object type.
@@ -674,6 +684,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _description = tool["function"].get("description")
             if _description is not None:
                 _tool["description"] = _description
+
+            if _strict is not None:
+                _tool["strict"] = _strict
 
             returned_tool = _tool
 
