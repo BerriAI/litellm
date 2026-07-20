@@ -256,17 +256,13 @@ class LowestCostLoggingHandler(CustomLogger):
             item_output_cost = None
             if _deployment.get("litellm_params", {}).get("input_cost_per_token", None):
                 try:
-                    item_input_cost = float(
-                        _deployment.get("litellm_params", {}).get("input_cost_per_token")
-                    )
+                    item_input_cost = float(_deployment.get("litellm_params", {}).get("input_cost_per_token"))
                 except (ValueError, TypeError):
                     item_input_cost = None
 
             if _deployment.get("litellm_params", {}).get("output_cost_per_token", None):
                 try:
-                    item_output_cost = float(
-                        _deployment.get("litellm_params", {}).get("output_cost_per_token")
-                    )
+                    item_output_cost = float(_deployment.get("litellm_params", {}).get("output_cost_per_token"))
                 except (ValueError, TypeError):
                     item_output_cost = None
 
