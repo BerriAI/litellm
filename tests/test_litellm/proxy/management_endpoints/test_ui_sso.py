@@ -2214,7 +2214,8 @@ class TestCLIKeyRegenerationFlow:
             _get_cli_sso_flow_or_raise(login_id="cli-test_1234567890", cache=mock_cache)
         assert expired_exc.value.status_code == 400
         assert "session not found or expired" in expired_exc.value.detail
-        assert "enable_redis_auth_cache" in expired_exc.value.detail
+        assert "configure a Redis cache" in expired_exc.value.detail
+        assert "enable_redis_auth_cache" not in expired_exc.value.detail
 
     def test_cli_sso_flow_is_redis_authoritative_when_redis_attached(self):
         """
