@@ -70,7 +70,7 @@ def _strip_unsupported_message_fields(message: AllMessageValues) -> None:
     the adapter attaches inside ``tool_calls[].function``) are stripped
     recursively so nested tool-call signatures are removed too.
     """
-    m = cast(dict, message)
+    m = cast(dict, message)  # cast-ok: AllMessageValues is a union of TypedDicts; pop/strip need a mutable mapping
     for field in _RECURSIVELY_STRIPPED_FIELDS:
         filter_value_from_dict(m, field)
     for field in _TOP_LEVEL_OUTPUT_ONLY_FIELDS:
