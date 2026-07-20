@@ -1401,6 +1401,10 @@ class ResponsesAPIStreamEvents(str, Enum):
     FUNCTION_CALL_ARGUMENTS_DELTA = "response.function_call_arguments.delta"
     FUNCTION_CALL_ARGUMENTS_DONE = "response.function_call_arguments.done"
 
+    # Custom tool call events (grammar/freeform tools, e.g. Cursor agent tools)
+    CUSTOM_TOOL_CALL_INPUT_DELTA = "response.custom_tool_call_input.delta"
+    CUSTOM_TOOL_CALL_INPUT_DONE = "response.custom_tool_call_input.done"
+
     # File search events
     FILE_SEARCH_CALL_IN_PROGRESS = "response.file_search_call.in_progress"
     FILE_SEARCH_CALL_SEARCHING = "response.file_search_call.searching"

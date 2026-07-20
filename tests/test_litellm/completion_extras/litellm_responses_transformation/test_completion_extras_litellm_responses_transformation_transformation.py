@@ -2853,3 +2853,256 @@ def test_streaming_function_call_tool_id_for_degenerate_call_id():
 
     assert stream_tool_id("fc_unique_abc123", "call_0") == "fc_unique_abc123"
     assert stream_tool_id("fc_2", "call_tokyo") == "call_tokyo"
+
+
+def test_chunk_parser_custom_tool_call_stream_sequence():
+    """Cursor agent mode drives grammar/freeform ``custom_tool_call`` items (e.g. its
+    ApplyPatch tool). The stream converter must surface them as chat-completions
+    tool_call deltas: the added event opens the call (id from ``call_id``, name, empty
+    arguments), each ``custom_tool_call_input.delta`` streams arguments, the done event
+    must NOT finish the stream, and ``response.completed`` must report
+    finish_reason="tool_calls". Before the fix every one of these events fell through
+    to an empty-content chunk and the completed event said "stop", so Cursor never saw
+    the tool call and agent mode stalled."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    added = iterator.chunk_parser(
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "custom_tool_call",
+                "id": "ctc_1",
+                "call_id": "call_patch1",
+                "name": "ApplyPatch",
+                "input": "",
+            },
+        }
+    )
+    tool_call = added.choices[0].delta.tool_calls[0]
+    assert tool_call.id == "call_patch1"
+    assert tool_call.type == "function"
+    assert tool_call.function.name == "ApplyPatch"
+    assert tool_call.function.arguments == ""
+    assert tool_call.index == 0
+    assert added.choices[0].finish_reason is None
+
+    delta = iterator.chunk_parser(
+        {
+            "type": "response.custom_tool_call_input.delta",
+            "output_index": 1,
+            "delta": "*** Begin Patch",
+        }
+    )
+    delta_tool_call = delta.choices[0].delta.tool_calls[0]
+    assert delta_tool_call.function.arguments == "*** Begin Patch"
+    assert delta_tool_call.index == 0
+    assert delta.choices[0].finish_reason is None
+
+    done = iterator.chunk_parser(
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "custom_tool_call",
+                "call_id": "call_patch1",
+                "name": "ApplyPatch",
+                "input": "*** Begin Patch",
+            },
+        }
+    )
+    assert done.choices[0].finish_reason is None
+
+    completed = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {"type": "reasoning", "id": "rs_1"},
+                    {"type": "custom_tool_call", "call_id": "call_patch1"},
+                ],
+                "usage": {"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+            },
+        }
+    )
+    assert completed.choices[0].finish_reason == "tool_calls"
+    assert completed.usage is not None
+    assert completed.usage.total_tokens == 10
+
+
+def test_chunk_parser_remaps_tool_call_indices_sequentially():
+    """Responses API output_index counts every output item, so a reasoning model's
+    first tool call arrives at output_index >= 1. Chat-completions clients accumulate
+    streamed tool_calls by index and expect the first call at 0; Cursor agent mode
+    misplaces calls when indices start above 0 (the community BYOK bridge assigns its
+    own sequential indices for the same reason). The iterator must remap each distinct
+    output_index to the next sequential slot and route argument deltas to the mapped
+    slot."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    first = iterator.chunk_parser(
+        {
+            "type": "response.output_item.added",
+            "output_index": 2,
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_read1",
+                "name": "read_file",
+                "arguments": "",
+            },
+        }
+    )
+    assert first.choices[0].delta.tool_calls[0].index == 0
+
+    first_args = iterator.chunk_parser(
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 2,
+            "delta": '{"path":',
+        }
+    )
+    assert first_args.choices[0].delta.tool_calls[0].index == 0
+
+    second = iterator.chunk_parser(
+        {
+            "type": "response.output_item.added",
+            "output_index": 4,
+            "item": {
+                "type": "function_call",
+                "id": "fc_2",
+                "call_id": "call_grep1",
+                "name": "grep",
+                "arguments": "",
+            },
+        }
+    )
+    assert second.choices[0].delta.tool_calls[0].index == 1
+
+    second_args = iterator.chunk_parser(
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 4,
+            "delta": '{"pattern":',
+        }
+    )
+    assert second_args.choices[0].delta.tool_calls[0].index == 1
+
+
+def test_convert_response_output_custom_tool_call_to_tool_calls_choice():
+    """Non-streaming twin of the custom_tool_call fix: a typed ResponseCustomToolCall
+    output item must become a chat tool_call (arguments = the raw custom input string,
+    id = call_id) in a finish_reason="tool_calls" choice instead of being silently
+    dropped, which left Cursor agent mode with an empty assistant message."""
+    from openai.types.responses import ResponseCustomToolCall
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    item = ResponseCustomToolCall(
+        type="custom_tool_call",
+        id="ctc_9",
+        call_id="call_custom9",
+        name="ApplyPatch",
+        input="*** Begin Patch\n*** End Patch",
+    )
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices([item])
+
+    assert len(choices) == 1
+    choice = choices[0]
+    assert choice.finish_reason == "tool_calls"
+    tool_call = choice.message.tool_calls[0]
+    assert tool_call.id == "call_custom9"
+    assert tool_call.function.name == "ApplyPatch"
+    assert tool_call.function.arguments == "*** Begin Patch\n*** End Patch"
+
+
+def test_convert_response_output_accumulates_raw_tool_calls_into_one_choice():
+    """Raw dict and generic-pydantic tool-call items must accumulate into the single
+    trailing tool_calls choice exactly like typed items. Emitting one choice per tool
+    call (the old raw-dict behavior) hid every call after choices[0] from chat
+    clients, which read only the first choice; a multi-tool agent turn through the
+    completion bridge lost all but one call."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    items = [
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_read42",
+            "name": "read_file",
+            "arguments": '{"path": "a.py"}',
+        },
+        {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "call_id": "call_patch42",
+            "name": "ApplyPatch",
+            "input": "*** Begin Patch",
+        },
+    ]
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        items,
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+
+    assert len(choices) == 1
+    choice = choices[0]
+    assert choice.finish_reason == "tool_calls"
+    tool_calls = choice.message.tool_calls
+    assert len(tool_calls) == 2
+    assert tool_calls[0].id == "call_read42"
+    assert tool_calls[0].function.name == "read_file"
+    assert tool_calls[0].function.arguments == '{"path": "a.py"}'
+    assert tool_calls[1].id == "call_patch42"
+    assert tool_calls[1].function.name == "ApplyPatch"
+    assert tool_calls[1].function.arguments == "*** Begin Patch"
+
+
+def test_convert_response_output_generic_pydantic_message_item():
+    """litellm's completion bridge (used for non-Responses-native providers behind the
+    router) emits GenericResponseOutputItem pydantic models rather than openai SDK
+    classes. The converter must normalize unrecognized pydantic items through the
+    raw-dict handler instead of dropping them; dropping them made transform_response
+    raise 'Unknown items in responses API response' on an otherwise-successful
+    completion (hit live via /cursor/chat/completions multi-turn tool round trips)."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    handler = LiteLLMResponsesTransformationHandler()
+    item = GenericResponseOutputItem(
+        type="message",
+        id="msg_generic1",
+        status="completed",
+        role="assistant",
+        content=[OutputText(type="output_text", text="42", annotations=[])],
+    )
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        [item],
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "42"
+    assert choices[0].finish_reason == "stop"
