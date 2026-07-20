@@ -146,6 +146,7 @@ class TestAzureFoundryMessages:
         require_successful_call(result)
         assert result.is_streaming, f"response was not streamed: {result.headers}"
         assert not result.stream_error, f"stream errored: {result.stream_error}"
+        assert result.stream_events, "stream produced no SSE events"
         assert any("tool_use" in event for event in result.stream_events), (
             "stream carried no tool_use block"
         )
