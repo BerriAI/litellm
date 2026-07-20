@@ -7,7 +7,7 @@ import { cn } from "@/lib/cva.config";
 import { ValueTooltip } from "./chart_tooltip";
 import { categoryFills, type ChartColor } from "./colors";
 
-export type DonutChartProps<TDatum extends Record<string, unknown>> = {
+export type DonutChartProps<TDatum extends object> = {
   data: readonly TDatum[];
   index: string;
   category: string;
@@ -23,19 +23,23 @@ export type DonutChartProps<TDatum extends Record<string, unknown>> = {
   style?: React.CSSProperties;
 };
 
-function formattedCategoryTotal<TDatum extends Record<string, unknown>>(
+function datumField(datum: object, key: string): unknown {
+  return (datum as Record<string, unknown>)[key];
+}
+
+function formattedCategoryTotal<TDatum extends object>(
   data: readonly TDatum[],
   category: string,
   valueFormatter?: (value: number) => string,
 ): string {
   const total = data.reduce((sum, datum) => {
-    const value = datum[category];
+    const value = datumField(datum, category);
     return sum + (typeof value === "number" ? value : 0);
   }, 0);
   return valueFormatter ? valueFormatter(total) : String(total);
 }
 
-export function DonutChart<TDatum extends Record<string, unknown>>({
+export function DonutChart<TDatum extends object>({
   data,
   index,
   category,
@@ -53,7 +57,7 @@ export function DonutChart<TDatum extends Record<string, unknown>>({
   const fills = categoryFills(data.length, colors);
   const config: ChartConfig = Object.fromEntries(
     data.map((datum, i) => {
-      const name = String(datum[index] ?? i);
+      const name = String(datumField(datum, index) ?? i);
       return [name, { label: name }];
     }),
   );
@@ -86,7 +90,7 @@ export function DonutChart<TDatum extends Record<string, unknown>>({
           isAnimationActive={false}
         >
           {data.map((datum, i) => (
-            <Cell key={String(datum[index] ?? i)} fill={fills[i]} />
+            <Cell key={String(datumField(datum, index) ?? i)} fill={fills[i]} />
           ))}
         </Pie>
       </PieChart>

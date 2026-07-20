@@ -7,7 +7,7 @@ import { cn } from "@/lib/cva.config";
 import { ValueTooltip, type ChartTooltipComponent } from "./chart_tooltip";
 import { categoryFills, type ChartColor } from "./colors";
 
-export type AreaChartProps<TDatum extends Record<string, unknown>> = {
+export type AreaChartProps<TDatum extends object> = {
   data: readonly TDatum[];
   index: string;
   categories: readonly string[];
@@ -22,7 +22,7 @@ export type AreaChartProps<TDatum extends Record<string, unknown>> = {
   style?: React.CSSProperties;
 };
 
-export function AreaChart<TDatum extends Record<string, unknown>>({
+export function AreaChart<TDatum extends object>({
   data,
   index,
   categories,
