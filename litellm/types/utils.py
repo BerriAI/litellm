@@ -5,6 +5,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    FrozenSet,
     List,
     Literal,
     Mapping,
@@ -3110,6 +3111,21 @@ class CustomPricingLiteLLMParams(BaseModel):
         backend model. Full pricing stays under the deployment's unique model id.
         """
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
+
+
+SHARED_BACKEND_MODEL_INFO_FIELDS: FrozenSet[str] = frozenset(
+    ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__
+) - frozenset(CustomPricingLiteLLMParams.model_fields)
+
+
+def shared_backend_model_info(model_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the fields safe to register under a shared ``{provider}/{model}``
+    key in ``litellm.model_cost``: cost-map schema fields (``ModelInfoBase``) minus
+    per-deployment pricing overrides. Per-deployment metadata (``id``,
+    ``access_via_team_ids``, arbitrary custom keys) never belongs on the shared key;
+    it stays under the deployment's unique model id.
+    """
+    return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
