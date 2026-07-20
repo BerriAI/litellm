@@ -547,7 +547,6 @@ class LiteLLMParamsBody(BaseModel):
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     mock_response: str | None = None
-    mock_timeout: bool | None = None
     timeout: float | None = None
 
 
