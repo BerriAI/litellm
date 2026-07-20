@@ -1,6 +1,6 @@
 # Governance Dict and Model-Level Guardrail Merge Regression
 
-> Status: analysis and design complete; tests, implementation, and live proof pending
+> Status: implemented and verified
 > Date: 2026-07-20
 
 ## Current State / Source Audit
@@ -282,8 +282,169 @@ outside this regression.
 | direct pre-fix TypeError reproduction | Done |
 | design document | Done in this docs-only commit |
 | thought-experiment gate | Done; retained the distinct list-containing-dict error contract |
-| failing regression test | Planned |
-| implementation | Planned |
-| focused/static/full validation | Planned |
-| real-provider proxy proof | Planned |
-| implementation commit and PR | Planned |
+| failing regression test | Done; failed pre-fix with `TypeError` and passed post-fix |
+| implementation | Done; `e7e779c232` |
+| focused/static/full validation | Done, except unavailable `platform-verify` target documented below |
+| real-provider proxy proof | Done; pre-fix 500, post-fix 200/400 |
+| implementation commit | Done; `e7e779c232` |
+| pull request | Tracked externally after repository verification |
+
+## Completion Evidence
+
+### Regression and implementation
+
+The focused regression was added through a real `Router` with a registered
+deployment rather than a class-level monkeypatch. Before the source change:
+
+```text
+FAILED tests/test_litellm/proxy/utils/helpers/test_guardrail_merge.py::test_check_and_merge_model_level_guardrails_preserves_governance_dict
+E   TypeError: unhashable type: 'dict'
+1 failed, 1 warning in 4.73s
+```
+
+After the implementation and final Ruff formatting:
+
+```text
+.............................                                            [100%]
+29 passed, 1 warning in 6.68s
+```
+
+The implementation is commit `e7e779c232` with message:
+
+```text
+fix(guardrails): handle governance dict when merging model-level guardrails
+```
+
+### Real-provider proxy proof
+
+The live proof used the complete platform adapter from `feat/custom-v1.90.3` in
+a temporary worktree and applied the same `utils.py` implementation hunk for the
+post-fix run. The untracked config enabled platform governance and static service
+account auth, configured local governance fallback with `min_version`, registered
+both `min_version` and `input_token_limit`, and attached
+`guardrails: [input_token_limit]` plus the exact bundled-tokenizer model info to the
+deployment. This made governance inject a non-empty mapping before the selected
+deployment merge. No mock provider or mock response was configured.
+
+The upstream was the real GitHub Models OpenAI-compatible inference endpoint with
+`openai/gpt-4.1-mini`. The token came from the signed-in GitHub CLI keyring and was
+passed only through the process environment.
+
+Both runs used:
+
+```bash
+DEBUG=false \
+GITHUB_MODELS_TOKEN="$(gh auth token)" \
+LITELLM_MASTER_KEY=sk-live-proof-master \
+GOVERNANCE_ENABLE_TOKEN_BUDGET=false \
+PYTHONPATH="$worktree:$worktree/litellm-platform-adapter" \
+/Users/dhsshin/Documents/LLMOps/litellm-custom/.venv/bin/python \
+  litellm/proxy/proxy_cli.py \
+  --config live-proof-config.yaml \
+  --detailed_debug --reload --use_v2_migration_resolver --port 4011 \
+  2>&1 | tee live-proof-<pre-or-post>.log
+```
+
+The same normal request before the fix:
+
+```bash
+curl -sS -i http://127.0.0.1:4011/v1/chat/completions \
+  -H 'Authorization: Bearer proof-service-token' \
+  -H 'X-Application-Id: live-proof-app' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"governed-model","messages":[{"role":"user","content":"Reply with exactly LIVE_PROXY_OK"}],"max_tokens":8,"metadata":{"version":"1.2.3"}}'
+```
+
+```http
+HTTP/1.1 500 Internal Server Error
+content-type: application/json
+
+{"error":{"message":"unhashable type: 'dict'","type":"None","param":"None","code":"500"}}
+```
+
+The pre-fix traceback identified the production path, not only the direct helper:
+
+```text
+File "litellm/proxy/utils.py", line 2459, in post_call_success_hook
+  guardrail_data = _check_and_merge_model_level_guardrails(...)
+File "litellm/proxy/utils.py", line 6106, in _check_and_merge_model_level_guardrails
+  return _merge_guardrails_with_existing(data, model_level_guardrails)
+File "litellm/proxy/utils.py", line 6135, in _merge_guardrails_with_existing
+  metadata["guardrails"] = list(set(existing_guardrails + model_level_guardrails))
+TypeError: unhashable type: 'dict'
+```
+
+The identical request after the fix reached the real provider and returned:
+
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"id":"chatcmpl-E3ZJa7k0oJMrKTxtPIvxBhrmMddfi","created":1784519442,"model":"governed-model","object":"chat.completion","system_fingerprint":"fp_a89d652ac6","choices":[{"finish_reason":"stop","index":0,"message":{"content":"LIVE_PROXY_OK","role":"assistant","provider_specific_fields":{"refusal":null},"annotations":[]},"provider_specific_fields":{"content_filter_results":{"hate":{"filtered":false,"severity":"safe"},"protected_material_code":{"detected":false,"filtered":false},"protected_material_text":{"detected":false,"filtered":false},"self_harm":{"filtered":false,"severity":"safe"},"sexual":{"filtered":false,"severity":"safe"},"violence":{"filtered":false,"severity":"safe"}}}}],"usage":{"completion_tokens":4,"prompt_tokens":13,"total_tokens":17,"completion_tokens_details":{"accepted_prediction_tokens":0,"audio_tokens":0,"reasoning_tokens":0,"rejected_prediction_tokens":0},"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":0},"latency_checkpoint":{"engine_tbt_ms":7,"engine_ttft_ms":44,"engine_ttlt_ms":73,"pre_inference_ms":181,"service_tbt_ms":13,"service_ttft_ms":501,"service_ttlt_ms":528,"total_duration_ms":368,"user_visible_ttft_ms":320}},"service_tier":"default","prompt_filter_results":[{"prompt_index":0,"content_filter_results":{"hate":{"filtered":false,"severity":"safe"},"jailbreak":{"detected":false,"filtered":false},"self_harm":{"filtered":false,"severity":"safe"},"sexual":{"filtered":false,"severity":"safe"},"violence":{"filtered":false,"severity":"safe"}}}]}
+```
+
+The post-fix over-limit request used 180 repeated `token` words:
+
+```bash
+long_prompt=$(printf 'token %.0s' {1..180})
+request_body=$(jq -nc --arg content "$long_prompt" \
+  '{model:"governed-model",messages:[{role:"user",content:$content}],max_tokens:8,metadata:{version:"1.2.3"}}')
+curl -sS -i http://127.0.0.1:4011/v1/chat/completions \
+  -H 'Authorization: Bearer proof-service-token' \
+  -H 'X-Application-Id: live-proof-app' \
+  -H 'Content-Type: application/json' \
+  -d "$request_body"
+```
+
+```http
+HTTP/1.1 400 Bad Request
+content-type: application/json
+
+{"error":{"message":"Input token count 193 plus reserved output tokens 8 exceeds the configured context limit of 128.","type":"guardrail_violation","param":"InputTokenLimitGuardrail","code":"400","provider_specific_fields":{"error":{"message":"Input token count 193 plus reserved output tokens 8 exceeds the configured context limit of 128.","type":"guardrail_violation","param":"InputTokenLimitGuardrail","code":"input_token_limit_exceeded"},"input_token_count":193,"output_token_reservation":8,"requested_context_tokens":201,"context_token_limit":128}}}
+```
+
+The required execution-log check produced both outcomes:
+
+```bash
+grep -i 'AAP context token limit' live-proof-post.log
+```
+
+```text
+12:50:41 - LiteLLM Proxy:DEBUG - AAP context token limit passed: tokenizer=GaussO3.5 input=18 reserved_output=8 requested_context=26 limit=128
+12:50:55 - LiteLLM Proxy:WARNING - AAP context token limit exceeded: tokenizer=GaussO3.5 input=193 reserved_output=8 requested_context=201 limit=128
+```
+
+`grep -i "unhashable type: 'dict'" live-proof-post.log` returned no output.
+
+### Formatting, lint, and unavailable target
+
+Final validation results:
+
+```text
+Ruff format check on both modified Python files: passed
+Ruff check on both modified Python files: passed
+Whole litellm Ruff check: passed
+Strict Ruff budget gate: passed
+Type-discipline LIT budget gate: passed
+basedpyright budget gate: passed; no rule above the staging baseline
+e2e basedpyright: 0 errors, 0 warnings, 0 notes
+Circular import check: passed
+Import safety check: passed
+```
+
+Neither `ruff-strict-budget.json` nor `basedpyright-code-budget.json` changed, so
+`make lint-budget-update` was not required.
+
+Repository instructions require `make platform-verify`, but the refreshed
+`upstream/litellm_internal_staging` Makefile has no such target. The literal result
+was:
+
+```text
+make: *** No rule to make target `platform-verify'.  Stop.
+```
+
+`make pre-commit` also could not fetch `litellm_internal_staging` from this clone's
+fork `origin` and requested absent dashboard `node_modules` despite no UI change.
+The equivalent Python lint targets were therefore run directly against a temporary
+`origin/litellm_internal_staging` ref pointing at the already refreshed
+`upstream/litellm_internal_staging`; all passed as listed above.
