@@ -35,6 +35,7 @@ from models import (
     TeamDeleteBody,
     TeamInfoParams,
     TeamInfoResponse,
+    TeamListResponse,
     TeamMemberAddBody,
     TeamMemberDeleteBody,
     TeamMemberEntry,
@@ -154,6 +155,19 @@ class ManagementClient:
                 response_type=TeamInfoResponse,
             )
         ).team_info
+
+    def team_list_ids(self) -> tuple[str, ...]:
+        return tuple(
+            entry.team_id
+            for entry in unwrap(
+                self.proxy.transport.get(
+                    "/team/list",
+                    headers=self.proxy.transport.master,
+                    params=NoBody(),
+                    response_type=TeamListResponse,
+                )
+            ).root
+        )
 
     def team_info_status(self, team_id: str) -> ProbeResult:
         return self.proxy.transport.probe("/team/info", params=TeamInfoParams(team_id=team_id))
