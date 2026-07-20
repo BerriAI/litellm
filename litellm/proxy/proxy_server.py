@@ -10878,7 +10878,7 @@ async def transform_request(request: TransformRequestBody):
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})
 
-    return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
+    return await asyncio.to_thread(return_raw_request, request.call_type, request.request_body)
 
 
 async def _check_if_model_is_user_added(

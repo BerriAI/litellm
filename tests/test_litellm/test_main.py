@@ -665,6 +665,37 @@ def _mocked_openai_chat_response(model: str) -> httpx.Response:
     )
 
 
+def test_return_raw_request_does_not_call_provider(respx_mock: respx.MockRouter):
+    """Regression for #33952: return_raw_request must transform without contacting the provider.
+
+    Previously return_raw_request invoked the real endpoint with a fake key and relied on the
+    provider rejecting it, which sent an unintended inference request and (in the async proxy
+    route) blocked the event loop on provider I/O.
+    """
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+
+    model = "gpt-4o"
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=_mocked_openai_chat_response(model)
+    )
+
+    request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+
+    assert route.call_count == 0
+    assert request.get("error") is None
+    assert request["raw_request_body"]["model"] == model
+    assert request["raw_request_body"]["messages"] == [
+        {"role": "user", "content": "hi"}
+    ]
+
+
 def test_completion_forwards_verbosity_in_raw_request(respx_mock: respx.MockRouter):
     """Regression test: completion() must forward the verbosity param to the provider request body."""
     from litellm.types.utils import CallTypes
