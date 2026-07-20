@@ -442,6 +442,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Policy", "Prompt Injection"],
     providerKey: "Repelloai",
   },
+  {
+    id: "straiker",
+    name: "Straiker",
+    description:
+      "Defend AI Agentic Guardrails: Indirect/Direct Prompt Injection, Tool Misuse, Malicious MCP and Skills",
+    category: "partner",
+    logo: `${ASSET_PREFIX}straiker.svg`,
+    tags: ["Agentic", "Prompt Injection", "Tool Misuse", "MCP", "Skills"],
+    providerKey: "Straiker",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];

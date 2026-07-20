@@ -21,7 +21,7 @@ def display_teams_table(teams: List[Dict[str, Any]]) -> None:
     console = Console()
 
     if not teams:
-        console.print("❌ No teams found for your user.")
+        console.print("No teams found for your user.")
         return
 
     table = Table(title="Available Teams")
@@ -91,10 +91,10 @@ def available(ctx: click.Context):
         teams = client.teams.get_available()
         if teams:
             console = Console()
-            console.print("\n🎯 Available Teams to Join:")
+            console.print("\nAvailable Teams to Join:")
             display_teams_table(teams)
         else:
-            click.echo("ℹ️ No available teams to join.")
+            click.echo("No available teams to join.")
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         error_body = e.response.json()
@@ -113,7 +113,7 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
     api_key = ctx.obj["api_key"]
 
     if not api_key:
-        click.echo("❌ No API key found. Please login first using 'litellm login'")
+        click.echo("No API key found. Please login first using 'litellm login'")
         raise click.Abort()
 
     try:
@@ -122,7 +122,7 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
             teams = client.teams.list()
 
             if not teams:
-                click.echo("❌ No teams found for your user.")
+                click.echo("No teams found for your user.")
                 return
 
             # Use interactive selection from auth module
@@ -133,14 +133,14 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
             if selected_team:
                 team_id = selected_team.get("team_id")
             else:
-                click.echo("❌ Operation cancelled.")
+                click.echo("Operation cancelled.")
                 return
 
         # Update the key with the selected team
         if team_id:
-            click.echo(f"\n🔄 Assigning your key to team: {team_id}")
+            click.echo(f"\nAssigning your key to team: {team_id}")
             client.keys.update(key=api_key, team_id=team_id)
-            click.echo(f"✅ Successfully assigned key to team: {team_id}")
+            click.echo(f"Successfully assigned key to team: {team_id}")
 
             # Show team details if available
             teams = client.teams.list()
@@ -148,9 +148,9 @@ def assign_key(ctx: click.Context, team_id: Optional[str]):
                 if team.get("team_id") == team_id:
                     models = team.get("models", [])
                     if models:
-                        click.echo(f"🎯 You can now access models: {', '.join(models)}")
+                        click.echo(f"You can now access models: {', '.join(models)}")
                     else:
-                        click.echo("🎯 You can now access all available models")
+                        click.echo("You can now access all available models")
                     break
 
     except requests.exceptions.HTTPError as e:

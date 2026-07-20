@@ -2560,6 +2560,108 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
+def test_add_litellm_metadata_from_anthropic_user_id_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_anthropic_user_id_dict_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": {
+                "device_id": "device",
+                "account_uuid": "account",
+                "session_id": "sess_4f8c1d2a-1234",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["user_id"] == "sess_4f8c1d2a-1234"
+    assert data["metadata"]["session_id"] == "sess_4f8c1d2a-1234"
+    assert data["litellm_session_id"] == "sess_4f8c1d2a-1234"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id():
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_body-session-id",
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id_dict():
+    data = {
+        "metadata": {
+            "user_id": {
+                "session_id": "body-session-id",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        "user_abc123_account__session_",
+        "user_abc123_account_",
+        "user_abc123_account__session_invalid!",
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_ignores_invalid_session_id(user_id: str):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        {},
+        {"session_id": 123},
+        {"session_id": "invalid session id"},
+        {"session_id": ""},
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_dict_ignores_invalid_session_id(
+    user_id: object,
+):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
 def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
     headers = {
@@ -2686,6 +2788,70 @@ def test_get_sanitized_user_information_from_key_includes_guardrails_metadata():
     assert "guardrails" in result["user_api_key_auth_metadata"]
     assert result["user_api_key_auth_metadata"]["guardrails"] == ["presidio", "aporia"]
     assert result["user_api_key_auth_metadata"]["other_field"] == "value"
+
+
+def test_user_and_team_spend_and_budget_flow_to_standard_logging_metadata():
+    """
+    Full flow: UserAPIKeyAuth -> get_sanitized_user_information_from_key ->
+    get_standard_logging_metadata. User-level and team-level spend + max budget
+    must reach the StandardLoggingPayload metadata that custom loggers receive,
+    alongside the key-level values
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-hash",
+        spend=1.5,
+        max_budget=10.0,
+        user_id="test-user",
+        user_spend=25.5,
+        user_max_budget=100.0,
+        team_id="test-team",
+        team_spend=250.75,
+        team_max_budget=1000.0,
+    )
+
+    sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    assert sanitized["user_api_key_spend"] == 1.5
+    assert sanitized["user_api_key_max_budget"] == 10.0
+    assert sanitized["user_api_key_user_spend"] == 25.5
+    assert sanitized["user_api_key_user_max_budget"] == 100.0
+    assert sanitized["user_api_key_team_spend"] == 250.75
+    assert sanitized["user_api_key_team_max_budget"] == 1000.0
+
+    logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        dict(sanitized)
+    )
+
+    assert logging_metadata["user_api_key_user_spend"] == 25.5
+    assert logging_metadata["user_api_key_user_max_budget"] == 100.0
+    assert logging_metadata["user_api_key_team_spend"] == 250.75
+    assert logging_metadata["user_api_key_team_max_budget"] == 1000.0
+
+
+def test_user_and_team_spend_and_budget_default_to_none_in_standard_logging_metadata():
+    """
+    Keys with no user or team level budgets report None for the new fields in the
+    StandardLoggingPayload metadata instead of raising
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key-hash")
+
+    sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+    logging_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        dict(sanitized)
+    )
+
+    assert logging_metadata["user_api_key_user_spend"] is None
+    assert logging_metadata["user_api_key_user_max_budget"] is None
+    assert logging_metadata["user_api_key_team_spend"] is None
+    assert logging_metadata["user_api_key_team_max_budget"] is None
 
 
 @pytest.mark.asyncio

@@ -57,6 +57,35 @@ def safe_divide(
     return numerator / denominator
 
 
+def coerce_token_limit(value: object) -> int | None:
+    """
+    Coerce a max_input_tokens / max_output_tokens value to an int, treating a
+    malformed value as absent.
+
+    A deployment's model_info is registered into litellm.model_cost verbatim, so a
+    config value like "128,000" or "" reaches the /v1/models listing uncoerced from
+    both the router index and the cost map. Returning None omits that one limit
+    instead of failing the whole listing.
+
+    Args:
+        value: The raw configured or cost-map value
+
+    Returns:
+        The value as an int, or None if it is missing or not a usable number.
+        Bools are rejected because True/False is never a meaningful token limit.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (str, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return None
+
+
 _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     # Anthropic
     "stop_sequence": "stop",

@@ -170,6 +170,17 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Form.Item
             label={
               <FieldLabel
+                label="Issuer (optional)"
+                tooltip="OAuth 2.0 authorization server issuer (RFC 8414). Auto-discovered from the upstream on first connect; set it explicitly to pin the trust anchor so token and scope discovery is fetched from and validated against this issuer (RFC 8414 §3.3) instead of anything the resource advertises."
+              />
+            }
+            name="issuer"
+          >
+            <TextInput placeholder="https://issuer.example.com" className={fieldClassName} />
+          </Form.Item>
+          <Form.Item
+            label={
+              <FieldLabel
                 label="Authorization URL (optional)"
                 tooltip="Optional override for the authorization endpoint."
               />
@@ -228,7 +239,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             label={
               <FieldLabel
                 label="Token Storage TTL (seconds, optional)"
-                tooltip="How long to cache each user's OAuth access token in Redis before evicting it (regardless of the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default."
+                tooltip="How long to cache each user's OAuth access token in Redis before evicting it (never longer than the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default."
               />
             }
             name="token_storage_ttl_seconds"

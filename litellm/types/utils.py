@@ -5,6 +5,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    FrozenSet,
     List,
     Literal,
     Mapping,
@@ -197,6 +198,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens: Optional[float]
     cache_read_input_token_cost_above_272k_tokens_priority: Optional[float]
     cache_read_input_token_cost_above_512k_tokens: Optional[float]
+    # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
+    # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
+    prompt_cache_min_tokens: Optional[int]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -209,6 +213,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
     input_cost_per_image_token: Optional[float]  # for gpt-image-1 and similar models
+    input_cost_per_video_token: Optional[float]  # for gemini omni models with video input
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -234,6 +239,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_character_above_128k_tokens: Optional[float]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_cost_per_image_token: Optional[float]
+    output_cost_per_video_token: Optional[float]  # for gemini omni models with video output
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -261,6 +267,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "responses",
             "ocr",
+            "realtime",
         ]
     ]
     tpm: Optional[int]
@@ -323,6 +330,7 @@ class CallTypes(str, Enum):
     cancel_batch = "cancel_batch"
     pass_through = "pass_through_endpoint"
     anthropic_messages = "anthropic_messages"
+    aanthropic_messages = "aanthropic_messages"
     get_assistants = "get_assistants"
     aget_assistants = "aget_assistants"
     create_assistants = "create_assistants"
@@ -395,6 +403,11 @@ class CallTypes(str, Enum):
     avector_store_create = "avector_store_create"
     vector_store_search = "vector_store_search"
     avector_store_search = "avector_store_search"
+
+    ingest = "ingest"
+    aingest = "aingest"
+    query = "query"
+    aquery = "aquery"
 
     #########################################################
     # Container Call Types
@@ -491,6 +504,7 @@ CallTypesLiteral = Literal[
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",
+    "aanthropic_messages",
     "aretrieve_batch",
     "retrieve_batch",
     "generate_content",
@@ -1472,6 +1486,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: Optional[int] = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    tool_use_tokens: Optional[int] = None
+    """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
+
     character_count: Optional[int] = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
 
@@ -1502,6 +1519,8 @@ class PromptTokensDetailsWrapper(
             del self.audio_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
+        if self.tool_use_tokens is None:
+            del self.tool_use_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
@@ -1796,14 +1815,17 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
+        usage_to_set = None
         if "usage" in kwargs and kwargs["usage"] is not None:
             if isinstance(kwargs["usage"], dict):
-                kwargs["usage"] = Usage(**kwargs["usage"])
+                usage_to_set = Usage(**kwargs["usage"])
+                kwargs["usage"] = usage_to_set
             elif isinstance(kwargs["usage"], BaseModel):
                 dump = (
                     kwargs["usage"].model_dump() if hasattr(kwargs["usage"], "model_dump") else kwargs["usage"].dict()
                 )
-                kwargs["usage"] = Usage(**dump)
+                usage_to_set = Usage(**dump)
+                kwargs["usage"] = usage_to_set
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1811,6 +1833,9 @@ class ModelResponseStream(ModelResponseBase):
         kwargs["provider_specific_fields"] = provider_specific_fields
 
         super().__init__(**kwargs)
+
+        if usage_to_set is not None:
+            self.usage = usage_to_set
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2467,6 +2492,10 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_spend: Optional[float]
     user_api_key_max_budget: Optional[float]
     user_api_key_budget_reset_at: Optional[str]
+    user_api_key_user_spend: Optional[float]
+    user_api_key_user_max_budget: Optional[float]
+    user_api_key_team_spend: Optional[float]
+    user_api_key_team_max_budget: Optional[float]
     user_api_key_org_id: Optional[str]
     user_api_key_org_alias: Optional[str]
     user_api_key_team_id: Optional[str]
@@ -2685,6 +2714,10 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     #   hints). Lets dashboards split rate-limit failures by cause without
     #   parsing free-text error messages.
     error_rate_limit_type: Optional[str]
+    error_budget_entity_type: Optional[str]
+    error_budget_entity_id: Optional[str]
+    error_budget_limit: Optional[float]
+    error_budget_spend: Optional[float]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -3046,6 +3079,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
     output_cost_per_image_token: Optional[float] = None
+    output_cost_per_video_token: Optional[float] = None
     output_cost_per_reasoning_token: Optional[float] = None
     output_cost_per_video_per_second: Optional[float] = None
     output_cost_per_audio_per_second: Optional[float] = None
@@ -3055,6 +3089,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     cache_read_input_token_cost_above_272k_tokens: Optional[float] = None
     cache_read_input_token_cost_above_512k_tokens: Optional[float] = None
     input_cost_per_image_token: Optional[float] = None
+    input_cost_per_video_token: Optional[float] = None
     input_cost_per_token_above_272k_tokens: Optional[float] = None
     input_cost_per_token_above_512k_tokens: Optional[float] = None
     output_cost_per_token_above_272k_tokens: Optional[float] = None
@@ -3076,6 +3111,21 @@ class CustomPricingLiteLLMParams(BaseModel):
         backend model. Full pricing stays under the deployment's unique model id.
         """
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
+
+
+SHARED_BACKEND_MODEL_INFO_FIELDS: FrozenSet[str] = frozenset(
+    ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__
+) - frozenset(CustomPricingLiteLLMParams.model_fields)
+
+
+def shared_backend_model_info(model_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the fields safe to register under a shared ``{provider}/{model}``
+    key in ``litellm.model_cost``: cost-map schema fields (``ModelInfoBase``) minus
+    per-deployment pricing overrides. Per-deployment metadata (``id``,
+    ``access_via_team_ids``, arbitrary custom keys) never belongs on the shared key;
+    it stays under the deployment's unique model id.
+    """
+    return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
@@ -3132,6 +3182,7 @@ all_litellm_params = (
         "use_client",
         "id",
         "fallbacks",
+        "routing_strategy",
         "azure",
         "headers",
         "model_list",
@@ -3203,6 +3254,7 @@ all_litellm_params = (
         "shared_session",
         "search_tool_name",
         "order",
+        "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
         "_litellm_rate_limit_descriptors",
@@ -3774,3 +3826,6 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
     model: Optional[str]  # the model being used for the LLM call
+    stream_holdback_chars: List[
+        int
+    ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)

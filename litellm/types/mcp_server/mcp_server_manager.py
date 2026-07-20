@@ -17,9 +17,24 @@ MCPInfo = Dict[str, Any]
 
 class MCPOAuthMetadata(BaseModel):
     scopes: Optional[List[str]] = None
+    """Resource-driven scopes for the authorization request: the RFC 9728 protected-resource
+    ``scopes_supported``, or the ``scope`` from the WWW-Authenticate 401 challenge when the resource
+    supplied one, else the authorization server's ``scopes_supported``. This is the scope value a
+    client requests per the MCP authorization spec Scope Selection Strategy; scope minimization and
+    inflation control are the authorization server's and user's job at consent (RFC 6749 §3.3), not
+    the client's."""
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    discovered_issuer: Optional[str] = None
+    """The ``issuer`` the authorization-server metadata document self-attests (RFC 8414). Persisted
+    trust-on-first-use as the server's ``issuer`` when none is configured, so that later rebuilds
+    anchor discovery on it (RFC 8414 §3.3) and a subsequently compromised resource cannot re-point
+    it. Never overwrites an admin-configured issuer."""
+    from_origin_fallback: bool = False
+    """True when the metadata came from guessing the resource origin as its authorization
+    server rather than from an RFC 9728/8414-advertised document. Guessed endpoints are
+    usable in memory but must never be persisted as configuration."""
 
 
 class MCPServer(BaseModel):
@@ -50,6 +65,8 @@ class MCPServer(BaseModel):
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
+    issuer: Optional[str] = None
+    issuer_is_anchored: bool = False
     scopes: Optional[List[str]] = None
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
@@ -70,6 +87,15 @@ class MCPServer(BaseModel):
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
+    # ID-JAG fields (draft-ietf-oauth-identity-assertion-authz-grant).
+    # Leg 1 reuses token_exchange_endpoint (IdP org-AS), audience (resource-AS
+    # identifier), scopes, subject_token_type, client_id/client_secret. Leg 2
+    # posts the ID-JAG assertion to id_jag_resource_token_endpoint.
+    id_jag_resource_token_endpoint: Optional[str] = None
+    id_jag_resource: Optional[str] = None
+    client_private_key: Optional[str] = None
+    client_private_key_id: Optional[str] = None
+    client_assertion_signing_alg: str = "RS256"
     # Wire dialect: "rfc8693" (standard token-exchange grant) or "entra_obo" (Microsoft Entra
     # On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use extension)
     token_exchange_profile: str = "rfc8693"
@@ -118,9 +144,10 @@ class MCPServer(BaseModel):
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
     token_validation: Optional[Dict[str, Any]] = None
-    # Optional TTL override (seconds) for the Redis per-user token cache.
-    # Defaults to the token's expires_in minus the expiry buffer, or
-    # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
+    # Optional TTL override (seconds) for the Redis per-user token cache, capped
+    # at the token's expires_in minus the expiry buffer so a cached entry never
+    # outlives the token. Defaults to the token's expires_in minus the expiry
+    # buffer, or MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
     token_storage_ttl_seconds: Optional[int] = None
     timeout: Optional[float] = None
     # Max concurrent outbound tool calls to this server; excess calls queue.

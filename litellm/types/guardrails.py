@@ -53,8 +53,14 @@ from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
 from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
     CiscoAIDefenseGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
+    SingulrGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
     HeadroomGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
+    CompresrGuardrailConfigModel,
 )
 
 """
@@ -122,7 +128,10 @@ class SupportedGuardrailIntegrations(Enum):
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
+    SINGULR = "singulr"
     HEADROOM = "headroom"
+    COMPRESR = "compresr"
+    STRAIKER = "straiker"
 
 
 class Role(Enum):
@@ -384,6 +393,86 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     mock_redacted_text: Optional[dict] = Field(default=None, description="Mock redacted text for testing")
 
 
+BedrockChecksContentFilterCategory = Literal["VIOLENCE", "HATE", "SEXUAL", "MISCONDUCT", "INSULTS"]
+BedrockChecksPromptAttackCategory = Literal["JAILBREAK", "PROMPT_INJECTION", "PROMPT_LEAKAGE"]
+BedrockChecksSensitiveInformationEntity = Literal[
+    "ADDRESS",
+    "AGE",
+    "AWS_ACCESS_KEY",
+    "AWS_SECRET_KEY",
+    "CA_HEALTH_NUMBER",
+    "CA_SOCIAL_INSURANCE_NUMBER",
+    "CREDIT_DEBIT_CARD_CVV",
+    "CREDIT_DEBIT_CARD_EXPIRY",
+    "CREDIT_DEBIT_CARD_NUMBER",
+    "DRIVER_ID",
+    "EMAIL",
+    "INTERNATIONAL_BANK_ACCOUNT_NUMBER",
+    "IP_ADDRESS",
+    "LICENSE_PLATE",
+    "MAC_ADDRESS",
+    "NAME",
+    "PASSWORD",
+    "PHONE",
+    "PIN",
+    "SWIFT_CODE",
+    "UK_NATIONAL_HEALTH_SERVICE_NUMBER",
+    "UK_NATIONAL_INSURANCE_NUMBER",
+    "UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER",
+    "URL",
+    "USERNAME",
+    "US_BANK_ACCOUNT_NUMBER",
+    "US_BANK_ROUTING_NUMBER",
+    "US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER",
+    "US_PASSPORT_NUMBER",
+    "US_SOCIAL_SECURITY_NUMBER",
+    "VEHICLE_IDENTIFICATION_NUMBER",
+]
+
+
+class BedrockChecksContentFilterCategoryItem(BaseModel):
+    category: BedrockChecksContentFilterCategory
+
+
+class BedrockChecksContentFilterModel(BaseModel):
+    categories: list[BedrockChecksContentFilterCategoryItem]
+
+
+class BedrockChecksPromptAttackCategoryItem(BaseModel):
+    category: BedrockChecksPromptAttackCategory
+
+
+class BedrockChecksPromptAttackModel(BaseModel):
+    categories: list[BedrockChecksPromptAttackCategoryItem]
+
+
+class BedrockChecksSensitiveInformationEntityItem(BaseModel):
+    type: BedrockChecksSensitiveInformationEntity
+
+
+class BedrockChecksSensitiveInformationModel(BaseModel):
+    entities: list[BedrockChecksSensitiveInformationEntityItem]
+
+
+class BedrockChecksConfigModel(BaseModel):
+    """Inline `checks` config for the resource-less Bedrock InvokeGuardrailChecks API.
+
+    Include only the checks you want to run; at least one must be set.
+    """
+
+    contentFilter: BedrockChecksContentFilterModel | None = None
+    promptAttack: BedrockChecksPromptAttackModel | None = None
+    sensitiveInformation: BedrockChecksSensitiveInformationModel | None = None
+
+    @model_validator(mode="after")
+    def _require_at_least_one_check(self) -> "BedrockChecksConfigModel":
+        if self.contentFilter is None and self.promptAttack is None and self.sensitiveInformation is None:
+            raise ValueError(
+                "Bedrock 'checks' must enable at least one of: contentFilter, promptAttack, sensitiveInformation."
+            )
+        return self
+
+
 class BedrockGuardrailConfigModel(BaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
@@ -408,6 +497,35 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
     aws_sts_endpoint: Optional[str] = Field(default=None, description="AWS STS endpoint URL")
     aws_bedrock_runtime_endpoint: Optional[str] = Field(default=None, description="AWS Bedrock runtime endpoint URL")
+    checks: BedrockChecksConfigModel | None = Field(
+        default=None,
+        description="Inline safeguards for the resource-less InvokeGuardrailChecks API "
+        "(contentFilter / promptAttack / sensitiveInformation). When set, the guardrail "
+        "calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier "
+        "is required. Mutually exclusive with guardrailIdentifier.",
+    )
+    content_filter_threshold: float | None = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="InvokeGuardrailChecks: block when any contentFilter severityScore >= "
+        "this value (scores are in [0,1]). Set to null to make the content filter "
+        "detect-only (logged, never blocks).",
+    )
+    prompt_attack_threshold: float | None = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="InvokeGuardrailChecks: block when any promptAttack severityScore >= "
+        "this value (scores are in [0,1]). Set to null to make prompt-attack detection detect-only.",
+    )
+    pii_confidence_threshold: float | None = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="InvokeGuardrailChecks: block when any sensitiveInformation confidenceScore "
+        ">= this value (scores are in [0,1]). Set to null to make PII detection detect-only.",
+    )
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):
@@ -687,6 +805,14 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "so only a valid guardrail response can block or modify it."
         ),
     )
+    skip_unscannable_attachments: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
+            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
+            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+        ),
+    )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -697,7 +823,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', and 'headroom'. "
+            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -790,6 +916,7 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     HeadroomGuardrailConfigModel,
+    CompresrGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
@@ -810,6 +937,7 @@ class LitellmParams(
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
+    SingulrGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -925,6 +1053,7 @@ class ApplyGuardrailRequest(BaseModel):
     entities: Optional[List[PiiEntityType]] = None
     input_type: str = "request"
     messages: Optional[List[Dict[str, Any]]] = None
+    metadata: Dict[str, Any] | None = None
 
 
 class ApplyGuardrailResponse(BaseModel):

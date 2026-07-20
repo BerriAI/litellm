@@ -7613,6 +7613,18 @@
               ],
               "title": "Messages"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Metadata"
+            },
             "text": {
               "title": "Text",
               "type": "string"

@@ -48,7 +48,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIException
+from ..common_utils import FireworksAIMixin, FireworksAIException
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -70,7 +70,7 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
     return {**top_level, **per_choice}
 
 
-class FireworksAIConfig(OpenAIGPTConfig):
+class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     """
     Reference: https://docs.fireworks.ai/api-reference/post-chatcompletions
 
@@ -114,6 +114,16 @@ class FireworksAIConfig(OpenAIGPTConfig):
         prompt_truncate_len: Optional[int] = None,
         context_length_exceeded_behavior: Optional[Literal["error", "truncate"]] = None,
     ) -> None:
+        OpenAIGPTConfig.__init__(
+            self,
+            frequency_penalty=frequency_penalty,
+            max_tokens=max_tokens,
+            n=n,
+            stop=stop,
+            temperature=temperature,
+            top_p=top_p,
+            response_format=response_format,
+        )
         locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
@@ -122,6 +132,32 @@ class FireworksAIConfig(OpenAIGPTConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        api_key = self._get_api_key(api_key)
+        if api_key is None:
+            raise ValueError("FIREWORKS_API_KEY is not set")
+
+        validated_headers = OpenAIGPTConfig.validate_environment(
+            self,
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        return self._add_session_affinity_header(validated_headers, litellm_params)
 
     def get_supported_openai_params(self, model: str):
         # Base parameters supported by all models

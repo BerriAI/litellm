@@ -118,10 +118,10 @@ export const useDeletedKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
-): UseQueryResult<KeysResponse> => {
+): UseQueryResult<DeletedKeysResponse> => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<KeysResponse>({
+  return useQuery<DeletedKeysResponse>({
     queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, { ...options, status: "deleted" }),
     enabled: Boolean(accessToken),

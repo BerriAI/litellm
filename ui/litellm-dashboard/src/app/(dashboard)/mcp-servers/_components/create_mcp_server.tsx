@@ -210,6 +210,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         credentials: isClientForwardedTokenMode(values.auth_type)
           ? preservedDeclaredAppCredentials(values.credentials)
           : { ...((values.credentials as Record<string, unknown> | undefined) ?? {}), ...(dcrClientRef.current ?? {}) },
+        issuer: values.issuer,
         authorization_url: values.authorization_url,
         token_url: values.token_url,
         registration_url: values.registration_url,
@@ -759,7 +760,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if ("credentials" in changedValues) {
       setAppMayNotMatchUpstream(false);
     } else {
-      const upstreamChanged = ["url", "spec_path", "authorization_url", "token_url", "registration_url"].some(
+      const upstreamChanged = ["url", "spec_path", "issuer", "authorization_url", "token_url", "registration_url"].some(
         (key) => key in changedValues,
       );
       const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;

@@ -1,4 +1,5 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
 import Settings from "./settings";
@@ -160,7 +161,8 @@ describe("Settings", () => {
 
     mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
 
-    const { getByText, container } = render(<Settings {...defaultProps} />);
+    const user = userEvent.setup();
+    const { getByText } = render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -170,18 +172,8 @@ describe("Settings", () => {
       expect(getByText("Langfuse")).toBeInTheDocument();
     });
 
-    const actionsCell = container.querySelector('[class*="flex justify-end gap-2"]');
-    expect(actionsCell).toBeTruthy();
-
-    const icons = actionsCell?.querySelectorAll("svg");
-    expect(icons?.length).toBeGreaterThanOrEqual(2);
-
-    const editIconParent = icons?.[1]?.closest('[class*="cursor-pointer"]');
-    expect(editIconParent).toBeTruthy();
-
-    act(() => {
-      fireEvent.click(editIconParent!);
-    });
+    await user.click(screen.getByTestId("callback-actions-langfuse-success"));
+    await user.click(await screen.findByTestId("callback-action-edit"));
 
     await waitFor(() => {
       expect(getByText("Edit Callback Settings")).toBeInTheDocument();
@@ -192,6 +184,42 @@ describe("Settings", () => {
       expect(getByText("Secret Key")).toBeInTheDocument();
       expect(getByText("Host")).toBeInTheDocument();
     });
+  });
+
+  it("should hold the callbacks table in loading state until the fetch settles", async () => {
+    let resolveCallbacks: (value: {
+      callbacks: never[];
+      available_callbacks: never[];
+      alerts: never[];
+    }) => void = () => {};
+    mockGetCallbacksCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCallbacks = resolve;
+      }),
+    );
+
+    render(<Settings {...defaultProps} />);
+
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+
+    await act(async () => {
+      resolveCallbacks({ callbacks: [], available_callbacks: [], alerts: [] });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("No callbacks configured")).toBeInTheDocument();
+  });
+
+  it("should resolve loading without fetching when the user id is missing", async () => {
+    render(<Settings {...defaultProps} userID={null as unknown as string} />);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
+    });
+    expect(mockGetCallbacksCall).not.toHaveBeenCalled();
+    expect(screen.getByText("No callbacks configured")).toBeInTheDocument();
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {

@@ -1,9 +1,10 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, Collapse, Divider, Space, Tooltip, Typography } from "antd";
+import { Select as AntdSelect, Card, Collapse, Divider, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 
@@ -43,6 +44,7 @@ export interface ComplexityRouterConfigValue {
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
+  return_raw_model_name?: boolean;
 }
 
 interface ComplexityRouterConfigProps {
@@ -61,6 +63,8 @@ interface ComplexityRouterConfigProps {
   onEmbeddingModelChange?: (model: string) => void;
   matchThreshold?: number;
   onMatchThresholdChange?: (threshold: number) => void;
+  escalationKeywords?: string[];
+  onEscalationKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors?: boolean;
 }
 
@@ -101,6 +105,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEmbeddingModelChange = () => {},
   matchThreshold = 0.5,
   onMatchThresholdChange = () => {},
+  escalationKeywords = [],
+  onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
   // Embedding models can't serve a chat-completion role, so they're excluded here.
@@ -213,6 +219,41 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ),
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
           },
+          {
+            key: "response",
+            label: (
+              <Text strong style={{ color: "#374151" }}>
+                Advanced: Response Format
+              </Text>
+            ),
+            children: (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.return_raw_model_name ?? false}
+                    onChange={(returnRawModelName) => onChange({ ...value, return_raw_model_name: returnRawModelName })}
+                  />
+                  <Text strong>Return raw model name</Text>
+                </div>
+                <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+                  Return the resolved underlying model name in responses instead of the autorouter alias.
+                </Text>
+              </>
+            ),
+          },
+          ...(onEscalationKeywordsChange
+            ? [
+                {
+                  key: "escalation",
+                  label: (
+                    <Text strong style={{ color: "#374151" }}>
+                      Advanced: Escalation Keywords
+                    </Text>
+                  ),
+                  children: <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />,
+                },
+              ]
+            : []),
           ...(onKeywordTierRulesChange || onSemanticMatchingEnabledChange
             ? [
                 {
