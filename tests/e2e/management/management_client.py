@@ -16,14 +16,20 @@ from models import (
     ChatMessage,
     KeyDeleteBody,
     KeyGenerateBody,
+    KeyGenerateResponse,
     KeyListParams,
     KeyListResponse,
+    KeyRegenerateBody,
     KeyUpdateBody,
     OrgDeleteBody,
     OrgInfoParams,
     OrgInfoResponse,
     OrgNewBody,
     OrgNewResponse,
+    TagDeleteBody,
+    TagListEntry,
+    TagListResponse,
+    TagNewBody,
     TeamData,
     TeamDeleteBody,
     TeamInfoParams,
@@ -88,6 +94,16 @@ class ManagementClient:
                 response_type=NoBody,
             )
         )
+
+    def regenerate_key(self, key: str) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/key/regenerate",
+                headers=self.proxy.transport.master,
+                json=KeyRegenerateBody(key=key),
+                response_type=KeyGenerateResponse,
+            )
+        ).key
 
     def key_alias_count(self, key_alias: str) -> int:
         return unwrap(
@@ -245,6 +261,38 @@ class ManagementClient:
                 params=OrgInfoParams(organization_id=organization_id),
                 response_type=OrgInfoResponse,
             )
+        )
+
+    def org_info_status(self, organization_id: str) -> ProbeResult:
+        return self.proxy.transport.probe("/organization/info", params=OrgInfoParams(organization_id=organization_id))
+    def create_tag(self, body: TagNewBody) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/tag/new",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
+
+    def delete_tag(self, name: str) -> None:
+        _ = self.proxy.transport.post(
+            "/tag/delete",
+            headers=self.proxy.transport.master,
+            json=TagDeleteBody(name=name),
+            response_type=NoBody,
+        )
+
+    def tag_list(self) -> tuple[TagListEntry, ...]:
+        return tuple(
+            unwrap(
+                self.proxy.transport.get(
+                    "/tag/list",
+                    headers=self.proxy.transport.master,
+                    params=NoBody(),
+                    response_type=TagListResponse,
+                )
+            ).root
         )
 
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:

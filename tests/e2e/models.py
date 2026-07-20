@@ -73,6 +73,10 @@ class KeyGenerateResponse(BaseModel):
     key: str
 
 
+class KeyRegenerateBody(BaseModel):
+    key: str
+
+
 class KeyDeleteBody(BaseModel):
     keys: list[str]
 
@@ -706,3 +710,26 @@ class OrgInfoResponse(BaseModel):
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+# ---------- tags (management) ----------
+
+
+class TagNewBody(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TagDeleteBody(BaseModel):
+    name: str
+
+
+class TagListEntry(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TagListResponse(RootModel[list[TagListEntry]]):
+    """GET /tag/list answers with a bare array of tag configs (the stored tags plus
+    any dynamically-seen spend tags), not an object wrapping them. Read the rows off
+    .root."""
