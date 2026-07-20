@@ -7464,6 +7464,40 @@ def giveup(e):
     return result
 
 
+def _build_azure_cost_fetcher_if_enabled() -> Optional[Any]:
+    """Return an AzureCostManagementClient when the pull flag + config + creds are all present, else None.
+
+    Evaluated at rollup call time so runtime flag toggles take effect without
+    a proxy restart.
+    """
+    if not general_settings.get("enable_azure_ptu_billing_pull", False):
+        return None
+    azure_ptu_billing = general_settings.get("azure_ptu_billing") or {}
+    subscription_id = azure_ptu_billing.get("subscription_id")
+    if not subscription_id:
+        verbose_proxy_logger.warning(
+            "enable_azure_ptu_billing_pull is true but general_settings.azure_ptu_billing.subscription_id is not set"
+        )
+        return None
+    try:
+        from litellm.integrations.azure_cost_management import (
+            AzureCostManagementClient,
+            AzureCostManagementError,
+        )
+        from litellm.integrations.azure_cost_management.azure_cost_management_client import (
+            AzureCostManagementConfig,
+        )
+
+        config = AzureCostManagementConfig.from_env(subscription_id=subscription_id)
+        return AzureCostManagementClient(config=config)
+    except Exception as exc:  # noqa: BLE001  # missing creds/env; log once per invocation and skip azure_billing this run
+        verbose_proxy_logger.warning(
+            "Azure Cost Management client could not be built: %s. azure_billing reservations will no-op this run.",
+            exc,
+        )
+        return None
+
+
 class ProxyStartupEvent:
     @classmethod
     def _initialize_startup_logging(
@@ -7935,12 +7969,15 @@ class ProxyStartupEvent:
             run_ptu_reservation_rollup,
         )
 
+        async def _scheduled_ptu_rollup() -> None:
+            azure_fetcher = _build_azure_cost_fetcher_if_enabled()
+            await run_ptu_reservation_rollup(prisma_client, azure_fetcher=azure_fetcher)
+
         scheduler.add_job(
-            run_ptu_reservation_rollup,
+            _scheduled_ptu_rollup,
             "cron",
             hour=0,
             minute=15,
-            args=[prisma_client],
             id=PTU_ROLLUP_JOB_ID,
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
