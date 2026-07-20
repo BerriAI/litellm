@@ -8,6 +8,8 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -158,3 +160,35 @@ def test_transform_request_unsafe_body(client, auth_as, monkeypatch):
         response = client.post("/utils/transform_request", json=payload)
     assert response.status_code == 400
     assert "unsafe" in response.text or "error" in response.text
+
+
+@pytest.mark.asyncio
+async def test_transform_request_does_not_block_event_loop(monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "is_request_body_safe", lambda **kwargs: True)
+
+    def slow_return_raw_request(endpoint, kwargs):
+        time.sleep(0.2)
+        return {
+            "raw_request_api_base": "https://example.com/v1/chat/completions",
+            "raw_request_body": kwargs,
+            "raw_request_headers": {},
+        }
+
+    monkeypatch.setattr("litellm.utils.return_raw_request", slow_return_raw_request)
+
+    async def heartbeat():
+        start = asyncio.get_running_loop().time()
+        await asyncio.sleep(0.01)
+        return asyncio.get_running_loop().time() - start
+
+    tick = asyncio.create_task(heartbeat())
+    await asyncio.sleep(0)
+    await proxy_server.transform_request(
+        proxy_server.TransformRequestBody(
+            call_type="completion",
+            request_body={"model": "openai/test-model"},
+        )
+    )
+
+    assert await tick < 0.1

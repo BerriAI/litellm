@@ -690,6 +690,29 @@ def test_completion_forwards_verbosity_in_raw_request(respx_mock: respx.MockRout
     assert request["raw_request_body"]["messages"] == messages
 
 
+def test_return_raw_request_does_not_contact_provider(respx_mock: respx.MockRouter):
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+
+    api_base = "https://example.com/v1"
+    provider_route = respx_mock.post(f"{api_base}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response("test-model")
+    )
+
+    request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "openai/test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "api_base": api_base,
+        },
+    )
+
+    assert request["raw_request_body"]["model"] == "test-model"
+    assert request["raw_request_api_base"] == f"{api_base}/"
+    assert provider_route.called is False
+
+
 @pytest.mark.asyncio
 async def test_acompletion_forwards_verbosity_to_provider_request(
     respx_mock: respx.MockRouter, monkeypatch
