@@ -277,6 +277,26 @@ class TestUserRoutes:
             f"/user/info reports user_role {info.user_role!r}, configured 'internal_user'"
         )
 
+    @pytest.mark.covers("mgmt.user.list.happy_path")
+    def test_created_users_appear_in_user_list(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        user_ids = tuple(
+            _create_user(
+                client,
+                resources,
+                UserNewBody(user_email=f"e2e-mgmt-{unique_marker()}@example.com", user_role="internal_user"),
+            )
+            for _ in range(2)
+        )
+
+        for user_id in user_ids:
+            _ = _poll(
+                client,
+                lambda user_id=user_id: (True if user_id in client.user_list_ids(user_id) else None),
+                f"/user/list never listed the created user {user_id} in the admin inventory",
+            )
+
 
 class TestOrganizationRoutes:
     @pytest.mark.covers("mgmt.organization.new.happy_path")
