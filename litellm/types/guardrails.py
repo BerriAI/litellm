@@ -124,6 +124,7 @@ class SupportedGuardrailIntegrations(Enum):
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
+    DEEPKEEP = "deepkeep"
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
@@ -555,6 +556,18 @@ class LassoGuardrailConfigModel(BaseModel):
     mask: Optional[bool] = Field(default=False, description="Enable content masking using Lasso classifix API")
 
 
+class DeepKeepGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the DeepKeep AI Firewall guardrail"""
+
+    deepkeep_firewall_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The DeepKeep Firewall ID to use for guardrail evaluation. "
+            "If not provided, the `DEEPKEEP_FIREWALL_ID` environment variable is checked."
+        ),
+    )
+
+
 class PillarGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Pillar Security guardrail"""
 
@@ -919,6 +932,7 @@ class LitellmParams(
     CompresrGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
+    DeepKeepGuardrailConfigModel,
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
