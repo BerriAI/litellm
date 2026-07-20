@@ -53,6 +53,42 @@ _CUSTOMER_UPDATE_ZERO_ALLOWED_BUDGET_FIELDS = frozenset(
 )
 
 
+def _customer_update_non_default_values(data_json, explicit_fields):
+    non_default_values = {}
+    for k, v in data_json.items():
+        if v is None:
+            continue
+        if v in ([], {}, 0):
+            if k in _CUSTOMER_UPDATE_ZERO_ALLOWED_BUDGET_FIELDS and k in explicit_fields:
+                non_default_values[k] = v
+            continue
+        non_default_values[k] = v
+    return non_default_values
+
+
+def _prepare_customer_budget_table_data(budget_table_data) -> None:
+    model_max_budget = budget_table_data.get("model_max_budget")
+    if model_max_budget is not None and len(model_max_budget) > 0:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            validate_model_max_budget,
+        )
+
+        try:
+            validate_model_max_budget(model_max_budget)
+        except ValueError as e:
+            raise ProxyException(
+                message=str(e),
+                type="bad_request",
+                param="model_max_budget",
+                code=400,
+            )
+
+    if budget_table_data.get("budget_duration") is not None and "budget_reset_at" not in budget_table_data:
+        budget_table_data["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=budget_table_data["budget_duration"]
+        )
+
+
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
     """Validate a raw end-user DB row into the typed customer response.
 
@@ -559,17 +595,7 @@ async def update_end_user(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        # get non default values for key
-        explicit_fields = data.fields_set()
-        non_default_values = {}
-        for k, v in data_json.items():
-            if v is None:
-                continue
-            if v in ([], {}, 0):
-                if k in _CUSTOMER_UPDATE_ZERO_ALLOWED_BUDGET_FIELDS and k in explicit_fields:
-                    non_default_values[k] = v
-                continue
-            non_default_values[k] = v
+        non_default_values = _customer_update_non_default_values(data_json, data.fields_set())
 
         ## Get end user table data ##
         end_user_table_data = await EndUserRepository(prisma_client).table.find_first(
@@ -612,26 +638,7 @@ async def update_end_user(
 
         ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
-            model_max_budget = budget_table_data.get("model_max_budget")
-            if model_max_budget is not None and len(model_max_budget) > 0:
-                from litellm.proxy.management_endpoints.key_management_endpoints import (
-                    validate_model_max_budget,
-                )
-
-                try:
-                    validate_model_max_budget(model_max_budget)
-                except ValueError as e:
-                    raise ProxyException(
-                        message=str(e),
-                        type="bad_request",
-                        param="model_max_budget",
-                        code=400,
-                    )
-
-            if budget_table_data.get("budget_duration") is not None and "budget_reset_at" not in budget_table_data:
-                budget_table_data["budget_reset_at"] = get_budget_reset_time(
-                    budget_duration=budget_table_data["budget_duration"]
-                )
+            _prepare_customer_budget_table_data(budget_table_data)
 
             if end_user_budget_table is None:
                 ## Create new budget ##
