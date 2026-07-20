@@ -2111,6 +2111,37 @@ def test_token_type_cost_breakdown_reads_cache_write_tokens():
     )
 
 
+def test_generic_cost_per_token_openai_cache_write_tokens_gpt_5_6():
+    """
+    Regression: OpenAI gpt-5.6 reports cache-write tokens under
+    prompt_tokens_details.cache_write_tokens (not the Anthropic cache_creation_tokens
+    name). Those tokens must be billed at the cache-write rate rather than the plain
+    input rate. Customer report: cache creation tokens were never counted for the
+    GPT-5.6 series, so cost was undercounted on cache-write requests.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5.6"
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, cache_write_tokens=800),
+    )
+
+    assert usage.prompt_tokens_details.cache_write_tokens == 800
+    assert usage.prompt_tokens_details.cache_creation_tokens == 800
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    expected_prompt = (1000 - 800) * info["input_cost_per_token"] + 800 * info["cache_creation_input_token_cost"]
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert info["cache_creation_input_token_cost"] > info["input_cost_per_token"]
+    assert prompt_cost > 1000 * info["input_cost_per_token"]
+
+
 def test_token_type_cost_breakdown_reconciles_with_generic_total():
     """
     Both-ways check: the reasoning subset must sum with the remaining (text) output

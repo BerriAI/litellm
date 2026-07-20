@@ -109,6 +109,50 @@ def test_get_logging_payload_does_not_map_missing_or_zero_cached_tokens(prompt_t
     assert "cache_read_input_tokens" not in additional_usage_values
 
 
+def test_get_logging_payload_maps_openai_cache_write_tokens_to_cache_creation_input_tokens():
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=2,
+            total_tokens=1002,
+            prompt_tokens_details={"cached_tokens": 0, "cache_write_tokens": 800},
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 800
+    assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 800
+
+
+def test_get_logging_payload_preserves_anthropic_cache_creation_input_tokens():
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=2,
+            total_tokens=1002,
+            cache_creation_input_tokens=300,
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 300
+
+
+@pytest.mark.parametrize(
+    "prompt_tokens_details",
+    [None, {"cached_tokens": 100}, {"cached_tokens": 100, "cache_write_tokens": 0}],
+)
+def test_get_logging_payload_does_not_map_missing_or_zero_cache_write_tokens(prompt_tokens_details):
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=12,
+            prompt_tokens_details=prompt_tokens_details,
+        )
+    )
+
+    assert "cache_creation_input_tokens" not in additional_usage_values
+
+
 def test_sanitize_request_body_for_spend_logs_payload_basic():
     request_body = {
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
