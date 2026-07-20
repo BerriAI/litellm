@@ -1,16 +1,13 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React from "react";
 import { PiggyBank } from "lucide-react";
+import { Alert, Tabs } from "antd";
 
-import { AreaChart, DonutChart } from "@/components/shared/charts";
-import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { userDailyActivityCall } from "@/components/networking";
-import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles } from "@/utils/roles";
-import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
+import UsageTab from "./UsageTab";
+import PromptCompressionTab from "./PromptCompressionTab";
+import AutorouterTab from "./AutorouterTab";
+import PromptCachingTab from "./PromptCachingTab";
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -18,173 +15,62 @@ interface CostOptimizationViewProps {
   userRole: string;
 }
 
-type DateRange = { from?: Date; to?: Date };
-
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-
-const usd = (value: number): string => {
-  const decimals = value > 0 && value < 1 ? 4 : 2;
-  return `$${formatNumberWithCommas(value, decimals)}`;
-};
-
-const shortDate = (iso: string): string =>
-  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-
-const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
-const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
-const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
-const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
-const autorouterRequestsOf = (m: SpendMetrics): number => m.autorouter_requests ?? 0;
-const autorouterEscalatedOf = (m: SpendMetrics): number => m.autorouter_escalated_requests ?? 0;
-
-const pct = (value: number): string => `${formatNumberWithCommas(value * 100, 1)}%`;
-
-const SummaryCard = ({ label, value, hint }: { label: string; value: string; hint?: string }) => (
-  <Card>
-    <CardHeader>
-      <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-    </CardHeader>
-    <CardContent>
-      <p className="text-2xl font-semibold text-foreground">{value}</p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
-    </CardContent>
-  </Card>
-);
-
 const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken, userId, userRole }) => {
-  const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
-  const initialTo = useMemo(() => new Date(), []);
-  const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
-
-  const startTime = dateValue.from ?? null;
-  const endTime = dateValue.to ?? null;
-  const isAdmin = all_admin_roles.includes(userRole);
-  const effectiveUserId = isAdmin ? null : userId;
-
-  const { data, loading, isFetchingMore } = usePaginatedDailyActivity({
-    fetchFn: userDailyActivityCall,
-    args: [accessToken, startTime, endTime, effectiveUserId],
-    enabled: !!accessToken && !!startTime && !!endTime,
-  });
-
-  const results = data.results as DailyData[];
-
-  const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
-  const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
-  const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
-  const autorouterRequestsTotal = useMemo(
-    () => results.reduce((sum, d) => sum + autorouterRequestsOf(d.metrics), 0),
-    [results],
-  );
-  const autorouterEscalatedTotal = useMemo(
-    () => results.reduce((sum, d) => sum + autorouterEscalatedOf(d.metrics), 0),
-    [results],
-  );
-  const escalationRate = autorouterRequestsTotal > 0 ? autorouterEscalatedTotal / autorouterRequestsTotal : 0;
-  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
-
-  const overTime = useMemo(
-    () =>
-      results.map((d) => ({
-        date: shortDate(d.date),
-        Compression: compressionOf(d.metrics),
-        "Prompt caching": cachingOf(d.metrics),
-      })),
-    [results],
-  );
-
-  const byDriver = useMemo(
-    () =>
-      [
-        { driver: "Autorouter (est.)", usd: autorouterTotal },
-        { driver: "Compression", usd: compressionTotal },
-        { driver: "Prompt caching", usd: cachingTotal },
-      ].filter((d) => d.usd > 0),
-    [autorouterTotal, compressionTotal, cachingTotal],
-  );
+  const items = [
+    {
+      key: "usage",
+      label: "Usage",
+      children: <UsageTab accessToken={accessToken} userId={userId} userRole={userRole} />,
+    },
+    {
+      key: "compression",
+      label: "Prompt Compression",
+      children: <PromptCompressionTab accessToken={accessToken} />,
+    },
+    {
+      key: "autorouter",
+      label: "Autorouter",
+      children: <AutorouterTab accessToken={accessToken} userId={userId} userRole={userRole} />,
+    },
+    {
+      key: "caching",
+      label: "Prompt Caching",
+      children: <PromptCachingTab accessToken={accessToken} />,
+    },
+  ];
 
   return (
     <div className="w-full space-y-6 p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <PiggyBank className="size-6 text-emerald-600" strokeWidth={1.75} />
-            <h1 className="text-xl font-semibold text-foreground">Cost Optimization</h1>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Money saved by autorouter routing, prompt compression, and prompt caching across your requests
-          </p>
+      <div>
+        <div className="flex items-center gap-2">
+          <PiggyBank className="size-6 text-emerald-600" strokeWidth={1.75} />
+          <h1 className="text-xl font-semibold text-foreground">Cost Optimization</h1>
         </div>
-        <AdvancedDatePicker value={dateValue} onValueChange={(v) => setDateValue(v)} />
+        <p className="mt-1 text-sm text-muted-foreground">
+          Track and configure the mechanisms that save you money: prompt compression, prompt caching, and auto routing
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-        <SummaryCard
-          label="Total saved"
-          value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Autorouter (est.) + compression + prompt caching"}
-        />
-        <SummaryCard
-          label="Compression savings"
-          value={usd(compressionTotal)}
-          hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
-        />
-        <SummaryCard label="Prompt caching savings" value={usd(cachingTotal)} hint="Cache read discount" />
-      </div>
+      <Alert
+        type="info"
+        showIcon
+        message="This is an experimental dashboard"
+        description={
+          <span>
+            Have feedback? Join the discussion{" "}
+            <a
+              href="https://github.com/BerriAI/litellm/discussions/32172"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 underline"
+            >
+              here
+            </a>
+          </span>
+        }
+      />
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-        <SummaryCard
-          label="Autorouter saved"
-          value={usd(autorouterTotal)}
-          hint="Estimated vs the most expensive configured model"
-        />
-        <SummaryCard
-          label="Escalation rate"
-          value={autorouterRequestsTotal > 0 ? pct(escalationRate) : "—"}
-          hint={
-            autorouterRequestsTotal > 0
-              ? `${formatNumberWithCommas(autorouterEscalatedTotal)} of ${formatNumberWithCommas(
-                  autorouterRequestsTotal,
-                )} routed requests asked to escalate`
-              : "No autorouter requests yet"
-          }
-        />
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Savings over time</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <AreaChart
-              data={overTime}
-              index="date"
-              categories={["Compression", "Prompt caching"]}
-              colors={["emerald", "blue"]}
-              valueFormatter={usd}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Savings by driver</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <DonutChart
-              className="h-80"
-              data={byDriver}
-              index="driver"
-              category="usd"
-              colors={["amber", "emerald", "blue"]}
-              valueFormatter={usd}
-              showLabel
-              label={usd(totalSaved)}
-            />
-          </CardContent>
-        </Card>
-      </div>
+      <Tabs defaultActiveKey="usage" items={items} />
     </div>
   );
 };
