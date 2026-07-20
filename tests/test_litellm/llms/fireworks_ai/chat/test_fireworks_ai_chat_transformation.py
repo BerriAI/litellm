@@ -187,6 +187,26 @@ def test_validate_environment_resolves_api_key_from_env_and_sets_content_type(mo
     assert headers["Content-Type"] == "application/json"
 
 
+def test_validate_environment_raises_without_api_key(monkeypatch):
+    for env_var in (
+        "FIREWORKS_API_KEY",
+        "FIREWORKS_AI_API_KEY",
+        "FIREWORKSAI_API_KEY",
+        "FIREWORKS_AI_TOKEN",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    config = FireworksAIConfig()
+
+    with pytest.raises(ValueError, match="FIREWORKS_API_KEY is not set"):
+        config.validate_environment(
+            headers={},
+            model="accounts/fireworks/models/test-model",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+
 def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     assert (
         get_fireworks_session_id(
