@@ -169,6 +169,24 @@ class TestKeyRoutes:
 
         _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
 
+    @pytest.mark.covers("mgmt.key.list.happy_path")
+    def test_created_key_appears_in_key_list_inventory(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        alias = f"e2e-mgmt-keylist-{unique_marker()}"
+        assert client.key_alias_count(alias) == 0, (
+            f"/key/list already reports a key under the unused alias {alias!r} before it is created"
+        )
+
+        _ = _generate_key(client, resources, KeyGenerateBody(key_alias=alias))
+
+        def listed() -> bool | None:
+            return True if client.key_alias_count(alias) == 1 else None
+
+        _ = _poll(
+            client, listed, f"created key with alias {alias!r} never appeared in /key/list before the deadline"
+        )
+
 
     @pytest.mark.covers("mgmt.key.block.persists")
     def test_block_persists_to_key_info(self, client: ManagementClient, resources: ResourceManager) -> None:
