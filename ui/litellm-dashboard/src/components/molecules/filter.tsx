@@ -1,6 +1,7 @@
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { FilterIcon } from "@heroicons/react/outline";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { Button, Input, Select } from "antd";
-import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 
 export interface FilterOptionCustomComponentProps {
@@ -54,8 +55,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     [key: string]: boolean;
   }>({});
 
-  const debouncedSearch = useCallback(
-    debounce(async (value: string, option: FilterOption) => {
+  const debouncedSearch = useDebouncedCallback(
+    async (value: string, option: FilterOption) => {
       if (!option.isSearchable || !option.searchFn) return;
 
       setSearchLoadingMap((prev) => ({ ...prev, [option.name]: true }));
@@ -68,8 +69,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
       } finally {
         setSearchLoadingMap((prev) => ({ ...prev, [option.name]: false }));
       }
-    }, 300),
-    [],
+    },
+    { wait: DEBOUNCE_WAIT_MS },
   );
 
   // Load initial options for searchable filters

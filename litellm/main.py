@@ -92,7 +92,10 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
-from litellm.litellm_core_utils.get_litellm_params import OPTIONAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_litellm_params import (
+    AWS_CREDENTIAL_KWARGS_KEYS,
+    OPTIONAL_KWARGS_KEYS,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -507,6 +510,20 @@ async def acompletion(
     #########################################################
     #########################################################
     litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=kwargs,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
+        model=model,
+        custom_llm_provider=cast(Optional[str], custom_llm_provider),  # cast-ok: read from untyped kwargs
+        tools=tools,
+    )
+
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=kwargs.get("prompt_id", None),
@@ -5056,6 +5073,19 @@ def completion(  # type: ignore
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+    from litellm.types.llms.openai import AllMessageValues
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=non_default_params,
+        messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+        model=model,
+        custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
+        tools=tools,
+    )
+
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
@@ -5326,7 +5356,7 @@ def completion(  # type: ignore
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
-            aws_bedrock_project_id=kwargs.get("aws_bedrock_project_id"),
+            **{key: kwargs[key] for key in AWS_CREDENTIAL_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,

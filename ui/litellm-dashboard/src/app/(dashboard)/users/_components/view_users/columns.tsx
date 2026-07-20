@@ -3,8 +3,7 @@ import { Badge, Grid, Icon } from "@tremor/react";
 import { Tooltip, Checkbox, Tag } from "antd";
 import { UserInfo } from "@/components/networking";
 import { PencilAltIcon, TrashIcon, InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
-import { CopyOutlined } from "@ant-design/icons";
-import { formatNumberWithCommas, copyToClipboard } from "@/utils/dataUtils";
+import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 
 interface SelectionOptions {
   selectedUsers: UserInfo[];
@@ -29,24 +28,7 @@ export const columns = (
       header: "User ID",
       accessorKey: "user_id",
       enableSorting: true,
-      cell: ({ row }) => (
-        <div className="flex items-center space-x-2">
-          <Tooltip title={row.original.user_id}>
-            <span className="text-xs">{row.original.user_id ? `${row.original.user_id.slice(0, 7)}...` : "-"}</span>
-          </Tooltip>
-          {row.original.user_id && (
-            <Tooltip title="Copy User ID">
-              <CopyOutlined
-                onClick={(e) => {
-                  e.stopPropagation();
-                  copyToClipboard(row.original.user_id, "User ID copied to clipboard");
-                }}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
-              />
-            </Tooltip>
-          )}
-        </div>
-      ),
+      cell: ({ row }) => <IdCell value={row.original.user_id} variant="plain" copyable />,
     },
     {
       header: "Email",
@@ -93,17 +75,13 @@ export const columns = (
       header: "Spend (USD)",
       accessorKey: "spend",
       enableSorting: true,
-      cell: ({ row }) => (
-        <span className="text-xs">{row.original.spend ? formatNumberWithCommas(row.original.spend, 4) : "-"}</span>
-      ),
+      cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={4} />,
     },
     {
       header: "Budget (USD)",
       accessorKey: "max_budget",
       enableSorting: false,
-      cell: ({ row }) => (
-        <span className="text-xs">{row.original.max_budget !== null ? row.original.max_budget : "Unlimited"}</span>
-      ),
+      cell: ({ row }) => <MoneyCell value={row.original.max_budget} decimals={2} emptyText="Unlimited" showZero />,
     },
     {
       header: () => (
@@ -142,21 +120,13 @@ export const columns = (
       header: "Created At",
       accessorKey: "created_at",
       enableSorting: true,
-      cell: ({ row }) => (
-        <span className="text-xs">
-          {row.original.created_at ? new Date(row.original.created_at).toLocaleDateString() : "-"}
-        </span>
-      ),
+      cell: ({ row }) => <DateCell value={row.original.created_at} precision="date" />,
     },
     {
       header: "Updated At",
       accessorKey: "updated_at",
       enableSorting: false,
-      cell: ({ row }) => (
-        <span className="text-xs">
-          {row.original.updated_at ? new Date(row.original.updated_at).toLocaleDateString() : "-"}
-        </span>
-      ),
+      cell: ({ row }) => <DateCell value={row.original.updated_at} precision="date" />,
     },
     {
       id: "actions",

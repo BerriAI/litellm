@@ -27,18 +27,18 @@ from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody
 pytestmark = pytest.mark.e2e
 
 def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure: str) -> T:
-    deadline = time.monotonic() + client.gateway.poll_timeout
+    deadline = time.monotonic() + client.proxy.poll_timeout
     while time.monotonic() < deadline:
         found = attempt()
         if found is not None:
             return found
-        time.sleep(client.gateway.poll_interval)
+        time.sleep(client.proxy.poll_interval)
     pytest.fail(failure)
 
 
 def _generate_key(client: ManagementClient, resources: ResourceManager, body: KeyGenerateBody) -> str:
-    key = client.gateway.generate_key(body)
-    resources.defer(lambda: client.gateway.delete_key(key))
+    key = client.proxy.generate_key(body)
+    resources.defer(lambda: client.proxy.delete_key(key))
     return key
 
 
@@ -111,16 +111,19 @@ class TestKeyRoutes:
         key = _generate_key(
             client,
             resources,
-            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424242),
+            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=424242, rpm_limit=424243),
         )
 
-        info = client.gateway.key_info(key)
+        info = client.proxy.key_info(key)
         assert info.key_alias == alias, f"/key/info reports key_alias {info.key_alias!r}, configured {alias!r}"
         assert info.models == ["gemini-2.5-flash"], (
             f"/key/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
         assert info.tpm_limit == 424242, (
             f"/key/info reports tpm_limit {info.tpm_limit}, configured 424242"
+        )
+        assert info.rpm_limit == 424243, (
+            f"/key/info reports rpm_limit {info.rpm_limit}, configured 424243"
         )
 
         _poll_chat_ok(client, key, "gemini-2.5-flash")
@@ -140,7 +143,7 @@ class TestKeyRoutes:
 
         client.update_key_models(key, ["gpt-5.5"])
 
-        info = client.gateway.key_info(key)
+        info = client.proxy.key_info(key)
         assert info.models == ["gpt-5.5"], (
             f"/key/info reports models {info.models} after /key/update to ['gpt-5.5']"
         )
@@ -167,7 +170,7 @@ class TestKeyRoutes:
 
 
 class TestTeamRoutes:
-    @pytest.mark.covers("management.team.new.persists")
+    @pytest.mark.covers("mgmt.team.new.persists")
     def test_new_persists_to_team_info_and_binds_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -181,7 +184,7 @@ class TestTeamRoutes:
         )
 
         key = _generate_key(client, resources, KeyGenerateBody(team_id=team_id))
-        key_info = client.gateway.key_info(key)
+        key_info = client.proxy.key_info(key)
         assert key_info.team_id == team_id, (
             f"key generated under team {team_id} carries team_id {key_info.team_id!r} in /key/info"
         )
@@ -212,7 +215,7 @@ class TestTeamRoutes:
 
 
 class TestUserRoutes:
-    @pytest.mark.covers("mgmt.user.new.persists")
+    @pytest.mark.covers("mgmt.user.new.happy_path")
     def test_new_persists_to_user_info(self, client: ManagementClient, resources: ResourceManager) -> None:
         email = f"e2e-mgmt-{unique_marker()}@example.com"
         user_id = _create_user(client, resources, UserNewBody(user_email=email, user_role="internal_user"))
@@ -225,7 +228,7 @@ class TestUserRoutes:
 
 
 class TestOrganizationRoutes:
-    @pytest.mark.covers("mgmt.organization.new.persists")
+    @pytest.mark.covers("mgmt.organization.new.happy_path")
     def test_new_persists_to_organization_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -252,12 +255,12 @@ def _assert_route_forbidden(route: str, outcome: StreamingResponse) -> None:
 
 
 class TestManagementRoutePermissions:
-    @pytest.mark.covers("mgmt.key.generate.member_forbidden")
+    @pytest.mark.covers("other.auth.virtual_key.route_permission_enforced")
     def test_llm_only_key_forbidden_from_management_writes(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         key = client.llm_only_key()
-        resources.defer(lambda: client.gateway.delete_key(key))
+        resources.defer(lambda: client.proxy.delete_key(key))
         marker = unique_marker()
         alias = f"e2e-mgmt-forbidden-key-{marker}"
         team_id = f"e2e-mgmt-forbidden-team-{marker}"

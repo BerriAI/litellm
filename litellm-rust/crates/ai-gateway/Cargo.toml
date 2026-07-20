@@ -41,3 +41,4 @@ python-config = ["dep:pyo3"]
 
 [dev-dependencies]
 futures-channel = "0.3"
+tower = { version = "0.5.3", features = ["util"] }

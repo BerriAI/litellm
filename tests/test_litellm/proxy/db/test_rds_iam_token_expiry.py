@@ -26,25 +26,13 @@ class TestPrismaWrapperTokenRefresh:
     """Tests for the PrismaWrapper RDS IAM token refresh implementation."""
 
     @pytest.fixture
-    def setup_env(self):
+    def setup_env(self, monkeypatch, unset_database_url):
         """Setup environment variables for testing."""
-        os.environ["DATABASE_HOST"] = "test-host.rds.amazonaws.com"
-        os.environ["DATABASE_PORT"] = "5432"
-        os.environ["DATABASE_USER"] = "test_user"
-        os.environ["DATABASE_NAME"] = "test_db"
-        os.environ["IAM_TOKEN_DB_AUTH"] = "True"
-        yield
-        # Cleanup
-        for key in [
-            "DATABASE_HOST",
-            "DATABASE_PORT",
-            "DATABASE_USER",
-            "DATABASE_NAME",
-            "DATABASE_URL",
-            "IAM_TOKEN_DB_AUTH",
-            "DATABASE_SCHEMA",
-        ]:
-            os.environ.pop(key, None)
+        monkeypatch.setenv("DATABASE_HOST", "test-host.rds.amazonaws.com")
+        monkeypatch.setenv("DATABASE_PORT", "5432")
+        monkeypatch.setenv("DATABASE_USER", "test_user")
+        monkeypatch.setenv("DATABASE_NAME", "test_db")
+        monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "True")
 
     def _generate_mock_token(self, expires_in_seconds: int = 900) -> str:
         """Generate a mock IAM token with expiration info."""
@@ -172,22 +160,12 @@ class TestBackgroundRefreshLoop:
     """Tests for the background refresh loop timing."""
 
     @pytest.fixture
-    def setup_env(self):
+    def setup_env(self, monkeypatch, unset_database_url):
         """Setup environment variables for testing."""
-        os.environ["DATABASE_HOST"] = "test-host.rds.amazonaws.com"
-        os.environ["DATABASE_PORT"] = "5432"
-        os.environ["DATABASE_USER"] = "test_user"
-        os.environ["DATABASE_NAME"] = "test_db"
-        yield
-        # Cleanup
-        for key in [
-            "DATABASE_HOST",
-            "DATABASE_PORT",
-            "DATABASE_USER",
-            "DATABASE_NAME",
-            "DATABASE_URL",
-        ]:
-            os.environ.pop(key, None)
+        monkeypatch.setenv("DATABASE_HOST", "test-host.rds.amazonaws.com")
+        monkeypatch.setenv("DATABASE_PORT", "5432")
+        monkeypatch.setenv("DATABASE_USER", "test_user")
+        monkeypatch.setenv("DATABASE_NAME", "test_db")
 
     @pytest.mark.asyncio
     async def test_calculate_seconds_fallback_when_no_url(self, setup_env):

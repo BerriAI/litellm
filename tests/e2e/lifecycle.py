@@ -13,7 +13,7 @@ the test body is run(), and the fixture's teardown is teardown().
 from dataclasses import dataclass, field
 from typing import Callable, List, Protocol, runtime_checkable
 
-from e2e_gateway import Gateway
+from proxy_client import ProxyClient
 from models import KeyGenerateBody
 
 
@@ -52,7 +52,7 @@ def run_case(case: E2ECase) -> None:
 @runtime_checkable
 class ResourceClient(Protocol):
     """Proxy operations the convenience creators use. Resource types without a
-    creator here are handled generically via ResourceManager.defer(). The Gateway
+    creator here are handled generically via ResourceManager.defer(). The ProxyClient
     satisfies this."""
 
     def generate_key(self, body: KeyGenerateBody) -> str: ...
@@ -63,12 +63,12 @@ class ResourceClient(Protocol):
 
 
 @runtime_checkable
-class GatewayProvider(Protocol):
-    """Every suite's client exposes the shared Gateway, which the resources fixture
+class ProxyClientProvider(Protocol):
+    """Every suite's client exposes the shared ProxyClient, which the resources fixture
     uses for cleanup. The client adds its own route methods on top."""
 
     @property
-    def gateway(self) -> Gateway: ...
+    def proxy(self) -> ProxyClient: ...
 
 
 @dataclass

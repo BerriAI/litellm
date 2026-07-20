@@ -125,7 +125,9 @@ if MCP_AVAILABLE:
         get_user_env_vars_bulk,
         get_user_oauth_credential,
         list_user_oauth_credentials,
+        mcp_oauth_token_identity,
         merge_user_env_vars,
+        purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         store_user_credential,
         store_user_oauth_credential,
@@ -534,6 +536,7 @@ if MCP_AVAILABLE:
         sanitized.env = {}
         sanitized.command = None
         sanitized.args = []
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
@@ -579,6 +582,7 @@ if MCP_AVAILABLE:
         sanitized.teams = []
         sanitized.env_vars = None
 
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
@@ -684,6 +688,7 @@ if MCP_AVAILABLE:
             command=payload.command,
             args=payload.args,
             env=payload.env,
+            issuer=payload.issuer,
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
             registration_url=payload.registration_url,
@@ -718,12 +723,13 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-        tools = await _list_mcp_tools(
+        listing = await _list_mcp_tools(
             user_api_key_auth=user_api_key_dict,
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
         )
+        tools = listing.tools
         dumped_tools = [dict(tool) for tool in tools]
 
         return {"tools": dumped_tools}
@@ -1473,6 +1479,7 @@ if MCP_AVAILABLE:
             temporary_server = await global_mcp_server_manager.build_mcp_server_from_table(
                 temp_record,
                 credentials_are_encrypted=False,
+                persist_discovered_endpoints=False,
             )
             _cache_temporary_mcp_server(
                 temporary_server,
@@ -1913,6 +1920,11 @@ if MCP_AVAILABLE:
             expires_in=payload.expires_in,
             scopes=payload.scopes,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         # Read back the persisted record so the response reflects the stored
         # expires_at rather than recomputing it here (which could diverge by
         # milliseconds or if the storage logic ever adds a grace period).
@@ -1953,6 +1965,11 @@ if MCP_AVAILABLE:
                 await delete_user_credential(prisma_client, user_id, server_id)
             except RecordNotFoundError:
                 pass  # Already gone — treat as a successful delete
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
+            )
+
+            await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=False,
@@ -2308,6 +2325,41 @@ if MCP_AVAILABLE:
                 },
             )
 
+        # Snapshot the pre-update identity so we can detect a mint-relevant change below. The read is
+        # advisory (it only feeds the stale-token purge decision), so a failure skips the purge with a
+        # warning instead of failing the edit, whose primary job is the update itself.
+        try:
+            old_server_record = await get_mcp_server(prisma_client, payload.server_id)
+            old_server_record_read_failed = False
+        except Exception as exc:  # noqa: BLE001 - advisory read; invalidation is best-effort end-to-end
+            verbose_logger.warning(
+                "MCP server %s: could not snapshot the pre-update record; skipping the stale-token check: %s",
+                payload.server_id,
+                exc,
+            )
+            old_server_record = None
+            old_server_record_read_failed = True
+
+        if (
+            payload.dcr_bridge
+            and payload.auth_type is None
+            and (old_server_record is not None or old_server_record_read_failed)
+        ):
+            stored_auth_type = old_server_record.auth_type if old_server_record else None
+            stored_auth_type_name = getattr(stored_auth_type, "value", stored_auth_type)
+            if stored_auth_type not in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": (
+                            "dcr_bridge is only supported for auth_type true_passthrough or "
+                            f"oauth_delegate (stored auth_type: {stored_auth_type_name!r}). Include "
+                            "the server's auth_type in the update payload or configure one of the "
+                            "client-forwarded token modes first."
+                        )
+                    },
+                )
+
         # try to update the mcp server
         mcp_server_record_updated = await update_mcp_server(
             prisma_client,
@@ -2325,6 +2377,30 @@ if MCP_AVAILABLE:
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+
+        # If a field that determines which upstream OAuth token gets minted changed (url/audience, OAuth
+        # mode/grant, authorization-server endpoints, or the OAuth client + scopes), every stored per-user
+        # token was minted for the old configuration and is stale. Purge them (DB + cache) so the next
+        # tool call re-authorizes instead of forwarding a token for a resource/AS/client that no longer
+        # matches. Best-effort: a purge failure must not fail the update, whose primary job already
+        # succeeded.
+        if old_server_record is not None and mcp_oauth_token_identity(old_server_record) != mcp_oauth_token_identity(
+            mcp_server_record_updated
+        ):
+            try:
+                purged = await purge_user_oauth_credentials_for_server(prisma_client, payload.server_id)
+                if purged:
+                    verbose_logger.info(
+                        "MCP server %s: purged %d stale per-user OAuth token(s) after a mint-relevant config change",
+                        payload.server_id,
+                        purged,
+                    )
+            except Exception as exc:  # noqa: BLE001 - purge is best-effort; the server update already succeeded
+                verbose_logger.warning(
+                    "MCP server %s: failed to purge stale per-user OAuth tokens after config change: %s",
+                    payload.server_id,
+                    exc,
+                )
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:

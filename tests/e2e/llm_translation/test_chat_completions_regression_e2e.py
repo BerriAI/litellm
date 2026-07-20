@@ -33,26 +33,38 @@ class TestChatCompletionsRegression:
         CHAT_MODELS,
         ids=[f"{model}-{route}" for model, route in CHAT_MODELS],
     )
-    @pytest.mark.covers("llm.chat_completions.provider.basic.nonstream.works", exercised_on=[])
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.basic.nonstream.works",
+        "llm.chat_completions.anthropic.basic.nonstream.works",
+        "llm.chat_completions.vertex.basic.nonstream.works",
+        exercised_on=[],
+    )
     def test_chat_returns_real_completion(
         self, client: PassthroughClient, scoped_key: str, model: str, route: str
     ) -> None:
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 scoped_key,
                 ChatBody(
                     model=model,
                     messages=[
-                        ChatMessage(role="user", content=f"reply with one word {unique_marker()}")
+                        ChatMessage(
+                            role="user",
+                            content=f"reply with one word {unique_marker()}",
+                        )
                     ],
                     max_tokens=512,
                 ),
             )
         )
 
-        assert response.model, f"{model} ({route}): response carried no model name: {response}"
-        assert response.choices, f"{model} ({route}): response had no choices: {response}"
+        assert (
+            response.model
+        ), f"{model} ({route}): response carried no model name: {response}"
+        assert (
+            response.choices
+        ), f"{model} ({route}): response had no choices: {response}"
         message = response.choices[0].message
-        assert message is not None and message.content and message.content.strip(), (
-            f"{model} ({route}): 200 with an empty completion (#28991): {response}"
-        )
+        assert (
+            message is not None and message.content and message.content.strip()
+        ), f"{model} ({route}): 200 with an empty completion (#28991): {response}"
