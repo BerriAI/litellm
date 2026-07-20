@@ -105,6 +105,7 @@ impl IntoResponse for MessagesRouteError {
             ),
             CoreError::Http { .. }
             | CoreError::Network(_)
+            | CoreError::Timeout
             | CoreError::InvalidResponse(_)
             | CoreError::InvalidType { .. }
             | CoreError::MissingField(_) => (

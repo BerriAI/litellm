@@ -11,6 +11,7 @@
 //!   binary turns on. The `python-config` feature additionally pulls in [`python`]
 //!   for the load-time config reader.
 
+pub(crate) mod config;
 pub mod io;
 pub mod messages;
 pub mod ocr;

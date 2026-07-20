@@ -3,14 +3,16 @@ use std::pin::Pin;
 
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::CoreError;
-use litellm_core::ocr::transformation::OcrAuthStrategy;
+use litellm_core::ocr::transformation::{OcrAuth, OcrAuthStrategy, OcrDocumentPreparation};
 use litellm_core::CoreResult;
 use serde_json::{json, Map, Value};
 
 use super::common_utils::{
     convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
+    upload_reducto_document,
 };
 use super::types::{PreparedOcrRequest, ProviderOcrRequest};
+use crate::config::resolve_env_reference;
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
@@ -20,6 +22,7 @@ use crate::integrations::custom_logger::{
 use crate::integrations::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
 };
+use crate::io::vertex_ai::VertexAiBase;
 
 pub(crate) struct OcrLifecycleHooks {
     logger_runner: CustomLoggerRunner,
@@ -80,11 +83,30 @@ impl OcrLifecycleHooks {
         let env_lookup = |key: &str| std::env::var(key).ok();
         let headers = string_headers(request.extra_headers)?;
         let auth_strategy = config.auth_strategy();
-        let api_key = (!has_header(&headers, auth_strategy.header_name()))
-            .then(|| config.resolve_api_key(request.api_key.as_deref(), &env_lookup))
-            .transpose()?;
+        let api_key = resolve_env_reference(request.api_key.as_deref(), &env_lookup);
+        let api_base = resolve_env_reference(request.api_base.as_deref(), &env_lookup);
+        let api_key = if has_header(&headers, auth_strategy.header_name()) {
+            None
+        } else {
+            match config.ocr_auth() {
+                OcrAuth::ProviderKey => {
+                    Some(config.resolve_api_key(api_key.as_deref(), &env_lookup)?)
+                }
+                OcrAuth::VertexOauth => {
+                    let credentials = VertexAiBase::resolve_credential_source(
+                        &request.optional_params,
+                        &env_lookup,
+                    );
+                    Some(
+                        VertexAiBase::shared()
+                            .get_access_token(credentials.as_deref())
+                            .await?,
+                    )
+                }
+            }
+        };
         let url = config.complete_url(
-            request.api_base.as_deref(),
+            api_base.as_deref(),
             &request.model,
             &request.optional_params,
             &env_lookup,
@@ -92,15 +114,20 @@ impl OcrLifecycleHooks {
         let filtered_params = config.map_ocr_params(&request.optional_params);
         let model = request.model.clone();
         let custom_llm_provider = request.custom_llm_provider.clone();
-        let document = if config.requires_data_uri_document() {
-            convert_document_url_to_data_uri(request.document).await?
-        } else {
-            request.document
+        let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
+        let document = match config.document_preparation() {
+            OcrDocumentPreparation::None => request.document,
+            OcrDocumentPreparation::DataUri => {
+                convert_document_url_to_data_uri(request.document, request.timeout).await?
+            }
+            OcrDocumentPreparation::ReductoUpload => {
+                upload_reducto_document(request.document, &url, &upstream_headers, request.timeout)
+                    .await?
+            }
         };
         let body = config
             .transform_ocr_request(&request.model, document, filtered_params)?
             .data;
-        let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
         let body = self
             .run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
             .await?;
@@ -225,7 +252,7 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
                 return;
             }
             let logging_error = LoggingError {
-                message: error.to_string(),
+                message: error.public_message(),
                 kind: core_error_kind(error).to_string(),
             };
             let response_obj = CallbackValue::new(
@@ -323,6 +350,7 @@ fn core_error_kind(error: &CoreError) -> &'static str {
         CoreError::MissingField(_) => "MissingField",
         CoreError::Http { .. } => "HttpError",
         CoreError::InvalidResponse(_) => "InvalidResponse",
+        CoreError::Timeout => "Timeout",
         CoreError::Network(_) => "NetworkError",
         CoreError::Routing(_) => "RoutingError",
     }

@@ -32,6 +32,12 @@ fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
     Ok(json.call_method1("loads", (encoded,))?.unbind())
 }
 
+fn ocr_error_to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
+    let status_code = err.public_status_code();
+    let message = err.public_message();
+    build_rust_ocr_error(py, &message, status_code).unwrap_or_else(|import_err| import_err)
+}
+
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
     match err {
         CoreError::Auth(message) => PyValueError::new_err(message),
@@ -41,6 +47,18 @@ fn core_error_to_pyerr(err: CoreError) -> PyErr {
         | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
     }
+}
+
+fn build_rust_ocr_error(
+    py: Python<'_>,
+    message: &str,
+    status_code: Option<u16>,
+) -> PyResult<PyErr> {
+    let exc_type = py
+        .import("litellm.rust_bridge.ocr")?
+        .getattr("RustOcrError")?;
+    let instance = exc_type.call1((message, status_code))?;
+    Ok(PyErr::from_value(instance))
 }
 
 fn optional_object_to_map(
@@ -196,7 +214,7 @@ fn ocr(
 
     match result {
         Ok(value) => json_to_py(py, value),
-        Err(err) => Err(core_error_to_pyerr(err)),
+        Err(err) => Err(ocr_error_to_pyerr(py, err)),
     }
 }
 
@@ -238,7 +256,7 @@ fn aocr(
             litellm_call_id: None,
         })
         .await
-        .map_err(core_error_to_pyerr)?;
+        .map_err(|err| Python::attach(|py| ocr_error_to_pyerr(py, err)))?;
 
         Python::attach(|py| json_to_py(py, value))
     })

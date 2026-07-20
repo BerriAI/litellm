@@ -107,10 +107,7 @@ impl OcrProviderConfig for MistralOcrConfig {
     ) -> CoreResult<OcrResponseData> {
         let response_object = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
-                expected: "object",
-                actual: json_type_name(&response_json),
-            })?;
+            .ok_or_else(|| CoreError::unexpected_response_type(&response_json))?;
 
         let pages = response_object
             .get("pages")
@@ -215,6 +212,137 @@ mod tests {
     }
 
     #[test]
+    fn map_ocr_params_forwards_id_and_drops_litellm_internal_params() {
+        let params = json!({
+            "id": "ocr-req-9",
+            "pages": [0, 1],
+            "metadata": {"trace": "internal"},
+            "litellm_metadata": {"trace": "internal"},
+            "num_retries": 3,
+            "original_generic_function": "canary"
+        });
+        let mapped = map_ocr_params(params.as_object().unwrap());
+
+        assert_eq!(mapped.get("id"), Some(&json!("ocr-req-9")));
+        assert_eq!(mapped.get("pages"), Some(&json!([0, 1])));
+        for internal in [
+            "metadata",
+            "litellm_metadata",
+            "num_retries",
+            "original_generic_function",
+        ] {
+            assert!(!mapped.contains_key(internal), "{internal} must be dropped");
+        }
+    }
+
+    #[test]
+    fn map_ocr_params_omits_id_when_absent() {
+        let params = json!({
+            "pages": [0, 1],
+            "include_image_base64": true
+        });
+        let mapped = map_ocr_params(params.as_object().unwrap());
+
+        assert!(!mapped.contains_key("id"));
+        assert_eq!(mapped.get("pages"), Some(&json!([0, 1])));
+    }
+
+    #[test]
+    fn map_ocr_params_omits_id_when_null() {
+        let params = json!({
+            "id": null,
+            "pages": [0, 1],
+            "include_image_base64": true
+        });
+        let mapped = map_ocr_params(params.as_object().unwrap());
+
+        assert!(
+            !mapped.contains_key("id"),
+            "null id must be dropped for the standalone Axum path"
+        );
+        assert_eq!(mapped.get("pages"), Some(&json!([0, 1])));
+        assert_eq!(mapped.get("include_image_base64"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn transform_ocr_request_omits_null_id_from_serialized_body() {
+        let document = json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        });
+        let supplied = json!({
+            "id": null,
+            "pages": [0],
+            "include_image_base64": true
+        });
+        let filtered = map_ocr_params(supplied.as_object().unwrap());
+
+        let result = transform_ocr_request("mistral-ocr-latest", document.clone(), filtered)
+            .expect("request should transform");
+
+        assert_eq!(
+            result.data,
+            json!({
+                "model": "mistral-ocr-latest",
+                "document": document,
+                "pages": [0],
+                "include_image_base64": true
+            })
+        );
+        assert!(result.data.get("id").is_none());
+    }
+
+    #[test]
+    fn transform_ocr_request_serializes_full_supported_contract() {
+        let document = json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        });
+        let supplied = json!({
+            "pages": [0, 2, 5],
+            "include_image_base64": true,
+            "image_limit": 10,
+            "image_min_size": 64,
+            "bbox_annotation_format": {"type": "text"},
+            "document_annotation_format": {"type": "json_schema"},
+            "document_annotation_prompt": "extract title",
+            "extract_header": true,
+            "extract_footer": false,
+            "table_format": "html",
+            "confidence_scores_granularity": "word",
+            "include_blocks": true,
+            "id": "ocr-req-9",
+            "litellm_metadata": {"trace": "internal"},
+            "num_retries": 3
+        });
+        let filtered = map_ocr_params(supplied.as_object().unwrap());
+
+        let result = transform_ocr_request("mistral-ocr-latest", document.clone(), filtered)
+            .expect("request should transform");
+
+        assert_eq!(
+            result.data,
+            json!({
+                "model": "mistral-ocr-latest",
+                "document": document,
+                "pages": [0, 2, 5],
+                "include_image_base64": true,
+                "image_limit": 10,
+                "image_min_size": 64,
+                "bbox_annotation_format": {"type": "text"},
+                "document_annotation_format": {"type": "json_schema"},
+                "document_annotation_prompt": "extract title",
+                "extract_header": true,
+                "extract_footer": false,
+                "table_format": "html",
+                "confidence_scores_granularity": "word",
+                "include_blocks": true,
+                "id": "ocr-req-9"
+            })
+        );
+    }
+
+    #[test]
     fn transform_ocr_request_builds_mistral_body() {
         let document = json!({
             "type": "document_url",
@@ -255,6 +383,15 @@ mod tests {
                 actual: "string",
             }
         );
+    }
+
+    #[test]
+    fn transform_ocr_response_rejects_non_object_as_invalid_response() {
+        let err = transform_ocr_response("mistral-ocr-latest", json!("boom"))
+            .expect_err("non-object provider response should be rejected");
+
+        assert!(matches!(err, CoreError::InvalidResponse(_)));
+        assert_eq!(err.public_status_code(), Some(500));
     }
 
     #[test]

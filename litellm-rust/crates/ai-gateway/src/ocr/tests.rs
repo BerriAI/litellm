@@ -74,6 +74,7 @@ struct RecordedLogEvent {
     call_type: String,
     user_id: Option<String>,
     response_object: Option<String>,
+    error_message: Option<String>,
     error_kind: Option<String>,
 }
 
@@ -102,6 +103,7 @@ impl CustomLogger for RecordingOcrLogger {
                 call_type: model_call_details.call_type.to_string(),
                 user_id: model_call_details.metadata.user_api_key_user_id.clone(),
                 response_object: Some(response_obj.object.clone()),
+                error_message: None,
                 error_kind: None,
             });
             Ok(())
@@ -121,6 +123,10 @@ impl CustomLogger for RecordingOcrLogger {
                 call_type: model_call_details.call_type.to_string(),
                 user_id: model_call_details.metadata.user_api_key_user_id.clone(),
                 response_object: response_obj.map(|value| value.object.clone()),
+                error_message: model_call_details
+                    .failure_error
+                    .as_ref()
+                    .map(|error| error.message.clone()),
                 error_kind: model_call_details
                     .failure_error
                     .as_ref()
@@ -339,6 +345,7 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
             call_type: "ocr".to_string(),
             user_id: Some("user-1".to_string()),
             response_object: Some("ocr".to_string()),
+            error_message: None,
             error_kind: None,
         }]
     );
@@ -401,6 +408,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
             call_type: "ocr".to_string(),
             user_id: None,
             response_object: Some("error".to_string()),
+            error_message: Some("OCR request failed with status 500".to_string()),
             error_kind: Some("HttpError".to_string()),
         }]
     );
@@ -445,6 +453,7 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
             call_type: "ocr".to_string(),
             user_id: None,
             response_object: Some("error".to_string()),
+            error_message: Some("Invalid OCR request".to_string()),
             error_kind: Some("InvalidRequest".to_string()),
         }]
     );

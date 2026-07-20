@@ -2,66 +2,129 @@
 Main OCR function for LiteLLM.
 """
 
-import asyncio
 import base64
 import mimetypes
 import os
 import re
-from dataclasses import dataclass
 from io import IOBase
-from typing import Any, Callable, Coroutine, Union, cast
+from typing import Any, Coroutine, Union, cast
 
 import httpx
+from typing_extensions import Never
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.azure_ai.ocr.common_utils import (
-    is_azure_document_intelligence_model,
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge.ocr import (
+    RustAocr,
+    RustOcr,
+    RustOcrError,
+    load_rust_aocr,
+    load_rust_ocr,
 )
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge import ocr as rust_ocr_bridge
-from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import ProviderConfigManager, client
-
-####### ENVIRONMENT VARIABLES ###################
-base_llm_http_handler = BaseLLMHTTPHandler()
-#################################################
+from litellm.utils import client, filter_out_litellm_params
 
 
-@dataclass
-class _PreparedOCRRequest:
-    model: str
-    document: dict[str, Any]
-    api_key: str | None
-    api_base: str | None
-    custom_llm_provider: str
-    extra_headers: dict[str, object] | None
-    provider_config: BaseOCRConfig
-    optional_params: dict[str, object]
-    litellm_params: dict[str, object]
-    effective_timeout: Union[float, httpx.Timeout]
-    litellm_logging_obj: LiteLLMLoggingObj
+class _OCRInputError(ValueError):
+    pass
 
 
-@dataclass
-class _PreparedRustOCRCall:
-    api_key: str | None
-    api_base: str | None
-    headers: dict[str, object]
-    optional_params: dict[str, object]
+def _ocr_error_response(status_code: int) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        request=httpx.Request(method="POST", url="https://litellm.ai"),
+    )
 
 
-_RUST_OCR_PROVIDERS = {
-    "mistral",
-    "azure_ai",
-    "vertex_ai",
-}
+def _raise_rust_ocr_exception(err: RustOcrError, model: str, custom_llm_provider: str | None) -> Never:
+    provider = custom_llm_provider or "mistral"
+    status_code = err.status_code
+    message = err.message
+    match status_code:
+        case None:
+            raise litellm.APIConnectionError(message=message, llm_provider=provider, model=model)
+        case 400:
+            raise litellm.BadRequestError(message=message, model=model, llm_provider=provider)
+        case 401:
+            raise litellm.AuthenticationError(message=message, llm_provider=provider, model=model)
+        case 403:
+            raise litellm.PermissionDeniedError(
+                message=message,
+                llm_provider=provider,
+                model=model,
+                response=_ocr_error_response(403),
+            )
+        case 404:
+            raise litellm.NotFoundError(message=message, model=model, llm_provider=provider)
+        case 408:
+            raise litellm.Timeout(message=message, model=model, llm_provider=provider)
+        case 422:
+            raise litellm.UnprocessableEntityError(
+                message=message,
+                model=model,
+                llm_provider=provider,
+                response=_ocr_error_response(422),
+            )
+        case 429:
+            raise litellm.RateLimitError(message=message, llm_provider=provider, model=model)
+        case 500:
+            raise litellm.InternalServerError(message=message, llm_provider=provider, model=model)
+        case 502:
+            raise litellm.BadGatewayError(message=message, llm_provider=provider, model=model)
+        case 503:
+            raise litellm.ServiceUnavailableError(message=message, llm_provider=provider, model=model)
+        case _:
+            raise litellm.APIError(
+                status_code=status_code,
+                message=message,
+                llm_provider=provider,
+                model=model,
+            )
 
 
-def _prepare_ocr_request(
+def _raise_ocr_exception(
+    e: Exception,
+    model: str,
+    custom_llm_provider: str | None,
+    completion_kwargs: dict[str, object],
+    kwargs: dict[str, object],
+) -> Never:
+    if isinstance(e, RustOcrError):
+        _raise_rust_ocr_exception(e, model, custom_llm_provider)
+    if isinstance(e, _OCRInputError):
+        raise litellm.BadRequestError(
+            message="Invalid OCR request",
+            model=model,
+            llm_provider=custom_llm_provider or "mistral",
+        ) from e
+    raise litellm.exception_type(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        original_exception=e,
+        completion_kwargs=completion_kwargs,
+        extra_kwargs=kwargs,
+    )
+
+
+def _timeout_to_seconds(
+    timeout: Union[float, httpx.Timeout] | None,
+) -> float | None:
+    """Convert the Python OCR timeout to a single seconds value for the Rust bridge.
+
+    The Rust HTTP client takes one duration; ``httpx.Timeout`` carries separate
+    connect/read/write/pool values, so pick the read deadline as the closest
+    analog to a total-request timeout.
+    """
+    if timeout is None:
+        return None
+    if isinstance(timeout, httpx.Timeout):
+        return timeout.read
+    return float(timeout)
+
+
+def _resolve_ocr_call_context(
     model: str,
     document: dict[str, Any],
     api_key: str | None,
@@ -70,12 +133,22 @@ def _prepare_ocr_request(
     custom_llm_provider: str | None,
     extra_headers: dict[str, Any] | None,
     kwargs: dict[str, Any],
-) -> _PreparedOCRRequest:
+) -> tuple[
+    str,
+    dict[str, Any],
+    str | None,
+    str | None,
+    str,
+    dict[str, object] | None,
+    dict[str, object],
+    Union[float, httpx.Timeout],
+    LiteLLMLoggingObj,
+]:
     litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.pop("litellm_logging_obj"))
     litellm_call_id = cast(str | None, kwargs.get("litellm_call_id", None))
 
     if not isinstance(document, dict):
-        raise ValueError(f"document must be a dict with 'type' and URL/file field, got {type(document)}")
+        raise _OCRInputError(f"document must be a dict with 'type' and URL/file field, got {type(document)}")
 
     doc_type = document.get("type")
 
@@ -84,7 +157,7 @@ def _prepare_ocr_request(
         doc_type = document.get("type")
 
     if doc_type not in ["document_url", "image_url"]:
-        raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
+        raise _OCRInputError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
 
     caller_supplied_api_base = api_base is not None
 
@@ -100,41 +173,25 @@ def _prepare_ocr_request(
         api_key=api_key,
     )
 
+    if dynamic_api_key:
+        api_key = dynamic_api_key
     suppress_dynamic_api_base = (
         not caller_supplied_api_base
         and custom_llm_provider == "azure_ai"
-        and is_azure_document_intelligence_model(model)
+        and ("doc-intelligence" in model.lower() or "documentintelligence" in model.lower())
     )
-    if dynamic_api_key:
-        api_key = dynamic_api_key
     if dynamic_api_base and not suppress_dynamic_api_base:
         api_base = dynamic_api_base
 
-    ocr_provider_config = ProviderConfigManager.get_provider_ocr_config(
-        model=model,
-        provider=litellm.LlmProviders(custom_llm_provider),
-    )
-
-    if ocr_provider_config is None:
-        raise ValueError(f"OCR is not supported for provider: {custom_llm_provider}")
-
     verbose_logger.debug(f"OCR call - model: {model}, provider: {custom_llm_provider}")
 
-    litellm_params = GenericLiteLLMParams(**kwargs)
+    forwarded_kwargs = {
+        **filter_out_litellm_params(kwargs=kwargs),
+        **{key: kwargs[key] for key in _OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM if kwargs.get(key) is not None},
+    }
+    optional_params = {key: value for key, value in forwarded_kwargs.items() if key not in _RUST_BRIDGE_INTERNAL_PARAMS}
 
-    supported_params = ocr_provider_config.get_supported_ocr_params(model=model)
-    non_default_params = {}
-    for param in supported_params:
-        if param in kwargs:
-            non_default_params[param] = kwargs.pop(param)
-
-    optional_params = ocr_provider_config.map_ocr_params(
-        non_default_params=non_default_params,
-        optional_params={},
-        model=model,
-    )
-
-    verbose_logger.debug(f"OCR optional_params after mapping: {optional_params}")
+    verbose_logger.debug(f"OCR optional_params forwarded to Rust: {optional_params}")
 
     effective_timeout = timeout or request_timeout
 
@@ -144,162 +201,122 @@ def _prepare_ocr_request(
         optional_params=optional_params,
         litellm_params={
             "litellm_call_id": litellm_call_id,
-            "api_base": api_base,
+            "api_base": api_base or "",
         },
         custom_llm_provider=custom_llm_provider,
     )
 
-    return _PreparedOCRRequest(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=cast(dict[str, object] | None, extra_headers),
-        provider_config=ocr_provider_config,
-        optional_params=cast(dict[str, object], optional_params),
-        litellm_params=dict(litellm_params),
-        effective_timeout=effective_timeout,
-        litellm_logging_obj=litellm_logging_obj,
+    return (
+        model,
+        document,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        cast(dict[str, object] | None, extra_headers),
+        cast(dict[str, object], optional_params),
+        effective_timeout,
+        litellm_logging_obj,
     )
 
 
-def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
-    return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
-
-
-def _rust_bridge_optional_params(
-    prepared_request: _PreparedOCRRequest,
-    resolve_secret: Callable[[str], str | None],
-) -> dict[str, object]:
-    optional_params = dict(prepared_request.optional_params)
-    if prepared_request.custom_llm_provider == "vertex_ai":
-        vertex_project = (
-            prepared_request.litellm_params.get("vertex_project")
-            or prepared_request.litellm_params.get("vertex_ai_project")
-            or litellm.vertex_project
-            or resolve_secret("VERTEXAI_PROJECT")
-        )
-        vertex_location = (
-            prepared_request.litellm_params.get("vertex_location")
-            or prepared_request.litellm_params.get("vertex_ai_location")
-            or litellm.vertex_location
-            or resolve_secret("VERTEXAI_LOCATION")
-            or resolve_secret("VERTEX_LOCATION")
-        )
-        if vertex_project is not None:
-            optional_params["vertex_project"] = vertex_project
-        if vertex_location is not None:
-            optional_params["vertex_location"] = vertex_location
-    return optional_params
-
-
-def _rust_bridge_api_base(
-    prepared_request: _PreparedOCRRequest,
-    resolve_secret: Callable[[str], str | None],
-) -> str | None:
-    if prepared_request.api_base is not None:
-        return prepared_request.api_base
-    if prepared_request.custom_llm_provider == "azure_ai":
-        if is_azure_document_intelligence_model(prepared_request.model):
-            return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
-        return resolve_secret("AZURE_AI_API_BASE")
-    return None
-
-
-def _prepare_rust_ocr_call(
-    prepared_request: _PreparedOCRRequest,
-    resolve_api_key: Callable[[str], str | None],
-) -> _PreparedRustOCRCall:
-    provider_config = prepared_request.provider_config
-    api_key_env_var = provider_config.get_api_key_env_var()
-    resolved_api_key = prepared_request.api_key or (
-        resolve_api_key(api_key_env_var) if api_key_env_var is not None else None
-    )
-    resolved_headers = provider_config.validate_environment(
-        headers=prepared_request.extra_headers or {},
-        model=prepared_request.model,
-        api_key=resolved_api_key,
-        api_base=prepared_request.api_base,
-        litellm_params=prepared_request.litellm_params,
-    )
-    resolved_complete_url = provider_config.get_complete_url(
-        api_base=prepared_request.api_base,
-        model=prepared_request.model,
-        optional_params=prepared_request.optional_params,
-        litellm_params=prepared_request.litellm_params,
-    )
-    rust_api_base = _rust_bridge_api_base(prepared_request, resolve_api_key)
-    rust_optional_params = _rust_bridge_optional_params(prepared_request, resolve_api_key)
-    prepared_request.litellm_logging_obj.pre_call(
+def _run_pre_call_logging(
+    litellm_logging_obj: LiteLLMLoggingObj,
+    model: str,
+    document: dict[str, object],
+    api_key: str | None,
+    api_base: str | None,
+    extra_headers: dict[str, object] | None,
+    optional_params: dict[str, object],
+) -> None:
+    litellm_logging_obj.pre_call(
         input="OCR document processing",
-        api_key=resolved_api_key,
+        api_key=api_key,
         additional_args={
             "complete_input_dict": {
-                "model": prepared_request.model,
-                "document": prepared_request.document,
-                **rust_optional_params,
+                "model": model,
+                "document": document,
+                **optional_params,
             },
-            "api_base": resolved_complete_url,
-            "headers": resolved_headers,
+            "api_base": api_base or "",
+            "headers": extra_headers or {},
         },
-    )
-    return _PreparedRustOCRCall(
-        api_key=resolved_api_key,
-        api_base=rust_api_base,
-        headers=cast(dict[str, object], resolved_headers),
-        optional_params=rust_optional_params,
     )
 
 
 def _run_rust_ocr(
-    prepared_request: _PreparedOCRRequest,
-    resolve_api_key: Callable[[str], str | None],
-) -> OCRResponse | None:
-    if rust_ocr_bridge.load_rust_ocr() is None:
-        return None
-    prepared = _prepare_rust_ocr_call(
-        prepared_request=prepared_request,
-        resolve_api_key=resolve_api_key,
+    rust_ocr: RustOcr,
+    model: str,
+    document: dict[str, object],
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str,
+    extra_headers: dict[str, object] | None,
+    optional_params: dict[str, object],
+    timeout: Union[float, httpx.Timeout],
+    litellm_logging_obj: LiteLLMLoggingObj,
+) -> OCRResponse:
+    _run_pre_call_logging(
+        litellm_logging_obj=litellm_logging_obj,
+        model=model,
+        document=document,
+        api_key=api_key,
+        api_base=api_base,
+        extra_headers=extra_headers,
+        optional_params=optional_params,
     )
-    rust_response = rust_ocr_bridge.ocr(
-        model=prepared_request.model,
-        document=prepared_request.document,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=prepared.headers,
-        optional_params=prepared.optional_params,
-        timeout=prepared_request.effective_timeout,
+    return OCRResponse.model_validate(
+        rust_ocr(
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+        )
     )
-    if rust_response is None:
-        return None
-    return OCRResponse.model_validate(rust_response)
+
+
+def _missing_rust_bridge_error() -> RuntimeError:
+    return RuntimeError(
+        "Rust OCR bridge is required for litellm.ocr()/litellm.aocr(), but the native extension is unavailable"
+    )
 
 
 async def _run_rust_aocr(
-    prepared_request: _PreparedOCRRequest,
-    resolve_api_key: Callable[[str], str | None],
-) -> OCRResponse | None:
-    if rust_ocr_bridge.load_rust_aocr() is None:
-        return None
-    prepared = _prepare_rust_ocr_call(
-        prepared_request=prepared_request,
-        resolve_api_key=resolve_api_key,
+    rust_aocr: RustAocr,
+    model: str,
+    document: dict[str, object],
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str,
+    extra_headers: dict[str, object] | None,
+    optional_params: dict[str, object],
+    timeout: Union[float, httpx.Timeout],
+    litellm_logging_obj: LiteLLMLoggingObj,
+) -> OCRResponse:
+    _run_pre_call_logging(
+        litellm_logging_obj=litellm_logging_obj,
+        model=model,
+        document=document,
+        api_key=api_key,
+        api_base=api_base,
+        extra_headers=extra_headers,
+        optional_params=optional_params,
     )
-    rust_response = await rust_ocr_bridge.aocr(
-        model=prepared_request.model,
-        document=prepared_request.document,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=prepared.headers,
-        optional_params=prepared.optional_params,
-        timeout=prepared_request.effective_timeout,
+    return OCRResponse.model_validate(
+        await rust_aocr(
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+        )
     )
-    if rust_response is None:
-        return None
-    return OCRResponse.model_validate(rust_response)
 
 
 @client
@@ -365,9 +382,11 @@ async def aocr(
         )
 
         # OCR with local file
+        from pathlib import Path
+
         response = await litellm.aocr(
             model="mistral/mistral-ocr-latest",
-            document={"type": "file", "file": "/path/to/document.pdf"}
+            document={"type": "file", "file": Path("/path/to/document.pdf")}
         )
         ```
     """
@@ -382,7 +401,17 @@ async def aocr(
         "kwargs": kwargs,
     }
     try:
-        prepared = _prepare_ocr_request(
+        (
+            model,
+            document,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            optional_params,
+            effective_timeout,
+            litellm_logging_obj,
+        ) = _resolve_ocr_call_context(
             model=model,
             document=document,
             api_key=api_key,
@@ -392,51 +421,31 @@ async def aocr(
             extra_headers=extra_headers,
             kwargs=kwargs,
         )
-        model = prepared.model
-        custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
-            from litellm.secret_managers.main import get_secret_str
+        rust_aocr = load_rust_aocr()
+        if rust_aocr is None:
+            raise _missing_rust_bridge_error()
 
-            rust_response = await _run_rust_aocr(
-                prepared_request=prepared,
-                resolve_api_key=get_secret_str,
-            )
-            if rust_response is None:
-                verbose_logger.debug("Async Rust OCR bridge unavailable; falling back to Python path")
-            else:
-                return rust_response
-
-        response = base_llm_http_handler.ocr(
-            model=prepared.model,
-            document=prepared.document,
-            optional_params=prepared.optional_params,
-            timeout=prepared.effective_timeout,
-            logging_obj=prepared.litellm_logging_obj,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            custom_llm_provider=prepared.custom_llm_provider,
-            aocr=True,
-            headers=prepared.extra_headers,
-            provider_config=prepared.provider_config,
-            litellm_params=prepared.litellm_params,
+        return await _run_rust_aocr(
+            rust_aocr=rust_aocr,
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout=effective_timeout,
+            litellm_logging_obj=litellm_logging_obj,
         )
-
-        if asyncio.iscoroutine(response):
-            response = await response
-
-        if response is None:
-            raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
-
-        return response
     except Exception as e:
-        raise litellm.exception_type(
+        _raise_ocr_exception(
+            e,
             model=model,
             custom_llm_provider=custom_llm_provider,
-            original_exception=e,
             completion_kwargs=completion_kwargs,
-            extra_kwargs=kwargs,
+            kwargs=kwargs,
         )
 
 
@@ -445,6 +454,10 @@ async def aocr(
 #################################################
 
 _MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
+
+_RUST_BRIDGE_INTERNAL_PARAMS = {"original_generic_function"}
+
+_OCR_PUBLIC_PARAMS_RESERVED_BY_LITELLM: frozenset[str] = frozenset({"id"})
 
 _MIME_TYPE_MAP = {
     ".pdf": "application/pdf",
@@ -492,7 +505,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
     """
     file_input = document.get("file")
     if file_input is None:
-        raise ValueError(
+        raise _OCRInputError(
             "document with type='file' must include a 'file' field containing "
             "a pathlib.Path, file-like object, or bytes"
         )
@@ -508,7 +521,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         # Opening it as a path is an arbitrary local file read on the proxy
         # host, which is then base64-encoded and forwarded to the OCR
         # provider — an exfiltration primitive.
-        raise ValueError(
+        raise _OCRInputError(
             "OCR file input does not accept bare str values. Pass bytes, "
             "a pathlib.Path, or a file-like object. To OCR a local file "
             "from a path, call open(path, 'rb') yourself."
@@ -518,7 +531,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         # Python-level type that HTTP form values can't fabricate.
         file_path = str(file_input)
         if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
+            raise _OCRInputError("OCR file input path does not exist")
         mime_type = get_mime_type(file_path)
         file_name = os.path.basename(file_path)
         with open(file_path, "rb") as f:
@@ -534,18 +547,18 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
         if isinstance(file_bytes, str):
             file_bytes = file_bytes.encode("utf-8")
     else:
-        raise ValueError(
+        raise _OCRInputError(
             f"Unsupported file input type: {type(file_input)}. Expected pathlib.Path, bytes, or a file-like object."
         )
 
     if not file_bytes:
-        raise ValueError("File is empty or could not be read")
+        raise _OCRInputError("File is empty or could not be read")
 
     if "mime_type" in document:
         mime_type = document["mime_type"]
 
     if not _MIME_PATTERN.match(mime_type):
-        raise ValueError(f"Invalid MIME type: {mime_type}")
+        raise _OCRInputError(f"Invalid MIME type: {mime_type}")
 
     base64_data = base64.b64encode(file_bytes).decode("utf-8")
     data_uri = f"data:{mime_type};base64,{base64_data}"
@@ -627,9 +640,11 @@ def ocr(
         )
 
         # OCR with local file
+        from pathlib import Path
+
         response = litellm.ocr(
             model="mistral/mistral-ocr-latest",
-            document={"type": "file", "file": "/path/to/document.pdf"}
+            document={"type": "file", "file": Path("/path/to/document.pdf")}
         )
 
         # Access pages
@@ -648,9 +663,18 @@ def ocr(
         "kwargs": kwargs,
     }
     try:
-        _is_async = kwargs.pop("aocr", False) is True
-        completion_kwargs["aocr"] = _is_async
-        prepared = _prepare_ocr_request(
+        completion_kwargs["aocr"] = kwargs.pop("aocr", False) is True
+        (
+            model,
+            document,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            optional_params,
+            effective_timeout,
+            litellm_logging_obj,
+        ) = _resolve_ocr_call_context(
             model=model,
             document=document,
             api_key=api_key,
@@ -660,43 +684,29 @@ def ocr(
             extra_headers=extra_headers,
             timeout=timeout,
         )
-        model = prepared.model
-        custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
-            from litellm.secret_managers.main import get_secret_str
+        rust_ocr = load_rust_ocr()
+        if rust_ocr is None:
+            raise _missing_rust_bridge_error()
 
-            rust_response = _run_rust_ocr(
-                prepared_request=prepared,
-                resolve_api_key=get_secret_str,
-            )
-            if rust_response is None:
-                verbose_logger.debug("Rust OCR bridge unavailable; falling back to Python path")
-            else:
-                return rust_response
-
-        response = base_llm_http_handler.ocr(
-            model=prepared.model,
-            document=prepared.document,
-            optional_params=prepared.optional_params,
-            timeout=prepared.effective_timeout,
-            logging_obj=prepared.litellm_logging_obj,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            custom_llm_provider=prepared.custom_llm_provider,
-            aocr=_is_async,
-            headers=prepared.extra_headers,
-            provider_config=prepared.provider_config,
-            litellm_params=prepared.litellm_params,
+        return _run_rust_ocr(
+            rust_ocr=rust_ocr,
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout=effective_timeout,
+            litellm_logging_obj=litellm_logging_obj,
         )
-
-        return response
     except Exception as e:
-        raise litellm.exception_type(
+        _raise_ocr_exception(
+            e,
             model=model,
             custom_llm_provider=custom_llm_provider,
-            original_exception=e,
             completion_kwargs=completion_kwargs,
-            extra_kwargs=kwargs,
+            kwargs=kwargs,
         )
