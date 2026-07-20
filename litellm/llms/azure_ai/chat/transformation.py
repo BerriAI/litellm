@@ -35,7 +35,7 @@ class AzureFoundryErrorStrings(str, enum.Enum):
 # ``reasoning_content`` on input, but the direct ``fireworks_ai`` provider
 # strips ``thinking_blocks`` and Azure AI Foundry fronts multiple backends, so
 # drop both as a defensive default for a generic multi-backend provider.
-_TOP_LEVEL_OUTPUT_ONLY_FIELDS: Tuple[str, ...] = (
+_TOP_LEVEL_OUTPUT_ONLY_FIELDS: tuple[str, ...] = (
     "thinking_blocks",
     "reasoning_content",
 )
@@ -49,7 +49,7 @@ _TOP_LEVEL_OUTPUT_ONLY_FIELDS: Tuple[str, ...] = (
 # strict upstreams still reject it with
 # ``Extra inputs are not permitted, field:
 # 'messages[n].tool_calls[m].function.provider_specific_fields'``.
-_RECURSIVELY_STRIPPED_FIELDS: Tuple[str, ...] = (
+_RECURSIVELY_STRIPPED_FIELDS: tuple[str, ...] = (
     "cache_control",
     "provider_specific_fields",
 )
