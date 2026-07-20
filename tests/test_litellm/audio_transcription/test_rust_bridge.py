@@ -2,6 +2,10 @@ import importlib
 
 import pytest
 
+import litellm
+import litellm.main as litellm_main
+from litellm.types.utils import TranscriptionResponse
+
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
 
@@ -82,3 +86,73 @@ def test_loader_returns_none_without_native_extension(monkeypatch: pytest.Monkey
     monkeypatch.setattr("litellm.rust_bridge.get_native_bridge", lambda: None)
     assert rust_bridge.load_rust_transcription() is None
     assert rust_bridge.load_rust_atranscription() is None
+
+
+@pytest.mark.asyncio
+async def test_bedrock_atranscription_falls_back_to_python_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unavailable_rust(**_: object) -> None:
+        return None
+
+    async def python_response(**_: object) -> TranscriptionResponse:
+        return TranscriptionResponse(text="hello")
+
+    monkeypatch.setattr(litellm_main, "_run_rust_atranscription", unavailable_rust)
+    monkeypatch.setattr(
+        "litellm.llms.bedrock.audio_transcription.handler.BedrockAudioTranscriptionHandler.audio_transcriptions",
+        lambda *_args, **kwargs: python_response(**kwargs),
+    )
+
+    response = await litellm.atranscription(
+        model="bedrock/mistral.voxtral-mini-3b-2507",
+        file=("audio.wav", b"audio", "audio/wav"),
+    )
+
+    assert isinstance(response, TranscriptionResponse)
+    assert response.text == "hello"
+    assert not hasattr(response, "__await__")
+
+
+def test_bedrock_transcription_falls_back_to_python_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_rust(**_: object) -> None:
+        return None
+
+    def python_response(*_: object, **__: object) -> TranscriptionResponse:
+        return TranscriptionResponse(text="hello")
+
+    monkeypatch.setattr(litellm_main, "_run_rust_transcription", unavailable_rust)
+    monkeypatch.setattr(
+        "litellm.llms.bedrock.audio_transcription.handler.BedrockAudioTranscriptionHandler.audio_transcriptions",
+        python_response,
+    )
+
+    response = litellm.transcription(
+        model="bedrock/mistral.voxtral-mini-3b-2507",
+        file=("audio.wav", b"audio", "audio/wav"),
+    )
+
+    assert isinstance(response, TranscriptionResponse)
+    assert response.text == "hello"
+    assert not hasattr(response, "__await__")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_atranscription_rust_response_is_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def rust_response(**_: object) -> TranscriptionResponse:
+        return TranscriptionResponse(text="rust")
+
+    monkeypatch.setattr(litellm_main, "_run_rust_atranscription", rust_response)
+
+    response = await litellm.atranscription(
+        model="bedrock/mistral.voxtral-mini-3b-2507",
+        file=("audio.wav", b"audio", "audio/wav"),
+    )
+
+    assert isinstance(response, TranscriptionResponse)
+    assert response.text == "rust"
+    assert not hasattr(response, "__await__")

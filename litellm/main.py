@@ -28,6 +28,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Awaitable,
     Callable,
     Coroutine,
     Dict,
@@ -7576,6 +7577,17 @@ async def _run_rust_atranscription(
     return None if rust_response is None else TranscriptionResponse(**rust_response)
 
 
+async def _run_bedrock_atranscription(
+    *,
+    rust_request: Callable[[], Awaitable[TranscriptionResponse | None]],
+    python_fallback: Callable[[], Awaitable[TranscriptionResponse]],
+) -> TranscriptionResponse:
+    rust_response = await rust_request()
+    if rust_response is not None:
+        return rust_response
+    return await python_fallback()
+
+
 @client
 async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     """
@@ -7840,59 +7852,89 @@ def transcription(
             provider_config=provider_config,  # type: ignore[arg-type]
         )
     elif custom_llm_provider == "bedrock":
-        rust_response = (
-            _run_rust_atranscription(
-                model=model,
-                file=file,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
-                optional_params=optional_params,
-                kwargs=kwargs,
-                timeout=timeout,
-            )
-            if atranscription
-            else _run_rust_transcription(
-                model=model,
-                file=file,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
-                optional_params=optional_params,
-                kwargs=kwargs,
-                timeout=timeout,
-            )
-        )
-        if rust_response is not None:
-            response = rust_response
-        else:
+        if atranscription:
             from litellm.llms.bedrock.audio_transcription.handler import (
                 BedrockAudioTranscriptionHandler,
             )
 
-            response = BedrockAudioTranscriptionHandler().audio_transcriptions(
-                model=model,
-                audio_file=file,
-                optional_params=optional_params,
-                litellm_params=litellm_params_dict,
-                model_response=model_response,
-                atranscription=atranscription,
-                client=(
-                    client
-                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                    else None
+            response = _run_bedrock_atranscription(
+                rust_request=partial(
+                    _run_rust_atranscription,
+                    model=model,
+                    file=file,
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    optional_params=optional_params,
+                    kwargs=kwargs,
+                    timeout=timeout,
                 ),
-                timeout=timeout,
-                max_retries=max_retries,
-                logging_obj=litellm_logging_obj,
-                api_base=api_base,
-                api_key=api_key,
-                headers=extra_headers,
-                provider_config=provider_config,
-                shared_session=shared_session,
+                python_fallback=partial(
+                    BedrockAudioTranscriptionHandler().audio_transcriptions,
+                    model=model,
+                    audio_file=file,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params_dict,
+                    model_response=model_response,
+                    atranscription=True,
+                    client=(
+                        client
+                        if client is not None
+                        and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
+                        else None
+                    ),
+                    timeout=timeout,
+                    max_retries=max_retries,
+                    logging_obj=litellm_logging_obj,
+                    api_base=api_base,
+                    api_key=api_key,
+                    headers=extra_headers,
+                    provider_config=provider_config,
+                    shared_session=shared_session,
+                ),
             )
+        else:
+            rust_response = _run_rust_transcription(
+                model=model,
+                file=file,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                kwargs=kwargs,
+                timeout=timeout,
+            )
+            if rust_response is not None:
+                response = rust_response
+            else:
+                from litellm.llms.bedrock.audio_transcription.handler import (
+                    BedrockAudioTranscriptionHandler,
+                )
+
+                response = BedrockAudioTranscriptionHandler().audio_transcriptions(
+                    model=model,
+                    audio_file=file,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params_dict,
+                    model_response=model_response,
+                    atranscription=False,
+                    client=(
+                        client
+                        if client is not None
+                        and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
+                        else None
+                    ),
+                    timeout=timeout,
+                    max_retries=max_retries,
+                    logging_obj=litellm_logging_obj,
+                    api_base=api_base,
+                    api_key=api_key,
+                    headers=extra_headers,
+                    provider_config=provider_config,
+                    shared_session=shared_session,
+                )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
