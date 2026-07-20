@@ -91,11 +91,12 @@
   },
   "overrides": {
     "prismjs": "1.30.0",
-    "js-yaml": "4.2.0",
+    "js-yaml": "4.3.0",
     "glob": "13.0.0",
     "minimatch": "10.2.4",
     "ws": "8.21.0",
     "braces": "3.0.3",
+    "brace-expansion": "5.0.7",
     "axios": "1.13.6",
     "postcss": "8.5.13",
     "esbuild": "0.28.1",
