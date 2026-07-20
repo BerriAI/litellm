@@ -666,6 +666,10 @@ class UserDeleteBody(BaseModel):
     user_ids: list[str]
 
 
+class UserDeleteResponse(RootModel[int]):
+    pass
+
+
 class UserListParams(BaseModel):
     user_ids: str
 
