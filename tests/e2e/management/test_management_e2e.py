@@ -439,6 +439,28 @@ class TestModelRoutes:
             "after /model/update",
         )
 
+    @pytest.mark.covers("mgmt.model.delete.persists")
+    def test_delete_removes_from_model_info_catalog(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete fires again on the already-deleted model by
+        design: it is the safety net if this test fails before the in-body delete, and
+        a repeat /model/delete is a warn-only no-op the teardown absorbs."""
+        model_name = f"e2e-mgmt-model-{unique_marker()}"
+        model_id = client.proxy.create_model(model_name, LiteLLMParamsBody(model="openai/gpt-5.5", api_key="dummy"))
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        assert model_name in [entry.model_name for entry in client.proxy.model_info()], (
+            f"{model_name} absent from /model/info right after /model/new; cannot prove deletion removes it"
+        )
+
+        client.delete_model_strict(model_id)
+
+        def absent() -> bool | None:
+            return True if model_name not in [entry.model_name for entry in client.proxy.model_info()] else None
+
+        _ = _poll(client, absent, f"{model_name} still present in /model/info after /model/delete at the deadline")
+
     @pytest.mark.covers("mgmt.model.add.persists")
     def test_new_persists_to_model_info_catalog(
         self, client: ManagementClient, resources: ResourceManager
