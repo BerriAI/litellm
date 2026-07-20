@@ -145,7 +145,7 @@ def _model_for(provider_name: str) -> str:
 OPENAI_BATCH_MODEL = _model_for("openai")
 AZURE_BATCH_MODEL = _model_for("azure")
 
-BEDROCK_SCENARIOS: tuple[Scenario, ...] = ("unified",)
+BEDROCK_SCENARIOS: tuple[Scenario, ...] = ("encoded", "unified")
 
 
 def scenarios_for_provider(provider: Provider) -> tuple[Scenario, ...]:

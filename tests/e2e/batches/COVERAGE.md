@@ -17,13 +17,18 @@ failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 | OpenAI    | yes | yes | yes | yes | OpenAI Files |
 | Azure     | yes | yes | yes | yes | Azure Files |
 | Vertex AI | yes | yes | yes | yes | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
-| Bedrock   | yes (unified only) | yes | no (limited upstream) | no | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
+| Bedrock   | yes (`encoded` + `unified`) | yes | no (limited upstream) | no | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 
 Bedrock cancel is unreliable upstream and list is unsupported, so both are gated off
 (`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix.
 Bedrock file upload requires a model on the request (`encoded` / `unified` scenarios only);
 `model_param` and `provider_fallback` are omitted because `POST /bedrock/v1/files` has no
-model-less passthrough path.
+model-less passthrough path, and Bedrock `create_batch` itself has no model-less path:
+without a model it raises `LiteLLM doesn't support custom_llm_provider=bedrock for
+'create_batch'`, since the model is what resolves the region, batch config, and IAM role
+ARN. The `encoded` and `unified` scenarios both recover that model at create time (from the
+model-scoped file id, or the managed file's `target_model_names`), so both route into the
+Bedrock job-creation path; a raw file created model-less cannot.
 
 ## Routing scenarios (per `litellm/proxy/batches_endpoints/endpoints.py`)
 
