@@ -2,7 +2,6 @@ use litellm_core::CoreResult;
 use litellm_core::call_lifecycle::CallLifecycle;
 use serde_json::Value;
 
-mod client;
 mod common_utils;
 mod handler;
 mod hooks;

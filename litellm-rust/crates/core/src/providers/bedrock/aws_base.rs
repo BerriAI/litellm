@@ -52,7 +52,7 @@ pub struct AwsAuthConfig {
 }
 
 impl AwsAuthConfig {
-    fn with_environment(self, env_lookup: &dyn Fn(&str) -> Option<String>) -> Self {
+    fn with_environment(self, env_lookup: &(dyn Fn(&str) -> Option<String> + Sync)) -> Self {
         Self {
             access_key_id: self.access_key_id.or_else(|| env_lookup(AWS_ACCESS_KEY_ID)),
             secret_access_key: self
@@ -144,7 +144,7 @@ fn same_role_arns(target: &str, caller: &str) -> bool {
 
 pub fn classify_auth(
     config: AwsAuthConfig,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> AwsAuthFlow {
     let config = config.with_environment(env_lookup);
     if let (Some(token), Some(role), Some(session_name)) = (
@@ -194,7 +194,7 @@ pub fn classify_auth(
 
 pub async fn resolve_credentials(
     config: AwsAuthConfig,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> CoreResult<Credentials> {
     let resolved = config.clone().with_environment(env_lookup);
     let flow = classify_auth(config, env_lookup);
