@@ -352,20 +352,29 @@ def test_transform_request_drops_thinking_blocks_for_fireworks_model():
         headers={},
     )
 
-    def _assert_no_unsupported_fields(node):
+    # Match the production invariant exactly: ``_strip_unsupported_message_fields``
+    # pops ``thinking_blocks`` / ``reasoning_content`` at the message top level only,
+    # and strips ``provider_specific_fields`` / ``cache_control`` recursively (they
+    # nest inside ``tool_calls[].function`` / content blocks). Asserting the
+    # top-level-only fields are absent from every nested node would document a
+    # stronger invariant than the code enforces and give a false sense of security.
+    top_level_only_fields = ("thinking_blocks", "reasoning_content")
+    recursively_stripped_fields = ("provider_specific_fields", "cache_control")
+
+    def _assert_no_recursively_stripped_fields(node):
         if isinstance(node, dict):
-            assert "thinking_blocks" not in node
-            assert "reasoning_content" not in node
-            assert "provider_specific_fields" not in node
-            assert "cache_control" not in node
+            for field in recursively_stripped_fields:
+                assert field not in node
             for value in node.values():
-                _assert_no_unsupported_fields(value)
+                _assert_no_recursively_stripped_fields(value)
         elif isinstance(node, list):
             for item in node:
-                _assert_no_unsupported_fields(item)
+                _assert_no_recursively_stripped_fields(item)
 
     for message in payload["messages"]:
-        _assert_no_unsupported_fields(message)
+        for field in top_level_only_fields:
+            assert field not in message
+        _assert_no_recursively_stripped_fields(message)
 
 
 def test_transform_messages_strips_nested_tool_call_provider_specific_fields():
@@ -405,3 +414,36 @@ def test_transform_messages_strips_nested_tool_call_provider_specific_fields():
     assert "provider_specific_fields" not in tool_call
     assert "provider_specific_fields" not in tool_call["function"]
     assert tool_call["function"]["name"] == "read_file"
+
+
+def test_strip_unsupported_message_fields_top_level_only_fields_not_stipped_below_top_level():
+    """Document the production invariant Greptile flagged: ``thinking_blocks``
+    and ``reasoning_content`` are popped at the message top level only. They do
+    not appear nested in practice, and the production code does not recurse into
+    content blocks to remove them. A future change that nests them would need a
+    matching production change; pinning the current contract here keeps the test
+    suite and the code in sync rather than asserting a stronger invariant than
+    the code enforces.
+    """
+    from litellm.llms.azure_ai.chat.transformation import (
+        _strip_unsupported_message_fields,
+    )
+
+    # A message that carries a top-level-only field nested inside a content
+    # block; the helper must remove the top-level copy but leave the nested one
+    # (the contract is top-level-only for these fields).
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "hi", "thinking_blocks": [{"type": "thinking"}]},
+        ],
+        "thinking_blocks": [{"type": "thinking", "thinking": "top"}],
+        "reasoning_content": "top-level reasoning",
+    }
+
+    _strip_unsupported_message_fields(message)  # type: ignore[arg-type]
+
+    assert "thinking_blocks" not in message
+    assert "reasoning_content" not in message
+    # The nested copy inside the content block is NOT touched (top-level-only):
+    assert "thinking_blocks" in message["content"][0]

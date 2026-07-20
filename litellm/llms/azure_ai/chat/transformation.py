@@ -74,7 +74,14 @@ def _strip_unsupported_message_fields(message: AllMessageValues) -> None:
     for field in _RECURSIVELY_STRIPPED_FIELDS:
         filter_value_from_dict(m, field)
     for field in _TOP_LEVEL_OUTPUT_ONLY_FIELDS:
-        m.pop(field, None)
+        value = m.pop(field, None)
+        if field == "reasoning_content" and value:
+            verbose_logger.debug(
+                "azure_ai: dropped non-empty 'reasoning_content' from a replayed "
+                "message; some Azure AI Foundry backends accept it on input, but it "
+                "is dropped as a defensive default for a generic multi-backend "
+                "provider."
+            )
 
 
 class AzureAIStudioConfig(OpenAIConfig):
