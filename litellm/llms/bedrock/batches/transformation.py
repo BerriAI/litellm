@@ -215,7 +215,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "roleArn": role_arn,
         }
 
-        bedrock_tags = litellm_params.get("bedrock_tags") or optional_params.get("bedrock_tags")
+        config_bedrock_tags = litellm_params.get("bedrock_tags")
+        bedrock_tags = config_bedrock_tags if config_bedrock_tags is not None else optional_params.get("bedrock_tags")
         if bedrock_tags is not None:
             bedrock_request["tags"] = _validate_bedrock_tags(bedrock_tags)
 
