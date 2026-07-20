@@ -169,6 +169,32 @@ class TestKeyRoutes:
         _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
 
 
+class TestKeyRegeneration:
+    @pytest.mark.covers("mgmt.key.regenerate.happy_path")
+    def test_regenerate_rotates_to_a_working_new_key(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        old_key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
+
+        new_key = client.regenerate_key(old_key)
+        resources.defer(lambda: client.proxy.delete_key(new_key))
+        assert new_key != old_key, "regenerate returned the same key string, so no rotation happened"
+
+        def new_accepted() -> bool | None:
+            outcome = client.chat_status(new_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code != 401 else None
+
+        _ = _poll(client, new_accepted, "regenerated key was never accepted at auth (still 401) at the deadline")
+
+        def old_rejected() -> bool | None:
+            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code == 401 else None
+
+        _ = _poll(
+            client, old_rejected, "old key was still accepted after regeneration (never rejected 401) at the deadline"
+        )
+
+
 class TestTeamRoutes:
     @pytest.mark.covers("mgmt.team.new.persists")
     def test_new_persists_to_team_info_and_binds_keys(

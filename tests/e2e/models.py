@@ -73,6 +73,10 @@ class KeyGenerateResponse(BaseModel):
     key: str
 
 
+class KeyRegenerateBody(BaseModel):
+    key: str
+
+
 class KeyDeleteBody(BaseModel):
     keys: list[str]
 
