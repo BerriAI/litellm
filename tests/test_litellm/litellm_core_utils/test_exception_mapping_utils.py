@@ -680,3 +680,55 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
 
     assert excinfo.value.status_code == 404
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "Connection error.",
+        "Connection error..",
+        "[Errno 111] Connection refused",
+        "httpx.ConnectError: [Errno 111] Connection refused",
+    ],
+)
+def test_openai_connection_error_wrapped_as_500_maps_to_api_connection_error(error_message):
+    """OpenAI SDK connection failures are often re-wrapped as OpenAIError(status_code=500).
+    They must stay APIConnectionError, not InternalServerError (#33969)."""
+    original_exception = OpenAIError(status_code=500, message=error_message)
+
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        exception_type(
+            model="gpt-4o-mini",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert "InternalServerError" not in type(excinfo.value).__name__
+    assert error_message.split(".")[0] in str(excinfo.value) or "Connection" in str(excinfo.value)
+
+
+def test_openai_genuine_500_still_maps_to_internal_server_error():
+    original_exception = OpenAIError(
+        status_code=500,
+        message="The server had an error processing your request.",
+    )
+
+    with pytest.raises(litellm.InternalServerError):
+        exception_type(
+            model="gpt-4o-mini",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+
+@pytest.mark.parametrize(
+    "error_str, expected",
+    [
+        ("Connection error.", True),
+        ("Connection refused", True),
+        ("The server had an error processing your request.", False),
+        ("invalid_request_error", False),
+    ],
+)
+def test_is_error_str_connection_error(error_str, expected):
+    assert ExceptionCheckers.is_error_str_connection_error(error_str) is expected
