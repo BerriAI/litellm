@@ -8,6 +8,7 @@ import datetime
 import hashlib
 import os
 import re
+import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, NamedTuple, Optional, Type
 
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
 
 BLOCKED_BY_OVALIX_FALLBACK_MESSAGE = "This message was blocked by Ovalix"
 BLOCKED_ACTION_TYPE = "block"
+_ROUTING_CACHE_TTL_SECONDS = 3600
+_ROUTING_CACHE_MAX_SIZE = 1000
 
 
 class ResolvedRouting(NamedTuple):
@@ -301,6 +304,109 @@ class OvalixGuardrail(CustomGuardrail):
         if isinstance(modified, dict) and "content" in modified:
             return modified["content"]
         return None
+
+    def _get_key_alias(self, request_data: dict) -> str | None:
+        metadata = {**(request_data.get("metadata") or {}), **(request_data.get("litellm_metadata") or {})}
+        return metadata.get("user_api_key_alias") or metadata.get("user_api_key_key_alias")
+
+    async def _get_app_name_regex(self) -> re.Pattern[str]:
+        if self._app_name_regex is not None:
+            return self._app_name_regex
+        url = f"{self._tracker_api_base}/tracking/custom_application/litellm_app_name_regex"
+        try:
+            response = await self._async_handler.get(url, headers=dict(self._tracker_headers))
+            response.raise_for_status()
+            compiled = re.compile(response.json()["regex"])
+        except Exception as e:
+            verbose_proxy_logger.exception("Ovalix app-name regex fetch failed: %s", e)
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=f"Ovalix guardrail error: app-name regex fetch failed: {e!s}",
+                should_wrap_with_default_message=False,
+            ) from e
+        self._app_name_regex = compiled
+        return compiled
+
+    def _extract_application_name(self, alias: str, regex: re.Pattern[str]) -> str | None:
+        match = regex.search(alias)
+        if not match:
+            return None
+        name = (match.group(1) if match.groups() else match.group(0)).strip()
+        return name or None
+
+    def _routing_cache_get(self, name: str) -> ResolvedRouting | None:
+        entry = self._routing_cache.get(name)
+        if entry is None:
+            return None
+        stored_at, routing = entry
+        if time.monotonic() - stored_at >= _ROUTING_CACHE_TTL_SECONDS:
+            del self._routing_cache[name]
+            return None
+        self._routing_cache.move_to_end(name)
+        return routing
+
+    def _routing_cache_put(self, name: str, routing: ResolvedRouting) -> None:
+        self._routing_cache[name] = (time.monotonic(), routing)
+        self._routing_cache.move_to_end(name)
+        while len(self._routing_cache) > _ROUTING_CACHE_MAX_SIZE:
+            self._routing_cache.popitem(last=False)
+
+    async def _resolve_routing(self, request_data: dict) -> ResolvedRouting:
+        if self._application_id:
+            return ResolvedRouting(
+                self._application_id,
+                self._pre_checkpoint_id,
+                self._post_checkpoint_id,
+                self._file_checkpoint_id,
+                None,
+            )
+        alias = self._get_key_alias(request_data)
+        if not alias:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message="Ovalix guardrail error: no application_id configured and no user_api_key_alias to resolve by",
+                should_wrap_with_default_message=False,
+            )
+        regex = await self._get_app_name_regex()
+        name = self._extract_application_name(alias, regex)
+        if not name:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message="Ovalix guardrail error: could not extract an application name from the api key alias",
+                should_wrap_with_default_message=False,
+            )
+        if self._enable_routing_cache:
+            cached = self._routing_cache_get(name)
+            if cached is not None:
+                return cached
+        routing = await self._resolve_via_tracker(name)
+        if self._enable_routing_cache:
+            self._routing_cache_put(name, routing)
+        return routing
+
+    async def _resolve_via_tracker(self, application_name: str) -> ResolvedRouting:
+        url = f"{self._tracker_api_base}/tracking/custom_application/resolve_litellm_application"
+        try:
+            response = await self._async_handler.post(
+                url, headers=dict(self._tracker_headers), json={"application_name": application_name}
+            )
+            response.raise_for_status()
+            body = response.json()
+            routing = ResolvedRouting(
+                application_id=str(body["application_id"]),
+                checkpoint_id_pre=body.get("checkpoint_id_pre"),
+                checkpoint_id_post=body.get("checkpoint_id_post"),
+                checkpoint_id_pre_file=body.get("checkpoint_id_pre_file"),
+                checkpoint_id_post_file=body.get("checkpoint_id_post_file"),
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception("Ovalix routing resolution failed: %s", e)
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=f"Ovalix guardrail error: routing resolution failed: {e!s}",
+                should_wrap_with_default_message=False,
+            ) from e
+        return routing
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
