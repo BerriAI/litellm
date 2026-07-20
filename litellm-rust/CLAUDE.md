@@ -62,6 +62,13 @@ Not allowed in `core`:
 
 Python owns rollout state and fallback while Rust is being introduced. Rust
 paths must be off by default until parity tests prove equivalence with Python.
+A new provider/route may instead be implemented rust-only with no Python
+reference; then the Python interface is a thin dispatch that calls Rust with no
+fallback, and you state the rust-only choice explicitly in the PR. Either way
+the Python side stays minimal (it only marshals inputs and calls the Rust
+interface), never add a per-route feature flag, and never push provider
+dispatch into `litellm/main.py`; put it in a thin dispatch class under
+`litellm/llms/<provider>/<route>/`.
 
 ## Production Bar
 
