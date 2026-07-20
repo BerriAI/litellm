@@ -614,6 +614,11 @@ class LiteLLMRoutes(enum.Enum):
             "/jwt/key/mapping/delete",
             "/jwt/key/mapping/list",
             "/jwt/key/mapping/info",
+            # ptu reservations
+            "/ptu_reservation/new",
+            "/ptu_reservation/list",
+            "/ptu_reservation/info",
+            "/ptu_reservation/close",
         ]
         + key_management_routes
         + mcp_management_routes
