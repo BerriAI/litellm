@@ -21,7 +21,10 @@ from .llm_provider_handlers.openai_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
-from .success_handler import PassThroughEndpointLogging
+from .success_handler import (
+    PassThroughEndpointLogging,
+    cohere_passthrough_logging_handler,
+)
 
 
 class PassThroughStreamingHandler:
@@ -190,6 +193,28 @@ class PassThroughStreamingHandler:
         all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
         standard_logging_response_object: Optional[PassThroughEndpointLoggingResultValues] = None
         kwargs: dict = {}
+
+        # Non-POST streams are replays, not generations. OpenAI's Responses
+        # resume API (`GET /v1/responses/{id}?stream=true`) re-emits the
+        # original event stream INCLUDING the terminal `response.completed`
+        # event and its usage block — running the cost handlers on it would
+        # re-bill the full generation on every resume. Only a real string
+        # method may skip costing (test doubles yield mocks; treat as POST).
+        _payload = litellm_logging_obj.model_call_details.get("passthrough_logging_payload") or {}
+        _request_method = _payload.get("request_method") if isinstance(_payload, dict) else None
+        if isinstance(_request_method, str) and _request_method.upper() not in ("POST", "WEBSOCKET"):
+            verbose_proxy_logger.debug(
+                "Streamed passthrough cost handlers skipped for %s %s: non-POST replay",
+                _request_method,
+                url_route,
+            )
+            # Same shape the unparseable-chunks fallback returns: logged, $0 —
+            # correct here, because the upstream does not bill replays.
+            return (
+                StandardPassThroughResponseObject(response="non-POST streamed replay; cost handlers skipped"),
+                kwargs,
+            )
+
         if endpoint_type == EndpointType.ANTHROPIC:
             anthropic_passthrough_logging_handler_result = (
                 AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
@@ -236,6 +261,21 @@ class PassThroughStreamingHandler:
             )
             standard_logging_response_object = openai_passthrough_logging_handler_result["result"]
             kwargs = openai_passthrough_logging_handler_result["kwargs"]
+        elif endpoint_type == EndpointType.COHERE:
+            cohere_passthrough_logging_handler_result = (
+                cohere_passthrough_logging_handler._handle_logging_llm_collected_chunks(
+                    litellm_logging_obj=litellm_logging_obj,
+                    passthrough_success_handler_obj=passthrough_success_handler_obj,
+                    url_route=url_route,
+                    request_body=request_body,
+                    endpoint_type=endpoint_type,
+                    start_time=start_time,
+                    all_chunks=all_chunks,
+                    end_time=end_time,
+                )
+            )
+            standard_logging_response_object = cohere_passthrough_logging_handler_result["result"]
+            kwargs = cohere_passthrough_logging_handler_result["kwargs"]
 
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(

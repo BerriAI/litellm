@@ -278,9 +278,18 @@ class CohereV2ModelResponseIterator:
         return None
 
     def _parse_message_end(self, chunk: dict) -> Tuple[bool, str, Optional[ChatCompletionUsageBlock]]:
-        """Parse message-end events to extract finish info and usage."""
-        data = chunk.get("data", {})
-        delta = data.get("delta", {})
+        """Parse message-end events to extract finish info and usage.
+
+        Accepts both envelopes. Cohere's v2 SSE stream puts the payload at the
+        top level (`{"type": "message-end", "delta": {...}}`) — the same shape
+        `_parse_content_delta` reads — while a `{"event": ..., "data": {...}}`
+        wrapper is used elsewhere. Reading only the wrapped form meant `usage`
+        came back `None` for every real SSE stream, so the rebuilt response had
+        no token counts and was priced from estimated tokens instead of
+        Cohere's billed ones.
+        """
+        data = chunk.get("data")
+        delta = (data if isinstance(data, dict) else chunk).get("delta", {})
         is_finished = True
         finish_reason = delta.get("finish_reason", "stop")
 
@@ -328,7 +337,10 @@ class CohereV2ModelResponseIterator:
                 provider_specific_fields = self._parse_tool_plan_delta(chunk)
             elif event_type == "citation-start":
                 provider_specific_fields = self._parse_citation_start(chunk)
-            elif event_type == "message-end":
+            elif event_type == "message-end" or chunk_type == "message-end":
+                # The SSE payload carries `type`, not `event` — keying only off
+                # `event` meant a real stream's terminal chunk (and with it the
+                # billed usage) was never parsed.
                 is_finished, finish_reason, usage = self._parse_message_end(chunk)
 
             # Handle citations in any chunk type (fallback)

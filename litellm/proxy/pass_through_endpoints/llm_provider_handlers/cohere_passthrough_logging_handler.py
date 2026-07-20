@@ -5,6 +5,7 @@ import httpx
 
 import litellm
 from litellm import stream_chunk_builder
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -13,7 +14,7 @@ from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from litellm.llms.cohere.common_utils import (
-    ModelResponseIterator as CohereModelResponseIterator,
+    CohereV2ModelResponseIterator as CohereModelResponseIterator,
 )
 from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
@@ -43,6 +44,22 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+        """Rebuild a Cohere v2 chat response from collected raw SSE lines.
+
+        Two things this had to get right before it could produce a cost, and
+        which went unnoticed while the method had no call sites:
+
+        1. It must use the **v2** iterator. The v1 `ModelResponseIterator`
+           never populates `usage` on any chunk, so a response rebuilt with it
+           has no tokens and prices at exactly $0 — the very hole this is
+           supposed to close. Only `CohereV2ModelResponseIterator` reads the
+           `message-end` event's usage block, and `/v2/chat` is the streaming
+           surface the pass-through tracks anyway.
+        2. It receives raw SSE *lines* (`data: {...}`, `event: content-delta`),
+           not bare JSON. `convert_str_chunk_to_generic_chunk` only strips a
+           `data:` prefix when handed `bytes`, so passing these straight through
+           raises `JSONDecodeError` on the first line.
+        """
         cohere_model_response_iterator = CohereModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
@@ -55,15 +72,40 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         )
         all_openai_chunks = []
         for _chunk_str in all_chunks:
+            payload = self._extract_sse_data_payload(_chunk_str)
+            if payload is None:
+                continue
             try:
-                generic_chunk = cohere_model_response_iterator.convert_str_chunk_to_generic_chunk(chunk=_chunk_str)
+                generic_chunk = cohere_model_response_iterator.convert_str_chunk_to_generic_chunk(chunk=payload)
                 litellm_chunk = litellm_custom_stream_wrapper.chunk_creator(chunk=generic_chunk)
                 if litellm_chunk is not None:
                     all_openai_chunks.append(litellm_chunk)
             except (StopIteration, StopAsyncIteration):
                 break
+            except Exception as e:  # noqa: BLE001  # cost tracking is best-effort; never break the response path
+                # One malformed line must not discard the usage carried by the
+                # rest of the stream — that would silently reintroduce a $0 row.
+                verbose_proxy_logger.debug("Skipping unparseable Cohere stream line: %s", e)
+                continue
+        if not all_openai_chunks:
+            return None
         complete_streaming_response = stream_chunk_builder(chunks=all_openai_chunks)
         return complete_streaming_response
+
+    @staticmethod
+    def _extract_sse_data_payload(line: str) -> Optional[str]:
+        """Return the JSON payload of an SSE `data:` line, else None.
+
+        Non-`data:` framing lines (`event: ...`, `id: ...`, `:` comments) and
+        the terminal `[DONE]` sentinel carry no chunk to parse.
+        """
+        stripped = line.strip()
+        if not stripped.startswith("data:"):
+            return None
+        payload = stripped[len("data:") :].strip()
+        if not payload or payload == "[DONE]":
+            return None
+        return payload
 
     def cohere_passthrough_handler(
         self,

@@ -62,6 +62,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.pass_through_endpoints.passthrough_admission import (
+    PassthroughAdmissionError,
+    enforce_passthrough_admission,
+)
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -74,6 +78,12 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 
+from .common_utils import (
+    is_cohere_streaming_url,
+    is_fireworks_url,
+    is_openai_compatible_url,
+    is_openai_wire_compatible_route,
+)
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 
@@ -329,7 +339,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return return_headers
 
     @staticmethod
-    def get_endpoint_type(url: str) -> EndpointType:
+    def get_endpoint_type(url: str, custom_llm_provider: Optional[str] = None) -> EndpointType:
         parsed_url = urlparse(url)
         if (
             ("generateContent") in url
@@ -340,11 +350,37 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             return EndpointType.VERTEX_AI
         elif parsed_url.hostname == "api.anthropic.com":
             return EndpointType.ANTHROPIC
-        elif (
-            parsed_url.hostname == "api.openai.com"
-            or parsed_url.hostname == "openai.azure.com"
-            or (parsed_url.hostname and "openai.com" in parsed_url.hostname)
-        ):
+        elif is_cohere_streaming_url(url):
+            # Cohere fell through to GENERIC, which reassembles nothing and
+            # costs nothing — so every *streamed* Cohere pass-through was
+            # billed against our Cohere account and recorded at $0. COHERE
+            # routes the collected chunks to the Cohere logging handler, which
+            # rebuilds the response and prices it.
+            return EndpointType.COHERE
+        elif is_openai_compatible_url(url):
+            # Suffix match, not equality: real Azure resources are
+            # `{resource}.openai.azure.com` / `{resource}.cognitiveservices.azure.com`,
+            # so an `== "openai.azure.com"` test never fires and every raw Azure
+            # stream fell through to GENERIC, which does no cost tracking at all
+            # (silent $0 rows). `is_openai_compatible_url` also keeps the
+            # OpenAI-path guard on the shared Azure Cognitive Services domains.
+            return EndpointType.OPENAI
+        elif is_fireworks_url(url):
+            # Fireworks serves an OpenAI-compatible API. Without this branch it
+            # fell through to GENERIC, which reassembles nothing and costs
+            # nothing — so every *streamed* Fireworks pass-through was billed
+            # upstream and recorded at $0. OPENAI routes the collected chunks to
+            # `_handle_logging_openai_collected_chunks`, which prices them via
+            # the Fireworks cost calculator.
+            return EndpointType.OPENAI
+        elif is_openai_wire_compatible_route(url, custom_llm_provider):
+            # Provider-keyed OpenAI-compatible upstreams (groq, together_ai,
+            # deepseek, ...) carry no hostname marker. The NON-streaming
+            # dispatch already prices these through the OpenAI handler; without
+            # this branch their streamed twin classified GENERIC — no costing —
+            # so the same call recorded a real cost in one mode and $0 in the
+            # other. The streamed chunk handler resolves the provider itself,
+            # so OPENAI is safe for any wire-compatible upstream.
             return EndpointType.OPENAI
         return EndpointType.GENERIC
 
@@ -827,7 +863,9 @@ async def pass_through_request(
 
         requested_query_params: Optional[dict] = query_params or dict(request.query_params)
 
-        endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
+        endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(
+            str(url), custom_llm_provider=custom_llm_provider
+        )
 
         # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
         # signed via request.state; we must send those instead of re-encoding the
@@ -854,6 +892,26 @@ async def pass_through_request(
             _parsed_body = {}
         else:
             _parsed_body = await _read_request_body(request)
+
+        #########################################################
+        # Admission control (before the upstream call)
+        #
+        # Cost tracking on pass-through is an allow-list: an unrecognised
+        # route bills the upstream account and records $0 against the caller's
+        # key. Checking after the response would be too late — the money is
+        # already spent — so refuse here, while refusing is still free.
+        # No-op unless general_settings.passthrough_require_cost_tracking.
+        #########################################################
+        from litellm.proxy.proxy_server import general_settings as _admission_general_settings
+
+        enforce_passthrough_admission(
+            general_settings=_admission_general_settings,
+            provider=custom_llm_provider,
+            method=request.method,
+            path=url.path,
+            request_body=_parsed_body,
+        )
+
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
@@ -1430,6 +1488,12 @@ async def pass_through_request(
             status_code=response.status_code,
             headers=response_headers,
         )
+    except PassthroughAdmissionError as e:
+        # Refused before any upstream call, so there is no spend to log and
+        # nothing to report as an upstream failure. Surface it as a plain 4xx
+        # with the reason, rather than letting the generic handler below turn a
+        # deliberate policy decision into an opaque 500.
+        raise HTTPException(status_code=e.status_code, detail={"error": e.message})
     except ModifyResponseException as e:
         verbose_proxy_logger.info(
             "pass_through_endpoint: Guardrail %s modified response: %s",

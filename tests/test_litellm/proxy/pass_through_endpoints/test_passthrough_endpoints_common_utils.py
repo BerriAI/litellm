@@ -97,3 +97,107 @@ def test_encode_bedrock_runtime_modelid_arn_edge_cases():
     expected = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Ftest-profile.v1/invoke"
     result = CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint)
     assert result == expected
+
+
+class TestOpenAIWireCompatibleScope:
+    """`is_openai_wire_compatible_route` is the single scope predicate shared by
+    the pass-through success handler and the OpenAI route helpers."""
+
+    def test_provider_widens_scope_beyond_the_hostname_allow_list(self):
+        from litellm.proxy.pass_through_endpoints.common_utils import (
+            is_openai_wire_compatible_route,
+        )
+
+        url = "https://api.fireworks.ai/inference/v1/chat/completions"
+        assert is_openai_wire_compatible_route(url, "fireworks_ai") is True
+        assert (
+            is_openai_wire_compatible_route(
+                "https://api.groq.com/openai/v1/chat/completions", "groq"
+            )
+            is True
+        )
+
+    def test_shared_azure_domains_keep_the_path_marker_guard(self):
+        """A provider label must not let Speech / Vision / Language on the
+        shared Azure Cognitive Services domains be costed as OpenAI."""
+        from litellm.proxy.pass_through_endpoints.common_utils import (
+            is_openai_wire_compatible_route,
+        )
+
+        speech = (
+            "https://my-resource.cognitiveservices.azure.com"
+            "/speechtotext/v3.1/transcriptions"
+        )
+        assert is_openai_wire_compatible_route(speech, "azure") is False
+        assert is_openai_wire_compatible_route(speech, "openai") is False
+        # ... while a real Azure OpenAI path still matches.
+        assert (
+            is_openai_wire_compatible_route(
+                "https://my-resource.cognitiveservices.azure.com/openai/deployments/gpt-4o/chat/completions",
+                "azure",
+            )
+            is True
+        )
+
+    def test_unknown_provider_and_host_is_out_of_scope(self):
+        from litellm.proxy.pass_through_endpoints.common_utils import (
+            is_openai_wire_compatible_route,
+        )
+
+        assert (
+            is_openai_wire_compatible_route(
+                "https://api.example.com/v1/chat/completions", "some_random_provider"
+            )
+            is False
+        )
+        assert is_openai_wire_compatible_route(None, None) is False
+
+
+class TestFireworksModelIdHelpers:
+    def test_is_fireworks_model_id(self):
+        from litellm.proxy.pass_through_endpoints.common_utils import (
+            is_fireworks_model_id,
+        )
+
+        assert is_fireworks_model_id("accounts/fireworks/models/deepseek-v3") is True
+        assert (
+            is_fireworks_model_id("fireworks_ai/accounts/fireworks/models/deepseek-v3")
+            is True
+        )
+        assert is_fireworks_model_id("gpt-4o") is False
+        assert is_fireworks_model_id("azure/my-deployment") is False
+        assert is_fireworks_model_id(None) is False
+
+    def test_resolve_provider_prefers_the_configured_one(self):
+        from litellm.proxy.pass_through_endpoints.common_utils import (
+            resolve_openai_passthrough_provider,
+        )
+
+        assert (
+            resolve_openai_passthrough_provider(
+                model="accounts/fireworks/models/deepseek-v3",
+                custom_llm_provider="openai",
+            )
+            == "openai"
+        )
+
+    def test_resolve_provider_infers_fireworks_when_unset(self):
+        """A generic pass-through declares no provider; defaulting to "openai"
+        made the price lookup raise and the call record $0."""
+        from litellm.proxy.pass_through_endpoints.common_utils import (
+            resolve_openai_passthrough_provider,
+        )
+
+        assert (
+            resolve_openai_passthrough_provider(
+                model="accounts/fireworks/models/deepseek-v3"
+            )
+            == "fireworks_ai"
+        )
+        assert (
+            resolve_openai_passthrough_provider(
+                url_route="https://api.fireworks.ai/inference/v1/chat/completions"
+            )
+            == "fireworks_ai"
+        )
+        assert resolve_openai_passthrough_provider(model="gpt-4o") == "openai"

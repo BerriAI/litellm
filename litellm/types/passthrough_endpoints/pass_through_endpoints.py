@@ -24,6 +24,10 @@ class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    # Streamed Cohere chat. Without its own member `api.cohere.com` classified
+    # as GENERIC, which reassembles nothing and costs nothing — every streamed
+    # Cohere pass-through was billed upstream and recorded at $0.
+    COHERE = "cohere"
     GENERIC = "generic"
 
 
@@ -37,22 +41,22 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
     The full url of the request
     """
 
-    request_method: Optional[str]
+    request_method: str | None
     """
     The method of the request
     "GET", "POST", "PUT", "DELETE", etc.
     """
 
-    request_body: Optional[dict]
+    request_body: dict | None
     """
     The body of the request
     """
-    response_body: Optional[dict]  # only tracked for non-streaming responses
+    response_body: dict | None  # only tracked for non-streaming responses
     """
     The body of the response
     """
 
-    cost_per_request: Optional[float]
+    cost_per_request: float | None
     """
     The cost per request to the target endpoint
 

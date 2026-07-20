@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from contextlib import ExitStack
+from datetime import datetime
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Optional
@@ -34,6 +35,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    EndpointType,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -3613,6 +3615,182 @@ async def test_multipart_passthrough_preserves_boundary():
     async_client.request.assert_called_once()
 
 
+class TestGetEndpointType:
+    """Regression tests for `HttpPassThroughEndpointHelpers.get_endpoint_type`.
+
+    `get_endpoint_type` picks the `EndpointType` used to route *streaming*
+    passthrough responses to a cost-tracking handler. It used to compare
+    hostnames with exact equality (`hostname == "openai.azure.com"`), but a real
+    Azure resource is `{resource}.openai.azure.com` — so the check never fired,
+    every raw Azure stream fell through to `EndpointType.GENERIC`, which does no
+    cost tracking, and the call was billed upstream while recording $0.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-02-01",
+            "https://my-resource.openai.azure.com/openai/v1/chat/completions",
+            "https://my-resource.cognitiveservices.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-02-01",
+            "https://my-resource.cognitiveservices.azure.com/v1/chat/completions",
+        ],
+    )
+    def test_azure_subdomains_are_openai(self, url):
+        """Real Azure resources live on a subdomain of the shared Azure domains."""
+        assert (
+            HttpPassThroughEndpointHelpers.get_endpoint_type(url) == EndpointType.OPENAI
+        )
+
+    def test_openai_proper_is_openai(self):
+        assert (
+            HttpPassThroughEndpointHelpers.get_endpoint_type(
+                "https://api.openai.com/v1/chat/completions"
+            )
+            == EndpointType.OPENAI
+        )
+
+    def test_lookalike_host_is_not_openai(self):
+        """Suffix matching must not degrade into a substring test: an attacker
+        controlled `...azure.com.attacker.example` host must stay GENERIC."""
+        for url in (
+            "https://cognitiveservices.azure.com.attacker.example/v1/chat/completions",
+            "https://openai.azure.com.attacker.example/v1/chat/completions",
+            "https://api.openai.com.attacker.example/v1/chat/completions",
+            "https://notopenai.azure.com.evil.test/openai/v1/chat/completions",
+        ):
+            assert (
+                HttpPassThroughEndpointHelpers.get_endpoint_type(url)
+                == EndpointType.GENERIC
+            ), url
+
+    def test_non_openai_cognitive_services_stay_generic(self):
+        """The shared Azure domains also host Speech / Vision / Language. Those
+        carry no OpenAI-style path marker and must not be classified as OpenAI."""
+        for url in (
+            "https://my-resource.cognitiveservices.azure.com/speechtotext/v3.1/transcriptions",
+            "https://my-resource.cognitiveservices.azure.com/vision/v3.2/analyze",
+        ):
+            assert (
+                HttpPassThroughEndpointHelpers.get_endpoint_type(url)
+                == EndpointType.GENERIC
+            ), url
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.fireworks.ai/inference/v1/chat/completions",
+            "https://api.fireworks.ai/inference/v1/completions",
+        ],
+    )
+    def test_fireworks_is_openai(self, url):
+        """Fireworks serves an OpenAI-compatible API.
+
+        Anything `get_endpoint_type` does not match becomes `GENERIC`, which
+        reassembles nothing and costs nothing — so every *streamed* Fireworks
+        pass-through was billed upstream and recorded $0. Mapping it to OPENAI
+        routes the collected chunks to the OpenAI streaming cost handler.
+        """
+        assert (
+            HttpPassThroughEndpointHelpers.get_endpoint_type(url)
+            == EndpointType.OPENAI
+        )
+
+    def test_fireworks_lookalike_host_is_not_openai(self):
+        """Suffix matching, not a substring test."""
+        for url in (
+            "https://api.fireworks.ai.attacker.example/v1/chat/completions",
+            "https://notfireworks.ai.evil.test/v1/chat/completions",
+        ):
+            assert (
+                HttpPassThroughEndpointHelpers.get_endpoint_type(url)
+                == EndpointType.GENERIC
+            ), url
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.cohere.com/v2/chat",
+            "https://api.cohere.ai/v2/chat",
+        ],
+    )
+    def test_cohere_chat_is_cohere(self, url):
+        """Streamed Cohere chat fell through to `GENERIC`, which reassembles
+        nothing and costs nothing — so it was billed against our Cohere account
+        and recorded at $0, even though `CoherePassthroughLoggingHandler`
+        already had a `_build_complete_streaming_response`. It simply had no
+        call site. `COHERE` routes the collected chunks to it.
+        """
+        assert (
+            HttpPassThroughEndpointHelpers.get_endpoint_type(url)
+            == EndpointType.COHERE
+        )
+
+    def test_non_streaming_cohere_routes_stay_generic(self):
+        """Only `/v2/chat` streams and is reconstructable from SSE chunks.
+        Claiming `COHERE` for embed / rerank / classify would assert cost
+        coverage that does not exist — the handler has no parser for them.
+        (Non-streamed embed is still costed by the success-handler path.)
+        """
+        for url in (
+            "https://api.cohere.com/v1/embed",
+            "https://api.cohere.com/v2/rerank",
+            "https://api.cohere.com/v1/classify",
+        ):
+            assert (
+                HttpPassThroughEndpointHelpers.get_endpoint_type(url)
+                == EndpointType.GENERIC
+            ), url
+
+    def test_cohere_lookalike_host_is_not_cohere(self):
+        """Suffix matching, not a substring test."""
+        for url in (
+            "https://api.cohere.com.attacker.example/v2/chat",
+            "https://notcohere.ai.evil.test/v2/chat",
+        ):
+            assert (
+                HttpPassThroughEndpointHelpers.get_endpoint_type(url)
+                == EndpointType.GENERIC
+            ), url
+
+    def test_gemini_streaming_stays_vertex_ai(self):
+        """Streamed Gemini is deliberately routed through the Vertex handler.
+
+        There is no `EndpointType.GEMINI`: both providers share the same
+        `generateContent` chunk iterator, and
+        `VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url`
+        resolves the AI Studio host to the `gemini` provider, so the Vertex
+        branch already prices and attributes streamed Gemini correctly. This
+        pins that routing so a future change cannot silently drop Gemini into
+        `GENERIC` (which would cost nothing).
+        """
+        assert (
+            HttpPassThroughEndpointHelpers.get_endpoint_type(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+            )
+            == EndpointType.VERTEX_AI
+        )
+
+    def test_other_providers_unchanged(self):
+        assert (
+            HttpPassThroughEndpointHelpers.get_endpoint_type(
+                "https://api.anthropic.com/v1/messages"
+            )
+            == EndpointType.ANTHROPIC
+        )
+        assert (
+            HttpPassThroughEndpointHelpers.get_endpoint_type(
+                "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/gemini-2.0-flash:generateContent"
+            )
+            == EndpointType.VERTEX_AI
+        )
+        assert (
+            HttpPassThroughEndpointHelpers.get_endpoint_type(
+                "https://api.cohere.com/v1/chat"
+            )
+            == EndpointType.GENERIC
+        )
+
+
 def test_get_response_headers_strips_server_and_date():
     """Regression: forwarding the upstream's Server/Date headers causes
     uvicorn to add its own and strict HTTP parsers (aiohttp) reject the
@@ -4617,3 +4795,227 @@ async def test_pass_through_relay_full_consumption_logs_no_partial_relay_warning
     finally:
         cleanup()
         await fake_client.aclose()
+
+
+class TestGenericPassthroughUsagePricing:
+    """Cost tracking used to be a strict allow-list.
+
+    Any pass-through route without a bespoke provider handler recorded $0
+    while its request was still forwarded upstream with *our* credentials and
+    billed to us — breaking per-key budgets and corrupting invoice
+    reconciliation. `normalize_llm_passthrough_logging_payload` now ends in a
+    fallback that prices any recognisable usage shape, so pricing is the
+    default for a new provider rather than something each one must opt into.
+    """
+
+    # A host and path that deliberately match no provider handler.
+    URL = "https://api.novel-provider.example/v1/generate"
+    PROMPT_TOKENS = 1000
+    COMPLETION_TOKENS = 500
+
+    def _logging_obj(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {}
+        mock_logging_obj.optional_params = {}
+        mock_logging_obj.litellm_call_id = "test-call-id"
+        mock_logging_obj.litellm_trace_id = "test-trace-id"
+        return mock_logging_obj
+
+    def _normalize(self, response_body, request_body=None, url=None, logging_obj=None):
+        from litellm.proxy.pass_through_endpoints.success_handler import (
+            PassThroughEndpointLogging,
+        )
+
+        logging_obj = logging_obj or self._logging_obj()
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(response_body)
+
+        PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+            httpx_response=mock_response,
+            response_body=response_body,
+            request_body=request_body or {},
+            logging_obj=logging_obj,
+            url_route=url or self.URL,
+            result="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            custom_llm_provider=None,
+        )
+        return logging_obj.model_call_details.get("response_cost")
+
+    def _expected(self, price_key):
+        import litellm
+
+        price = litellm.model_cost[price_key]
+        return (
+            price["input_cost_per_token"] * self.PROMPT_TOKENS
+            + price["output_cost_per_token"] * self.COMPLETION_TOKENS
+        )
+
+    def test_prices_openai_usage_shape(self):
+        """`usage.prompt_tokens` / `usage.completion_tokens`."""
+        cost = self._normalize(
+            {
+                "model": "gpt-4o",
+                "usage": {
+                    "prompt_tokens": self.PROMPT_TOKENS,
+                    "completion_tokens": self.COMPLETION_TOKENS,
+                },
+            }
+        )
+        assert cost == pytest.approx(self._expected("gpt-4o"), rel=1e-6)
+
+    def test_prices_anthropic_usage_shape(self):
+        """`usage.input_tokens` / `usage.output_tokens`."""
+        cost = self._normalize(
+            {
+                "model": "claude-sonnet-4-5",
+                "usage": {
+                    "input_tokens": self.PROMPT_TOKENS,
+                    "output_tokens": self.COMPLETION_TOKENS,
+                },
+            }
+        )
+        assert cost == pytest.approx(self._expected("claude-sonnet-4-5"), rel=1e-6)
+
+    def test_prices_gemini_usage_shape(self):
+        """`usageMetadata.promptTokenCount` / `.candidatesTokenCount`."""
+        cost = self._normalize(
+            {
+                "usageMetadata": {
+                    "promptTokenCount": self.PROMPT_TOKENS,
+                    "candidatesTokenCount": self.COMPLETION_TOKENS,
+                }
+            },
+            request_body={"model": "gemini-2.5-flash"},
+        )
+        assert cost == pytest.approx(self._expected("gemini/gemini-2.5-flash"), rel=1e-6)
+
+    def test_model_may_come_from_the_request_body(self):
+        """Many APIs echo no model in the response."""
+        cost = self._normalize(
+            {
+                "usage": {
+                    "prompt_tokens": self.PROMPT_TOKENS,
+                    "completion_tokens": self.COMPLETION_TOKENS,
+                }
+            },
+            request_body={"model": "gpt-4o"},
+        )
+        assert cost == pytest.approx(self._expected("gpt-4o"), rel=1e-6)
+
+    def test_unknown_model_is_left_unpriced(self):
+        """Never invent a number: an unpriced row is recoverable, a wrong one
+        looks authoritative and corrupts reconciliation."""
+        assert (
+            self._normalize(
+                {
+                    "model": "some-model-that-does-not-exist-xyz",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                }
+            )
+            is None
+        )
+
+    def test_missing_model_is_left_unpriced(self):
+        assert (
+            self._normalize(
+                {"usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+            )
+            is None
+        )
+
+    def test_unrecognised_body_is_left_unpriced(self):
+        """No usage block -> nothing to price (file uploads, deletes, ...)."""
+        assert self._normalize({"model": "gpt-4o", "id": "file-123"}) is None
+        assert self._normalize({"model": "gpt-4o", "usage": "not-a-dict"}) is None
+        assert self._normalize(None) is None
+
+    def test_all_zero_usage_is_left_unpriced(self):
+        """A zeroed usage block carries no billable signal."""
+        assert (
+            self._normalize(
+                {
+                    "model": "gpt-4o",
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+                }
+            )
+            is None
+        )
+
+    def test_per_second_priced_models_are_left_unpriced(self):
+        """Audio / image models price per second or per image, not per token.
+        Multiplying their zero per-token rates would write a misleading $0.00
+        that looks like real coverage."""
+        assert (
+            self._normalize(
+                {
+                    "model": "whisper-1",
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+                }
+            )
+            is None
+        )
+
+    def test_fallback_does_not_shadow_a_provider_handler(self):
+        """The fallback is the last `else` — a route a real handler claims must
+        still go to that handler."""
+        from litellm.proxy.pass_through_endpoints.success_handler import (
+            PassThroughEndpointLogging,
+        )
+
+        handler = PassThroughEndpointLogging()
+        with patch.object(
+            handler, "_price_generic_passthrough", side_effect=AssertionError("shadowed")
+        ):
+            anthropic_body = {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+            mock_response = MagicMock(spec=httpx.Response)
+            mock_response.status_code = 200
+            mock_response.text = json.dumps(anthropic_body)
+            mock_response.headers = {}
+            mock_response.json.return_value = anthropic_body
+            # An Anthropic route: claimed by the Anthropic handler, so the
+            # generic fallback must not run.
+            handler.normalize_llm_passthrough_logging_payload(
+                httpx_response=mock_response,
+                response_body=anthropic_body,
+                request_body={},
+                logging_obj=self._logging_obj(),
+                url_route="https://api.anthropic.com/v1/messages",
+                result="",
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                cache_hit=False,
+                custom_llm_provider=None,
+            )
+
+    def test_pricing_failure_never_breaks_the_request(self):
+        """Cost tracking is best-effort; it must not raise into the response
+        path."""
+        with patch(
+            "litellm.proxy.pass_through_endpoints.success_handler._resolve_generic_price",
+            side_effect=RuntimeError("boom"),
+        ):
+            assert (
+                self._normalize(
+                    {
+                        "model": "gpt-4o",
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                    }
+                )
+                is None
+            )

@@ -330,6 +330,7 @@ class TestVertexAIPassThroughHandler:
             # Verify create_pass_through_route was called with correct arguments
             mock_create_route.assert_called_once_with(
                 endpoint=endpoint,
+                custom_llm_provider="vertex_ai",
                 target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
@@ -438,6 +439,7 @@ class TestVertexAIPassThroughHandler:
             # Verify create_pass_through_route was called with correct arguments
             mock_create_route.assert_called_once_with(
                 endpoint=endpoint,
+                custom_llm_provider="vertex_ai",
                 target=f"https://aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
@@ -540,6 +542,7 @@ class TestVertexAIPassThroughHandler:
             # Verify default credentials were used
             mock_create_route.assert_called_once_with(
                 endpoint=endpoint,
+                custom_llm_provider="vertex_ai",
                 target=f"https://{default_location}-aiplatform.googleapis.com/v1/projects/{default_project}/locations/{default_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"Authorization": f"Bearer {default_credentials}"},
                 is_streaming_request=False,
@@ -628,6 +631,7 @@ class TestVertexAIPassThroughHandler:
             # Verify create_pass_through_route was called with correct arguments
             mock_create_route.assert_called_once_with(
                 endpoint=endpoint,
+                custom_llm_provider="vertex_ai",
                 target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
                 custom_headers={"authorization": f"Bearer {test_token}"},
                 is_streaming_request=False,
@@ -1774,6 +1778,7 @@ class TestLLMPassthroughFactoryProxyRoute:
                 custom_llm_provider=LlmProviders.VLLM, region_name=None
             )
             mock_create_route.assert_called_once_with(
+                custom_llm_provider="vllm",
                 endpoint="/chat/completions",
                 target="https://example.com/v1/chat/completions",
                 custom_headers={"x-api-key": "dummy"},
