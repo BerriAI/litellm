@@ -625,6 +625,11 @@ class TeamNewResponse(BaseModel):
     team_id: str
 
 
+class TeamUpdateBody(BaseModel):
+    team_id: str
+    team_alias: str
+
+
 class TeamInfoParams(BaseModel):
     team_id: str
 
