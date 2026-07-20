@@ -94,6 +94,7 @@ class KeyInfo(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     team_id: str | None = None
+    blocked: bool | None = None
     spend: float | None = None
     max_budget: float | None = None
     budget_reset_at: str | None = None
@@ -579,6 +580,10 @@ class CredentialCreateResponse(BaseModel):
 class KeyUpdateBody(BaseModel):
     key: str
     models: list[str]
+
+
+class KeyBlockBody(BaseModel):
+    key: str
 
 
 class KeyListParams(BaseModel):

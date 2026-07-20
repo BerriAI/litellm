@@ -14,6 +14,7 @@ from e2e_http import NoBody, ProbeResult, Result, StreamingResponse, Success, Un
 from models import (
     ChatBody,
     ChatMessage,
+    KeyBlockBody,
     KeyDeleteBody,
     KeyGenerateBody,
     KeyListParams,
@@ -85,6 +86,16 @@ class ManagementClient:
                 "/key/delete",
                 headers=self.proxy.transport.master,
                 json=KeyDeleteBody(keys=[key]),
+                response_type=NoBody,
+            )
+        )
+
+    def block_key(self, key: str) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/key/block",
+                headers=self.proxy.transport.master,
+                json=KeyBlockBody(key=key),
                 response_type=NoBody,
             )
         )
