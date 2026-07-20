@@ -105,6 +105,7 @@ from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
+    JWTKeyMappingRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -3999,6 +4000,11 @@ async def delete_verification_tokens(
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=litellm_changed_by,
             )
+            await _cleanup_jwt_key_mappings_for_tokens(
+                tokens=tuple(key.token for key in authorized_keys),
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
 
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 deleted_tokens = await prisma_client.delete_data(tokens=tokens)
@@ -4112,6 +4118,25 @@ async def _persist_deleted_verification_tokens(
         records=records,
         prisma_client=prisma_client,
     )
+
+
+async def _cleanup_jwt_key_mappings_for_tokens(
+    tokens: Tuple[str, ...],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    if not tokens:
+        return
+    mappings = await JWTKeyMappingRepository(prisma_client).table.find_many(where={"token": {"in": list(tokens)}})
+    if not mappings:
+        return
+    await asyncio.gather(
+        *(
+            user_api_key_cache.async_delete_cache(f"jwt_key_mapping:{mapping.jwt_claim_name}:{mapping.jwt_claim_value}")
+            for mapping in mappings
+        )
+    )
+    await JWTKeyMappingRepository(prisma_client).table.delete_many(where={"token": {"in": list(tokens)}})
 
 
 async def delete_key_aliases(
