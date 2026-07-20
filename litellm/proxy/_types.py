@@ -1729,12 +1729,12 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
-    soft_budget: Optional[float] = None
-    max_parallel_requests: Optional[int] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    model_max_budget: Optional[GenericBudgetConfigType] = None
-    budget_duration: Optional[str] = None
+    soft_budget: float | None = None
+    max_parallel_requests: int | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    model_max_budget: GenericBudgetConfigType | None = None
+    budget_duration: str | None = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
