@@ -687,7 +687,7 @@ def _extract_upstream_auth_failure(
 ) -> Optional[tuple[int, Optional[str]]]:
     """The upstream 401/403 and its ``WWW-Authenticate`` header from the exception tree, or ``None``.
 
-    Delegates to the shared traversal in ``faults.list_outcomes`` so every consumer (tool listing,
+    Delegates to the shared traversal in ``faults`` so every consumer (tool listing,
     tool calls, the connect-time probe) selects the same response with the same deliberate order:
     explicit ``raise ... from`` causes first, ExceptionGroup members in raise order, the incidental
     ``__context__`` chain last. A response raised while handling the real failure can therefore never
