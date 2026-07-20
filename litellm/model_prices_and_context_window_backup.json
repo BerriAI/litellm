@@ -8441,13 +8441,13 @@
         "supports_tool_choice": true
     },
     "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": {
-        "input_cost_per_token": 1.41e-06,
+        "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 3.5e-07,
+        "output_cost_per_token": 1e-06,
         "source": "https://azure.microsoft.com/en-us/blog/introducing-the-llama-4-herd-in-azure-ai-foundry-and-azure-databricks/",
         "supports_function_calling": true,
         "supports_tool_choice": true,
