@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { getRouterSettingsCall } from "../networking";
+import { getRouterSettingsCall, modelInfoCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
 import { FallbackSelectionForm } from "../Settings/RouterSettings/Fallbacks/FallbackSelectionForm";
@@ -30,6 +30,7 @@ interface RouterSettingsAccordionProps {
   value?: RouterSettingsAccordionValue;
   onChange?: (value: RouterSettingsAccordionValue) => void;
   modelData?: any;
+  teamId?: string;
 }
 
 export interface RouterSettingsAccordionRef {
@@ -39,7 +40,7 @@ export interface RouterSettingsAccordionRef {
 const PROPAGATE_WAIT_MS = 100;
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
-  ({ accessToken, value, onChange, modelData }, ref) => {
+  ({ accessToken, value, onChange, modelData, teamId }, ref) => {
     const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
       routerSettings: {},
       selectedStrategy: null,
@@ -182,6 +183,15 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       }
       const loadModels = async () => {
         try {
+          if (teamId) {
+            const response = await modelInfoCall(accessToken, "", "", 1, 1000, undefined, undefined, teamId);
+            const teamModels: ModelGroup[] = (response?.data ?? [])
+              .map((item: { model_name?: string }) => item.model_name)
+              .filter((name: string | undefined): name is string => Boolean(name))
+              .map((name: string) => ({ model_group: name }));
+            setModelInfo(teamModels);
+            return;
+          }
           const uniqueModels = await fetchAvailableModels(accessToken);
           setModelInfo(uniqueModels);
         } catch (error) {
@@ -189,7 +199,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         }
       };
       loadModels();
-    }, [accessToken]);
+    }, [accessToken, teamId]);
 
     // Helper function to build router_settings from current state
     const buildRouterSettings = (): RouterSettingsAccordionValue["router_settings"] => {

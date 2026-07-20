@@ -1,11 +1,14 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
+import { modelInfoCall } from "../networking";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "./RouterSettingsAccordion";
 
 vi.mock("../networking", () => ({
   getRouterSettingsCall: vi.fn().mockResolvedValue({}),
+  modelInfoCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -13,7 +16,9 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
 }));
 
 vi.mock("../Settings/RouterSettings/Fallbacks/FallbackSelectionForm", () => ({
-  FallbackSelectionForm: () => null,
+  FallbackSelectionForm: ({ availableModels }: { availableModels: string[] }) => (
+    <div data-testid="available-models">{availableModels.join(",")}</div>
+  ),
 }));
 
 vi.mock("@tremor/react", () => ({
@@ -41,13 +46,24 @@ vi.mock("../router_settings/RouterSettingsForm", () => ({
 
 describe("RouterSettingsAccordion", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
-    vi.runOnlyPendingTimers();
+    cleanup();
+    if (vi.isFakeTimers()) {
+      vi.runOnlyPendingTimers();
+    }
     vi.useRealTimers();
   });
+
+  const flushPromises = async () => {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
 
   const flushInitialPropagation = async (onChange: ReturnType<typeof vi.fn>) => {
     await act(async () => {
@@ -79,6 +95,29 @@ describe("RouterSettingsAccordion", () => {
     });
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0].router_settings.routing_strategy).toBe("usage-based-routing");
+  });
+
+  it("populates the fallback dropdown with team-scoped models when teamId is set", async () => {
+    vi.mocked(modelInfoCall).mockResolvedValueOnce({
+      data: [{ model_name: "team-a-model" }, { model_name: "team-b-model" }],
+    });
+
+    render(<RouterSettingsAccordion accessToken="test-token" teamId="team-1" />);
+    await flushPromises();
+
+    expect(screen.getByTestId("available-models").textContent).toBe("team-a-model,team-b-model");
+    expect(modelInfoCall).toHaveBeenCalledWith("test-token", "", "", 1, 1000, undefined, undefined, "team-1");
+    expect(fetchAvailableModels).not.toHaveBeenCalled();
+  });
+
+  it("uses the global model list when no teamId is provided", async () => {
+    vi.mocked(fetchAvailableModels).mockResolvedValueOnce([{ model_group: "shared-gpt" }]);
+
+    render(<RouterSettingsAccordion accessToken="test-token" />);
+    await flushPromises();
+
+    expect(screen.getByTestId("available-models").textContent).toBe("shared-gpt");
+    expect(modelInfoCall).not.toHaveBeenCalled();
   });
 
   it("does not call onChange when unmounted mid-wait", async () => {
