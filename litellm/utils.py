@@ -8099,6 +8099,12 @@ class ProviderConfigManager:
             )
 
             return AzureSpeechAudioTranscriptionConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.audio_transcription.transformation import (
+                BedrockAudioTranscriptionConfig,
+            )
+
+            return BedrockAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:

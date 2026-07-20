@@ -10,6 +10,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
+import base64
 import contextvars
 import datetime
 import inspect
@@ -59,6 +60,7 @@ import litellm
 
 # client must be imported from litellm as it's a decorator used at function definition time
 from litellm import client
+from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 
 # Other utils are imported directly to avoid circular imports
 from litellm.utils import (
@@ -81,22 +83,19 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.chat_completion_agentic_loop import (
-    maybe_run_chat_completion_agentic_loop,
-)
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.request_timeout_resolver import (
-    get_configured_request_timeout,
+from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    maybe_run_chat_completion_agentic_loop,
 )
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
 )
-from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -111,6 +110,9 @@ from litellm.litellm_core_utils.mock_functions import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
+)
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -213,7 +215,6 @@ from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
 from .llms.bytez.chat.transformation import BytezChatConfig
-from .llms.gdc.chat.transformation import GDCGeminiConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
@@ -222,24 +223,25 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
+from .llms.gdc.chat.transformation import GDCGeminiConfig
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.ollama.completion import handler as ollama
-from .llms.oobabooga.chat import oobabooga
-from .llms.openai.completion.handler import OpenAITextCompletion
-from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
-from .llms.openai.openai import OpenAIChatCompletion
 from .llms.nvidia_riva.audio_transcription.handler import (
     NvidiaRivaAudioTranscription,
 )
 from .llms.nvidia_riva.audio_transcription.transformation import (
     NvidiaRivaAudioTranscriptionConfig,
 )
+from .llms.oci.chat.transformation import OCIChatConfig
+from .llms.ollama.completion import handler as ollama
+from .llms.oobabooga.chat import oobabooga
+from .llms.openai.completion.handler import OpenAITextCompletion
+from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
+from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
@@ -7459,6 +7461,121 @@ async def amoderation(
 ##### Transcription #######################
 
 
+_RUST_TRANSCRIPTION_PROVIDERS = {"bedrock"}
+_BEDROCK_AUDIO_FORMATS = {"wav", "mp3", "flac", "ogg"}
+
+
+def _rust_audio_payload(file: FileTypes) -> dict[str, object]:
+    processed_audio = process_audio_file(file)
+    content_type_formats = {
+        "audio/flac": "flac",
+        "audio/mpeg": "mp3",
+        "audio/mp3": "mp3",
+        "audio/ogg": "ogg",
+        "audio/wav": "wav",
+        "audio/x-wav": "wav",
+    }
+    content_type_format = content_type_formats.get(processed_audio.content_type)
+    filename_format = processed_audio.filename.rsplit(".", 1)[-1].lower() if "." in processed_audio.filename else ""
+    audio_format = content_type_format or filename_format
+    if audio_format not in _BEDROCK_AUDIO_FORMATS:
+        raise ValueError(f"Unsupported Bedrock audio format for file {processed_audio.filename!r}")
+    return {
+        "data": base64.b64encode(processed_audio.file_content).decode("ascii"),
+        "format": audio_format,
+        "filename": processed_audio.filename,
+    }
+
+
+def _rust_audio_optional_params(
+    optional_params: dict[str, object],
+    kwargs: dict[str, object],
+) -> dict[str, object]:
+    credential_keys = {
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_region_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "aws_bedrock_runtime_endpoint",
+    }
+    return {
+        **optional_params,
+        **{key: value for key, value in kwargs.items() if key in credential_keys and value is not None},
+    }
+
+
+def _run_rust_transcription(
+    *,
+    model: str,
+    file: FileTypes,
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str,
+    extra_headers: dict[str, object] | None,
+    optional_params: dict[str, object],
+    kwargs: dict[str, object],
+    timeout: object,
+) -> TranscriptionResponse | None:
+    from litellm.rust_bridge import transcription as rust_transcription_bridge
+
+    if not rust_transcription_bridge.rust_transcription_enabled():
+        return None
+    if custom_llm_provider not in _RUST_TRANSCRIPTION_PROVIDERS:
+        return None
+    if rust_transcription_bridge.load_rust_transcription() is None:
+        return None
+    rust_response = rust_transcription_bridge.transcription(
+        model=model,
+        audio=_rust_audio_payload(file),
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=extra_headers,
+        optional_params=_rust_audio_optional_params(optional_params, kwargs),
+        timeout=timeout,
+    )
+    return None if rust_response is None else TranscriptionResponse(**rust_response)
+
+
+async def _run_rust_atranscription(
+    *,
+    model: str,
+    file: FileTypes,
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str,
+    extra_headers: dict[str, object] | None,
+    optional_params: dict[str, object],
+    kwargs: dict[str, object],
+    timeout: object,
+) -> TranscriptionResponse | None:
+    from litellm.rust_bridge import transcription as rust_transcription_bridge
+
+    if not rust_transcription_bridge.rust_transcription_enabled():
+        return None
+    if custom_llm_provider not in _RUST_TRANSCRIPTION_PROVIDERS:
+        return None
+    if rust_transcription_bridge.load_rust_atranscription() is None:
+        return None
+    rust_response = await rust_transcription_bridge.atranscription(
+        model=model,
+        audio=_rust_audio_payload(file),
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=extra_headers,
+        optional_params=_rust_audio_optional_params(optional_params, kwargs),
+        timeout=timeout,
+    )
+    return None if rust_response is None else TranscriptionResponse(**rust_response)
+
+
 @client
 async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     """
@@ -7722,6 +7839,60 @@ def transcription(
             headers=extra_headers,
             provider_config=provider_config,  # type: ignore[arg-type]
         )
+    elif custom_llm_provider == "bedrock":
+        rust_response = (
+            _run_rust_atranscription(
+                model=model,
+                file=file,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                kwargs=kwargs,
+                timeout=timeout,
+            )
+            if atranscription
+            else _run_rust_transcription(
+                model=model,
+                file=file,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                kwargs=kwargs,
+                timeout=timeout,
+            )
+        )
+        if rust_response is not None:
+            response = rust_response
+        else:
+            from litellm.llms.bedrock.audio_transcription.handler import (
+                BedrockAudioTranscriptionHandler,
+            )
+
+            response = BedrockAudioTranscriptionHandler().audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=(
+                    client
+                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
+                    else None
+                ),
+                timeout=timeout,
+                max_retries=max_retries,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                headers=extra_headers,
+                provider_config=provider_config,
+                shared_session=shared_session,
+            )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
