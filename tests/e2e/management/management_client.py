@@ -14,25 +14,34 @@ from e2e_http import NoBody, ProbeResult, Result, StreamingResponse, Success, Un
 from models import (
     ChatBody,
     ChatMessage,
+    KeyBlockBody,
     KeyDeleteBody,
     KeyGenerateBody,
+    KeyGenerateResponse,
     KeyListParams,
     KeyListResponse,
+    KeyRegenerateBody,
     KeyUpdateBody,
     OrgDeleteBody,
     OrgInfoParams,
     OrgInfoResponse,
     OrgNewBody,
     OrgNewResponse,
+    TagDeleteBody,
+    TagListEntry,
+    TagListResponse,
+    TagNewBody,
     TeamData,
     TeamDeleteBody,
     TeamInfoParams,
     TeamInfoResponse,
+    TeamListResponse,
     TeamMemberAddBody,
     TeamMemberDeleteBody,
     TeamMemberEntry,
     TeamNewBody,
     TeamNewResponse,
+    TeamUpdateBody,
     UserDeleteBody,
     UserDeleteResponse,
     UserInfoParams,
@@ -41,6 +50,7 @@ from models import (
     UserListResponse,
     UserNewBody,
     UserNewResponse,
+    UserUpdateBody,
 )
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
@@ -90,6 +100,25 @@ class ManagementClient:
             )
         )
 
+    def block_key(self, key: str) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/key/block",
+                headers=self.proxy.transport.master,
+                json=KeyBlockBody(key=key),
+                response_type=NoBody,
+            )
+        )
+    def regenerate_key(self, key: str) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/key/regenerate",
+                headers=self.proxy.transport.master,
+                json=KeyRegenerateBody(key=key),
+                response_type=KeyGenerateResponse,
+            )
+        ).key
+
     def key_alias_count(self, key_alias: str) -> int:
         return unwrap(
             self.proxy.transport.get(
@@ -112,6 +141,28 @@ class ManagementClient:
         self._wait_for_team(team_id)
         return team_id
 
+    def update_team(self, body: TeamUpdateBody) -> None:
+        last: Result[NoBody] | None = None
+        for attempt in range(5):
+            last = self.proxy.transport.post(
+                "/team/update",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+            match last:
+                case Success():
+                    return
+                case UnknownApiError(body=body_text) if (
+                    "connecting to redis" in body_text.lower() or "name resolution" in body_text.lower()
+                ):
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                case _:
+                    break
+        assert last is not None
+        raise AssertionError(last)
+
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
             "/team/delete",
@@ -129,6 +180,19 @@ class ManagementClient:
                 response_type=TeamInfoResponse,
             )
         ).team_info
+
+    def team_list_ids(self) -> tuple[str, ...]:
+        return tuple(
+            entry.team_id
+            for entry in unwrap(
+                self.proxy.transport.get(
+                    "/team/list",
+                    headers=self.proxy.transport.master,
+                    params=NoBody(),
+                    response_type=TeamListResponse,
+                )
+            ).root
+        )
 
     def team_info_status(self, team_id: str) -> ProbeResult:
         return self.proxy.transport.probe("/team/info", params=TeamInfoParams(team_id=team_id))
@@ -192,6 +256,16 @@ class ManagementClient:
             )
         ).user_id
 
+    def update_user(self, body: UserUpdateBody) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/user/update",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
+
     def delete_user(self, user_id: str) -> None:
         _ = self.proxy.transport.post(
             "/user/delete",
@@ -232,6 +306,17 @@ class ManagementClient:
             )
         ).total
 
+    def user_list_ids(self, user_id: str) -> tuple[str, ...]:
+        listing = unwrap(
+            self.proxy.transport.get(
+                "/user/list",
+                headers=self.proxy.transport.master,
+                params=UserListParams(user_ids=user_id),
+                response_type=UserListResponse,
+            )
+        )
+        return tuple(row.user_id for row in listing.users)
+
     def create_org(self, body: OrgNewBody) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -258,6 +343,38 @@ class ManagementClient:
                 params=OrgInfoParams(organization_id=organization_id),
                 response_type=OrgInfoResponse,
             )
+        )
+
+    def org_info_status(self, organization_id: str) -> ProbeResult:
+        return self.proxy.transport.probe("/organization/info", params=OrgInfoParams(organization_id=organization_id))
+    def create_tag(self, body: TagNewBody) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/tag/new",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
+
+    def delete_tag(self, name: str) -> None:
+        _ = self.proxy.transport.post(
+            "/tag/delete",
+            headers=self.proxy.transport.master,
+            json=TagDeleteBody(name=name),
+            response_type=NoBody,
+        )
+
+    def tag_list(self) -> tuple[TagListEntry, ...]:
+        return tuple(
+            unwrap(
+                self.proxy.transport.get(
+                    "/tag/list",
+                    headers=self.proxy.transport.master,
+                    params=NoBody(),
+                    response_type=TagListResponse,
+                )
+            ).root
         )
 
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:
