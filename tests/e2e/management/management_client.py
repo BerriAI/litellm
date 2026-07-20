@@ -45,6 +45,7 @@ from models import (
     TeamNewResponse,
     TeamUpdateBody,
     UserDeleteBody,
+    UserDeleteResponse,
     UserInfoParams,
     UserInfoResponse,
     UserListParams,
@@ -285,6 +286,18 @@ class ManagementClient:
             headers=self.proxy.transport.master,
             json=UserDeleteBody(user_ids=[user_id]),
             response_type=NoBody,
+        )
+
+    def delete_user_strict(self, user_id: str) -> None:
+        """Strict delete for the act phase of a test: a failed delete is a hard
+        failure, unlike the warn-only delete_user used at teardown."""
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/user/delete",
+                headers=self.proxy.transport.master,
+                json=UserDeleteBody(user_ids=[user_id]),
+                response_type=UserDeleteResponse,
+            )
         )
 
     def user_info(self, user_id: str) -> UserInfoResponse:
