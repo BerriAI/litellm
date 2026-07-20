@@ -180,10 +180,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         for message in messages:
             if isinstance(message, dict):
+                message_dict = cast(dict, message)  # cast-ok: TypedDict message is a dict at runtime
                 for field in self.NON_SPEC_MESSAGE_FIELDS:
-                    filter_value_from_dict(
-                        cast(dict, message), field
-                    )  # cast-ok: TypedDict message is a dict at runtime
+                    filter_value_from_dict(message_dict, field)
 
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
