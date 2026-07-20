@@ -23,7 +23,7 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, UserNewBody, LiteLLMParamsBody, ModelInfoEntry
+from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, LiteLLMParamsBody, ModelInfoEntry
 
 pytestmark = pytest.mark.e2e
 
@@ -227,6 +227,17 @@ class TestTeamRoutes:
             f"key generated under team {team_id} carries team_id {key_info.team_id!r} in /key/info"
         )
 
+    @pytest.mark.covers("mgmt.team.update.persists")
+    def test_update_persists_to_team_info(self, client: ManagementClient, resources: ResourceManager) -> None:
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", ["gemini-2.5-flash"])
+
+        updated_alias = f"e2e-mgmt-team-updated-{unique_marker()}"
+        client.update_team(TeamUpdateBody(team_id=team_id, team_alias=updated_alias))
+
+        def reflected() -> bool | None:
+            return True if client.team_info(team_id).team_alias == updated_alias else None
+
+        _ = _poll(client, reflected, f"/team/info never reflected team_alias {updated_alias!r} after /team/update")
     @pytest.mark.covers("mgmt.team.list.happy_path")
     def test_created_team_appears_in_team_list(
         self, client: ManagementClient, resources: ResourceManager
