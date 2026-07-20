@@ -14,20 +14,28 @@ from e2e_http import NoBody, ProbeResult, Result, StreamingResponse, Success, Un
 from models import (
     ChatBody,
     ChatMessage,
+    KeyBlockBody,
     KeyDeleteBody,
     KeyGenerateBody,
+    KeyGenerateResponse,
     KeyListParams,
     KeyListResponse,
+    KeyRegenerateBody,
     KeyUpdateBody,
     OrgDeleteBody,
     OrgInfoParams,
     OrgInfoResponse,
     OrgNewBody,
     OrgNewResponse,
+    TagDeleteBody,
+    TagListEntry,
+    TagListResponse,
+    TagNewBody,
     TeamData,
     TeamDeleteBody,
     TeamInfoParams,
     TeamInfoResponse,
+    TeamListResponse,
     TeamMemberAddBody,
     TeamMemberDeleteBody,
     TeamMemberEntry,
@@ -90,6 +98,25 @@ class ManagementClient:
             )
         )
 
+    def block_key(self, key: str) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/key/block",
+                headers=self.proxy.transport.master,
+                json=KeyBlockBody(key=key),
+                response_type=NoBody,
+            )
+        )
+    def regenerate_key(self, key: str) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/key/regenerate",
+                headers=self.proxy.transport.master,
+                json=KeyRegenerateBody(key=key),
+                response_type=KeyGenerateResponse,
+            )
+        ).key
+
     def key_alias_count(self, key_alias: str) -> int:
         return unwrap(
             self.proxy.transport.get(
@@ -129,6 +156,19 @@ class ManagementClient:
                 response_type=TeamInfoResponse,
             )
         ).team_info
+
+    def team_list_ids(self) -> tuple[str, ...]:
+        return tuple(
+            entry.team_id
+            for entry in unwrap(
+                self.proxy.transport.get(
+                    "/team/list",
+                    headers=self.proxy.transport.master,
+                    params=NoBody(),
+                    response_type=TeamListResponse,
+                )
+            ).root
+        )
 
     def team_info_status(self, team_id: str) -> ProbeResult:
         return self.proxy.transport.probe("/team/info", params=TeamInfoParams(team_id=team_id))
@@ -230,6 +270,17 @@ class ManagementClient:
             )
         ).total
 
+    def user_list_ids(self, user_id: str) -> tuple[str, ...]:
+        listing = unwrap(
+            self.proxy.transport.get(
+                "/user/list",
+                headers=self.proxy.transport.master,
+                params=UserListParams(user_ids=user_id),
+                response_type=UserListResponse,
+            )
+        )
+        return tuple(row.user_id for row in listing.users)
+
     def create_org(self, body: OrgNewBody) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -256,6 +307,38 @@ class ManagementClient:
                 params=OrgInfoParams(organization_id=organization_id),
                 response_type=OrgInfoResponse,
             )
+        )
+
+    def org_info_status(self, organization_id: str) -> ProbeResult:
+        return self.proxy.transport.probe("/organization/info", params=OrgInfoParams(organization_id=organization_id))
+    def create_tag(self, body: TagNewBody) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/tag/new",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=NoBody,
+            )
+        )
+
+    def delete_tag(self, name: str) -> None:
+        _ = self.proxy.transport.post(
+            "/tag/delete",
+            headers=self.proxy.transport.master,
+            json=TagDeleteBody(name=name),
+            response_type=NoBody,
+        )
+
+    def tag_list(self) -> tuple[TagListEntry, ...]:
+        return tuple(
+            unwrap(
+                self.proxy.transport.get(
+                    "/tag/list",
+                    headers=self.proxy.transport.master,
+                    params=NoBody(),
+                    response_type=TagListResponse,
+                )
+            ).root
         )
 
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:

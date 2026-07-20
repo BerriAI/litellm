@@ -9,6 +9,7 @@ so the traffic-facing read-backs poll to a deadline instead of asserting once.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 
@@ -22,7 +23,8 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody, UserUpdateBody
+
+from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
 
 pytestmark = pytest.mark.e2e
 
@@ -169,6 +171,43 @@ class TestKeyRoutes:
         _ = _poll(client, rejected, "deleted key was still accepted on chat (never rejected 401) at the deadline")
 
 
+    @pytest.mark.covers("mgmt.key.block.persists")
+    def test_block_persists_to_key_info(self, client: ManagementClient, resources: ResourceManager) -> None:
+        key = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"]))
+        assert not client.proxy.key_info(key).blocked, "/key/info reports the key blocked before /key/block ran"
+
+        client.block_key(key)
+
+        def blocked() -> bool | None:
+            return True if client.proxy.key_info(key).blocked else None
+
+        _ = _poll(client, blocked, "/key/info never reported the key blocked after /key/block before the deadline")
+class TestKeyRegeneration:
+    @pytest.mark.covers("mgmt.key.regenerate.happy_path")
+    def test_regenerate_rotates_to_a_working_new_key(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        old_key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
+
+        new_key = client.regenerate_key(old_key)
+        resources.defer(lambda: client.proxy.delete_key(new_key))
+        assert new_key != old_key, "regenerate returned the same key string, so no rotation happened"
+
+        def new_accepted() -> bool | None:
+            outcome = client.chat_status(new_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code != 401 else None
+
+        _ = _poll(client, new_accepted, "regenerated key was never accepted at auth (still 401) at the deadline")
+
+        def old_rejected() -> bool | None:
+            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code == 401 else None
+
+        _ = _poll(
+            client, old_rejected, "old key was still accepted after regeneration (never rejected 401) at the deadline"
+        )
+
+
 class TestTeamRoutes:
     @pytest.mark.covers("mgmt.team.new.persists")
     def test_new_persists_to_team_info_and_binds_keys(
@@ -187,6 +226,19 @@ class TestTeamRoutes:
         key_info = client.proxy.key_info(key)
         assert key_info.team_id == team_id, (
             f"key generated under team {team_id} carries team_id {key_info.team_id!r} in /key/info"
+        )
+
+    @pytest.mark.covers("mgmt.team.list.happy_path")
+    def test_created_team_appears_in_team_list(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        alias = f"e2e-mgmt-team-{unique_marker()}"
+        team_id = _create_team(client, resources, alias, ["gemini-2.5-flash"])
+
+        _ = _poll(
+            client,
+            lambda: team_id if team_id in client.team_list_ids() else None,
+            f"/team/list never included the created team {team_id}",
         )
 
     @pytest.mark.covers("mgmt.team.member_add.persists")
@@ -242,6 +294,25 @@ class TestUserRoutes:
         assert info.user_role == "internal_user_viewer", (
             f"/user/info reports user_role {info.user_role!r} after /user/update to 'internal_user_viewer'"
         )
+    @pytest.mark.covers("mgmt.user.list.happy_path")
+    def test_created_users_appear_in_user_list(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        user_ids = tuple(
+            _create_user(
+                client,
+                resources,
+                UserNewBody(user_email=f"e2e-mgmt-{unique_marker()}@example.com", user_role="internal_user"),
+            )
+            for _ in range(2)
+        )
+
+        for user_id in user_ids:
+            _ = _poll(
+                client,
+                lambda user_id=user_id: (True if user_id in client.user_list_ids(user_id) else None),
+                f"/user/list never listed the created user {user_id} in the admin inventory",
+            )
 
 
 class TestOrganizationRoutes:
@@ -259,6 +330,103 @@ class TestOrganizationRoutes:
         )
         assert info.models == ["gemini-2.5-flash"], (
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
+        )
+
+    @pytest.mark.covers("mgmt.organization.delete.persists")
+    def test_delete_removes_from_organization_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete fires again on the already-deleted org by
+        design: the deferred cleanup must survive this test failing before the
+        in-body delete, and a repeat /organization/delete is a warn-only no-op the
+        teardown absorbs."""
+        org_id = client.create_org(OrgNewBody(organization_alias=f"e2e-mgmt-org-{unique_marker()}"))
+        resources.defer(lambda: client.delete_org(org_id))
+
+        assert client.org_info_status(org_id).status_code == 200, (
+            f"/organization/info did not resolve org {org_id} before deletion"
+        )
+
+        client.delete_org(org_id)
+
+        def gone() -> bool | None:
+            return True if client.org_info_status(org_id).status_code == 404 else None
+
+        _ = _poll(client, gone, f"org {org_id} still resolved on /organization/info after /organization/delete")
+
+
+class TestTagRoutes:
+    @pytest.mark.covers("mgmt.tag.new.happy_path")
+    def test_new_persists_to_tag_list(self, client: ManagementClient, resources: ResourceManager) -> None:
+        name = f"e2e-mgmt-tag-{unique_marker()}"
+        description = "Tag for spend categorization"
+
+        assert all(entry.name != name for entry in client.tag_list()), (
+            f"tag {name!r} was already listed by /tag/list before /tag/new created it"
+        )
+
+        client.create_tag(TagNewBody(name=name, description=description))
+        resources.defer(lambda: client.delete_tag(name))
+
+        def listed() -> TagListEntry | None:
+            return next((entry for entry in client.tag_list() if entry.name == name), None)
+
+        entry = _poll(client, listed, f"/tag/list never listed {name!r} after /tag/new")
+        assert entry.description == description, (
+            f"/tag/list reports description {entry.description!r} for {name!r}, configured {description!r}"
+        )
+
+
+_INITIAL_INPUT_COST = 0.00000111
+_UPDATED_INPUT_COST = 0.00000222
+
+
+def _model_entry(client: ManagementClient, model_name: str) -> ModelInfoEntry | None:
+    return next((entry for entry in client.proxy.model_info() if entry.model_name == model_name), None)
+
+
+class TestModelRoutes:
+    @pytest.mark.covers("mgmt.model.update.persists")
+    def test_update_persists_input_cost_to_model_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        model_name = f"e2e-mgmt-model-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model_name,
+            LiteLLMParamsBody(
+                model="gpt-4o-mini",
+                mock_response="ok",
+                input_cost_per_token=_INITIAL_INPUT_COST,
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        before = _model_entry(client, model_name)
+        assert before is not None, f"{model_name} absent from /model/info right after /model/new"
+        initial = before.litellm_params.input_cost_per_token
+        assert initial is not None and math.isclose(initial, _INITIAL_INPUT_COST, rel_tol=1e-9), (
+            f"/model/info reports input_cost_per_token {initial}, registered {_INITIAL_INPUT_COST}"
+        )
+
+        client.proxy.update_model(
+            model_id,
+            LiteLLMParamsBody(model="gpt-4o-mini", input_cost_per_token=_UPDATED_INPUT_COST),
+        )
+
+        def updated() -> ModelInfoEntry | None:
+            entry = _model_entry(client, model_name)
+            if entry is None:
+                return None
+            cost = entry.litellm_params.input_cost_per_token
+            if cost is not None and math.isclose(cost, _UPDATED_INPUT_COST, rel_tol=1e-9):
+                return entry
+            return None
+
+        _ = _poll(
+            client,
+            updated,
+            f"/model/info never reported input_cost_per_token {_UPDATED_INPUT_COST} for {model_name} "
+            "after /model/update",
         )
 
 
