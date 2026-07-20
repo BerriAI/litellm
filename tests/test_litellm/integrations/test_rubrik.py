@@ -1040,3 +1040,795 @@ class TestResolveModel:
             {"response": response}, {"model": "fallback"}
         )
         assert result == "unknown"
+
+
+# -- Additional Initialization edge cases ------------------------------------
+
+
+class TestInitializationEdgeCases:
+    def test_batch_size_zero_uses_default(self):
+        """RUBRIK_BATCH_SIZE=0 must warn and fall back to the default."""
+        with patch("asyncio.create_task", Mock()):
+            with patch.dict(
+                os.environ,
+                {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_BATCH_SIZE": "0"},
+            ):
+                h = RubrikLogger()
+                # Should use default, not 0
+                assert h.batch_size > 0
+
+    def test_batch_size_negative_uses_default(self):
+        """RUBRIK_BATCH_SIZE=-1 must warn and fall back to the default."""
+        with patch("asyncio.create_task", Mock()):
+            with patch.dict(
+                os.environ,
+                {"RUBRIK_WEBHOOK_URL": "http://host", "RUBRIK_BATCH_SIZE": "-5"},
+            ):
+                h = RubrikLogger()
+                assert h.batch_size > 0
+
+
+# -- aclose() -----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestAclose:
+    async def test_aclose_cancels_task_and_closes_moderation_client(self, mock_env):
+        """aclose() must cancel the periodic flush task and close the dedicated
+        moderation HTTP client."""
+        with patch("asyncio.create_task", Mock()):
+            handler = RubrikLogger()
+
+        mock_task = Mock()
+        mock_task.cancel = Mock()
+        handler._periodic_flush_task = mock_task
+
+        handler.moderation_client = AsyncMock()
+        handler.moderation_client.aclose = AsyncMock()
+
+        await handler.aclose()
+
+        mock_task.cancel.assert_called_once()
+        handler.moderation_client.aclose.assert_awaited_once()
+
+    async def test_aclose_with_none_task_only_closes_client(self, mock_env):
+        """aclose() must still close the client even when the periodic task is None."""
+        with patch("asyncio.create_task", Mock()):
+            handler = RubrikLogger()
+
+        handler._periodic_flush_task = None
+        handler.moderation_client = AsyncMock()
+        handler.moderation_client.aclose = AsyncMock()
+
+        await handler.aclose()
+
+        handler.moderation_client.aclose.assert_awaited_once()
+
+
+# -- apply_guardrail edge cases -----------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestApplyGuardrailEdgeCases:
+    async def test_unknown_input_type_returns_inputs_unchanged(self, handler):
+        """When input_type is not 'request' or 'response', inputs are returned as-is."""
+        inputs = make_inputs_with_tools([make_tool_call_dict("call_1", "tool")])
+        result = await handler.apply_guardrail(
+            inputs=inputs, request_data={}, input_type="unknown"
+        )
+        assert result is inputs
+
+    async def test_response_with_no_texts_and_no_tool_calls_returns_inputs(self, handler):
+        """_moderate_response early-returns when both texts and tool_calls are empty."""
+        from litellm.types.utils import GenericGuardrailAPIInputs
+
+        inputs = GenericGuardrailAPIInputs()
+        result = await handler.apply_guardrail(
+            inputs=inputs, request_data={}, input_type="response"
+        )
+        assert result is inputs
+
+    async def test_moderate_response_empty_call_details_emits_warning(self, handler):
+        """When logging_obj is present but model_call_details is empty, a warning is
+        logged and moderation proceeds (fail-open on HTTP error)."""
+        tc = make_tool_call_dict("call_1", "test_tool")
+        inputs = make_inputs_with_tools([tc])
+
+        logging_obj = Mock()
+        logging_obj.model_call_details = {}
+
+        handler.moderation_client = _echo_service()
+
+        result = await handler.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="response",
+            logging_obj=logging_obj,
+        )
+        assert result is inputs
+
+
+# -- Prompt moderation --------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestPromptModeration:
+    async def test_prompt_moderation_passthrough(self, handler):
+        """Webhook returns {} (empty dict) → inputs returned unchanged."""
+        inputs = {"structured_messages": [{"role": "user", "content": "Hello"}]}
+
+        handler.moderation_client = _mock_service_response({})
+
+        result = await handler.apply_guardrail(
+            inputs=inputs, request_data={}, input_type="request"
+        )
+        assert result is inputs
+
+    async def test_prompt_moderation_blocked_raises(self, handler):
+        """Webhook returns synthetic chat.completion → raises ModifyResponseException."""
+        inputs = {
+            "structured_messages": [{"role": "user", "content": "Harmful prompt"}],
+            "model": "gpt-4",
+        }
+
+        handler.moderation_client = _mock_service_response(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "This request violates our policy.",
+                        }
+                    }
+                ]
+            }
+        )
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await handler.apply_guardrail(
+                inputs=inputs, request_data={"model": "gpt-4"}, input_type="request"
+            )
+        assert "violates our policy" in exc_info.value.message
+
+    async def test_prompt_moderation_no_messages_skips_moderation(self, handler):
+        """When structured_messages is absent/empty, moderation is skipped."""
+        inputs = {"model": "gpt-4"}
+
+        result = await handler.apply_guardrail(
+            inputs=inputs, request_data={}, input_type="request"
+        )
+        assert result is inputs
+
+    async def test_prompt_moderation_stashes_logging_obj_on_block(self, handler):
+        """On a prompt block, _stash_block_context must set the blocked flag."""
+        inputs = {
+            "structured_messages": [{"role": "user", "content": "bad prompt"}],
+        }
+
+        handler.moderation_client = _mock_service_response(
+            {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "Blocked."}}
+                ]
+            }
+        )
+
+        logging_obj = Mock()
+        logging_obj.model_call_details = {}
+        request_data: dict = {}
+
+        with pytest.raises(ModifyResponseException):
+            await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=logging_obj,
+            )
+
+        assert logging_obj.model_call_details.get("_rubrik_blocked") is True
+        assert request_data.get("_rubrik_logging_obj") is logging_obj
+
+
+# -- _stash_block_context -----------------------------------------------------
+
+
+class TestStashBlockContext:
+    def test_with_non_none_logging_obj_sets_flag_and_stashes(self):
+        """Sets _rubrik_blocked flag and stores logging_obj on request_data."""
+        logging_obj = Mock()
+        logging_obj.model_call_details = {}
+        request_data: dict = {}
+
+        RubrikLogger._stash_block_context(logging_obj, request_data)
+
+        assert logging_obj.model_call_details["_rubrik_blocked"] is True
+        assert request_data["_rubrik_logging_obj"] is logging_obj
+
+    def test_with_none_logging_obj_stores_none_on_request_data(self):
+        """When logging_obj is None, stores None on request_data (logged as error)."""
+        request_data: dict = {"litellm_call_id": "test-id"}
+
+        RubrikLogger._stash_block_context(None, request_data)
+
+        assert request_data["_rubrik_logging_obj"] is None
+
+
+# -- _normalize_tool_calls duck-typed -----------------------------------------
+
+
+class TestNormalizeToolCallsDuckTyped:
+    def test_duck_typed_object_with_id_and_function_attrs(self):
+        """Objects that have .id and .function attrs but are not
+        ChatCompletionMessageToolCall are handled by the third branch."""
+        from litellm.types.utils import Function
+
+        tc = Mock()
+        tc.id = "call_duck"
+        tc.type = "function"
+        tc.function = Function(name="duck_tool", arguments='{"x": 1}')
+        # Make isinstance(..., ChatCompletionMessageToolCall) return False
+        # by using a plain Mock (not a ChatCompletionMessageToolCall subclass)
+
+        result = RubrikLogger._normalize_tool_calls([tc])
+        assert len(result) == 1
+        assert result[0].id == "call_duck"
+        assert result[0].function.name == "duck_tool"
+
+    def test_duck_typed_without_type_defaults_to_function(self):
+        """getattr(tc, "type", None) falls back to "function" when absent."""
+        from litellm.types.utils import Function
+
+        tc = Mock(spec=["id", "function"])  # no .type attr
+        tc.id = "call_no_type"
+        tc.function = Function(name="fn", arguments="{}")
+
+        result = RubrikLogger._normalize_tool_calls([tc])
+        assert result[0].type == "function"
+
+
+# -- _flatten_messages_for_moderation -----------------------------------------
+
+
+class TestFlattenMessagesForModeration:
+    def test_plain_string_content_preserved(self):
+        messages = [{"role": "user", "content": "Hello world"}]
+        result = RubrikLogger._flatten_messages_for_moderation(messages)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "Hello world"
+
+    def test_content_list_flattened_to_string(self):
+        """Content as a list of parts (e.g. Anthropic multi-part) is flattened."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello from parts"},
+                ],
+            }
+        ]
+        result = RubrikLogger._flatten_messages_for_moderation(messages)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert "Hello from parts" in result[0]["content"]
+
+    def test_non_dict_messages_skipped(self):
+        """Non-dict entries in the messages list are silently skipped."""
+        messages = [
+            "raw string message",
+            {"role": "user", "content": "valid"},
+        ]
+        result = RubrikLogger._flatten_messages_for_moderation(messages)
+        assert len(result) == 1
+        assert result[0]["content"] == "valid"
+
+    def test_none_messages_returns_empty(self):
+        result = RubrikLogger._flatten_messages_for_moderation(None)
+        assert result == []
+
+    def test_multiple_messages_preserved_in_order(self):
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Question?"},
+        ]
+        result = RubrikLogger._flatten_messages_for_moderation(messages)
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert result[1]["role"] == "user"
+
+
+# -- _build_prompt_moderation_payload -----------------------------------------
+
+
+class TestBuildPromptModerationPayload:
+    def test_payload_includes_tools_when_present(self):
+        inputs = {
+            "model": "gpt-4",
+            "structured_messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "fn"}}],
+        }
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, {})
+        assert payload["tools"] == [{"type": "function", "function": {"name": "fn"}}]
+
+    def test_payload_includes_user_when_present(self):
+        inputs = {
+            "structured_messages": [{"role": "user", "content": "hi"}],
+        }
+        request_data = {"user": "alice"}
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, request_data)
+        assert payload["user"] == "alice"
+
+    def test_payload_uses_explicit_correlation_key(self):
+        inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
+        request_data = {
+            "correlation_key": "corr-123",
+            "litellm_call_id": "litellm-456",
+        }
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, request_data)
+        assert payload["correlation_key"] == "corr-123"
+
+    def test_payload_falls_back_to_litellm_call_id(self):
+        """When correlation_key is absent, litellm_call_id is used."""
+        inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
+        request_data = {"litellm_call_id": "litellm-789"}
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, request_data)
+        assert payload["correlation_key"] == "litellm-789"
+
+    def test_payload_omits_optional_fields_when_absent(self):
+        inputs = {"structured_messages": [{"role": "user", "content": "hi"}]}
+        payload = RubrikLogger._build_prompt_moderation_payload(inputs, {})
+        assert "tools" not in payload
+        assert "user" not in payload
+        assert "correlation_key" not in payload
+
+
+# -- _extract_request_data tools preference -----------------------------------
+
+
+class TestExtractRequestDataToolsPreference:
+    def test_prefers_tools_from_request_data_over_optional_params(self):
+        """When 'tools' key exists in request_data, it wins over optional_params."""
+        call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-4",
+            "optional_params": {
+                "tools": [{"type": "function", "function": {"name": "from_optional"}}]
+            },
+        }
+        request_data = {
+            "tools": [{"type": "function", "function": {"name": "from_request"}}]
+        }
+        result = RubrikLogger._extract_request_data(call_details, request_data)
+        assert result["tools"] == [
+            {"type": "function", "function": {"name": "from_request"}}
+        ]
+
+    def test_falls_back_to_optional_params_when_not_in_request_data(self):
+        call_details = {
+            "optional_params": {
+                "tools": [{"type": "function", "function": {"name": "from_optional"}}]
+            }
+        }
+        result = RubrikLogger._extract_request_data(call_details, {})
+        assert result["tools"] == [
+            {"type": "function", "function": {"name": "from_optional"}}
+        ]
+
+    def test_explicit_empty_list_in_request_data_is_forwarded(self):
+        """An explicit empty tools list signals 'no tools' to the moderation service."""
+        call_details = {
+            "optional_params": {
+                "tools": [{"type": "function", "function": {"name": "from_optional"}}]
+            }
+        }
+        request_data = {"tools": []}
+        result = RubrikLogger._extract_request_data(call_details, request_data)
+        assert result["tools"] == []
+
+
+# -- _extract_prompt_refusal --------------------------------------------------
+
+
+class TestExtractPromptRefusal:
+    def test_passthrough_response_returns_none(self):
+        """Empty dict (passthrough) → None."""
+        assert RubrikLogger._extract_prompt_refusal({}) is None
+
+    def test_no_choices_returns_none(self):
+        assert RubrikLogger._extract_prompt_refusal({"choices": []}) is None
+
+    def test_block_response_returns_content(self):
+        service_response = {
+            "choices": [{"message": {"content": "Request blocked by Rubrik."}}]
+        }
+        result = RubrikLogger._extract_prompt_refusal(service_response)
+        assert result == "Request blocked by Rubrik."
+
+    def test_empty_content_falls_back_to_default_message(self):
+        """When content is empty string or falsy, falls back to default refusal."""
+        service_response = {"choices": [{"message": {"content": ""}}]}
+        result = RubrikLogger._extract_prompt_refusal(service_response)
+        assert result == "Request blocked by policy."
+
+    def test_none_content_falls_back_to_default_message(self):
+        service_response = {"choices": [{"message": {"content": None}}]}
+        result = RubrikLogger._extract_prompt_refusal(service_response)
+        assert result == "Request blocked by policy."
+
+
+# -- _prepend_system_prompt exception path ------------------------------------
+
+
+class TestPrependSystemPromptException:
+    def test_exception_during_unpack_is_caught_and_logged(self):
+        """When an exception is raised inside _prepend_system_prompt, it is swallowed."""
+
+        class ExplodingList(list):
+            def __iter__(self):
+                raise RuntimeError("iteration error!")
+
+        payload = {"messages": ExplodingList()}
+        source = {"system": "You are an assistant."}
+
+        # Must not raise
+        RubrikLogger._prepend_system_prompt(payload, source)
+
+
+# -- _append_and_maybe_flush batch trigger ------------------------------------
+
+
+@pytest.mark.asyncio
+class TestAppendAndMaybeFlush:
+    async def test_flush_triggered_when_queue_reaches_batch_size(self, handler):
+        """flush_queue is called when the queue length reaches batch_size."""
+        handler.batch_size = 2
+        handler.flush_queue = AsyncMock()
+
+        await handler._append_and_maybe_flush({"msg": "a"})
+        handler.flush_queue.assert_not_called()
+
+        await handler._append_and_maybe_flush({"msg": "b"})
+        handler.flush_queue.assert_called_once()
+
+    async def test_no_flush_before_batch_size(self, handler):
+        handler.batch_size = 5
+        handler.flush_queue = AsyncMock()
+
+        for i in range(4):
+            await handler._append_and_maybe_flush({"msg": str(i)})
+
+        handler.flush_queue.assert_not_called()
+
+
+# -- _enqueue_log_event exception handling ------------------------------------
+
+
+@pytest.mark.asyncio
+class TestEnqueueLogEventExceptions:
+    async def test_exception_from_prepare_log_payload_is_caught(self, handler):
+        """Exceptions raised by _prepare_log_payload are caught and logged."""
+        handler._prepare_log_payload = AsyncMock(
+            side_effect=RuntimeError("payload error")
+        )
+
+        # Must not raise
+        await handler._enqueue_log_event(
+            {"standard_logging_object": {"messages": [], "response": ""}}, "test"
+        )
+        assert len(handler.log_queue) == 0
+
+
+# -- async_log_success_event skip when _rubrik_blocked ------------------------
+
+
+@pytest.mark.asyncio
+class TestSuccessEventBlockedSkip:
+    async def test_skips_enqueue_when_rubrik_blocked_flag_set(self, handler):
+        """When kwargs['_rubrik_blocked'] is True, the event is not enqueued."""
+        kwargs = {
+            "_rubrik_blocked": True,
+            "litellm_call_id": "blocked-call-123",
+            "standard_logging_object": {
+                "messages": [{"role": "user", "content": "hi"}],
+                "response": "hello",
+            },
+        }
+        await handler.async_log_success_event(
+            kwargs=kwargs, response_obj=None, start_time=None, end_time=None
+        )
+        assert len(handler.log_queue) == 0
+
+
+# -- async_post_call_failure_hook ---------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestPostCallFailureHook:
+    async def test_non_modify_exception_returns_immediately(self, handler):
+        """Non-ModifyResponseException causes a no-op."""
+        await handler.async_post_call_failure_hook(
+            request_data={"litellm_call_id": "test"},
+            original_exception=ValueError("unrelated error"),
+            user_api_key_dict=None,
+        )
+        assert len(handler.log_queue) == 0
+
+    async def test_modify_exception_without_stashed_logging_obj_emits_warning(
+        self, handler
+    ):
+        """ModifyResponseException with no _rubrik_logging_obj → warning, no enqueue."""
+        request_data = {"litellm_call_id": "test-123", "model": "gpt-4"}
+        exc = ModifyResponseException(
+            message="blocked",
+            model="gpt-4",
+            request_data=request_data,
+            guardrail_name="rubrik",
+        )
+
+        await handler.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=exc,
+            user_api_key_dict=None,
+        )
+        assert len(handler.log_queue) == 0
+
+    async def test_modify_exception_with_valid_logging_obj_enqueues_payload(
+        self, handler
+    ):
+        """ModifyResponseException + stashed logging_obj → builds and enqueues."""
+        logging_obj = Mock()
+        logging_obj.model_call_details = {
+            "litellm_call_id": "call-abc",
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "standard_logging_object": {
+                "id": "chatcmpl-original",
+                "model": "gpt-4",
+                "response": "original",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            "metadata": {},
+        }
+
+        request_data = {"_rubrik_logging_obj": logging_obj}
+        exc = ModifyResponseException(
+            message="blocked by policy",
+            model="gpt-4",
+            request_data=request_data,
+            guardrail_name="rubrik",
+        )
+
+        handler.batch_size = 10**6  # disable auto-flush
+        await handler.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=exc,
+            user_api_key_dict=None,
+        )
+        assert len(handler.log_queue) == 1
+        assert "ModifyResponseException" in handler.log_queue[0]["response"]
+
+    async def test_logging_obj_popped_from_request_data(self, handler):
+        """_rubrik_logging_obj must be popped from request_data so it is not
+        forwarded downstream."""
+        logging_obj = Mock()
+        logging_obj.model_call_details = {
+            "litellm_call_id": "call-pop",
+            "model": "gpt-4",
+            "messages": [],
+            "standard_logging_object": {
+                "id": "chatcmpl-pop",
+                "model": "gpt-4",
+                "response": "text",
+                "messages": [],
+            },
+            "metadata": {},
+        }
+
+        request_data = {"_rubrik_logging_obj": logging_obj}
+        exc = ModifyResponseException(
+            message="popped",
+            model="gpt-4",
+            request_data=request_data,
+            guardrail_name="rubrik",
+        )
+
+        handler.batch_size = 10**6
+        await handler.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=exc,
+            user_api_key_dict=None,
+        )
+        assert "_rubrik_logging_obj" not in request_data
+
+    async def test_build_and_enqueue_swallows_attribute_error_from_prepare_payload(
+        self, handler
+    ):
+        """When _prepare_block_failure_payload raises AttributeError/KeyError/TypeError,
+        the error is logged and the event is silently dropped (lines 806-812)."""
+        logging_obj = Mock()
+        # Make model_call_details.get() raise TypeError
+        logging_obj.model_call_details = None  # .get() will raise AttributeError
+
+        exc = ModifyResponseException(
+            message="blocked",
+            model="gpt-4",
+            request_data={},
+            guardrail_name="rubrik",
+        )
+
+        # Must not raise
+        await handler._build_and_enqueue_block_event(logging_obj, exc, None)
+        assert len(handler.log_queue) == 0
+
+    async def test_build_and_enqueue_swallows_flush_exception(self, handler):
+        """When _append_and_maybe_flush raises, the error is logged (lines 816-817)."""
+        logging_obj = Mock()
+        logging_obj.model_call_details = {
+            "litellm_call_id": "call-flush-err",
+            "model": "gpt-4",
+            "messages": [],
+            "standard_logging_object": {
+                "id": "id-flush-err",
+                "model": "gpt-4",
+                "response": "text",
+                "messages": [],
+            },
+            "metadata": {},
+        }
+
+        exc = ModifyResponseException(
+            message="blocked",
+            model="gpt-4",
+            request_data={},
+            guardrail_name="rubrik",
+        )
+
+        handler._append_and_maybe_flush = AsyncMock(
+            side_effect=RuntimeError("flush failed")
+        )
+
+        # Must not raise
+        await handler._build_and_enqueue_block_event(logging_obj, exc, None)
+
+
+# -- _prepare_block_failure_payload and _build_fallback_payload ---------------
+
+
+class TestPrepareBlockFailurePayload:
+    def test_uses_standard_logging_object_when_present(self, handler):
+        """When standard_logging_object is on model_call_details, it is used as base."""
+        logging_obj = Mock()
+        logging_obj.model_call_details = {
+            "litellm_call_id": "call-slo",
+            "model": "gpt-4",
+            "standard_logging_object": {
+                "id": "chatcmpl-original",
+                "model": "gpt-4",
+                "response": "original response",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            "metadata": {},
+        }
+        exc = ModifyResponseException(
+            message="blocked",
+            model="gpt-4",
+            request_data={},
+            guardrail_name="rubrik",
+        )
+
+        payload = handler._prepare_block_failure_payload(logging_obj, exc)
+
+        assert "ModifyResponseException: blocked" in payload["response"]
+        assert payload["id"] == "call-slo"
+
+    def test_uses_fallback_when_standard_logging_object_absent(self, handler):
+        """When standard_logging_object is absent, _build_fallback_payload is used."""
+        from datetime import datetime
+
+        logging_obj = Mock()
+        logging_obj.model_call_details = {
+            "litellm_call_id": "call-fallback",
+            "model": "claude-3",
+            "messages": [{"role": "user", "content": "question"}],
+            "optional_params": {"temperature": 0.5},
+            "metadata": {"user_api_key_hash": "hash-abc"},
+            "start_time": datetime(2024, 6, 1),
+        }
+        exc = ModifyResponseException(
+            message="prompt blocked",
+            model="claude-3",
+            request_data={},
+            guardrail_name="rubrik",
+        )
+
+        payload = handler._prepare_block_failure_payload(logging_obj, exc)
+
+        assert payload["id"] == "call-fallback"
+        assert payload["model"] == "claude-3"
+        assert payload["model_group"] == "claude-3"
+        assert "ModifyResponseException: prompt blocked" in payload["response"]
+        assert payload["metadata"]["user_api_key_hash"] == "hash-abc"
+        assert payload["status"] == "failure"
+
+    def test_fallback_payload_without_start_time(self, handler):
+        """_build_fallback_payload handles missing start_time gracefully."""
+        logging_obj = Mock()
+        logging_obj.model_call_details = {
+            "litellm_call_id": "call-notime",
+            "model": "gpt-4",
+            "messages": [],
+            "optional_params": {},
+            "metadata": {},
+        }
+        exc = ModifyResponseException(
+            message="blocked",
+            model="gpt-4",
+            request_data={},
+            guardrail_name="rubrik",
+        )
+
+        payload = handler._prepare_block_failure_payload(logging_obj, exc)
+        assert payload["startTime"] is None
+
+
+# -- async_send_batch empty queue and flush_queue edge cases ------------------
+
+
+@pytest.mark.asyncio
+class TestQueueEdgeCases:
+    async def test_async_send_batch_returns_early_on_empty_queue(self, handler):
+        """async_send_batch is a no-op when the queue is empty."""
+        handler.async_httpx_client = AsyncMock()
+        await handler.async_send_batch()
+        handler.async_httpx_client.post.assert_not_called()
+
+    async def test_flush_queue_returns_early_when_flush_lock_is_none(self, handler):
+        """flush_queue is a no-op when flush_lock is None."""
+        handler.flush_lock = None
+        handler.log_queue = [{"msg": "a"}]
+        handler.async_httpx_client = AsyncMock()
+
+        await handler.flush_queue()
+        handler.async_httpx_client.post.assert_not_called()
+
+    async def test_flush_queue_returns_early_when_queue_empty_inside_lock(self, handler):
+        """flush_queue acquires the lock then no-ops when the queue is empty."""
+        handler.log_queue = []
+        handler.async_httpx_client = AsyncMock()
+
+        await handler.flush_queue()
+        handler.async_httpx_client.post.assert_not_called()
+
+
+# -- _post_json non-dict response ---------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestPostJson:
+    async def test_raises_type_error_for_list_response(self, handler):
+        """When the service returns a JSON array instead of a dict, TypeError is raised."""
+        mock_client = AsyncMock()
+        mock_resp = Mock()
+        mock_resp.json.return_value = ["not", "a", "dict"]
+        mock_resp.raise_for_status = Mock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        handler.moderation_client = mock_client
+
+        with pytest.raises(TypeError, match="non-dict JSON"):
+            await handler._post_json(
+                handler.prompt_moderation_endpoint, {}, "Test service"
+            )
+
+    async def test_raises_type_error_for_string_response(self, handler):
+        """A bare string response also raises TypeError."""
+        mock_client = AsyncMock()
+        mock_resp = Mock()
+        mock_resp.json.return_value = "blocked"
+        mock_resp.raise_for_status = Mock()
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        handler.moderation_client = mock_client
+
+        with pytest.raises(TypeError, match="non-dict JSON"):
+            await handler._post_json(
+                handler.response_moderation_endpoint, {}, "Test service"
+            )
