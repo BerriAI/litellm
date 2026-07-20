@@ -22,7 +22,7 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody
+from models import KeyGenerateBody, LiteLLMParamsBody, OrgNewBody, TeamNewBody, UserNewBody
 
 pytestmark = pytest.mark.e2e
 
@@ -242,6 +242,25 @@ class TestOrganizationRoutes:
         )
         assert info.models == ["gemini-2.5-flash"], (
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
+        )
+
+
+class TestModelRoutes:
+    @pytest.mark.covers("mgmt.model.add.persists")
+    def test_new_persists_to_model_info_catalog(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        model_name = f"e2e-mgmt-model-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model_name,
+            LiteLLMParamsBody(model="openai/gpt-5.5", api_key="e2e-dummy-key"),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        cataloged = [entry.model_name for entry in client.proxy.model_info()]
+        assert model_name in cataloged, (
+            f"/model/info does not list {model_name!r} after /model/new; registration did not persist "
+            f"into the routing catalog: {cataloged}"
         )
 
 
