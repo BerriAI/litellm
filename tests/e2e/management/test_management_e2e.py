@@ -270,6 +270,28 @@ class TestOrganizationRoutes:
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
         )
 
+    @pytest.mark.covers("mgmt.organization.delete.persists")
+    def test_delete_removes_from_organization_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """The teardown's deferred delete fires again on the already-deleted org by
+        design: the deferred cleanup must survive this test failing before the
+        in-body delete, and a repeat /organization/delete is a warn-only no-op the
+        teardown absorbs."""
+        org_id = client.create_org(OrgNewBody(organization_alias=f"e2e-mgmt-org-{unique_marker()}"))
+        resources.defer(lambda: client.delete_org(org_id))
+
+        assert client.org_info_status(org_id).status_code == 200, (
+            f"/organization/info did not resolve org {org_id} before deletion"
+        )
+
+        client.delete_org(org_id)
+
+        def gone() -> bool | None:
+            return True if client.org_info_status(org_id).status_code == 404 else None
+
+        _ = _poll(client, gone, f"org {org_id} still resolved on /organization/info after /organization/delete")
+
 
 class TestTagRoutes:
     @pytest.mark.covers("mgmt.tag.new.happy_path")
