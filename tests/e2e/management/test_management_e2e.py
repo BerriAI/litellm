@@ -22,7 +22,7 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgNewBody, TeamNewBody, UserNewBody
+from models import KeyGenerateBody, OrgNewBody, TagListEntry, TagNewBody, TeamNewBody, UserNewBody
 
 pytestmark = pytest.mark.e2e
 
@@ -242,6 +242,28 @@ class TestOrganizationRoutes:
         )
         assert info.models == ["gemini-2.5-flash"], (
             f"/organization/info reports models {info.models}, configured ['gemini-2.5-flash']"
+        )
+
+
+class TestTagRoutes:
+    @pytest.mark.covers("mgmt.tag.new.happy_path")
+    def test_new_persists_to_tag_list(self, client: ManagementClient, resources: ResourceManager) -> None:
+        name = f"e2e-mgmt-tag-{unique_marker()}"
+        description = "Tag for spend categorization"
+
+        assert all(entry.name != name for entry in client.tag_list()), (
+            f"tag {name!r} was already listed by /tag/list before /tag/new created it"
+        )
+
+        client.create_tag(TagNewBody(name=name, description=description))
+        resources.defer(lambda: client.delete_tag(name))
+
+        def listed() -> TagListEntry | None:
+            return next((entry for entry in client.tag_list() if entry.name == name), None)
+
+        entry = _poll(client, listed, f"/tag/list never listed {name!r} after /tag/new")
+        assert entry.description == description, (
+            f"/tag/list reports description {entry.description!r} for {name!r}, configured {description!r}"
         )
 
 
