@@ -658,10 +658,12 @@ def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_f
     with open(cost_map_path) as f:
         cost_map = json.load(f)
     rules = cost_map["fallback_generalizations"]["rules"]
-    pattern = re.compile(
-        next(r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
-        re.IGNORECASE,
+    rule_pattern = next(
+        (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
+        None,
     )
+    assert rule_pattern is not None, "claude-mid-conversation-system rule not found in fallback_generalizations"
+    pattern = re.compile(rule_pattern, re.IGNORECASE)
     missing = [
         key
         for key, info in cost_map.items()
