@@ -23,6 +23,9 @@ from litellm.proxy.container_endpoints.ownership import (
     assert_user_can_access_container,
     get_container_forwarding_params,
 )
+from litellm.proxy.container_endpoints.request_utils import (
+    get_container_list_query_params,
+)
 
 
 def _load_endpoints_config() -> Dict:
@@ -373,11 +376,9 @@ async def _process_request(
         version,
     )
 
-    query_params = dict(request.query_params)
-    data: Dict[str, Any] = {
-        "query_params": query_params,
-        **path_params,
-    }
+    data: Dict[str, Any] = dict(path_params)
+    if route_type == "alist_container_files":
+        data.update(get_container_list_query_params(request))
 
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
