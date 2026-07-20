@@ -244,6 +244,7 @@ class CountTokensBody(BaseModel):
 
 class AnthropicContentBlock(BaseModel):
     type: str | None = None
+    text: str | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
