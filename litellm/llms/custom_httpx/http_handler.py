@@ -143,6 +143,7 @@ _STREAMING_ERROR_BODY_READ_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="litellm-streaming-error-body-read",
 )
 
+_MAX_ERROR_BODY_BYTES = 64 * 1024  # 64 KB cap — prevents event-loop stalls from huge upstream error bodies
 
 def _prepare_request_data_and_content(
     data: Optional[Union[dict, str, bytes]] = None,
@@ -382,19 +383,27 @@ def mask_sensitive_info(error_message):
 
 
 def _safe_get_response_text(response: httpx.Response) -> str:
-    """Safely read response text, falling back to empty string on decoding errors."""
+    """Safely read response text, capped at _MAX_ERROR_BODY_BYTES to prevent event-loop stalls."""
     try:
-        return response.text
+        text = response.text
+        if len(text.encode("utf-8", errors="replace")) > _MAX_ERROR_BODY_BYTES:
+            text = text.encode("utf-8", errors="replace")[:_MAX_ERROR_BODY_BYTES].decode("utf-8", errors="replace")
+            text += f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]"
+        return text
     except Exception:
         return ""
 
 
 async def _safe_aread_response(response: httpx.Response, timeout: Optional[float] = None) -> bytes:
-    """Safely read async response body, falling back to empty bytes on errors."""
+    """Safely read async response body, capped at _MAX_ERROR_BODY_BYTES."""
     try:
         if timeout is not None:
-            return await asyncio.wait_for(response.aread(), timeout=timeout)
-        return await response.aread()
+            body = await asyncio.wait_for(response.aread(), timeout=timeout)
+        else:
+            body = await response.aread()
+        if len(body) > _MAX_ERROR_BODY_BYTES:
+            body = body[:_MAX_ERROR_BODY_BYTES] + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+        return body
     except Exception:
         return b""
 
@@ -405,11 +414,17 @@ def _safe_read_response(response: httpx.Response, timeout: Optional[float] = Non
         if timeout is not None:
             future = _STREAMING_ERROR_BODY_READ_EXECUTOR.submit(response.read)
             try:
-                return future.result(timeout=timeout)
+                body = future.result(timeout=timeout)
+                if len(body) > _MAX_ERROR_BODY_BYTES:
+                    body = body[:_MAX_ERROR_BODY_BYTES] + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+                return body
             except Exception:
                 response.close()
                 return b""
-        return response.read()
+        body = response.read()
+        if len(body) > _MAX_ERROR_BODY_BYTES:
+            body = body[:_MAX_ERROR_BODY_BYTES] + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+        return body
     except Exception:
         return b""
 
