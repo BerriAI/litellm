@@ -168,12 +168,12 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     if updated_patch.litellm_params_keys_to_delete:
         for key in updated_patch.litellm_params_keys_to_delete:
             if key != "model":
-                merged_deployment_dict["litellm_params"].pop(key, None)  # type: ignore
+                merged_deployment_dict["litellm_params"].pop(key, None)
 
     if updated_patch.model_info_keys_to_delete:
         for key in updated_patch.model_info_keys_to_delete:
             if key not in PROTECTED_MODEL_INFO_KEYS:
-                merged_deployment_dict.get("model_info", {}).pop(key, None)  # type: ignore
+                merged_deployment_dict.get("model_info", {}).pop(key, None)
 
     # convert to prisma compatible format
 

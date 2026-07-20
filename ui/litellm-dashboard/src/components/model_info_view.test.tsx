@@ -657,9 +657,7 @@ describe("ModelInfoView", () => {
 
     const modelInfoInput = screen
       .getAllByRole("textbox")
-      .find(
-        (input) => input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_note"'),
-      );
+      .find((input) => input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_note"'));
     expect(modelInfoInput).toBeDefined();
     if (!modelInfoInput) {
       return;
