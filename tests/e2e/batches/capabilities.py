@@ -7,7 +7,14 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
+from e2e_config import unique_marker
 from models import LiteLLMParamsBody
+
+_BATCH_RUN = unique_marker()
+
+
+def batch_model_name(base: str) -> str:
+    return f"{base}-{_BATCH_RUN}"
 
 
 def _env_ref(*names: str) -> str:
@@ -91,23 +98,52 @@ class Capability:
 
     @property
     def jsonl_model(self) -> str:
-        return self.model if self.scenario == "unified" else self.raw_model
+        # Always the provider deployment name. Unified routes via
+        # target_model_names; the JSONL body.model must still be a name Azure /
+        # Vertex accept. Putting the proxy alias here used to depend on a perfect
+        # rewrite, and a stale or mis-selected deployment produced model_not_found.
+        return self.raw_model
 
 
 PROVIDERS: tuple[Provider, ...] = (
-    Provider("openai", "openai-batch", "gpt-4o-mini", can_cancel=True, can_list=True),
-    Provider("azure", "azure-batch", "gpt-5.4-mini-batch", can_cancel=True, can_list=True),
     Provider(
-        "vertex_ai", "vertex-batch", "gemini-2.5-flash", can_cancel=True, can_list=True
+        "openai", batch_model_name("openai-batch"), "gpt-4o-mini", can_cancel=True, can_list=True
+    ),
+    Provider(
+        "azure",
+        batch_model_name("azure-batch"),
+        "gpt-5.4-mini-batch",
+        can_cancel=True,
+        can_list=True,
+    ),
+    Provider(
+        "vertex_ai",
+        batch_model_name("vertex-batch"),
+        "gemini-2.5-flash",
+        can_cancel=True,
+        can_list=True,
     ),
     Provider(
         "bedrock",
-        "bedrock-batch",
+        batch_model_name("bedrock-batch"),
         "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         can_cancel=False,
         can_list=False,
     ),
 )
+
+def _model_for(provider_name: str) -> str:
+    for provider in PROVIDERS:
+        if provider.name == provider_name:
+            return provider.model
+    raise ValueError(
+        f"no batch provider named {provider_name!r} in PROVIDERS; "
+        f"known={[p.name for p in PROVIDERS]}"
+    )
+
+
+OPENAI_BATCH_MODEL = _model_for("openai")
+AZURE_BATCH_MODEL = _model_for("azure")
 
 BEDROCK_SCENARIOS: tuple[Scenario, ...] = ("unified",)
 
