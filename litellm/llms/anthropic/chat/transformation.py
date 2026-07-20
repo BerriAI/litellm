@@ -553,12 +553,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Sub-schema constraints (e.g. ``contains``) are serialized as JSON so
                 # the advisory note preserves what the constraint actually required,
                 # instead of just noting that it existed.
-                note_value = (
-                    json.dumps(value) if isinstance(value, (dict, list)) else value
-                )
-                constraint_descriptions.append(
-                    constraint_labels[field].format(note_value)
-                )
+                note_value = json.dumps(value) if isinstance(value, (dict, list)) else value
+                constraint_descriptions.append(constraint_labels[field].format(note_value))
 
         result: Dict[str, Any] = {}
 
