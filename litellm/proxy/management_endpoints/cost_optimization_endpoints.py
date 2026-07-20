@@ -136,10 +136,10 @@ async def cost_optimization_usage_logs(
     conditions = [_optimized_where_sql()]
     params: list[object] = []
     if start_date:
-        conditions.append('"startTime" >= $%d' % (len(params) + 1))
+        conditions.append('"startTime" >= $%d::timestamp' % (len(params) + 1))
         params.append(_parse_date(start_date))
     if end_date:
-        conditions.append('"startTime" < $%d' % (len(params) + 1))
+        conditions.append('"startTime" < $%d::timestamp' % (len(params) + 1))
         params.append(_parse_date(end_date, end=True))
     where_sql = " AND ".join(conditions)
 
@@ -155,8 +155,8 @@ async def cost_optimization_usage_logs(
     )
     total_value = total_rows[0].get("total") if total_rows else 0
     total = int(total_value) if isinstance(total_value, (int, float)) else 0
-    offset_placeholder = len(params) + 1
-    limit_placeholder = len(params) + 2
+    limit_placeholder = len(params) + 1
+    offset_placeholder = len(params) + 2
     rows = cast(  # cast-ok: Prisma raw query returns rows with the selected columns
         list[Mapping[str, object]],
         await query_raw(
