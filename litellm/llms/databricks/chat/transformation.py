@@ -389,10 +389,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "response_format", None
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
-        if (
-            "reasoning_effort" in non_default_params
-            and self._databricks_model_uses_anthropic_thinking_param(model)
-        ):
+        if "reasoning_effort" in non_default_params and self._databricks_model_uses_anthropic_thinking_param(model):
             reasoning_effort_value = non_default_params.get("reasoning_effort")
             mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,
