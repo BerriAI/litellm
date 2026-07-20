@@ -65,6 +65,7 @@ class KeyGenerateBody(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
+    allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
 
@@ -128,6 +129,21 @@ class ChatMetadata(BaseModel):
 class ChatMessage(BaseModel):
     role: str
     content: str
+
+
+class CacheControl(BaseModel):
+    type: str = "ephemeral"
+
+
+class TextBlock(BaseModel):
+    type: str = "text"
+    text: str
+    cache_control: CacheControl | None = None
+
+
+class RichMessage(BaseModel):
+    role: str
+    content: list[TextBlock]
 
 
 class ThinkingParam(BaseModel):
@@ -541,6 +557,9 @@ class LiteLLMParamsBody(BaseModel):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     aws_batch_role_arn: str | None = None
+    aws_role_name: str | None = None
+    aws_session_name: str | None = None
+    aws_external_id: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     extra_headers: dict[str, str] | None = None
@@ -636,11 +655,16 @@ class TeamMemberEntry(BaseModel):
     user_id: str
 
 
+class TeamMetadata(BaseModel):
+    disable_global_guardrails: bool | None = None
+
+
 class TeamNewBody(BaseModel):
     team_alias: str
     models: list[str] = []
     team_id: str | None = None
     organization_id: str | None = None
+    metadata: TeamMetadata | None = None
 
 
 class TeamNewResponse(BaseModel):

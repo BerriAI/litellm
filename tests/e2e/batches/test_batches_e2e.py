@@ -16,13 +16,14 @@ misroute to the wrong provider fails the create.
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import pytest
 
-from e2e_config import unique_marker
+from e2e_config import require_env, unique_marker
 
 from batch_client import (
     BatchClient,
@@ -39,7 +40,9 @@ from capabilities import (
     FILE_ID_SHAPE,
     OPENAI_BATCH_MODEL,
     Capability,
+    batch_model_name,
     coverage_cells_for_lifecycle,
+    is_managed_id,
     matches_id_shape,
     raw_id_matches_provider,
 )
@@ -53,7 +56,7 @@ from e2e_http import (
     unwrap,
 )
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, SpendLogRow
+from models import KeyGenerateBody, LiteLLMParamsBody, SpendLogRow
 
 pytestmark = pytest.mark.e2e
 
@@ -457,3 +460,328 @@ def test_rate_limited_batch_create_leaves_no_unattributed_spend_row(
         "batch create on a rate-limited key left an unattributed spend row "
         f"(LIT-3266); rows={[(r.request_id, r.call_type, r.model) for r in new_orphans]}"
     )
+
+
+OPENAI_FILE_CONTENT_BACKEND = "gpt-4o-mini"
+
+
+class TestBatchFileContent:
+    """GET /v1/files/{id}/content returns the uploaded batch JSONL bytes."""
+
+    @pytest.mark.covers(
+        "llm.files.openai.content.nonstream.works",
+        exercised_on=["files"],
+    )
+    def test_file_content_matches_upload(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        proxy_name = f"e2e-file-content-{unique_marker()}"
+        model_id = client.create_model(
+            proxy_name,
+            LiteLLMParamsBody(
+                model=f"openai/{OPENAI_FILE_CONTENT_BACKEND}",
+                api_key="os.environ/OPENAI_API_KEY",
+            ),
+        )
+        resources.defer(lambda: client.delete_model(model_id))
+        key = resources.key()
+
+        payload = render_jsonl(OPENAI_FILE_CONTENT_BACKEND)
+        file = unwrap(
+            client.upload_file(
+                content=payload,
+                form=FileUploadForm(purpose="batch", target_model_names=proxy_name),
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        assert file.id
+
+        downloaded = client.proxy.transport.download(
+            f"/v1/files/{file.id}/content",
+            headers=client.proxy.transport.bearer(key),
+        )
+        assert downloaded.status_code == 200, (
+            f"file content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
+        )
+        expected = payload.decode().rstrip("\n")
+        got = downloaded.body.rstrip("\n")
+        assert got == expected, (
+            "downloaded file content must match the uploaded JSONL bytes"
+        )
+
+
+BATCH_RL_REQUEST_LINES = 3
+BATCH_RL_RPM_LIMIT = 2
+
+
+def _multi_request_jsonl(model: str, n: int) -> bytes:
+    lines = tuple(
+        json.dumps(
+            {
+                "custom_id": f"req-{i}",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 8,
+                },
+            }
+        )
+        for i in range(n)
+    )
+    return ("\n".join(lines) + "\n").encode()
+
+
+class TestBatchRateLimitErrorMapping:
+    """Batch create that exceeds a key's RPM maps to a structured 429.
+
+    The batch rate limiter reads the input file at submission time and rejects
+    the create when the file's request count would exceed the key's remaining
+    RPM. The product promise is not only the block itself but the
+    OpenAI-compatible shape: HTTP 429, a body that names the batch rate limit,
+    and pacing headers so clients can back off. Complements the LIT-3266 hygiene
+    check (no orphan spend rows) by asserting the error mapping when the limiter
+    actually fires.
+    """
+
+    @pytest.mark.covers(
+        "quota_management.ratelimit.batch_rpm.blocks_over_limit",
+        exercised_on=["batches"],
+    )
+    def test_batch_create_over_rpm_returns_mapped_429(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        user_id = f"e2e-batch-rl-map-{unique_marker()}"
+        key = client.proxy.generate_key(
+            KeyGenerateBody(
+                models=[], rpm_limit=BATCH_RL_RPM_LIMIT, tpm_limit=1_000_000, user_id=user_id
+            )
+        )
+        resources.defer(lambda: client.proxy.delete_key(key))
+
+        file = unwrap(
+            client.upload_file(
+                content=_multi_request_jsonl("gpt-4o-mini", BATCH_RL_REQUEST_LINES),
+                form=FileUploadForm(purpose="batch"),
+                model=OPENAI_BATCH_MODEL,
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+
+        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+
+        assert created.status_code == 429, (
+            f"expected batch RPM 429 when file has {BATCH_RL_REQUEST_LINES} requests and "
+            f"rpm_limit={BATCH_RL_RPM_LIMIT}, got {created.status_code}: {created.body[:400]}"
+        )
+        body_lower = created.body.lower()
+        assert "batch rate limit exceeded" in body_lower, (
+            f"429 body must name the batch rate limit so clients can branch on it; "
+            f"got: {created.body[:400]}"
+        )
+        assert str(BATCH_RL_REQUEST_LINES) in created.body, (
+            f"429 body should report the batch request count ({BATCH_RL_REQUEST_LINES}); "
+            f"got: {created.body[:400]}"
+        )
+        assert "rpm" in body_lower or "requests remaining" in body_lower, (
+            f"429 body must describe the RPM budget remaining so clients can pace; "
+            f"got: {created.body[:400]}"
+        )
+        retry_after = created.headers.get("retry-after")
+        if retry_after is not None:
+            assert retry_after.isdigit() and int(retry_after) > 0, (
+                f"retry-after must be a positive integer when present, got {retry_after!r}"
+            )
+
+
+ASSUME_ROLE_RAW_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def _assume_role_params(role_arn: str, session_name: str) -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model=ASSUME_ROLE_RAW_MODEL,
+        aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+        aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+        aws_region_name="os.environ/AWS_REGION",
+        s3_region_name="os.environ/AWS_REGION",
+        s3_bucket_name="os.environ/AWS_BATCH_S3_BUCKET",
+        s3_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+        s3_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+        aws_batch_role_arn="os.environ/AWS_BATCH_ROLE_ARN",
+        aws_role_name=role_arn,
+        aws_session_name=session_name,
+    )
+
+
+class TestBedrockBatchAssumeRole:
+    """Bedrock batch create under STS assume-role credentials.
+
+    Provisions a bedrock batch deployment whose litellm_params carry
+    aws_role_name / aws_session_name (the product path for role assumption) and
+    runs the unified file-upload + batch-create lifecycle. Success means the
+    proxy assumed the role and Bedrock accepted the job; a misconfigured role
+    fails create with an AWS auth error rather than silently falling back to the
+    ambient key.
+    """
+
+    @pytest.mark.covers(
+        "llm.batches.bedrock.assume_role.nonstream.works",
+        "llm.files.bedrock.upload.nonstream.works",
+        exercised_on=["batches", "files"],
+    )
+    def test_unified_batch_create_with_assume_role(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        (role_arn,) = require_env("AWS_ROLE_NAME")
+        require_env(
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION",
+            "AWS_BATCH_S3_BUCKET",
+            "AWS_BATCH_ROLE_ARN",
+        )
+        session_name = f"e2e-batch-sts-{unique_marker()}"[:64]
+        model_name = batch_model_name("bedrock-sts-batch")
+
+        model_id = client.create_model(model_name, _assume_role_params(role_arn, session_name))
+        resources.defer(lambda: client.delete_model(model_id))
+        key = resources.key()
+
+        file = unwrap(
+            client.upload_file(
+                content=render_jsonl(ASSUME_ROLE_RAW_MODEL),
+                form=FileUploadForm(purpose="batch", target_model_names=model_name),
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        assert_file_object(file, provider="bedrock")
+
+        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        require_successful_call(created)
+        batch = BatchObject.model_validate_json(created.body)
+        resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+
+        assert batch.id, f"assume-role create returned no batch id: {created.body[:200]}"
+        assert is_managed_id(batch.id), (
+            f"assume-role create via target_model_names must return a managed batch id, "
+            f"got {batch.id!r}"
+        )
+        assert batch.status in CREATED_BATCH_STATUSES, (
+            f"assume-role batch has non-transitional status {batch.status!r}"
+        )
+        assert_batch_object(batch)
+
+        fetched = unwrap(client.retrieve_batch(batch.id, key=key))
+        assert fetched.id == batch.id
+
+
+GEMINI_FILES_RAW_MODEL = "gemini-2.5-flash"
+
+
+class TestGeminiFiles:
+    """Gemini Files API upload through the proxy (LIT-3382).
+
+    gemini is a first-class FileCreateProvider. The test registers a gemini
+    deployment, uploads a tiny batch-purpose JSONL with target_model_names
+    routing, and asserts a FileObject comes back. Batch create for pure gemini
+    (non-Vertex) is out of scope here; Vertex covers the Gemini batch job path in
+    the main lifecycle matrix.
+    """
+
+    @pytest.mark.covers(
+        "llm.files.gemini.upload.nonstream.works",
+        exercised_on=["files"],
+    )
+    def test_gemini_file_upload(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        model_name = batch_model_name("gemini-files")
+        model_id = client.create_model(
+            model_name,
+            LiteLLMParamsBody(
+                model=f"gemini/{GEMINI_FILES_RAW_MODEL}",
+                api_key="os.environ/GEMINI_API_KEY",
+            ),
+        )
+        resources.defer(lambda: client.delete_model(model_id))
+        key = resources.key()
+
+        file = unwrap(
+            client.upload_file(
+                content=render_jsonl(GEMINI_FILES_RAW_MODEL),
+                form=FileUploadForm(purpose="batch", target_model_names=model_name),
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        assert_file_object(file, provider="gemini")
+        assert file.id, "gemini file upload returned no id"
+
+
+def _vllm_params(api_base: str, api_key: str | None, model_id: str) -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model=f"hosted_vllm/{model_id}",
+        api_base=api_base,
+        api_key=api_key,
+    )
+
+
+class TestHostedVllmBatch:
+    """hosted_vllm file upload + batch create (OpenAI-compatible path, LIT-3266).
+
+    hosted_vllm is in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, so /v1/files
+    and /v1/batches route through the OpenAI handler against the deployment's
+    api_base. Skipped for now: it needs a live vLLM (or OpenAI-compatible) server
+    exposing the files/batches APIs (HOSTED_VLLM_API_BASE), which the e2e
+    environment does not currently provision.
+    """
+
+    @pytest.mark.skip(
+        reason="hosted_vllm batch/files needs a live vLLM server (HOSTED_VLLM_API_BASE) "
+        "not provisioned in the e2e environment; re-enable when available (LIT-3266)"
+    )
+    @pytest.mark.covers(
+        "llm.batches.hosted_vllm.basic.nonstream.works",
+        "llm.files.hosted_vllm.upload.nonstream.works",
+        exercised_on=["batches", "files"],
+    )
+    def test_unified_file_and_batch_create(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        (api_base,) = require_env("HOSTED_VLLM_API_BASE")
+        api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
+        model_id = (
+            os.environ.get("HOSTED_VLLM_MODEL") or "meta-llama/Llama-3.2-3B-Instruct"
+        ).strip()
+        proxy_name = batch_model_name("hosted-vllm-batch")
+
+        model_row_id = client.create_model(
+            proxy_name, _vllm_params(api_base, api_key, model_id)
+        )
+        resources.defer(lambda: client.delete_model(model_row_id))
+        key = resources.key()
+
+        file = unwrap(
+            client.upload_file(
+                content=render_jsonl(model_id),
+                form=FileUploadForm(purpose="batch", target_model_names=proxy_name),
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+        assert_file_object(file, provider="hosted_vllm")
+
+        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        require_successful_call(created)
+        batch = BatchObject.model_validate_json(created.body)
+        resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+
+        assert batch.id, f"hosted_vllm create returned no batch id: {created.body[:200]}"
+        assert batch.status in CREATED_BATCH_STATUSES, (
+            f"hosted_vllm batch has non-transitional status {batch.status!r}"
+        )
+        assert_batch_object(batch)

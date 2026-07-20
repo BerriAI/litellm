@@ -8,6 +8,8 @@
 - {id: mgmt.key.delete.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:3122", rationale: "Deletion revokes future calls"}
 - {id: mgmt.key.delete.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "key_management_endpoints.py:3122", rationale: "Non-owner cannot delete"}
 - {id: mgmt.key.info.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:3380", rationale: "Info reflects all writes"}
+- {id: mgmt.virtual_key.valid_allows, module: mgmt, tier: P0, surface: api, assertions: [valid_allows], source: "user_api_key_auth.py", rationale: "Virtual key authenticates chat the way production OpenAI clients do"}
+- {id: mgmt.virtual_key.invalid_denied, module: mgmt, tier: P0, surface: api, assertions: [invalid_denied], source: "user_api_key_auth.py", rationale: "Bogus bearer is rejected before provider call"}
 - {id: mgmt.team.new.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "team_endpoints.py:897", rationale: "team_id/alias/budgets stored"}
 - {id: mgmt.team.new.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "team_endpoints.py:897", rationale: "Only org-admin/master creates teams"}
 - {id: mgmt.team.member_add.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "team_endpoints.py:2424", rationale: "Membership + per-member budget persist"}
