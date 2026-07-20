@@ -1944,6 +1944,91 @@ class TestIsRequestBodySafeBlocksRivaUseSsl:
         )
 
 
+class TestIsRequestBodySafeBlocksBedrockTags:
+    """``bedrock_tags`` lands as AWS resource tags on Bedrock batch jobs
+    created with the proxy's AWS identity, so a caller-supplied value can
+    forge ownership or cost-allocation labels; like
+    ``aws_bedrock_project_id`` it is blocked without an admin opt-in."""
+
+    def test_bedrock_tags_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="bedrock_tags"):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-opus",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_bedrock_tags(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="bedrock-batch-opus",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_bedrock_tags(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch-opus",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-opus-4-7",
+                        "configurable_clientside_auth_params": ["bedrock_tags"],
+                    },
+                }
+            ]
+        )
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=router,
+                model="bedrock-batch-opus",
+            )
+            is True
+        )
+
+    def test_per_deployment_opt_in_for_other_param_still_rejects_bedrock_tags(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch-opus",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-opus-4-7",
+                        "configurable_clientside_auth_params": ["api_base"],
+                    },
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="bedrock_tags"):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=router,
+                model="bedrock-batch-opus",
+            )
+
+
 # ── is_request_body_safe nested-config recursion (VERIA-6) ────────────────────
 
 
