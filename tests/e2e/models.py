@@ -65,11 +65,16 @@ class KeyGenerateBody(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
+    allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
 
 
 class KeyGenerateResponse(BaseModel):
+    key: str
+
+
+class KeyRegenerateBody(BaseModel):
     key: str
 
 
@@ -94,6 +99,7 @@ class KeyInfo(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     team_id: str | None = None
+    blocked: bool | None = None
     spend: float | None = None
     max_budget: float | None = None
     budget_reset_at: str | None = None
@@ -123,6 +129,21 @@ class ChatMetadata(BaseModel):
 class ChatMessage(BaseModel):
     role: str
     content: str
+
+
+class CacheControl(BaseModel):
+    type: str = "ephemeral"
+
+
+class TextBlock(BaseModel):
+    type: str = "text"
+    text: str
+    cache_control: CacheControl | None = None
+
+
+class RichMessage(BaseModel):
+    role: str
+    content: list[TextBlock]
 
 
 class ThinkingParam(BaseModel):
@@ -159,6 +180,27 @@ class ChatBody(BaseModel):
     tools: list[ChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+
+
+class RouterSettingsOverride(BaseModel):
+    """Per-request `router_settings_override` in a /chat/completions body: the
+    reliability knobs (fallbacks by trigger, retry count) the reliability suite
+    drives per call instead of via static router config. Serialized exclude_none, so
+    an override sets only the strategies a test exercises. Each fallbacks map is
+    model_name -> the ordered fallback model_names to try."""
+
+    fallbacks: list[dict[str, list[str]]] | None = None
+    context_window_fallbacks: list[dict[str, list[str]]] | None = None
+    content_policy_fallbacks: list[dict[str, list[str]]] | None = None
+    num_retries: int | None = None
+
+
+class ReliabilityChatBody(ChatBody):
+    """A /chat/completions body carrying a per-request router_settings_override.
+    Composes ChatBody (no attribute repetition) and adds the override; serialized
+    exclude_none so an absent override never leaks into the request."""
+
+    router_settings_override: RouterSettingsOverride | None = None
 
 
 class OutMessage(BaseModel):
@@ -515,12 +557,16 @@ class LiteLLMParamsBody(BaseModel):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     aws_batch_role_arn: str | None = None
+    aws_role_name: str | None = None
+    aws_session_name: str | None = None
+    aws_external_id: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     mock_response: str | None = None
+    timeout: float | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -545,6 +591,17 @@ class ModelNewBody(BaseModel):
 class ModelNewResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
+
+
+class ModelUpdateBody(BaseModel):
+    """POST /model/update body: the target deployment (`model_info.id`) plus the
+    `litellm_params` to merge over its stored params. The handler overlays only the
+    non-null fields, so a body carrying `input_cost_per_token` re-prices the
+    deployment while leaving its other params intact."""
+
+    model_config = ConfigDict(protected_namespaces=())
+    litellm_params: LiteLLMParamsBody
+    model_info: ModelInfoBody
 
 
 class ModelListEntry(BaseModel):
@@ -581,6 +638,10 @@ class KeyUpdateBody(BaseModel):
     models: list[str]
 
 
+class KeyBlockBody(BaseModel):
+    key: str
+
+
 class KeyListParams(BaseModel):
     key_alias: str
 
@@ -594,15 +655,25 @@ class TeamMemberEntry(BaseModel):
     user_id: str
 
 
+class TeamMetadata(BaseModel):
+    disable_global_guardrails: bool | None = None
+
+
 class TeamNewBody(BaseModel):
     team_alias: str
     models: list[str] = []
     team_id: str | None = None
     organization_id: str | None = None
+    metadata: TeamMetadata | None = None
 
 
 class TeamNewResponse(BaseModel):
     team_id: str
+
+
+class TeamUpdateBody(BaseModel):
+    team_id: str
+    team_alias: str
 
 
 class TeamInfoParams(BaseModel):
@@ -634,6 +705,15 @@ class TeamDeleteBody(BaseModel):
     team_ids: list[str]
 
 
+class TeamListEntry(BaseModel):
+    team_id: str
+
+
+class TeamListResponse(RootModel[list[TeamListEntry]]):
+    """GET /team/list answers with a bare array of team objects (not an object
+    wrapping them). Only team_id is read; pydantic ignores the rest."""
+
+
 UserRole = Literal["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"]
 
 
@@ -645,6 +725,11 @@ class UserNewBody(BaseModel):
 
 class UserNewResponse(BaseModel):
     user_id: str
+
+
+class UserUpdateBody(BaseModel):
+    user_id: str
+    user_role: UserRole
 
 
 class UserInfoParams(BaseModel):
@@ -666,11 +751,20 @@ class UserDeleteBody(BaseModel):
     user_ids: list[str]
 
 
+class UserDeleteResponse(RootModel[int]):
+    pass
+
+
 class UserListParams(BaseModel):
     user_ids: str
 
 
+class UserListRow(BaseModel):
+    user_id: str
+
+
 class UserListResponse(BaseModel):
+    users: list[UserListRow]
     total: int
 
 
@@ -681,6 +775,11 @@ class OrgNewBody(BaseModel):
 
 class OrgNewResponse(BaseModel):
     organization_id: str
+
+
+class OrgUpdateBody(BaseModel):
+    organization_id: str
+    organization_alias: str
 
 
 class OrgInfoParams(BaseModel):
@@ -695,3 +794,26 @@ class OrgInfoResponse(BaseModel):
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+# ---------- tags (management) ----------
+
+
+class TagNewBody(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TagDeleteBody(BaseModel):
+    name: str
+
+
+class TagListEntry(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TagListResponse(RootModel[list[TagListEntry]]):
+    """GET /tag/list answers with a bare array of tag configs (the stored tags plus
+    any dynamically-seen spend tags), not an object wrapping them. Read the rows off
+    .root."""

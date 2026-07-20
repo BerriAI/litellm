@@ -485,6 +485,41 @@ def anthropic_messages_handler(
             mock_response=litellm_params.mock_response,
         )
 
+    # Expand litellm_proxy MCP references through the MCP gateway before dispatch, so every
+    # downstream path (native passthrough and both bridges) gets real tools rather than a
+    # reference the provider cannot resolve. Popped from kwargs so it never reaches the provider.
+    skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
+    if not skip_mcp_handler and tools:
+        from litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler import (
+            anthropic_messages_with_mcp,
+        )
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+            return anthropic_messages_with_mcp(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                container=container,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
 
     if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:

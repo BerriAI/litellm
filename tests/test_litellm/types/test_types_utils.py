@@ -416,3 +416,113 @@ def test_message_accepts_thinking_block_with_null_signature():
     )
     assert choice.message.thinking_blocks is not None
     assert choice.message.thinking_blocks[0]["signature"] is None
+
+
+def test_delta_serialization_contract():
+    """
+    Lock the exact per-chunk serialization shape that the streaming path emits.
+
+    Delta is built once per streaming chunk and serialized via
+    ModelResponseStream.model_dump(), which defaults to exclude_unset=True.
+    The construction therefore has to mark content/role/function_call/
+    tool_calls/audio as "set" (so they survive exclude_unset) while keeping
+    OpenAI-omitted fields (reasoning_content, thinking_blocks, reasoning_items,
+    images, annotations) absent unless explicitly provided. This guards that
+    contract for both the default dump and the exclude_unset dump.
+    """
+    from litellm.types.utils import Delta
+
+    base_keys = {"content", "role", "function_call", "tool_calls", "audio"}
+
+    # Plain content delta: only the OpenAI-compatible keys appear, nothing extra
+    delta = Delta(content="hi", role="assistant")
+    assert set(delta.model_dump(exclude_unset=True).keys()) == base_keys
+    assert set(delta.model_dump().keys()) == base_keys | {"provider_specific_fields"}
+    assert delta.model_dump(exclude_unset=True) == {
+        "content": "hi",
+        "role": "assistant",
+        "function_call": None,
+        "tool_calls": None,
+        "audio": None,
+    }
+
+    # Empty delta still emits the base keys (used for the trailing chunk)
+    assert set(Delta().model_dump(exclude_unset=True).keys()) == base_keys
+
+    # model_fields_set is part of the contract. The legacy setattr-then-delattr
+    # path marked content/role/function_call/tool_calls/audio/images/annotations
+    # as set (pydantic's __delattr__ does not clear __pydantic_fields_set__), so
+    # images/annotations remain in model_fields_set even though they are omitted
+    # from the dump when absent. Lock that exact set so a pydantic change to
+    # fields_set handling fails here rather than silently shifting the contract.
+    expected_fields_set = base_keys | {"images", "annotations"}
+    assert Delta(content="hi", role="assistant").model_fields_set == expected_fields_set
+    assert Delta().model_fields_set == expected_fields_set
+    assert (
+        Delta(
+            content="x",
+            images=[{"type": "image_url", "image_url": {"url": "http://x"}}],
+        ).model_fields_set
+        == expected_fields_set
+    )
+
+    # Optional fields only show up when provided
+    for kwargs, expected_extra in [
+        ({"reasoning_content": "t"}, "reasoning_content"),
+        (
+            {
+                "thinking_blocks": [
+                    {"type": "thinking", "thinking": "a", "signature": "s"}
+                ]
+            },
+            "thinking_blocks",
+        ),
+        ({"reasoning_items": []}, "reasoning_items"),
+        (
+            {"images": [{"type": "image_url", "image_url": {"url": "http://x"}}]},
+            "images",
+        ),
+        (
+            {
+                "annotations": [
+                    {
+                        "type": "url_citation",
+                        "url_citation": {
+                            "start_index": 0,
+                            "end_index": 1,
+                            "title": "t",
+                            "url": "u",
+                        },
+                    }
+                ]
+            },
+            "annotations",
+        ),
+    ]:
+        present = Delta(content="x", **kwargs)
+        assert expected_extra in present.model_dump(exclude_unset=True)
+        absent = Delta(content="x")
+        assert expected_extra not in absent.model_dump(exclude_unset=True)
+        assert not hasattr(absent, expected_extra)
+
+    # tool_calls dicts are coerced and back-filled with index/type
+    tc_delta = Delta(
+        tool_calls=[{"id": "1", "function": {"name": "f", "arguments": "{}"}}]
+    )
+    dumped = tc_delta.model_dump(exclude_unset=True)["tool_calls"]
+    assert dumped == [
+        {
+            "id": "1",
+            "function": {"arguments": "{}", "name": "f"},
+            "type": "function",
+            "index": 0,
+        }
+    ]
+
+    # Extra provider params survive (extra='allow') and, because super().__init__
+    # populates them before the base keys are appended, order ahead of "content".
+    extra_delta = Delta(content="x", custom_field="v")
+    extra_dump = extra_delta.model_dump(exclude_unset=True)
+    keys = list(extra_dump.keys())
+    assert extra_dump["custom_field"] == "v"
+    assert keys.index("custom_field") < keys.index("content")
