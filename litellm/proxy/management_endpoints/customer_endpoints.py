@@ -616,6 +616,13 @@ async def update_end_user(
                 update_end_user_table_data["budget_id"] = budget_table_data_record.budget_id
             else:
                 ## Update existing budget ##
+                # Recompute budget_reset_at when budget_duration changes on an existing budget,
+                # mirroring the create-path fix (addresses greptile review feedback)
+                if budget_table_data.get("budget_reset_at") is None and budget_table_data.get("budget_duration") is not None:
+                    budget_table_data["budget_reset_at"] = get_budget_reset_time(
+                        budget_duration=budget_table_data["budget_duration"]
+                    )
+
                 budget_table_data_record = await BudgetRepository(prisma_client).table.update(
                     where={"budget_id": end_user_budget_table.budget_id},
                     data=budget_table_data,
