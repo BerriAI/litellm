@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
+    filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -160,6 +161,8 @@ class AzureAIStudioConfig(OpenAIConfig):
             ),
         ]
 
+    NON_SPEC_MESSAGE_FIELDS = ("thinking_blocks", "provider_specific_fields", "reasoning_content")
+
     def _transform_messages(
         self,
         messages: List[AllMessageValues],
@@ -169,8 +172,19 @@ class AzureAIStudioConfig(OpenAIConfig):
         - Azure AI Studio doesn't support content as a list. This handles:
             1. Transforms list content to a string.
             2. If message contains an image or audio, send as is (user-intended)
+        - Strips non-spec LiteLLM output-only fields that strict OpenAI-compatible
+          backends (e.g. Fireworks with additionalProperties=false) reject with
+          "Extra inputs are not permitted, field: 'messages[n].thinking_blocks'".
+          These include message-level thinking_blocks/reasoning_content/provider_specific_fields
+          and nested tool_calls[].function.provider_specific_fields.
         """
         for message in messages:
+            if isinstance(message, dict):
+                for field in self.NON_SPEC_MESSAGE_FIELDS:
+                    filter_value_from_dict(
+                        cast(dict, message), field
+                    )  # cast-ok: TypedDict message is a dict at runtime
+
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
                 continue
