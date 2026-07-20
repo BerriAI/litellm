@@ -1225,7 +1225,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
-            if output_item.get("type") == "custom_tool_call":
+            elif output_item.get("type") == "custom_tool_call":
                 tool_call_index = OpenAiResponsesToChatCompletionStreamIterator._sequential_tool_call_index(
                     tool_call_index_map, parsed_chunk.get("output_index", 0)
                 )
