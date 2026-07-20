@@ -22,6 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -491,6 +492,12 @@ async def update_end_user(
     - alias: Optional[str] = None  # human-friendly alias
     - blocked: bool = False  # allow/disallow requests for this end-user
     - max_budget: Optional[float] = None
+    - soft_budget: Optional[float] = None
+    - max_parallel_requests: Optional[int] = None
+    - tpm_limit: Optional[int] = None
+    - rpm_limit: Optional[int] = None
+    - model_max_budget: Optional[dict] = None
+    - budget_duration: Optional[str] = None  # e.g. "30d", "1mo"; also sets budget_reset_at when creating/updating a budget
     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
     - allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
@@ -594,6 +601,18 @@ async def update_end_user(
 
         ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
+            # Mirror /budget/new and /budget/update: when budget_duration is set and
+            # budget_reset_at is not, compute the next reset so reset_budget_job can
+            # renew spend. budget_reset_at is server-managed (not on LiteLLM_BudgetTable
+            # allowlist), so it must be injected here.
+            if (
+                budget_table_data.get("budget_duration") is not None
+                and "budget_reset_at" not in budget_table_data
+            ):
+                budget_table_data["budget_reset_at"] = get_budget_reset_time(
+                    budget_duration=budget_table_data["budget_duration"]
+                )
+
             if end_user_budget_table is None:
                 ## Create new budget ##
                 budget_table_data_record = await BudgetRepository(prisma_client).table.create(
