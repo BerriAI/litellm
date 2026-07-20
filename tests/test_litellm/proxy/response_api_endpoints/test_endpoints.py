@@ -803,13 +803,29 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
     """A Responses-shaped body (``input``, no ``messages``; what Cursor agent mode
     sends) must run through the Responses pipeline with chat-completions output, and
     ``stream_options`` (chat-completions-only; Cursor sends include_usage) must be
-    stripped before the Responses call since OpenAI's Responses API rejects it."""
+    stripped before the Responses call since OpenAI's Responses API rejects it.
+    Stripping must not mutate the dict _read_request_body returned: that can be the
+    request-scope cached parsed body itself, and removing a key from it corrupts the
+    cache's key snapshot so any later _read_request_body caller (spend tracking,
+    logging hooks) silently gets an empty body; a follow-up read must still see the
+    full original body."""
+    import asyncio
+
     from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _read_request_body as real_read_request_body,
+    )
     from litellm.types.llms.openai import ResponsesAPIResponse
 
     import litellm.proxy.proxy_server as ps
+
+    captured_requests = []
+
+    async def capturing_read_request_body(request):
+        captured_requests.append(request)
+        return await real_read_request_body(request=request)
 
     mock_router = MagicMock()
     mock_router.aresponses = AsyncMock(
@@ -835,7 +851,9 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
 
     app.dependency_overrides[user_api_key_auth] = _auth_override
     try:
-        with patch.object(ps, "llm_router", mock_router):
+        with patch.object(ps, "llm_router", mock_router), patch.object(
+            ps, "_read_request_body", side_effect=capturing_read_request_body
+        ):
             client = TestClient(app)
             response = client.post(
                 "/cursor/chat/completions",
@@ -858,3 +876,8 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
     called_kwargs = mock_router.aresponses.call_args.kwargs
     assert "stream_options" not in called_kwargs
     mock_router.acompletion.assert_not_called()
+
+    assert captured_requests
+    followup_body = asyncio.run(real_read_request_body(request=captured_requests[0]))
+    assert followup_body.get("stream_options") == {"include_usage": True}
+    assert followup_body.get("input") == [{"role": "user", "content": "hello"}]
