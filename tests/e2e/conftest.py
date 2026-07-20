@@ -14,14 +14,14 @@ shared fixtures build on it.
 """
 
 import functools
-import sys
+import os
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 import requests
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
+from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
 from proxy_client import ProxyClient, build_proxy_client
@@ -107,26 +107,17 @@ def pytest_runtest_call(item: pytest.Item) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Once the whole e2e session is done (all suites), truncate the spend logs so
-    the DB doesn't accumulate test rows. Sessions where no e2e test body ran leave
-    the DB alone so a `DATABASE_URL` pointing at a shared instance is never wiped
-    without an e2e run. Best-effort: a cleanup failure (no DB reachable) must not
-    fail the run. The spend_tracking dir goes on sys.path only for this import and
-    is removed after, so a broader `pytest tests/` run is not left with a mutated
-    path."""
-    if not session.stash.get(_E2E_TEST_RAN, False):
-        return
-    spend_dir = str(Path(__file__).parent / "quota_management" / "spend_tracking")
-    sys.path.insert(0, spend_dir)
-    try:
-        from spend_e2e_client import reset_spend_logs  # pyright: ignore
-
-        reset_spend_logs()
-    except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
-        print(f"spend-log cleanup best-effort failed: {exc}")
-    finally:
-        if spend_dir in sys.path:
-            sys.path.remove(spend_dir)
+    """Once the whole e2e session is done (all suites), optionally truncate the
+    spend logs so the DB doesn't accumulate test rows. The truncate is destructive
+    and irreversible, so it runs only when the operator explicitly opts in
+    (`E2E_RESET_SPEND_LOGS=1`) and an e2e test body actually ran; otherwise a
+    `DATABASE_URL` pointing at a shared or staging instance is left untouched.
+    Best-effort: a cleanup failure (no DB reachable) must not fail the run."""
+    run_spend_log_cleanup(
+        opt_in=os.environ.get(RESET_OPT_IN_ENV),
+        e2e_test_ran=session.stash.get(_E2E_TEST_RAN, False),
+        truncate=reset_spend_logs,
+    )
 
 
 @pytest.fixture(scope="session")

@@ -7,10 +7,10 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use google_cloud_auth::credentials::AccessTokenCredentials;
 use google_cloud_auth::credentials::external_account;
 use google_cloud_auth::credentials::service_account;
 use google_cloud_auth::credentials::user_account;
-use google_cloud_auth::credentials::AccessTokenCredentials;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

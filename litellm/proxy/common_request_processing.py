@@ -33,6 +33,7 @@ from litellm.constants import (
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -89,6 +90,13 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation =
     "error_message": "Client disconnected the request",
     "error_class": "ClientDisconnected",
 }
+
+
+def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
+    return any(
+        isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
+        for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
+    )
 
 
 def _apply_client_disconnect_metadata(target_metadata: Optional[dict[str, object]]) -> None:
@@ -672,6 +680,7 @@ def _override_openai_response_model(
     response_obj: Any,
     requested_model: str,
     log_context: str,
+    return_raw_model_name: bool = False,
 ) -> None:
     """
     Force the OpenAI-compatible `model` field in the response to match what the client requested.
@@ -695,7 +704,7 @@ def _override_openai_response_model(
     3. If this was a fastest_response batch completion, use the winning model's
        model group name instead of the comma-separated list the client sent.
     """
-    if not requested_model:
+    if return_raw_model_name or not requested_model:
         return
 
     hidden_params = get_hidden_params_dict(response_obj)
@@ -1938,6 +1947,7 @@ class ProxyBaseLLMRequestProcessing:
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+                return_raw_model_name=_should_return_raw_model_name(self.data),
             )
 
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers
