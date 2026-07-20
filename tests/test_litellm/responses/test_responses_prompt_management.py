@@ -580,6 +580,22 @@ class TestMergePromptManagementMessagesIntoInput:
         # reasoning immediately precedes its OWN assistant message, not the context msg
         assert result.index(REASONING_ITEM) == result.index(ASSISTANT_MESSAGE) - 1
 
+    def test_stray_non_message_item_in_hook_output_is_not_treated_as_an_anchor(self):
+        """Defensive: a non-conforming hook could echo a non-message item (reasoning/
+        function_call/...) back into its output instead of returning only messages.
+        _build_message_index only indexes genuine message items, so that stray item
+        can never be mistaken for a message anchor -- it just passes through as part
+        of the hook's output, and the real reasoning item still lands next to its own
+        assistant message rather than being misattached to the stray item."""
+        original = [REASONING_ITEM, ASSISTANT_MESSAGE, USER_MESSAGE]
+        stray_item = {"type": "function_call", "id": "fc_stray", "call_id": "c", "name": "n", "arguments": "{}"}
+        merged = [stray_item, ASSISTANT_MESSAGE, USER_MESSAGE]  # non-conforming hook output
+
+        result = _merge_prompt_management_messages_into_input(original, merged)
+
+        assert result == [stray_item, REASONING_ITEM, ASSISTANT_MESSAGE, USER_MESSAGE]
+        assert result.index(REASONING_ITEM) == result.index(ASSISTANT_MESSAGE) - 1
+
     def test_cache_control_deepcopy_reattaches_via_message_id(self):
         """Mirrors AnthropicCacheControlHook: messages are deep-copied (object identity
         lost) but their message ids are preserved. The reasoning item is re-attached to
