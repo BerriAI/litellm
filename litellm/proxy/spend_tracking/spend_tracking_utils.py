@@ -577,7 +577,7 @@ def _get_messages_for_spend_logs_payload(
     return "{}"
 
 
-_SENSITIVE_REQUEST_BODY_KEYS = frozenset({"secret_fields"})
+_SENSITIVE_REQUEST_BODY_KEYS = frozenset({"secret_fields", "privaite_map"})
 
 
 def _sanitize_request_body_for_spend_logs_payload(
