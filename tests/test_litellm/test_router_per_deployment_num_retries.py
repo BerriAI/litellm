@@ -3,11 +3,14 @@ Unit tests for per-deployment num_retries in litellm_params
 GitHub Issue: #18968 - Per-deployment max_retries/num_retries in litellm_params is not used in retry logic
 """
 
+import httpx
 import pytest
+import pytest_asyncio
 from unittest.mock import patch
 
 import litellm
 from litellm import Router
+from litellm.types.router import RetryPolicy
 
 
 class TestPerDeploymentNumRetries:
@@ -319,3 +322,145 @@ class TestNumRetriesNoneGuard:
 
         # 1 initial attempt + at least 1 retry -> proves None fell back to a positive int
         assert calls["n"] >= 2
+
+
+class TestNoProviderRetryAmplification:
+    """
+    A routed request must reach the upstream provider exactly ``1 + <router retries>``
+    times. The Router is the sole retry owner for routed calls, so the provider SDK
+    must never retry on top of it. Otherwise a per-deployment ``num_retries`` set in
+    ``litellm_params`` is applied twice - once by the Router loop and once as the
+    provider client's ``max_retries`` - turning one request into ``(1 + num_retries) ** 2``
+    upstream requests.
+
+    These tests count actual upstream HTTP requests through the full Router completion
+    path by injecting a counting transport via ``litellm.aclient_session`` (the
+    documented seam the OpenAI client builder reads), so both Router-level and any
+    provider-SDK-level retries are observed.
+    """
+
+    @staticmethod
+    def _install_counting_upstream() -> dict:
+        """Route every upstream POST to a 500 and count it. ``retry-after: 0`` keeps
+        provider-SDK backoff at zero so a mutated (double-retrying) build stays fast."""
+        counter = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            counter["n"] += 1
+            return httpx.Response(
+                500,
+                headers={"retry-after": "0"},
+                json={"error": {"message": "boom", "type": "server_error"}},
+            )
+
+        litellm.aclient_session = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        return counter
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _isolate_clients(self):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        yield
+        session = litellm.aclient_session
+        litellm.aclient_session = None
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        if session is not None:
+            await session.aclose()
+
+    @staticmethod
+    def _router(api_base: str, litellm_params: dict, **router_kwargs) -> Router:
+        params = {"model": "openai/gpt-4o-mini", "api_base": api_base, "api_key": "sk-fake"}
+        params.update(litellm_params)
+        return Router(model_list=[{"model_name": "mock", "litellm_params": params}], **router_kwargs)
+
+    async def _call_and_count(self, router: Router, **call_kwargs) -> int:
+        counter = self._install_counting_upstream()
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.InternalServerError):
+                await router.acompletion(
+                    model="mock", messages=[{"role": "user", "content": "hi"}], **call_kwargs
+                )
+        return counter["n"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("num_retries", [2, 5])
+    async def test_deployment_num_retries_sends_no_extra_provider_requests(self, num_retries):
+        """
+        Deployment ``num_retries=N`` (every attempt failing) must send exactly ``N + 1``
+        upstream requests, not ``(N + 1) ** 2``. This is the amplification regression:
+        an unfixed build sends 9 (N=2) or 36 (N=5).
+        """
+        counter = self._install_counting_upstream()
+        router = self._router(
+            f"https://amp-{num_retries}.local/v1", {"num_retries": num_retries}, num_retries=1
+        )
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.InternalServerError):
+                await router.acompletion(model="mock", messages=[{"role": "user", "content": "hi"}])
+        assert counter["n"] == num_retries + 1
+
+    @pytest.mark.asyncio
+    async def test_request_max_retries_does_not_nest_with_router_retries(self):
+        """
+        A request-body ``max_retries`` must not make the provider SDK retry on top of the
+        Router. With deployment ``num_retries=5`` and request ``max_retries=3`` the count
+        stays ``6``; a build that lets either value reach the provider SDK sends 24 or 36.
+        """
+        router = self._router("https://nest-req.local/v1", {"num_retries": 5}, num_retries=1)
+        assert await self._call_and_count(router, max_retries=3) == 6
+
+    @pytest.mark.asyncio
+    async def test_deployment_max_retries_does_not_nest_with_router_retries(self):
+        """
+        A deployment-level ``max_retries`` is likewise never applied on top of the Router's
+        retries for a routed call: deployment ``num_retries=5`` plus ``max_retries=3`` still
+        sends exactly ``6`` upstream requests.
+        """
+        router = self._router(
+            "https://nest-dep.local/v1", {"num_retries": 5, "max_retries": 3}, num_retries=1
+        )
+        assert await self._call_and_count(router) == 6
+
+    @pytest.mark.asyncio
+    async def test_retry_policy_configured_does_not_reintroduce_amplification(self):
+        """
+        With a retry policy configured alongside a per-deployment ``num_retries=5``, the
+        provider SDK still must not retry: exactly ``6`` upstream requests, not 36.
+        """
+        router = self._router(
+            "https://policy.local/v1",
+            {"num_retries": 5},
+            num_retries=1,
+            retry_policy=RetryPolicy(InternalServerErrorRetries=2),
+        )
+        assert await self._call_and_count(router) == 6
+
+    @pytest.mark.asyncio
+    async def test_global_num_retries_not_amplified(self):
+        """
+        Global ``num_retries`` (no per-deployment setting) already behaves correctly and
+        must stay that way: ``num_retries=3`` sends ``4`` upstream requests.
+        """
+        router = self._router("https://global.local/v1", {}, num_retries=3)
+        assert await self._call_and_count(router) == 4
+
+    @pytest.mark.asyncio
+    async def test_direct_completion_still_forwards_num_retries_to_provider(self):
+        """
+        For a NON-routed direct ``litellm.acompletion`` call, ``num_retries`` remains an
+        alias for the provider client's ``max_retries`` (the instructor use case). The
+        provider SDK therefore retries in addition to litellm's own retry wrapper, so the
+        upstream count exceeds ``num_retries + 1`` - proving the routed-call fix did not
+        change direct-call behaviour.
+        """
+        counter = self._install_counting_upstream()
+        num_retries = 2
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.InternalServerError):
+                await litellm.acompletion(
+                    model="openai/gpt-4o-mini",
+                    api_base="https://direct.local/v1",
+                    api_key="sk-fake",
+                    messages=[{"role": "user", "content": "hi"}],
+                    num_retries=num_retries,
+                )
+        assert counter["n"] > num_retries + 1
