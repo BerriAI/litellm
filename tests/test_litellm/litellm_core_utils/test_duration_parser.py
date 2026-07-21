@@ -2,7 +2,10 @@ import unittest
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.litellm_core_utils.duration_parser import (
+    duration_in_seconds,
+    get_next_standardized_reset_time,
+)
 
 
 class TestStandardizedResetTime(unittest.TestCase):
@@ -144,6 +147,14 @@ class TestStandardizedResetTime(unittest.TestCase):
         )
         self.assertEqual(invalid_tz_result, invalid_tz_expected)
 
+    def test_malformed_duration_with_trailing_text_falls_back(self):
+        base_time = datetime(2023, 5, 15, 15, 20, 30, tzinfo=timezone.utc)
+        expected = datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc)
+
+        result = get_next_standardized_reset_time("10m!", base_time, "UTC")
+
+        self.assertEqual(result, expected)
+
     def test_iana_timezones_previously_unsupported(self):
         """Test IANA timezones that were previously unsupported by the hardcoded map."""
         # Base time: 2023-05-15 15:00:00 UTC
@@ -197,6 +208,23 @@ class TestStandardizedResetTime(unittest.TestCase):
         expected = datetime(2023, 3, 13, 0, 0, 0, tzinfo=eastern)
         result = get_next_standardized_reset_time("1d", pre_spring, "US/Eastern")
         self.assertEqual(result, expected)
+
+
+class TestDurationInSeconds(unittest.TestCase):
+    def test_valid_durations(self):
+        self.assertEqual(duration_in_seconds("30s"), 30)
+        self.assertEqual(duration_in_seconds("10m"), 600)
+        self.assertEqual(duration_in_seconds("2h"), 7200)
+        self.assertEqual(duration_in_seconds("3d"), 259200)
+        self.assertEqual(duration_in_seconds("1w"), 604800)
+        self.assertGreater(duration_in_seconds("1mo"), 0)
+
+    def test_malformed_durations_raise(self):
+        # Trailing characters after a valid unit must be rejected, not silently
+        # dropped: "10mb" previously parsed as 10 minutes.
+        for bad in ["10mb", "5days", "30x", "abc", "10 m"]:
+            with self.assertRaises(ValueError):
+                duration_in_seconds(bad)
 
 
 if __name__ == "__main__":

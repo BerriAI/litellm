@@ -14,7 +14,9 @@ from zoneinfo import ZoneInfo
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
-    match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+    # Use fullmatch so trailing characters after a valid unit are rejected
+    # rather than silently dropped (e.g. "10mb" must not parse as 10 minutes).
+    match = re.fullmatch(r"(\d+)(mo|[smhdw]?)", duration)
 
     if not match:
         raise ValueError("Invalid duration format")
@@ -167,7 +169,7 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> Tuple[
 
 def _parse_duration(duration: str) -> Tuple[Optional[int], Optional[str]]:
     """Parse the duration string into value and unit."""
-    match = re.match(r"(\d+)([a-z]+)", duration)
+    match = re.fullmatch(r"(\d+)(mo|[smhdw])", duration)
     if not match:
         return None, None
 
