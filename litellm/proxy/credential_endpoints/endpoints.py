@@ -321,7 +321,7 @@ async def get_credentials(
         return {"success": True, "credentials": masked_credentials}
     except HTTPException:
         raise
-    except (PrismaError, httpx.HTTPError) as e:
+    except Exception as e:
         return handle_exception_on_proxy(e)
 
 
@@ -599,7 +599,7 @@ async def update_credential(
     credentials_repository = CredentialsRepository(prisma_client)
     try:
         existing = await credentials_repository.find_by_name(credential_name)
-    except Exception as e:
+    except (PrismaError, httpx.HTTPError) as e:
         return handle_exception_on_proxy(e)
     await _authorize_credential_patch(
         credential_name=credential_name,
