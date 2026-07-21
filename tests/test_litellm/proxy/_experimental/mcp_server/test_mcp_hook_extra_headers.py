@@ -1119,3 +1119,80 @@ class TestOpenApiResolvedUpstreamAuth:
                     )
 
         called.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_caller_oauth2_headers_never_become_resolved_for_byok_server(self):
+        """Greptile P1 regression: BYOK servers defer to v1 (to_server_spec None), and the v1 arm
+        must never promote caller-supplied oauth2 headers into the resolved-auth slot, where they
+        would override the per-server BYOK credential and leak the caller's gateway Authorization
+        upstream."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="byok-spec",
+            name="byok_spec",
+            server_name="byok_spec",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+            spec_path="https://example.com/openapi.yaml",
+            is_byok=True,
+        )
+
+        resolved, forwarded = await manager.resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers={"Authorization": "Bearer sk-litellm-gateway-key"},
+            raw_headers=None,
+            mcp_auth_header="user-byok-key",
+            user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key="sk-user"),
+            forwarded_headers=None,
+        )
+
+        assert resolved is None
+        assert forwarded is None
+
+    @pytest.mark.asyncio
+    async def test_v1_server_threads_stored_headers_only_without_caller_headers(self):
+        """The v1 (unmigrated) arm resolves the stored per-user token only when the caller sent no
+        oauth2 headers of their own; with caller headers present the stored lookup is skipped and
+        nothing is promoted to resolved."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="v1-spec",
+            name="v1_spec",
+            server_name="v1_spec",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            spec_path="https://example.com/openapi.yaml",
+            delegate_auth_to_upstream=True,
+        )
+        stored = {"Authorization": "Bearer stored-v1-token"}
+        user_auth = UserAPIKeyAuth(user_id="alice", api_key="sk-user")
+
+        with patch.object(
+            manager, "_resolve_oauth2_headers_for_tool_call", new=AsyncMock(return_value=stored)
+        ) as lookup:
+            resolved, _ = await manager.resolve_openapi_upstream_auth(
+                mcp_server=server,
+                oauth2_headers=None,
+                raw_headers=None,
+                mcp_auth_header=None,
+                user_api_key_auth=user_auth,
+                forwarded_headers=None,
+            )
+        assert resolved == stored
+        lookup.assert_awaited_once_with(server, None, user_auth)
+
+        with patch.object(
+            manager, "_resolve_oauth2_headers_for_tool_call", new=AsyncMock(return_value=stored)
+        ) as lookup:
+            resolved, _ = await manager.resolve_openapi_upstream_auth(
+                mcp_server=server,
+                oauth2_headers={"Authorization": "Bearer caller-supplied"},
+                raw_headers=None,
+                mcp_auth_header=None,
+                user_api_key_auth=user_auth,
+                forwarded_headers=None,
+            )
+        assert resolved is None
+        lookup.assert_not_awaited()

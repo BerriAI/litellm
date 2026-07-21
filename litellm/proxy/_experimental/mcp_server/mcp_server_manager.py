@@ -4755,12 +4755,19 @@ class MCPServerManager:
         back with any header the resolver claimed already dropped. Unmigrated (v1) servers resolve
         through the stored-token lookup instead, and a missing per-user credential raises the same
         discovery challenge the MCPClient path serves, rather than egressing unauthenticated.
+
+        The resolved headers carry only credentials the gateway itself resolved (a stored per-user
+        token, a minted or exchanged token). Caller-supplied ``oauth2_headers`` are never promoted
+        into them: on the v2 arm they feed only subject-token extraction (the designed RFC 8693
+        input), and on the v1 arm their presence disables the stored lookup entirely, so a
+        caller's gateway credential can never displace a per-server BYOK header or leak upstream
+        as the resolved credential.
         """
         spec = to_server_spec(mcp_server)
         if spec is None:
-            stored_headers = await self._resolve_oauth2_headers_for_tool_call(
-                mcp_server, oauth2_headers, user_api_key_auth
-            )
+            if oauth2_headers:
+                return None, forwarded_headers
+            stored_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, None, user_api_key_auth)
             return stored_headers, forwarded_headers
 
         subject_token: str | None = None
@@ -4872,6 +4879,7 @@ class MCPServerManager:
             )
             tasks.append(during_hook_task)
 
+        caller_oauth2_headers = oauth2_headers
         oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, oauth2_headers, user_api_key_auth)
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
@@ -4891,7 +4899,7 @@ class MCPServerManager:
             )
             resolved_auth_headers, forwarded_headers = await self.resolve_openapi_upstream_auth(
                 mcp_server=mcp_server,
-                oauth2_headers=oauth2_headers,
+                oauth2_headers=caller_oauth2_headers,
                 raw_headers=raw_headers,
                 mcp_auth_header=mcp_auth_header,
                 user_api_key_auth=user_api_key_auth,
