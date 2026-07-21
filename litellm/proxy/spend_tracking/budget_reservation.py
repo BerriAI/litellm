@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -862,8 +863,6 @@ def get_budget_window_start(window: Any) -> Optional[datetime]:
     reset_at = _coerce_datetime(window_dict.get("reset_at"))
     if reset_at is None:
         return datetime.now(timezone.utc) - timedelta(seconds=duration_seconds)
-    if reset_at.tzinfo is None:
-        reset_at = reset_at.replace(tzinfo=timezone.utc)
     return reset_at - timedelta(seconds=duration_seconds)
 
 
@@ -871,10 +870,10 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
+        return parse_utc_datetime(value)
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parse_utc_datetime(value)
         except ValueError:
             return None
     return None

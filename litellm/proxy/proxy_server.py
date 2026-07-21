@@ -246,6 +246,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
@@ -6312,7 +6313,7 @@ class ProxyConfig:
             if interval_hours is None and force_reload is False:
                 return  # No interval configured, skip reload
 
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
 
             # Check if we need to reload based on interval or force reload
             should_reload = False
@@ -6325,7 +6326,7 @@ class ProxyConfig:
                 global last_model_cost_map_reload
                 if last_model_cost_map_reload is not None:
                     try:
-                        last_reload_time = datetime.fromisoformat(last_model_cost_map_reload)
+                        last_reload_time = parse_utc_datetime(last_model_cost_map_reload)
                         time_since_last_reload = current_time - last_reload_time
                         hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
 
@@ -6412,7 +6413,7 @@ class ProxyConfig:
             if interval_hours is None and force_reload is False:
                 return  # No interval configured, skip reload
 
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
 
             # Check if we need to reload based on interval or force reload
             should_reload = False
@@ -6425,7 +6426,7 @@ class ProxyConfig:
                 global last_anthropic_beta_headers_reload
                 if last_anthropic_beta_headers_reload is not None:
                     try:
-                        last_reload_time = datetime.fromisoformat(last_anthropic_beta_headers_reload)
+                        last_reload_time = parse_utc_datetime(last_anthropic_beta_headers_reload)
                         time_since_last_reload = current_time - last_reload_time
                         hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
 
@@ -11534,15 +11535,7 @@ def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
 
     if isinstance(dt, str):
         try:
-            # Handle ISO format strings, including 'Z' suffix
-            dt_str = dt.replace("Z", "+00:00") if dt.endswith("Z") else dt
-            parsed_dt = datetime.fromisoformat(dt_str)
-            # Ensure it's UTC-aware
-            if parsed_dt.tzinfo is None:
-                parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
-            else:
-                parsed_dt = parsed_dt.astimezone(timezone.utc)
-            return parsed_dt
+            return parse_utc_datetime(dt).astimezone(timezone.utc)
         except (ValueError, AttributeError):
             return None
 
@@ -15528,7 +15521,7 @@ async def reload_model_cost_map(
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         last_model_cost_map_reload = current_time.isoformat()
 
         # Set force reload flag in database for other pods, preserving existing interval_hours
@@ -15728,13 +15721,13 @@ async def get_model_cost_map_reload_status(
                 "next_run": None,
             }
 
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         next_run = None
 
         # Use pod's in-memory last reload time
         if last_model_cost_map_reload is not None:
             try:
-                last_reload_time = datetime.fromisoformat(last_model_cost_map_reload)
+                last_reload_time = parse_utc_datetime(last_model_cost_map_reload)
                 time_since_last_reload = current_time - last_reload_time
                 hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
 
@@ -15842,7 +15835,7 @@ async def reload_anthropic_beta_headers(
 
         # Update pod's in-memory last reload time
         global last_anthropic_beta_headers_reload
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         last_anthropic_beta_headers_reload = current_time.isoformat()
 
         # Set force reload flag in database for other pods, preserving existing interval_hours
@@ -16049,13 +16042,13 @@ async def get_anthropic_beta_headers_reload_status(
                 "next_run": None,
             }
 
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         next_run = None
 
         # Use pod's in-memory last reload time
         if last_anthropic_beta_headers_reload is not None:
             try:
-                last_reload_time = datetime.fromisoformat(last_anthropic_beta_headers_reload)
+                last_reload_time = parse_utc_datetime(last_anthropic_beta_headers_reload)
                 time_since_last_reload = current_time - last_reload_time
                 hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
 

@@ -1,0 +1,62 @@
+# Aware-vs-naive datetime comparisons raise TypeError at runtime.
+# ISO-8601 input may carry "Z"/offset (tz-aware) or not (naive), so raw
+# datetime.fromisoformat results must be normalized before comparing.
+# parse_utc_datetime in litellm/litellm_core_utils/datetime_utils.py is the
+# single allowed parse entrypoint under litellm/proxy/.
+
+rules:
+  - id: ban-raw-fromisoformat-in-proxy
+    message: >-
+      Raw datetime.fromisoformat() is banned under litellm/proxy/. Use
+      parse_utc_datetime() from litellm.litellm_core_utils.datetime_utils, which
+      normalizes naive values to UTC so comparisons against
+      datetime.now(timezone.utc) cannot raise TypeError.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/proxy
+    pattern-either:
+      - pattern: datetime.fromisoformat(...)
+      - pattern: datetime.datetime.fromisoformat(...)
+    metadata:
+      category: reliability
+      cwe: "CWE-704: Incorrect Type Conversion or Cast"
+      tags: [python, reliability, datetime]
+      confidence: HIGH
+
+  - id: tz-unnormalized-fromisoformat-compare
+    message: >-
+      Comparing a datetime.fromisoformat(...) result without timezone
+      normalization raises TypeError when one side is tz-aware and the other is
+      naive. Use parse_utc_datetime() from
+      litellm.litellm_core_utils.datetime_utils and compare against
+      datetime.now(timezone.utc).
+    severity: ERROR
+    languages: [python]
+    mode: taint
+    pattern-sources:
+      - pattern: datetime.fromisoformat(...)
+      - pattern: datetime.datetime.fromisoformat(...)
+    pattern-sanitizers:
+      - pattern: $DT.replace(tzinfo=$TZ)
+      - by-side-effect: true
+        patterns:
+          - pattern: $DT
+          - pattern-inside: |
+              if <... $DT.tzinfo is None ...>:
+                $DT = $DT.replace(tzinfo=$TZ)
+              ...
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $X > $Y
+              - pattern: $X < $Y
+              - pattern: $X >= $Y
+              - pattern: $X <= $Y
+              - pattern: $X - $Y
+    metadata:
+      category: reliability
+      cwe: "CWE-704: Incorrect Type Conversion or Cast"
+      tags: [python, reliability, datetime]
+      confidence: MEDIUM

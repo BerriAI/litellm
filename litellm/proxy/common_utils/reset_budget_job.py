@@ -6,6 +6,7 @@ from typing import Any, Callable, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
@@ -662,8 +663,7 @@ class ResetBudgetJob:
         reset_at_str = window.get("reset_at")
         if not reset_at_str:
             return False
-        reset_at = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
-        if reset_at > now:
+        if parse_utc_datetime(reset_at_str) > parse_utc_datetime(now):
             return False
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.0)
         if spend_counter_cache.redis_cache is not None:

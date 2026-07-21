@@ -26,6 +26,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
@@ -1515,12 +1516,7 @@ async def _user_api_key_auth_builder(
         ):
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
-                if isinstance(valid_token.expires, datetime):
-                    expiry_time = valid_token.expires
-                else:
-                    expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                expiry_time = parse_utc_datetime(valid_token.expires)
                 if expiry_time < current_time:
                     await _delete_cache_key_object(
                         hashed_token=hash_token(api_key),
@@ -1804,12 +1800,7 @@ async def _user_api_key_auth_builder(
             # Check 3. If token is expired
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
-                if isinstance(valid_token.expires, datetime):
-                    expiry_time = valid_token.expires
-                else:
-                    expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                expiry_time = parse_utc_datetime(valid_token.expires)
                 verbose_proxy_logger.debug(
                     f"Checking if token expired, expiry time {expiry_time} and current time {current_time}"
                 )
@@ -2683,9 +2674,7 @@ def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_n
 def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
     valid_token_metadata = valid_token.metadata
     if "temp_budget_increase" in valid_token_metadata and "temp_budget_expiry" in valid_token_metadata:
-        expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
-        if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
+        expiry = parse_utc_datetime(valid_token_metadata["temp_budget_expiry"])
         if expiry > datetime.now(timezone.utc):
             return valid_token_metadata["temp_budget_increase"]
     return None
@@ -2894,12 +2883,7 @@ async def _run_post_custom_auth_checks(
     # 2. Check token expiry
     if valid_token.expires is not None:
         current_time = datetime.now(timezone.utc)
-        if isinstance(valid_token.expires, datetime):
-            expiry_time = valid_token.expires
-        else:
-            expiry_time = datetime.fromisoformat(valid_token.expires)
-        if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-            expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+        expiry_time = parse_utc_datetime(valid_token.expires)
         if expiry_time < current_time:
             raise ProxyException(
                 message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",

@@ -10,6 +10,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_request_base_url,
     well_known_root_suffix,
@@ -867,9 +868,7 @@ class MCPRequestHandler:
         expires = key_object.expires
         if expires is None:
             return True
-        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
-        if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
+        expiry = parse_utc_datetime(expires)
         return expiry >= datetime.now(timezone.utc)
 
     @staticmethod

@@ -3453,8 +3453,7 @@ class TestPriceDataReloadAPI:
             ):
                 with patch("litellm.proxy.proxy_server.datetime") as mock_datetime:
                     # Mock current time to be 1 hour after last reload
-                    mock_datetime.utcnow.return_value = datetime(2024, 1, 1, 7, 0, 0)
-                    mock_datetime.fromisoformat = datetime.fromisoformat
+                    mock_datetime.now.return_value = datetime(2024, 1, 1, 7, 0, 0, tzinfo=timezone.utc)
 
                     response = client_with_auth.get(
                         "/schedule/model_cost_map_reload/status"
@@ -3465,7 +3464,7 @@ class TestPriceDataReloadAPI:
                     assert data["scheduled"] == True
                     assert data["interval_hours"] == 6
                     assert data["last_run"] == "2024-01-01T06:00:00"
-                    assert data["next_run"] == "2024-01-01T12:00:00"
+                    assert data["next_run"] == "2024-01-01T12:00:00+00:00"
 
     def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth):
         """Test that non-admin users cannot get reload status"""

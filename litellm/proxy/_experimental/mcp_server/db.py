@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     build_token_endpoint_client_auth,
@@ -1192,9 +1193,7 @@ def is_oauth_credential_expired(cred: Dict[str, Any], buffer_seconds: int = 0) -
     if not expires_at:
         return False
     try:
-        exp_dt = datetime.fromisoformat(expires_at)
-        if exp_dt.tzinfo is None:
-            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+        exp_dt = parse_utc_datetime(expires_at)
         return datetime.now(timezone.utc) + timedelta(seconds=buffer_seconds) > exp_dt
     except (ValueError, TypeError):
         return False
@@ -1551,11 +1550,9 @@ def _remaining_token_seconds(expires_at: str | None) -> int | None:
     if not expires_at:
         return None
     try:
-        exp_dt = datetime.fromisoformat(expires_at)
+        exp_dt = parse_utc_datetime(expires_at)
     except (ValueError, TypeError):
         return None
-    if exp_dt.tzinfo is None:
-        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
     remaining = int((exp_dt - datetime.now(timezone.utc)).total_seconds())
     return remaining if remaining > 0 else None
 
