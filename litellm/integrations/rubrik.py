@@ -196,11 +196,17 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             self._periodic_flush_task = self._start_periodic_flush_task()
 
     async def aclose(self):
-        """Cancel the periodic flush task and close the dedicated moderation HTTP client."""
+        """Cancel the periodic flush task.
+
+        ``moderation_client`` and ``async_httpx_client`` are shared objects
+        from LiteLLM's global HTTP-client cache (``get_async_httpx_client``
+        uses the same cache key for all instances with equal parameters).
+        Closing them here would close the shared connection pool for every
+        other logger instance; let LiteLLM manage their lifecycle instead.
+        """
         task = getattr(self, "_periodic_flush_task", None)
         if task is not None:
             task.cancel()
-        await self.moderation_client.close()
 
     # -- Guardrail hook --------------------------------------------------------
 
