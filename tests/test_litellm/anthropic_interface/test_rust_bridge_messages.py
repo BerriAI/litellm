@@ -247,7 +247,7 @@ async def test_gate_invokes_rust_for_native_anthropic_provider():
 
     response = await _gate(
         custom_llm_provider="anthropic",
-        litellm_params=GenericLiteLLMParams(api_key="sk-ant", rust=True),
+        litellm_params=GenericLiteLLMParams(api_key="sk-ant", rust=False),
         api_key="sk-ant",
         api_base="https://api.anthropic.com",
         headers={"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
