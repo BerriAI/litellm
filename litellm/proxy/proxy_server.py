@@ -13539,12 +13539,15 @@ async def login_v3(request: Request):
         username = str(body.get("username"))
         password = str(body.get("password"))
 
-        login_result = await authenticate_user(
-            username=username,
-            password=password,
-            master_key=master_key,
-            prisma_client=prisma_client,
-        )
+        if user_custom_ui_auth:
+            login_result = await user_custom_ui_auth(request, username, password)
+        else:
+            login_result = await authenticate_user(
+                username=username,
+                password=password,
+                master_key=master_key,
+                prisma_client=prisma_client,
+            )
 
         returned_ui_token_object = create_ui_token_object(
             login_result=login_result,

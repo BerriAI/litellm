@@ -408,6 +408,59 @@ def test_v3_login_success_returns_code(client, monkeypatch):
     }
 
 
+def test_v3_login_uses_custom_ui_auth_when_configured(client, monkeypatch):
+    """Pin: when user_custom_ui_auth is set, POST /v3/login calls it instead
+    of the built-in authenticate_user, same as /login and /v2/login.
+
+    Regression: /v3/login used to call authenticate_user unconditionally,
+    bypassing custom_ui_auth even though /login and /v2/login honored it.
+    """
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.auth.login_utils import LoginResult, create_ui_token_object
+
+    _install_login_mocks(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object", create_ui_token_object
+    )
+    monkeypatch.setattr(
+        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
+    )
+    monkeypatch.setattr(ps, "redis_usage_cache", None)
+    fake_cache = MagicMock()
+    fake_cache.async_set_cache = AsyncMock()
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_cache)
+
+    calls = []
+
+    async def _fake_custom_ui_auth(request, username, password):
+        calls.append((username, password))
+        return LoginResult(
+            user_id="custom-u-1",
+            key="sk-fake-custom-ui-key",
+            user_email="custom@example.invalid",
+            user_role="proxy_admin",
+            login_method="username_password",
+        )
+
+    monkeypatch.setattr(ps, "user_custom_ui_auth", _fake_custom_ui_auth)
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("built-in authenticate_user must not be called")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user", _fail_if_called
+    )
+
+    response = client.post(
+        "/v3/login",
+        json={"username": "custom-user", "password": "custom-password"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert bool(body.get("code"))
+    assert calls == [("custom-user", "custom-password")]
+
+
 def test_v3_login_authenticate_failure_500(client, monkeypatch):
     """Error path: with control_plane_url set, authenticate_user raises -> 500."""
     from litellm.proxy import proxy_server as ps
