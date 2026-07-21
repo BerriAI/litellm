@@ -234,6 +234,7 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/tag",
     "/budget",
     "/model/",
+    "/access_group",
     "/spend",
     "/global",
     "/config",
