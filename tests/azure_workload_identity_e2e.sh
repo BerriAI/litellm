@@ -174,16 +174,18 @@ ADMIN_DISPLAY_NAME="$(az ad signed-in-user show --query userPrincipalName -o tsv
 PUBLIC_IP="$(curl -fsS https://api.ipify.org)"
 [[ "$PUBLIC_IP" =~ ^[0-9a-fA-F:.]+$ ]] || die "Could not resolve the operator public IP."
 
-az postgres flexible-server create --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_NAME" \
-  --location "$LOCATION" --tier Burstable --sku-name Standard_B1ms --storage-size 32 --version 16 \
-  --microsoft-entra-auth Enabled --password-auth Disabled \
-  --admin-object-id "$ADMIN_OBJECT_ID" --admin-display-name "$ADMIN_DISPLAY_NAME" --admin-type User \
-  --public-access "$PUBLIC_IP" --only-show-errors >/dev/null
+POSTGRES_BODY="$(jq -cn --arg location "$LOCATION" --arg tenant "$TENANT_ID" \
+  '{location:$location,sku:{name:"Standard_B1ms",tier:"Burstable"},properties:{version:"16",storage:{storageSizeGB:32},authConfig:{activeDirectoryAuth:"Enabled",passwordAuth:"Disabled",tenantId:$tenant},network:{publicNetworkAccess:"Enabled"}}}')"
+az rest --method put \
+  --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.DBforPostgreSQL/flexibleServers/$POSTGRES_NAME?api-version=2024-08-01" \
+  --body "$POSTGRES_BODY" --only-show-errors >/dev/null
+unset POSTGRES_BODY
+az postgres flexible-server wait --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_NAME" \
+  --created --interval 20 --timeout 1800 --only-show-errors
+az postgres flexible-server firewall-rule create --resource-group "$RESOURCE_GROUP" \
+  --server-name "$POSTGRES_NAME" --name operator-bootstrap \
+  --start-ip-address "$PUBLIC_IP" --end-ip-address "$PUBLIC_IP" --only-show-errors >/dev/null
 
-# Azure CLI releases differ in whether flexible-server create also installs the
-# Entra administrator. Enforce auth config, then idempotently PUT the admin.
-az postgres flexible-server update --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_NAME" \
-  --microsoft-entra-auth Enabled --password-auth Disabled --yes --only-show-errors >/dev/null
 ADMIN_BODY="$(jq -cn --arg name "$ADMIN_DISPLAY_NAME" --arg tenant "$TENANT_ID" \
   '{properties:{principalName:$name,principalType:"User",tenantId:$tenant}}')"
 az rest --method put \
