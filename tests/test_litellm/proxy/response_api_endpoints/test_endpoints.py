@@ -1151,3 +1151,139 @@ class TestNestFlatChatToolChoice:
             42,
         ):
             assert _nest_flat_chat_tool_choice(unchanged) == unchanged
+
+
+class TestFlattenChatToolsForResponsesInputArm:
+    """
+    Mirror of TestNestFlatChatToolShapeMatrix for the input arm: chat-nested shapes in a
+    Responses-shaped body must flatten to the Responses dialect, per level, idempotently.
+    """
+
+    FLAT_GRAMMAR = {"type": "grammar", "definition": "start: patch", "syntax": "lark"}
+    NESTED_GRAMMAR = {"type": "grammar", "grammar": {"definition": "start: patch", "syntax": "lark"}}
+
+    @pytest.mark.parametrize("envelope", ["flat", "nested"])
+    @pytest.mark.parametrize("format_shape", ["absent", "text", "flat_grammar", "nested_grammar"])
+    def test_every_envelope_and_format_combination_lands_flat(self, envelope, format_shape):
+        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tools_for_responses
+
+        format_value = {
+            "absent": None,
+            "text": {"type": "text"},
+            "flat_grammar": self.FLAT_GRAMMAR,
+            "nested_grammar": self.NESTED_GRAMMAR,
+        }[format_shape]
+        payload = {"name": "ApplyPatch", "description": "V4A patch"}
+        if format_value is not None:
+            payload["format"] = format_value
+        tool = {"type": "custom", "custom": payload} if envelope == "nested" else {"type": "custom", **payload}
+
+        canonical = {"type": "custom", "name": "ApplyPatch", "description": "V4A patch"}
+        if format_shape in ("flat_grammar", "nested_grammar"):
+            canonical["format"] = self.FLAT_GRAMMAR
+        elif format_shape == "text":
+            canonical["format"] = {"type": "text"}
+
+        assert _flatten_chat_tools_for_responses([tool]) == [canonical]
+
+    def test_nested_function_tool_is_flattened_and_flat_passes_through(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tools_for_responses
+
+        nested = {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}
+        flat = {"type": "function", "name": "read_file", "parameters": {"type": "object"}}
+        assert _flatten_chat_tools_for_responses([nested]) == [flat]
+        assert _flatten_chat_tools_for_responses([flat]) == [flat]
+
+    def test_unrecognized_entries_pass_through(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tools_for_responses
+
+        entries = [{"type": "web_search"}, {"type": "custom"}, "junk", None, {}]
+        assert _flatten_chat_tools_for_responses(entries) == entries
+
+
+class TestFlattenChatToolChoiceForResponsesInputArm:
+    def test_nested_custom_and_function_tool_choice_flatten(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tool_choice_for_responses
+
+        assert _flatten_chat_tool_choice_for_responses({"type": "custom", "custom": {"name": "ApplyPatch"}}) == {
+            "type": "custom",
+            "name": "ApplyPatch",
+        }
+        assert _flatten_chat_tool_choice_for_responses({"type": "function", "function": {"name": "f"}}) == {
+            "type": "function",
+            "name": "f",
+        }
+
+    def test_flat_and_string_tool_choice_pass_through(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tool_choice_for_responses
+
+        for unchanged in ("auto", "required", None, {"type": "custom", "name": "x"}, {"type": "auto"}, 42):
+            assert _flatten_chat_tool_choice_for_responses(unchanged) == unchanged
+
+
+class TestCursorInputArmFlattening:
+    @pytest.mark.asyncio
+    async def test_nested_chat_shapes_in_input_body_reach_aresponses_flattened(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_flat123",
+            created_at=1234567890,
+            model="gpt-5.6",
+            object="response",
+            output=[
+                ResponseOutputMessage(
+                    id="msg_flat123",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(type="output_text", text="ok", annotations=[])],
+                )
+            ],
+        )
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                mock_router.aresponses = AsyncMock(return_value=mock_response)
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={
+                        "model": "gpt-5.6",
+                        "input": [{"role": "user", "content": "use ApplyPatch"}],
+                        "tools": [
+                            {
+                                "type": "custom",
+                                "custom": {
+                                    "name": "ApplyPatch",
+                                    "format": {
+                                        "type": "grammar",
+                                        "grammar": {"definition": "start: patch", "syntax": "lark"},
+                                    },
+                                },
+                            },
+                            {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
+                        ],
+                        "tool_choice": {"type": "custom", "custom": {"name": "ApplyPatch"}},
+                    },
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        call_kwargs = mock_router.aresponses.call_args.kwargs
+        assert call_kwargs["tools"] == [
+            {
+                "type": "custom",
+                "name": "ApplyPatch",
+                "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"},
+            },
+            {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
+        ]
+        assert call_kwargs["tool_choice"] == {"type": "custom", "name": "ApplyPatch"}
