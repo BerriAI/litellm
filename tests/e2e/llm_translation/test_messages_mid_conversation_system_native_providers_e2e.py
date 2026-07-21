@@ -88,9 +88,9 @@ def _system_reminder_turn() -> RichMessage:
 
 
 def _post_messages(client: EndpointsClient, key: str, body: RichMessagesRequest) -> Result[MessagesResult]:
-    return client.gateway.transport.post(
+    return client.proxy.transport.post(
         "/v1/messages",
-        headers=client.gateway.transport.bearer(key),
+        headers=client.proxy.transport.bearer(key),
         json=body,
         response_type=MessagesResult,
     )
