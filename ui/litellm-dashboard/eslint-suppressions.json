@@ -177,11 +177,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-tracking/_components/provider_display_helpers.test.ts": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-tracking/_components/provider_margin_table.tsx": {
     "no-restricted-imports": {
       "count": 1
