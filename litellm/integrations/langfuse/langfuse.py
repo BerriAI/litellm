@@ -829,8 +829,8 @@ class LangFuseLogger:
 
     def _create_langfuse_trace_context(
         self,
-        trace_id: Optional[str],
-        parent_observation_id: Optional[str],
+        trace_id: str | None,
+        parent_observation_id: str | None,
     ) -> dict[str, str]:
         normalized_trace_id = trace_id.lower().replace("-", "") if trace_id else ""
         resolved_trace_id = (
