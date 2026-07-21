@@ -280,6 +280,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "realtime",
         ]
     ]
+    supported_endpoints: Optional[List[str]]
+    use_openai_responses_path: Optional[bool]
     tpm: Optional[int]
     rpm: Optional[int]
     provider_specific_entry: Optional[Dict[str, float]]
