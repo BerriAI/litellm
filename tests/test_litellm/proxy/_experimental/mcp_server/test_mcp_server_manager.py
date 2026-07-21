@@ -3934,15 +3934,30 @@ class TestMCPServerManager:
         assert manager._get_mcp_server_from_tool_name("echo") is alpha
 
     def test_get_mcp_server_from_tool_name_refuses_prefixed_name_of_duplicate_named_servers(self):
-        """server_name is not unique, so a prefix shared by two servers must not silently pick one."""
+        """server_name is not unique, so a prefix shared by two servers must not silently pick one.
+
+        server_name is set so ``shared`` is a recognized prefix and the prefix-extraction path
+        is actually exercised; without it the name would not be seen as prefixed at all.
+        """
         manager = MCPServerManager()
-        first = MCPServer(server_id="id-first", name="shared", transport=MCPTransport.http)
-        second = MCPServer(server_id="id-second", name="shared", transport=MCPTransport.http)
+        first = MCPServer(server_id="id-first", name="shared", server_name="shared", transport=MCPTransport.http)
+        second = MCPServer(server_id="id-second", name="shared", server_name="shared", transport=MCPTransport.http)
         manager.registry = {"id-first": first, "id-second": second}
         manager._register_tool_route("shared-echo", "id-first")
         manager._register_tool_route("shared-echo", "id-second")
 
         assert manager._get_mcp_server_from_tool_name("shared-echo") is None
+
+    def test_get_mcp_server_from_tool_name_prefix_must_own_the_tool(self):
+        """A prefix that names a server which does not own the tool must not resolve to it."""
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="alpha", server_name="alpha", transport=MCPTransport.http)
+        beta = MCPServer(server_id="id-beta", name="beta", server_name="beta", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha, "id-beta": beta}
+        manager._register_tool_route("echo", "id-alpha")
+
+        assert manager._get_mcp_server_from_tool_name("beta-echo") is None
+        assert manager._get_mcp_server_from_tool_name("alpha-echo") is alpha
 
     def test_resolve_tool_route_is_not_found_when_no_owner_is_in_scope(self):
         """A tool whose only owner is outside the caller's scope must fail closed.

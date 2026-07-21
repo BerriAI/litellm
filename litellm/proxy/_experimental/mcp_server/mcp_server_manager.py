@@ -4902,40 +4902,39 @@ class MCPServerManager:
             servers expose ``tool_name``; use ``resolve_tool_route`` to tell the two
             cases apart.
         """
-        registry_servers = list(self.get_registry().values())
-
-        # Build prefix → server lookup covering every known form a tool name
-        # may take (alias / server_name / server_id / short ID).  This is what
-        # makes the short-prefix mode work without breaking historical names.
-        prefix_to_server: dict[str, MCPServer] = {}
-        for server in registry_servers:
-            for known_prefix in iter_known_server_prefixes(server):
-                normalised = normalize_server_name(known_prefix)
-                prefix_to_server.setdefault(normalised, server)
-
-        # First try with the original tool name
+        # The ownership map is the single source of truth. When ``tool_name`` is a
+        # registered tool (in any of its prefixed or unprefixed forms), a unique
+        # owner resolves by id and several owners are ambiguous, so we never collapse
+        # to an arbitrary one.
         owner_ids = self.tool_name_to_mcp_server_ids_mapping.get(tool_name)
-        if owner_ids is not None and len(owner_ids) == 1:
-            owned = self.get_mcp_server_by_id(next(iter(owner_ids)))
-            if owned is not None:
-                return owned
+        if owner_ids is not None:
+            return self.get_mcp_server_by_id(next(iter(owner_ids))) if len(owner_ids) == 1 else None
 
-        # If not found and tool name is prefixed, extract the prefix and
-        # match against any known form.
-        if is_tool_name_prefixed(tool_name, known_server_prefixes=set(prefix_to_server.keys())):
-            (
-                original_tool_name,
-                server_name_from_prefix,
-            ) = split_server_prefix_from_name(tool_name)
-            normalised_prefix = normalize_server_name(server_name_from_prefix)
-            matched_server = prefix_to_server.get(normalised_prefix)
-            if matched_server is not None and (
-                original_tool_name in self.tool_name_to_mcp_server_ids_mapping
-                or tool_name in self.tool_name_to_mcp_server_ids_mapping
-            ):
-                return matched_server
+        # ``tool_name`` is not itself registered. Interpret it as
+        # ``<server-prefix>-<tool>`` and resolve to the one server that both matches
+        # the prefix and owns the underlying tool. A prefix shared by several servers
+        # (server names are not unique) stays ambiguous and resolves to None.
+        known_prefixes = {
+            normalize_server_name(known_prefix)
+            for server in self.get_registry().values()
+            for known_prefix in iter_known_server_prefixes(server)
+        }
+        if not is_tool_name_prefixed(tool_name, known_server_prefixes=known_prefixes):
+            return None
 
-        return None
+        original_tool_name, server_name_from_prefix = split_server_prefix_from_name(tool_name)
+        tool_owner_ids = self.tool_name_to_mcp_server_ids_mapping.get(original_tool_name)
+        if not tool_owner_ids:
+            return None
+
+        normalised_prefix = normalize_server_name(server_name_from_prefix)
+        prefix_owners = [
+            server
+            for server in self.get_registry().values()
+            if server.server_id in tool_owner_ids
+            and normalised_prefix in {normalize_server_name(p) for p in iter_known_server_prefixes(server)}
+        ]
+        return prefix_owners[0] if len(prefix_owners) == 1 else None
 
     async def reload_servers_from_database(self):
         """Re-synchronize the in-memory MCP server registry with the database."""
