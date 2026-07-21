@@ -32,9 +32,11 @@ jobs:
           BRANCH_NAME="auto-update-price-and-context-window-$(date +'%Y-%m-%d')"
           git fetch origin "${BASE_BRANCH}" "${BRANCH_NAME}" || true
           if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
+            BRANCH_EXISTED=1
             git checkout -B "${BRANCH_NAME}" "origin/${BRANCH_NAME}"
             git merge --no-edit "origin/${BASE_BRANCH}"
           else
+            BRANCH_EXISTED=0
             git checkout -b "${BRANCH_NAME}" "origin/${BASE_BRANCH}"
           fi
           uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
@@ -44,6 +46,9 @@ jobs:
           else
             git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')"
             git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
+            BRANCH_EXISTED=1
+          fi
+          if [ "${BRANCH_EXISTED}" -eq 1 ]; then
             if [ "$(gh pr list --head "${BRANCH_NAME}" --state open --json number --jq 'length')" -gt 0 ]; then
               echo "PR already exists for ${BRANCH_NAME}."
             else
