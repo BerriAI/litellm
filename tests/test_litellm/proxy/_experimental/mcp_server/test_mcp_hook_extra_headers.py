@@ -1033,3 +1033,89 @@ class TestResolveByokMcpAuthHeader:
 
         check_mock.assert_awaited_once_with(server, user_auth)
         assert result == "caller-header"
+
+
+class TestOpenApiResolvedUpstreamAuth:
+    """LIT-4629: spec_path servers egress through plain httpx, so the manager's OpenAPI arm must
+    materialize the v2-resolved credential into the `_request_resolved_auth_headers` ContextVar;
+    before the fix the resolved token never reached the upstream API."""
+
+    def _oauth_server(self, **overrides: Any) -> MCPServer:
+        fields: Dict[str, Any] = dict(
+            server_id="srv-sheets",
+            name="google_sheets",
+            server_name="google_sheets",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            spec_path="https://example.com/sheets-openapi.yaml",
+        )
+        fields.update(overrides)
+        return MCPServer(**fields)
+
+    @pytest.mark.asyncio
+    async def test_call_tool_openapi_injects_v2_resolved_token_contextvar(self):
+        """The managed spec_path arm resolves the v2 credential and sets the ContextVar; kills
+        the mutant that drops the resolve_openapi_upstream_auth call in call_tool."""
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_resolved_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        manager = MCPServerManager()
+        server = self._oauth_server()
+        user_auth = UserAPIKeyAuth(user_id="alice", api_key="sk-user")
+        captured: Dict[str, Any] = {}
+
+        async def fake_openapi_handler(_server, _name, _arguments):
+            captured["resolved"] = _request_resolved_auth_headers.get()
+            return MagicMock()
+
+        with patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server):
+            with patch.object(
+                manager._cred_provider,
+                "resolve_credentials",
+                new=AsyncMock(return_value=Ok(StaticHeaderAuth("Bearer stored-user-token"))),
+            ):
+                with patch.object(manager, "_call_openapi_tool_handler", side_effect=fake_openapi_handler):
+                    await manager.call_tool(
+                        server_name=server.server_name,
+                        name="get_values",
+                        arguments={},
+                        user_api_key_auth=user_auth,
+                    )
+
+        assert captured["resolved"] == {"Authorization": "Bearer stored-user-token"}
+        assert _request_resolved_auth_headers.get() is None
+
+    @pytest.mark.asyncio
+    async def test_call_tool_openapi_m2m_missing_token_url_fails_closed(self):
+        """A url-less M2M spec server with no token_url must fail with a typed error instead of
+        egressing unauthenticated (the pre-#32259 silent failure this arm previously preserved).
+        Drives the real adapter/resolver chain: ClientCredentialsConfig with missing grant fields
+        resolves to a misconfigured CredError, raised as an HTTPException."""
+        from fastapi import HTTPException
+
+        manager = MCPServerManager()
+        server = self._oauth_server(
+            oauth2_flow="client_credentials",
+            client_id="m2m-client",
+            client_secret="m2m-secret",
+            token_url=None,
+        )
+        called = AsyncMock()
+
+        with patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server):
+            with patch.object(manager, "_call_openapi_tool_handler", new=called):
+                with pytest.raises(HTTPException):
+                    await manager.call_tool(
+                        server_name=server.server_name,
+                        name="get_values",
+                        arguments={},
+                        user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key="sk-user"),
+                    )
+
+        called.assert_not_awaited()
