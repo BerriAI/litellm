@@ -19,6 +19,7 @@ const rebaseRequest = async (request: Request, url: string): Promise<Request> =>
     cache: request.cache,
     redirect: request.redirect,
     referrer: request.referrer,
+    referrerPolicy: request.referrerPolicy,
     integrity: request.integrity,
     keepalive: request.keepalive,
     signal: request.signal,
