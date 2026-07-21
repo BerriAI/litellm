@@ -13333,6 +13333,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13352,6 +13353,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 5.00003e-06,
         "output_dbu_cost_per_token": 7.1429e-05,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13371,6 +13373,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 7.500003000000001e-05,
         "output_dbu_cost_per_token": 0.001071429,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13390,6 +13393,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 7.500003000000001e-05,
         "output_dbu_cost_per_token": 0.001071429,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13409,6 +13413,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 2.5000010000000002e-05,
         "output_dbu_cost_per_token": 0.000357143,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13429,6 +13434,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13448,6 +13454,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13467,6 +13474,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13486,6 +13494,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 2.49998e-06,
         "output_dbu_cost_per_token": 3.5714e-05,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13503,6 +13512,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 9.999990000000002e-06,
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -13520,6 +13530,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 5.0001e-07,
         "output_dbu_cost_per_token": 7.143e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
@@ -13535,6 +13546,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 9.999990000000002e-06,
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
@@ -13550,6 +13562,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 9.999990000000002e-06,
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
@@ -13565,6 +13578,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.9999700000000004e-06,
         "output_dbu_cost_per_token": 2.8571e-05,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
@@ -13580,6 +13594,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 3.9998000000000007e-07,
         "output_dbu_cost_per_token": 5.714000000000001e-06,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
@@ -13595,6 +13610,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 5.9997e-07,
         "output_dbu_cost_per_token": 8.571e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
@@ -13610,6 +13626,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 3.0001999999999996e-07,
         "output_dbu_cost_per_token": 4.285999999999999e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
@@ -13640,6 +13657,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.5000300000000002e-06,
         "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
@@ -13656,6 +13674,7 @@
             "notes": "Databricks documentation now provides both DBU costs (_dbu_cost_per_token) and dollar costs(_cost_per_token)."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.5000300000000002e-06,
         "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
@@ -13672,6 +13691,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
@@ -13688,6 +13708,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 4.5003000000000007e-07,
         "output_dbu_cost_per_token": 6.429000000000001e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
@@ -13703,6 +13724,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.5000300000000002e-06,
         "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
@@ -13719,6 +13741,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 2.9999900000000002e-06,
         "output_dbu_cost_per_token": 4.2857e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
@@ -13735,6 +13758,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.00002e-06,
         "output_dbu_cost_per_token": 1.4286e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
@@ -13751,6 +13775,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 1.00002e-06,
         "output_dbu_cost_per_token": 1.4286e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
@@ -13767,6 +13792,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
+        "supports_response_schema": true,
         "output_cost_per_token": 0.0,
         "output_dbu_cost_per_token": 0.0,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
