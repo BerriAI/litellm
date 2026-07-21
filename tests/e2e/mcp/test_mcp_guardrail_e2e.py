@@ -28,6 +28,14 @@ from mcp_client import McpCallToolResponse, McpClient, McpToolArguments
 
 pytestmark = pytest.mark.e2e
 
+# Stage runs several data-plane pods behind the shared key, and each picks up a
+# newly registered guardrail only on its next periodic DB sync (~30s in
+# proxy_server.py). Every pod is guaranteed to have refreshed only once a full sync
+# interval has elapsed since the create; before then a banned call routed to a
+# lagging pod passes through as legitimate in-flight propagation, not a leak.
+GUARDRAIL_FULL_SYNC_SECONDS = 40.0
+POST_SYNC_VERIFICATION_CALLS = 4
+
 
 def _poll_until_blocked(
     search: Callable[[str], Result[McpCallToolResponse]], banned_keyword: str, client: McpClient
@@ -60,6 +68,7 @@ class TestMcpToolCallGuardrail:
         guardrail_id = client.register_mcp_content_filter(
             name=f"e2e-mcp-cf-{marker}", blocked_keyword=banned_keyword
         )
+        guardrail_created_at = time.monotonic()
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
         server_id = register_datadog_mcp(client, resources)
@@ -105,13 +114,25 @@ class TestMcpToolCallGuardrail:
                     f"last result: {blocked}"
                 )
 
-        # After enforcement has propagated, a banned call must stay blocked (guards
-        # against a partial-propagation state where only some workers loaded it).
-        reblocked = search(f"still about {banned_keyword}")
-        assert isinstance(reblocked, UnknownApiError) and reblocked.status_code == 400, (
-            "once the guardrail is enforced a banned tool call must remain blocked on a repeat "
-            f"call, but got: {reblocked}"
-        )
+        # The block above only proves the one pod that served it has synced; another
+        # pod could still lack the guardrail and let the banned call reach Datadog.
+        # Wait out the full sync interval from the create so every pod has refreshed
+        # from the DB, then require the banned call to stay blocked across several
+        # attempts. A pass-through now is a genuine partial-propagation leak, not a
+        # race. Client load balancing still can't guarantee every pod is hit, so this
+        # samples several worker selections rather than proving all pods synced.
+        sync_remaining = guardrail_created_at + GUARDRAIL_FULL_SYNC_SECONDS - time.monotonic()
+        if sync_remaining > 0:
+            time.sleep(sync_remaining)
+        for attempt in range(1, POST_SYNC_VERIFICATION_CALLS + 1):
+            reblocked = search(f"still about {banned_keyword} #{attempt}")
+            assert isinstance(reblocked, UnknownApiError) and reblocked.status_code == 400, (
+                "after the guardrail sync interval every data-plane pod must block the banned "
+                f"keyword, but attempt {attempt} of {POST_SYNC_VERIFICATION_CALLS} was allowed "
+                f"through (a pod still lacks the guardrail): {reblocked}"
+            )
+            if attempt < POST_SYNC_VERIFICATION_CALLS:
+                time.sleep(client.proxy.poll_interval)
 
         allowed = search(f"e2e-clean-{marker}")
         match allowed:
