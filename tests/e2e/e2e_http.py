@@ -62,6 +62,7 @@ R = TypeVar("R", bound=BaseModel)
 
 class Success(BaseModel, Generic[R]):
     kind: Literal["success"] = "success"
+    status_code: int
     data: R
 
 
@@ -159,6 +160,18 @@ def unwrap[R: BaseModel](result: Result[R]) -> R:
             raise AssertionError(result)
 
 
+def unwrap_status[R: BaseModel](result: Result[R], expected_status: int) -> R:
+    """Like unwrap, but also pins the exact HTTP status the success came back on,
+    for routes whose contract is a specific 2xx (e.g. 201 Created on a submission)."""
+    match result:
+        case Success(status_code=status_code, data=data) if status_code == expected_status:
+            return data
+        case Success(status_code=status_code):
+            raise AssertionError(f"expected HTTP {expected_status}, got {status_code}")
+        case _:
+            raise AssertionError(result)
+
+
 def is_ok[R: BaseModel](result: Result[R]) -> bool:
     match result:
         case Success():
@@ -199,7 +212,7 @@ def _classify[R: BaseModel](
     if not resp.ok:
         return UnknownApiError(status_code=resp.status_code, body=resp.text)
     try:
-        return Success(data=response_type.model_validate(resp.json()))
+        return Success(status_code=resp.status_code, data=response_type.model_validate(resp.json()))
     except Exception as exc:  # noqa: BLE001 - any parse/validation failure is a value
         return ValidationError(message=str(exc))
 
@@ -276,6 +289,26 @@ def patch[R: BaseModel](
 ) -> Result[R]:
     try:
         resp = requests.patch(
+            str(url),
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
+
+
+def put[R: BaseModel](
+    url: URL,
+    *,
+    headers: BaseModel,
+    json: BaseModel,
+    response_type: type[R],
+    timeout: float = 30.0,
+) -> Result[R]:
+    try:
+        resp = requests.put(
             str(url),
             headers=_headers(headers),
             json=json.model_dump(by_alias=True, exclude_none=True),

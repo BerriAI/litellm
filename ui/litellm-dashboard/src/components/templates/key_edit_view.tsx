@@ -307,14 +307,29 @@ export function KeyEditView({
       }
 
       // Reconcile multi-window budget limits from the editor state, dropping
-      // incomplete entries (no max_budget). Sending [] tells the backend to clear
-      // all stored windows, so only send it when the user removed every window;
-      // when entries remain but are still incomplete, omit the field so the saved
-      // windows are left untouched (JSON.stringify drops the undefined key).
+      // incomplete entries (no max_budget). The backend treats any budget_limits
+      // in a /key/update request as an admin-only budget change, so re-sending
+      // the stored windows on an unrelated edit 403s a non-admin key owner
+      // (issue #33246). Only send the field when the user actually changed the
+      // windows, mirroring how allowed_routes is dropped above when unchanged:
+      // compare on (duration, cap), ignoring server-owned reset_at and order.
+      // Sending [] clears every window, so send it only when the user removed
+      // the last one; otherwise leave the field off (JSON.stringify drops the
+      // undefined key) so an unchanged or incomplete editor state never touches
+      // storage.
+      const windowSignature = (windows: Array<{ budget_duration: string; max_budget: number | null }> | undefined) =>
+        (windows ?? [])
+          .filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined)
+          .map((w) => `${w.budget_duration}:${w.max_budget}`)
+          .sort()
+          .join("|");
       const validWindows = budgetLimits.filter(
         (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
       );
-      if (validWindows.length > 0) {
+      const budgetLimitsUnchanged = windowSignature(keyData.budget_limits) === windowSignature(validWindows);
+      if (budgetLimitsUnchanged) {
+        // no-op: leave budget_limits off the payload
+      } else if (validWindows.length > 0) {
         values.budget_limits = validWindows;
       } else if (budgetLimits.length === 0) {
         values.budget_limits = [];
