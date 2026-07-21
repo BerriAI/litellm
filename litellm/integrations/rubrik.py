@@ -17,6 +17,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -846,7 +847,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             "model_group": call_details.get("model") or "",
             # model_id comes from response.hidden_params -- unavailable here.
             "model_id": "",
-            "model_parameters": call_details.get("optional_params") or {},
+            "model_parameters": ModelParamHelper.get_standard_logging_model_parameters(
+                call_details.get("optional_params") or {}
+            ),
             "startTime": _start,
             "endTime": _start,
             "completionStartTime": _start,
