@@ -581,23 +581,30 @@ def _calculate_input_cost(
     ### AUDIO COST
     if prompt_tokens_details["audio_tokens"]:
         audio_cost_key = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
-        prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
+        if model_info.get(audio_cost_key) is not None:
+            prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
+        elif model_info.get("input_cost_per_audio_per_second") is None:
+            prompt_cost += float(prompt_tokens_details["audio_tokens"]) * prompt_base_cost
 
     ### IMAGE TOKEN COST
     if prompt_tokens_details["image_tokens"]:
-        # For image token costs:
-        # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
         image_token_cost_key = "input_cost_per_image_token"
-        if model_info.get(image_token_cost_key) is None:
-            image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, image_token_cost_key, prompt_tokens_details["image_tokens"])
+        if model_info.get(image_token_cost_key) is not None:
+            prompt_cost += calculate_cost_component(
+                model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
+            )
+        else:
+            prompt_cost += float(prompt_tokens_details["image_tokens"]) * prompt_base_cost
 
     ### VIDEO TOKEN COST
     if prompt_tokens_details["video_tokens"]:
         video_token_cost_key = "input_cost_per_video_token"
-        if model_info.get(video_token_cost_key) is None:
-            video_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, video_token_cost_key, prompt_tokens_details["video_tokens"])
+        if model_info.get(video_token_cost_key) is not None:
+            prompt_cost += calculate_cost_component(
+                model_info, video_token_cost_key, prompt_tokens_details["video_tokens"]
+            )
+        elif model_info.get("input_cost_per_video_per_second") is None:
+            prompt_cost += float(prompt_tokens_details["video_tokens"]) * prompt_base_cost
 
     ### CACHE WRITING COST - Now uses tiered pricing
     if (
