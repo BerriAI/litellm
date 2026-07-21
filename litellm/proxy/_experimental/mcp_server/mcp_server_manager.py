@@ -224,6 +224,20 @@ def _uses_issuer_anchor(manual_issuer: str | None, is_discovery_auth_type: bool)
     return _blank_to_none(manual_issuer) is not None and is_discovery_auth_type
 
 
+def _has_oauth_discovery_source(server_url: str | None, use_issuer_anchor: bool) -> bool:
+    """Whether the server has any source OAuth discovery can fetch metadata from.
+
+    Resource-rooted discovery (RFC 9728) is fetched from the server ``url``, so spec-only
+    (OpenAPI) and stdio servers, which have none, could never discover: their OAuth endpoints
+    stayed unset unless entered manually and ``/authorize`` served its 400 with no hint of why.
+    An admin-pinned issuer is a trust anchor in its own right (RFC 8414 section 3.3) whose
+    metadata fetch does not touch the resource at all, so an anchored server can discover with
+    no ``url``. Called by both build paths (config and DB) so the two cannot disagree on when
+    discovery is reachable.
+    """
+    return bool(server_url) or use_issuer_anchor
+
+
 def _endpoints_yield_to_issuer(
     issuer: str | None,
     is_discovery_auth_type: bool,
@@ -1254,7 +1268,12 @@ class MCPServerManager:
             manual_token_url = _blank_to_none(server_config.get("token_url"))
             manual_registration_url = _blank_to_none(server_config.get("registration_url"))
             is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
-            use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type)
+            obo_needs_discovery = self._obo_needs_endpoint_discovery(
+                auth_type,
+                server_config.get("token_exchange_endpoint"),
+                manual_token_url,
+            )
+            use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type or obo_needs_discovery)
             manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
                 manual_issuer,
                 is_discovery_auth_type,
@@ -1262,17 +1281,12 @@ class MCPServerManager:
                 manual_token_url,
                 manual_registration_url,
             )
-            should_discover = bool(server_url) and (
-                is_discovery_auth_type
-                or self._obo_needs_endpoint_discovery(
-                    auth_type,
-                    server_config.get("token_exchange_endpoint"),
-                    manual_token_url,
-                )
+            should_discover = _has_oauth_discovery_source(server_url, use_issuer_anchor) and (
+                is_discovery_auth_type or obo_needs_discovery
             )
             if not should_discover:
                 mcp_oauth_metadata = None
-            elif manual_issuer is not None and is_discovery_auth_type:
+            elif use_issuer_anchor and manual_issuer is not None:
                 mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
             else:
                 mcp_oauth_metadata = await self._descovery_metadata(
@@ -1668,7 +1682,7 @@ class MCPServerManager:
         token_exchange_endpoint: Optional[str],
     ) -> Optional[MCPOAuthMetadata]:
         has_all_upstream_oauth_fields = bool(manual_authorization_url and manual_token_url and scopes)
-        needs_discovery = bool(server_url) and (
+        needs_discovery = _has_oauth_discovery_source(server_url, use_issuer_anchor) and (
             (is_discovery_auth_type and not has_all_upstream_oauth_fields)
             or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url)
         )
@@ -1787,12 +1801,16 @@ class MCPServerManager:
         manual_token_url = _blank_to_none(mcp_server.token_url)
         manual_registration_url = _blank_to_none(mcp_server.registration_url)
         is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
-        use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type)
-        manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
-            manual_issuer, is_discovery_auth_type, manual_authorization_url, manual_token_url, manual_registration_url
-        )
         token_exchange_endpoint = mcp_server.token_exchange_endpoint or (
             credentials_dict.get("token_exchange_endpoint") if credentials_dict else None
+        )
+        use_issuer_anchor = _uses_issuer_anchor(
+            manual_issuer,
+            is_discovery_auth_type
+            or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url),
+        )
+        manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
+            manual_issuer, is_discovery_auth_type, manual_authorization_url, manual_token_url, manual_registration_url
         )
         gated_oauth_metadata = await self._resolve_table_oauth_metadata(
             mcp_server=mcp_server,
@@ -1971,7 +1989,7 @@ class MCPServerManager:
         family: discovered ``authorization_url``/``token_url``/``scopes`` otherwise live only on
         the in-memory registry entry, which is rebuilt on every client connect (the DCR reuse path
         calls ``update_server``) and on every post-write DB reload, so one failed re-discovery
-        serves 400 "authorization url is not set" from /authorize until a later rebuild succeeds.
+        serves the 400 "authorization url is not configured" from /authorize until a later rebuild succeeds.
         Only fills row fields that are currently empty, never persists origin-fallback guesses
         (RFC 9728/8414-advertised metadata only), and deliberately skips ``registration_url``
         because ``_dcr_bridge_relays_client_registration`` keys off that column. Best-effort: a
