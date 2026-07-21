@@ -582,25 +582,33 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                   </CardHeader>
                   <CardContent>
                     <BarChart
-                      data={[...spendData.results].sort(
-                        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                      )}
+                      data={[...spendData.results]
+                        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                        .map((row) => ({
+                          ...row,
+                          "Request spend": row.metrics.spend ?? 0,
+                          "Flat cost": row.metrics.flat_cost ?? 0,
+                        }))}
                       index="date"
-                      categories={["metrics.spend"]}
-                      colors={["cyan"]}
+                      categories={["Request spend", "Flat cost"]}
+                      colors={["cyan", "violet"]}
+                      stack={true}
                       valueFormatter={valueFormatterSpend}
                       yAxisWidth={100}
-                      showLegend={false}
+                      showLegend={true}
                       customTooltip={({ payload, active }) => {
                         if (!active || !payload?.[0]) return null;
                         const data = payload[0].payload;
                         const entityCount = Object.keys(data.breakdown.entities || {}).length;
+                        const requestSpend = data.metrics.spend ?? 0;
+                        const flatCost = data.metrics.flat_cost ?? 0;
+                        const totalCost = requestSpend + flatCost;
                         return (
                           <div className="bg-white p-4 shadow-lg rounded-lg border">
                             <p className="font-bold">{data.date}</p>
-                            <p className="text-cyan-500">
-                              Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                            </p>
+                            <p className="text-cyan-500">Request spend: ${formatNumberWithCommas(requestSpend, 2)}</p>
+                            <p className="text-violet-500">Flat cost: ${formatNumberWithCommas(flatCost, 2)}</p>
+                            <p className="font-semibold">Total cost: ${formatNumberWithCommas(totalCost, 2)}</p>
                             <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
                             <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
                             <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
