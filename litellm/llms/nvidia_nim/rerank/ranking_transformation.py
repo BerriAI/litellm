@@ -6,7 +6,7 @@ Use this by passing "nvidia_nim/ranking/<model>" to force the /v1/ranking endpoi
 Reference: https://build.nvidia.com/nvidia/llama-3_2-nv-rerankqa-1b-v2/deploy
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -43,7 +43,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         # transform_rerank_response. The provider config is instantiated
         # per-request (see ProviderConfigManager.get_provider_rerank_config),
         # so this does not leak across requests.
-        self._client_side_top_n: Optional[int] = None
+        self._client_side_top_n: int | None = None
 
     def _get_clean_model_name(self, model: str) -> str:
         """Strip 'nvidia_nim/' and 'ranking/' prefixes from model name."""
@@ -57,9 +57,9 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         """
         Construct the Nvidia NIM ranking URL.
@@ -81,19 +81,19 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: Optional[dict],
+        non_default_params: dict | None,
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
-        instruction: Optional[str] = None,
-    ) -> Dict:
+        documents: list[str | dict[str, Any]],
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: list[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
+    ) -> dict:
         """
         Keep Cohere's top_n as-is instead of mapping it to top_k.
 
@@ -123,9 +123,9 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         """
         Transform request, using clean model name without 'ranking/' prefix.
@@ -156,7 +156,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
