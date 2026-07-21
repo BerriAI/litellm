@@ -299,7 +299,8 @@ jq -e --arg object_id "$IDENTITY_PRINCIPAL_ID" \
   <<<"$REDIS_POLICY_JSON" >/dev/null || die "Redis access policy does not match the managed identity."
 
 IMAGE_TAG="wi-e2e-${GIT_SHA}"
-az acr build --registry "$ACR_NAME" --image "litellm:$IMAGE_TAG" . --only-show-errors
+az acr build --registry "$ACR_NAME" --image "litellm:$IMAGE_TAG" \
+  --file gateway/Dockerfile . --only-show-errors
 ACR_LOGIN_SERVER="$(az acr show -g "$RESOURCE_GROUP" -n "$ACR_NAME" --query loginServer -o tsv)"
 IMAGE_DIGEST="$(az acr repository show -n "$ACR_NAME" --image "litellm:$IMAGE_TAG" --query digest -o tsv)"
 [[ "$IMAGE_DIGEST" == sha256:* ]] || die "ACR did not return an immutable digest."
@@ -338,6 +339,7 @@ spec:
         - name: litellm
           image: $IMAGE_REFERENCE
           imagePullPolicy: IfNotPresent
+          command: ["/app/.venv/bin/litellm"]
           args: ["--config", "/config/config.yaml", "--port", "4000", "--azure_postgresql_auth"]
           ports:
             - name: http
