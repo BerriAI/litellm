@@ -320,7 +320,10 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_settings,
+    get_budget_reset_time,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
@@ -4598,6 +4601,13 @@ class ProxyConfig:
                     litellm.json_logs = True
                     litellm._turn_on_json()
                     verbose_proxy_logger.debug(f"{blue_color_code} Enabled JSON logging via config{reset_color_code}")
+                elif key == "budget_reset_time":
+                    from litellm.proxy.common_utils.timezone_utils import (
+                        parse_budget_reset_time,
+                    )
+
+                    parse_budget_reset_time(value)
+                    setattr(litellm, key, value)
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, value, is_full_admin=False)}{reset_color_code}"
@@ -7869,6 +7879,7 @@ class ProxyStartupEvent:
             budget_reset_job = ResetBudgetJob(
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=prisma_client,
+                reset_settings=get_budget_reset_settings(),
             )
 
             scheduler.add_job(
