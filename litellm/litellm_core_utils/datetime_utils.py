@@ -17,8 +17,17 @@ def parse_utc_datetime(value: str | datetime) -> datetime:
     (key expiry checks, budget windows, spend reports). The "Z" suffix is handled
     explicitly because datetime.fromisoformat only accepts it from Python 3.11 and the
     project floor is 3.10.
+
+    Raises ValueError for unparseable strings and TypeError for any other type,
+    mirroring datetime.fromisoformat's own contract so existing
+    ``except (ValueError, TypeError)`` handlers stay fail-closed.
     """
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
+    if isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    elif isinstance(value, datetime):
+        parsed = value
+    else:
+        raise TypeError(f"parse_utc_datetime expects str or datetime, got {type(value).__name__}")
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed

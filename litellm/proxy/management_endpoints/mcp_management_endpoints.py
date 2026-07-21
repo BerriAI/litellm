@@ -2005,14 +2005,15 @@ if MCP_AVAILABLE:
             try:
                 exp = parse_utc_datetime(expires_at)
                 is_expired = exp < datetime.now(timezone.utc)
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
+        connected_at = cred.get("connected_at")
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=True,
-            expires_at=expires_at,
+            expires_at=expires_at if isinstance(expires_at, str) else None,
             is_expired=is_expired,
-            connected_at=cred.get("connected_at"),
+            connected_at=connected_at if isinstance(connected_at, str) else None,
         )
 
     @router.get(

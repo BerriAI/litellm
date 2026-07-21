@@ -3566,6 +3566,45 @@ async def test_get_mcp_oauth_user_credential_status_naive_past_expiry_is_expired
 
 
 @pytest.mark.asyncio
+async def test_get_mcp_oauth_user_credential_status_non_string_expiry_degrades_gracefully():
+    """A malformed non-string expires_at must report status instead of raising a 500."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        get_mcp_oauth_user_credential_status,
+    )
+
+    server_id = "srv-1"
+    stored_payload = {
+        "type": "oauth2",
+        "access_token": "tok",
+        "expires_at": 1577836800,
+        "connected_at": "2019-01-01T00:00:00+00:00",
+        "server_id": server_id,
+    }
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=AsyncMock(return_value=stored_payload),
+        ),
+    ):
+        result = await get_mcp_oauth_user_credential_status(
+            server_id=server_id,
+            user_api_key_dict=_make_user_auth("user-123"),
+        )
+
+    assert result.has_credential is True
+    assert result.is_expired is False
+    assert result.expires_at is None
+
+
+@pytest.mark.asyncio
 async def test_delete_mcp_oauth_user_credential_only_deletes_oauth():
     """delete_mcp_oauth_user_credential only deletes OAuth2 credentials, not BYOK."""
     from litellm.proxy._types import MCPOAuthUserCredentialStatus
@@ -5021,7 +5060,9 @@ def _edit_endpoint_patches(old_record, update_mock):
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(side_effect=old_record) if isinstance(old_record, Exception) else AsyncMock(return_value=old_record),
+            AsyncMock(side_effect=old_record)
+            if isinstance(old_record, Exception)
+            else AsyncMock(return_value=old_record),
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
@@ -5430,7 +5471,13 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
 
     registry_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "..", "..", "..", "litellm", "proxy", "openapi_registry.json",
+        "..",
+        "..",
+        "..",
+        "..",
+        "litellm",
+        "proxy",
+        "openapi_registry.json",
     )
     with open(registry_path) as f:
         registry = json.load(f)

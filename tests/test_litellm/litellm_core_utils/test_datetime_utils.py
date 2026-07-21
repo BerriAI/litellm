@@ -39,11 +39,17 @@ def test_aware_datetime_passthrough_unchanged():
 
 def test_result_always_comparable_to_utc_now():
     for value in ("2026-01-20T00:00:00", "2026-01-20T00:00:00Z", datetime(2026, 1, 20)):
-        assert parse_utc_datetime(value) < datetime.now(timezone.utc) or parse_utc_datetime(
-            value
-        ) >= datetime.now(timezone.utc)
+        assert parse_utc_datetime(value) < datetime.now(timezone.utc) or parse_utc_datetime(value) >= datetime.now(
+            timezone.utc
+        )
 
 
 def test_invalid_string_raises():
     with pytest.raises(ValueError):
         parse_utc_datetime("not-a-date")
+
+
+def test_non_str_non_datetime_raises_typeerror():
+    for bad in (1755000000, 1755000000.0, None, {"expires_at": "2026-01-01"}):
+        with pytest.raises(TypeError):
+            parse_utc_datetime(bad)  # pyright: ignore[reportArgumentType]  # exercising the runtime guard
