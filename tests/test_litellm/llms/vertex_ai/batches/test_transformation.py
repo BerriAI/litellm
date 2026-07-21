@@ -226,6 +226,23 @@ def test_get_output_file_id_empty_output_info_falls_through_to_output_config():
     assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
 
 
+def test_get_output_file_id_output_info_explicit_none_falls_through_to_output_config():
+    # Vertex AI can return "outputInfo": null in a 200 response (e.g. before it has
+    # asynchronously assigned the output directory). dict.get(key, default) does NOT
+    # substitute default when the key is present but explicitly None, so this must be
+    # handled explicitly instead of crashing with AttributeError: 'NoneType' object
+    # has no attribute 'get'.
+    resp = {
+        "outputInfo": None,
+        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg"}},
+    }
+    assert T._get_output_file_id_from_vertex_ai_batch_response(resp) == "gs://b/cfg/predictions.jsonl"
+
+
+def test_get_output_file_id_output_info_explicit_none_and_no_output_config():
+    assert T._get_output_file_id_from_vertex_ai_batch_response({"outputInfo": None}) == ""
+
+
 def test_get_output_file_id_no_output_info_and_no_output_config():
     assert T._get_output_file_id_from_vertex_ai_batch_response({}) == ""
 
