@@ -1011,7 +1011,7 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
         return
     if getattr(request.state, "parent_otel_span", None) is not None:
         return
-    start_time = datetime.now()
+    start_time = datetime.now(timezone.utc)
     try:
         request.state.litellm_received_at = start_time
     except Exception:
@@ -1061,7 +1061,7 @@ async def _user_api_key_auth_builder(
     # Prefer the receive-instant stamped by the early helper in
     # user_api_key_auth (before body parse) — overwriting it would shorten
     # the preprocessing-duration measurement by the body-parse window.
-    start_time = getattr(request.state, "litellm_received_at", None) or datetime.now()
+    start_time = getattr(request.state, "litellm_received_at", None) or datetime.now(timezone.utc)
     try:
         request.state.litellm_received_at = start_time
     except Exception:
@@ -1673,10 +1673,9 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
-            # update key budget with temp budget increase
-            valid_token = _update_key_budget_with_temp_budget_increase(
-                valid_token
-            )  # updating it here, allows all downstream reporting / checks to use the updated budget
+
+        if valid_token is not None:
+            valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
@@ -2608,7 +2607,7 @@ async def _return_user_api_key_auth_obj(
     start_time: datetime,
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
-    end_time = datetime.now()
+    end_time = datetime.now(timezone.utc)
 
     asyncio.create_task(
         user_api_key_service_logger_obj.async_service_success_hook(
@@ -2685,7 +2684,9 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
     valid_token_metadata = valid_token.metadata
     if "temp_budget_increase" in valid_token_metadata and "temp_budget_expiry" in valid_token_metadata:
         expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
-        if expiry > datetime.now():
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry > datetime.now(timezone.utc):
             return valid_token_metadata["temp_budget_increase"]
     return None
 
@@ -2695,9 +2696,10 @@ def _update_key_budget_with_temp_budget_increase(
 ) -> UserAPIKeyAuth:
     if valid_token.max_budget is None:
         return valid_token
-    temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
-    valid_token.max_budget = valid_token.max_budget + temp_budget_increase
-    return valid_token
+    temp_budget_increase = _get_temp_budget_increase(valid_token)
+    if not temp_budget_increase:
+        return valid_token
+    return valid_token.model_copy(update={"max_budget": valid_token.max_budget + temp_budget_increase})
 
 
 async def _lookup_end_user_and_apply_budget(

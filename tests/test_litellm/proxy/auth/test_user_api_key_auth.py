@@ -4515,3 +4515,84 @@ class TestCheckKeyModelBudgetWithFallback:
 
         assert exc_info.value is original_error
         assert "model" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_temp_budget_increase_applied_for_cached_key():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/25760
+
+    temp_budget_increase used to be applied only on the DB-fetch path, so a key
+    served from cache kept its original max_budget and was wrongly blocked once
+    spend crossed the original budget (but stayed under the effective budget).
+
+    Seed the auth cache with a key whose spend (5.0) exceeds its original
+    max_budget (2.0) but is under the effective budget (2.0 + 100.0). The cache-hit
+    request must not raise and the resolved token must carry max_budget == 102.0.
+
+    Resolving twice must yield 102.0 both times and leave the cached object at the
+    original 2.0: the increase is derived per request, never compounded or persisted.
+    """
+    from datetime import datetime, timedelta
+
+    from litellm.proxy.utils import hash_token
+
+    api_key = "sk-temp-budget-cache-regression"
+    hashed_token = hash_token(api_key)
+    expiry = (datetime.now() + timedelta(days=1)).isoformat()
+
+    cached_key = UserAPIKeyAuth(
+        token=hashed_token,
+        max_budget=2.0,
+        spend=5.0,
+        metadata={"temp_budget_increase": 100.0, "temp_budget_expiry": expiry},
+    )
+
+    user_api_key_cache = DualCache()
+    await _cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=cached_key,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._virtual_key_max_budget_alert_check",
+            new_callable=AsyncMock,
+        ),
+    ):
+        results = tuple(
+            [
+                await _user_api_key_auth_builder(
+                    request=mock_request,
+                    api_key=f"Bearer {api_key}",
+                    azure_api_key_header="",
+                    anthropic_api_key_header=None,
+                    google_ai_studio_api_key_header=None,
+                    azure_apim_header=None,
+                    request_data={"model": "gpt-4o-mini"},
+                )
+                for _ in range(2)
+            ]
+        )
+
+    assert all(result.max_budget == 102.0 for result in results)
+
+    cached_after = await user_api_key_cache.async_get_cache(key=hashed_token)
+    assert cached_after.max_budget == 2.0

@@ -9,7 +9,7 @@ import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/compon
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 import { Team } from "@/components/key_team_helpers/key_list";
-import CredentialsPanel from "@/components/model_add/credentials";
+import CredentialsPanel from "@/components/model_add/CredentialsPanel";
 import { getCallbacksCall } from "@/components/networking";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
