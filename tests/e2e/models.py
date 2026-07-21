@@ -817,3 +817,161 @@ class TagListResponse(RootModel[list[TagListEntry]]):
     """GET /tag/list answers with a bare array of tag configs (the stored tags plus
     any dynamically-seen spend tags), not an object wrapping them. Read the rows off
     .root."""
+
+
+# ---------- SSO management ----------
+
+
+class SSOConfigBase(BaseModel):
+    """Fields every SSO provider config shares on PATCH /update/sso_settings.
+    Serialized exclude_none, so a provider body carries only the fields it sets;
+    the endpoint reads every unset field as null and clears its env var, making a
+    single PATCH a full replace of the proxy's SSO state."""
+
+    proxy_base_url: str | None = None
+    user_email: str | None = None
+
+
+class EntraSSOConfig(SSOConfigBase):
+    """Microsoft Entra ID (Azure AD) provider config. `microsoft_client_id` is what
+    makes Entra the active provider; the secret and tenant are the other two vars
+    /sso/readiness requires."""
+
+    microsoft_client_id: str | None = None
+    microsoft_client_secret: str | None = None
+    microsoft_tenant: str | None = None
+
+
+class OktaSSOConfig(SSOConfigBase):
+    """Okta (generic OIDC) provider config. Okta is wired as the "generic" provider,
+    so `generic_client_id` activates it and readiness requires the secret plus the
+    three OIDC endpoint URLs."""
+
+    generic_client_id: str | None = None
+    generic_client_secret: str | None = None
+    generic_authorization_endpoint: str | None = None
+    generic_token_endpoint: str | None = None
+    generic_userinfo_endpoint: str | None = None
+
+
+type SSOConfigBody = EntraSSOConfig | OktaSSOConfig
+
+
+class SSOConfigClear(BaseModel):
+    """Empty PATCH /update/sso_settings body: serializes to {}, which the endpoint
+    reads as every field unset and so clears all SSO env vars back to the
+    unconfigured baseline. Used at teardown to isolate one provider test from the
+    next (the SSO config is a singleton row + live os.environ, not a per-test
+    resource)."""
+
+
+class SSOSettingsValues(BaseModel):
+    """The `values` block of GET /get/sso_settings: the stored provider config with
+    the OAuth client secrets masked. extra=ignore drops the fields a test doesn't
+    read (google_*, role/team mappings, ui_access_mode)."""
+
+    model_config = ConfigDict(extra="ignore")
+    microsoft_client_id: str | None = None
+    microsoft_client_secret: str | None = None
+    microsoft_tenant: str | None = None
+    generic_client_id: str | None = None
+    generic_client_secret: str | None = None
+    generic_authorization_endpoint: str | None = None
+    generic_token_endpoint: str | None = None
+    generic_userinfo_endpoint: str | None = None
+
+
+class SSOSettingsResponse(BaseModel):
+    """GET /get/sso_settings answer: `{values, field_schema}`. Only `values` is read."""
+
+    values: SSOSettingsValues
+
+
+class SSOReadinessResponse(BaseModel):
+    """GET /sso/readiness (the 200 path). `sso_configured` flips true once a provider
+    client id is set; `provider` names the active provider once every required var is
+    present. The 503 "partial config" path is read as a raw ProbeResult instead, so
+    its `missing_environment_variables` list is asserted off the body."""
+
+    status: str
+    sso_configured: bool
+    provider: str | None = None
+
+
+# ---------- SCIM v2 provisioning ----------
+
+SCIM_USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
+SCIM_GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
+SCIM_PATCH_OP_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+
+
+# SCIM wire names are camelCase/PascalCase; the field names match the protocol
+# exactly so no aliasing is needed and the serialized body is spec-correct.
+
+
+class SCIMName(BaseModel):
+    givenName: str | None = None
+    familyName: str | None = None
+
+
+class SCIMEmail(BaseModel):
+    """A SCIM email. `value` is validated as a real email address by the server, so
+    it must use a routable domain (reserved TLDs like .test/.example are rejected)."""
+
+    value: str
+    primary: bool = True
+    type: str = "work"
+
+
+class SCIMUserBody(BaseModel):
+    """POST /scim/v2/Users body. `userName` maps to the litellm user_id; the first
+    email's `value` becomes the internal user's user_email."""
+
+    schemas: list[str] = [SCIM_USER_SCHEMA]
+    userName: str
+    name: SCIMName | None = None
+    displayName: str | None = None
+    emails: list[SCIMEmail] = []
+    active: bool = True
+
+
+class SCIMUserResponse(BaseModel):
+    """A SCIM User resource. `id` is the litellm user_id (what the IdP addresses the
+    user by); the server derives the response `userName` from the user_email, so tests
+    key off `id`, not the echoed userName. extra=ignore drops the fields not asserted."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    userName: str | None = None
+    active: bool = True
+
+
+class SCIMPatchOperation(BaseModel):
+    op: str
+    path: str | None = None
+    value: bool | str | dict[str, object] | list[object] | None = None
+
+
+class SCIMPatchOp(BaseModel):
+    schemas: list[str] = [SCIM_PATCH_OP_SCHEMA]
+    Operations: list[SCIMPatchOperation]
+
+
+class SCIMGroupMember(BaseModel):
+    value: str
+    display: str | None = None
+
+
+class SCIMGroupBody(BaseModel):
+    schemas: list[str] = [SCIM_GROUP_SCHEMA]
+    displayName: str
+    members: list[SCIMGroupMember] = []
+
+
+class SCIMGroupResponse(BaseModel):
+    """A SCIM Group resource. `id` is the litellm team_id; `displayName` mirrors the
+    team_alias."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    displayName: str | None = None
