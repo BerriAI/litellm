@@ -1,8 +1,8 @@
 import * as networking from "@/components/networking";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import TeamInfoView from "./TeamInfo";
 
 vi.mock("@/components/networking", () => ({
@@ -1022,6 +1022,101 @@ describe("TeamInfoView", () => {
 
       const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
       expect(payload).not.toHaveProperty("model_aliases");
+    });
+  });
+
+  describe("guardrails dropdown grouping", () => {
+    const guardrail = (name: string, defaultOn: boolean) => ({
+      guardrail_name: name,
+      litellm_params: { default_on: defaultOn },
+    });
+
+    const openGuardrailsDropdown = async (user: ReturnType<typeof userEvent.setup>) => {
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/^Guardrails/)).toBeInTheDocument();
+      });
+
+      const dropdownsBefore = new Set(document.querySelectorAll(".ant-select-dropdown"));
+
+      await user.click(screen.getByLabelText(/^Guardrails/));
+
+      return waitFor(
+        () => {
+          const opened = Array.from(document.querySelectorAll(".ant-select-dropdown")).find(
+            (el) => !dropdownsBefore.has(el),
+          );
+          expect(opened).toBeDefined();
+          return opened as HTMLElement;
+        },
+        { timeout: 5000 },
+      );
+    };
+
+    beforeEach(() => {
+      testQueryClient.clear();
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+    });
+
+    it("should not render the Global or Other group headers when no global guardrails exist", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.getGuardrailsList).mockResolvedValue({
+        guardrails: [guardrail("dwacxzcz", false), guardrail("dwadsa", false)],
+      });
+
+      const dropdown = await openGuardrailsDropdown(user);
+
+      await waitFor(() => {
+        expect(within(dropdown).getByTitle("dwacxzcz")).toBeInTheDocument();
+      });
+      expect(within(dropdown).getByTitle("dwadsa")).toBeInTheDocument();
+      expect(within(dropdown).queryByText("Global")).not.toBeInTheDocument();
+      expect(within(dropdown).queryByText("Other")).not.toBeInTheDocument();
+    });
+
+    it("should not render the Global or Other group headers when every guardrail is global", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.getGuardrailsList).mockResolvedValue({
+        guardrails: [guardrail("always-on", true)],
+      });
+
+      const dropdown = await openGuardrailsDropdown(user);
+
+      await waitFor(() => {
+        expect(within(dropdown).getByTitle("always-on")).toBeInTheDocument();
+      });
+      expect(within(dropdown).queryByText("Global")).not.toBeInTheDocument();
+      expect(within(dropdown).queryByText("Other")).not.toBeInTheDocument();
+    });
+
+    it("should render both group headers when global and non-global guardrails exist", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.getGuardrailsList).mockResolvedValue({
+        guardrails: [guardrail("always-on", true), guardrail("opt-in", false)],
+      });
+
+      const dropdown = await openGuardrailsDropdown(user);
+
+      await waitFor(() => {
+        expect(within(dropdown).getByText("Global")).toBeInTheDocument();
+      });
+      expect(within(dropdown).getByText("Other")).toBeInTheDocument();
+      expect(within(dropdown).getByTitle("always-on")).toBeInTheDocument();
+      expect(within(dropdown).getByTitle("opt-in")).toBeInTheDocument();
     });
   });
 });

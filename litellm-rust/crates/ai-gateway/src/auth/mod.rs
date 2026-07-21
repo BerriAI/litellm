@@ -9,9 +9,9 @@
 //! runs during extraction, before the handler body. Routes never re-implement it.
 
 use axum::extract::FromRequestParts;
+use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
-use axum::http::StatusCode;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 

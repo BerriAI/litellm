@@ -654,6 +654,80 @@ async def test_logging_result_for_bridge_calls(logging_obj):
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_marks_litellm_params_async():
+    """LIT-4447: the async ``anthropic_messages`` entrypoint must plant
+    ``aanthropic_messages`` in ``litellm_params`` so ``_is_sync_litellm_request``
+    classifies the request async and the sync CustomLogger hook does not fire in
+    addition to the async one, mirroring how ``acompletion`` / ``aresponses`` set
+    their own async markers."""
+    import asyncio
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    captured = {}
+    logged = asyncio.Event()
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            captured["litellm_params"] = kwargs.get("litellm_params", {})
+            logged.set()
+
+    logger = CaptureLogger()
+    logger.log_success_event = MagicMock()
+    original_callbacks = getattr(litellm, "callbacks", [])
+    try:
+        litellm.callbacks = [logger]
+        await litellm.anthropic_messages(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="anthropic/claude-sonnet-4-5",
+            mock_response="Hello, world!",
+        )
+        await asyncio.wait_for(logged.wait(), timeout=10)
+
+        assert captured["litellm_params"].get("aanthropic_messages") is True
+        assert LitellmLogging._is_sync_litellm_request(captured["litellm_params"]) is False
+        logger.log_success_event.assert_not_called()
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_agenerate_content_marks_litellm_params_async():
+    """LIT-4475: the async ``agenerate_content`` entrypoint must plant
+    ``agenerate_content`` in ``litellm_params`` so ``_is_sync_litellm_request``
+    classifies the nested delegated call async, preventing the sync CustomLogger
+    hook from firing alongside the async one."""
+    import time
+
+    import litellm
+
+    logging_obj = LitellmLogging(
+        model="gemini/gemini-2.0-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=time.time(),
+        litellm_call_id="agenerate-content-marker-check",
+        function_id="fn",
+    )
+    try:
+        await litellm.agenerate_content(
+            model="gemini/gemini-2.0-flash",
+            contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+            mock_response="hello",
+            litellm_logging_obj=logging_obj,
+        )
+    except Exception:
+        pass
+
+    litellm_params = logging_obj.model_call_details.get("litellm_params", {})
+    assert litellm_params.get("agenerate_content") is True
+    assert LitellmLogging._is_sync_litellm_request(litellm_params) is False
+
+
+@pytest.mark.asyncio
 async def test_logging_non_streaming_request():
     import asyncio
 
@@ -712,7 +786,15 @@ async def test_logging_non_streaming_request():
 
 
 @pytest.mark.parametrize(
-    "async_flag", ["acompletion", "aresponses", "allm_passthrough_route"]
+    "async_flag",
+    [
+        "acompletion",
+        "aresponses",
+        "allm_passthrough_route",
+        "aanthropic_messages",
+        "agenerate_content",
+        "agenerate_content_stream",
+    ],
 )
 def test_success_handler_skips_sync_callbacks_for_async_requests(
     logging_obj, async_flag
@@ -804,6 +886,17 @@ def test_is_sync_litellm_request():
     assert (
         LitellmLogging._is_sync_litellm_request({"allm_passthrough_route": True})
         is False
+    )
+    assert (
+        LitellmLogging._is_sync_litellm_request({"aanthropic_messages": True}) is False
+    )
+    assert LitellmLogging._is_sync_litellm_request({"agenerate_content": True}) is False
+    assert (
+        LitellmLogging._is_sync_litellm_request({"agenerate_content_stream": True})
+        is False
+    )
+    assert (
+        LitellmLogging._is_sync_litellm_request({"aanthropic_messages": False}) is True
     )
 
 
@@ -2245,6 +2338,53 @@ def test_get_error_information_prefers_message_attribute_over_str():
     ), f"expected message from .message attribute, got {result['error_message']!r}"
     assert result["error_code"] == "401"
     assert result["error_class"] == "ProxyExceptionLike"
+
+
+def test_get_error_information_budget_exceeded_structured_fields():
+    """
+    Regression for LIT-4458: a budget-rejected request's failure
+    StandardLoggingPayload must identify WHICH budget blocked the call
+    as structured fields, not only inside the free-text error_str
+    ("ExceededBudget: User=... over budget. Spend=..., Budget=...").
+
+    Asserts get_error_information copies entity_type / entity_id /
+    max_budget / current_cost off BudgetExceededError into
+    error_budget_entity_type / error_budget_entity_id /
+    error_budget_limit / error_budget_spend, and leaves all four None
+    for non-budget exceptions.
+    """
+    from litellm.exceptions import BudgetExceededError
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    exc = BudgetExceededError(
+        current_cost=3.4e-05,
+        max_budget=1e-06,
+        message="ExceededBudget: User=repro-user over budget. Spend=3.4e-05, Budget=1e-06",
+        entity_type="user",
+        entity_id="repro-user",
+    )
+
+    result = StandardLoggingPayloadSetup.get_error_information(exc)
+    assert result["error_budget_entity_type"] == "user"
+    assert result["error_budget_entity_id"] == "repro-user"
+    assert result["error_budget_limit"] == 1e-06
+    assert result["error_budget_spend"] == 3.4e-05
+    assert result["error_code"] == "429"
+    assert result["error_class"] == "BudgetExceededError"
+    assert result["error_rate_limit_type"] == "budget"
+
+    legacy_exc = BudgetExceededError(current_cost=2.0, max_budget=1.0)
+    legacy_result = StandardLoggingPayloadSetup.get_error_information(legacy_exc)
+    assert legacy_result["error_budget_entity_type"] is None
+    assert legacy_result["error_budget_entity_id"] is None
+    assert legacy_result["error_budget_limit"] == 1.0
+    assert legacy_result["error_budget_spend"] == 2.0
+
+    non_budget_result = StandardLoggingPayloadSetup.get_error_information(ValueError("boom"))
+    assert non_budget_result["error_budget_entity_type"] is None
+    assert non_budget_result["error_budget_entity_id"] is None
+    assert non_budget_result["error_budget_limit"] is None
+    assert non_budget_result["error_budget_spend"] is None
 
 
 def test_get_error_information_preserves_explicit_empty_message():

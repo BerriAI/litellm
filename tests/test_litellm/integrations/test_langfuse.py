@@ -244,11 +244,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         assert context == {
             "trace_id": "a" * 32,
-            "parent_span_id": sha256(
-                parent_observation_id.lower().replace("-", "").encode("utf-8")
-            )
-            .digest()[:8]
-            .hex(),
+            "parent_span_id": sha256(parent_observation_id.lower().replace("-", "").encode("utf-8")).digest()[:8].hex(),
         }
 
     def test_langfuse_usage_details_optional_fields(self):
