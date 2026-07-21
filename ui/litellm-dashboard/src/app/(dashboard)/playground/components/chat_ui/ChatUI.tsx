@@ -254,6 +254,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
   const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [uploadedAudio, setUploadedAudio] = useState<File | null>(null);
+  const pendingPreviewUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    pendingPreviewUrlsRef.current = [...imagePreviewUrls, responsesImagePreviewUrl, chatImagePreviewUrl].filter(
+      (url): url is string => !!url,
+    );
+  }, [imagePreviewUrls, responsesImagePreviewUrl, chatImagePreviewUrl]);
+
+  useEffect(() => () => pendingPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url)), []);
+
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
