@@ -495,6 +495,21 @@ class TestBedrockMantleCodexAdditionalTools:
         assert body["input"] == [self._USER_MESSAGE]
         assert "tools" not in body
 
+    def test_hoist_is_logged_at_debug_level(self):
+        from unittest.mock import patch
+
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.debug"
+        ) as mock_debug:
+            self._transform(
+                input=[
+                    {"type": "additional_tools", "role": "developer", "tools": self._CODEX_TOOLS},
+                    self._USER_MESSAGE,
+                ]
+            )
+        assert mock_debug.call_count == 1
+        assert "additional_tools" in str(mock_debug.call_args)
+
 
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self, local_cost_map):

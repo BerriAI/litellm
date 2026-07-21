@@ -177,6 +177,12 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             return input, []
         remaining_input = [item for item in input if not cls._is_codex_additional_tools_item(item)]
         hoisted_tools = [tool for item in additional_tools_items for tool in cls._tools_of_additional_tools_item(item)]
+        verbose_logger.debug(
+            "Bedrock Mantle Responses API: hoisting %d tool(s) out of %d 'additional_tools' input item(s) "
+            "into the top-level tools param (Mantle rejects that input item type).",
+            len(hoisted_tools),
+            len(additional_tools_items),
+        )
         return remaining_input, cls._filter_unsupported_tools(hoisted_tools)
 
     def map_openai_params(
