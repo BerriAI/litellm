@@ -7,9 +7,13 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy._types import UserAPIKeyAuth
+from unittest.mock import patch
+
 from litellm.proxy.openai_files_endpoints.common_utils import (
     ensure_batch_response_managed_file_ids,
+    get_batch_from_database,
     read_stored_batch_attribution,
+    strip_internal_batch_attribution,
     update_batch_in_database,
 )
 from litellm.types.utils import LiteLLMBatch
@@ -159,6 +163,8 @@ async def test_update_batch_in_database_preserves_attribution_snapshot():
         ]
     )
     assert stored["metadata"]["litellm_batch_attribution"] == _BATCH_ATTRIBUTION
+    # The snapshot must land only in the persisted row, never on the object returned to the caller
+    assert response.metadata is None
 
 
 @pytest.mark.asyncio
@@ -396,3 +402,69 @@ async def test_ensure_batch_response_returns_early_without_auth():
 
     assert response.output_file_id == "file-raw-output"
     mock_managed_files.get_unified_output_file_id.assert_not_called()
+
+
+def test_strip_internal_batch_attribution_removes_only_internal_key():
+    file_object_data = {
+        "id": "batch_1",
+        "status": "completed",
+        "metadata": {"user_tag": "keep-me", "litellm_batch_attribution": _BATCH_ATTRIBUTION},
+    }
+    cleaned = strip_internal_batch_attribution(file_object_data)
+    assert cleaned["metadata"] == {"user_tag": "keep-me"}
+    # Original is not mutated (the raw row must keep the snapshot for the poller)
+    assert "litellm_batch_attribution" in file_object_data["metadata"]
+
+
+def test_strip_internal_batch_attribution_nulls_metadata_when_only_internal_key():
+    cleaned = strip_internal_batch_attribution(
+        {"id": "batch_1", "metadata": {"litellm_batch_attribution": _BATCH_ATTRIBUTION}}
+    )
+    assert cleaned["metadata"] is None
+
+
+@pytest.mark.parametrize(
+    "file_object_data",
+    [
+        {"id": "batch_1"},
+        {"id": "batch_1", "metadata": None},
+        {"id": "batch_1", "metadata": {"user_tag": "keep-me"}},
+    ],
+)
+def test_strip_internal_batch_attribution_noop_without_internal_key(file_object_data):
+    assert strip_internal_batch_attribution(file_object_data) == file_object_data
+
+
+@pytest.mark.asyncio
+async def test_get_batch_from_database_does_not_leak_attribution_to_caller():
+    """Regression: the batch returned from the stored row must not expose litellm_batch_attribution,
+    while the raw db row handed back for internal use keeps it
+    """
+    batch_id = "litellm_proxy;model_id:m;llm_batch_id:b"
+    stored_file_object = {
+        "id": "b",
+        "object": "batch",
+        "status": "completed",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-input",
+        "completion_window": "24h",
+        "created_at": 1234567890,
+        "metadata": {"litellm_batch_attribution": _BATCH_ATTRIBUTION},
+    }
+    row = SimpleNamespace(file_object=json.dumps(stored_file_object))
+
+    with patch(
+        "litellm.proxy.openai_files_endpoints.common_utils.ManagedObjectRepository"
+    ) as mock_repo:
+        mock_repo.return_value.table.find_first = AsyncMock(return_value=row)
+        db_batch_object, response = await get_batch_from_database(
+            batch_id=batch_id,
+            unified_batch_id=batch_id,
+            managed_files_obj=MagicMock(),
+            prisma_client=_build_prisma_mock(),
+            verbose_proxy_logger=MagicMock(),
+        )
+
+    assert "litellm_batch_attribution" not in (response.metadata or {})
+    # The raw row still carries the snapshot so update_batch_in_database can preserve it
+    assert read_stored_batch_attribution(db_batch_object) == _BATCH_ATTRIBUTION

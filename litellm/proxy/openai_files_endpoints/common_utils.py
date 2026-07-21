@@ -974,7 +974,7 @@ async def get_batch_from_database(
             if isinstance(db_batch_object.file_object, str)
             else db_batch_object.file_object
         )
-        response = LiteLLMBatch(**batch_data)
+        response = LiteLLMBatch(**strip_internal_batch_attribution(batch_data))
         response.id = batch_id
 
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
@@ -987,6 +987,19 @@ async def get_batch_from_database(
     except Exception as e:
         verbose_proxy_logger.warning(f"Failed to retrieve batch from ManagedObjectTable: {e}, falling back to provider")
         return None, None
+
+
+def strip_internal_batch_attribution(file_object_data: dict) -> dict:
+    """Return a copy of a stored batch file_object with the internal attribution snapshot removed.
+
+    litellm_batch_attribution is persisted under metadata for cost attribution only; it carries the
+    creator's key hash, email, and aliases, so it must never surface in a batch returned to a caller
+    """
+    metadata = file_object_data.get("metadata")
+    if not isinstance(metadata, dict) or "litellm_batch_attribution" not in metadata:
+        return file_object_data
+    cleaned_metadata = {k: v for k, v in metadata.items() if k != "litellm_batch_attribution"}
+    return {**file_object_data, "metadata": cleaned_metadata or None}
 
 
 def read_stored_batch_attribution(db_batch_object) -> Optional[dict]:
@@ -1073,15 +1086,18 @@ async def update_batch_in_database(
         db_status = response.status if response.status != "completed" else "complete"
 
         stored_attribution = read_stored_batch_attribution(db_batch_object)
+        file_object_json = response.model_dump_json()
         if stored_attribution is not None:
-            response.metadata = {
-                **(getattr(response, "metadata", None) or {}),
+            file_object_data = json.loads(file_object_json)
+            file_object_data["metadata"] = {
+                **(file_object_data.get("metadata") or {}),
                 "litellm_batch_attribution": stored_attribution,
             }
+            file_object_json = json.dumps(file_object_data)
 
         update_data: dict = {
             "status": db_status,
-            "file_object": response.model_dump_json(),
+            "file_object": file_object_json,
             "updated_at": litellm.utils.get_utc_datetime(),
         }
 
