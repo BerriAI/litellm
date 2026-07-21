@@ -60,6 +60,7 @@ import {
   Wallet,
   Wrench,
   Workflow,
+  Coins,
 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -92,6 +93,7 @@ interface SidebarProps {
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
   allowVectorStoresForTeamAdmins?: boolean;
+  enablePtuCostAttribution?: boolean;
 }
 
 interface MenuItem {
@@ -233,6 +235,13 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
       },
       { key: "budgets", page: "budgets", label: "Budgets", icon: <Wallet {...ICON} />, roles: all_admin_roles },
+      {
+        key: "ptu-reservations",
+        page: "ptu-reservations",
+        label: "PTU Reservations",
+        icon: <Coins {...ICON} />,
+        roles: all_admin_roles,
+      },
     ],
   },
   {
@@ -393,6 +402,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   allowAgentsForTeamAdmins,
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
+  enablePtuCostAttribution,
 }) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
@@ -444,6 +454,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
         }
         if (item.key === "projects" && !enableProjectsUI) return false;
         if (item.key === "chat" && !enableChatUI) return false;
+        if (item.key === "ptu-reservations" && !enablePtuCostAttribution) return false;
         if (
           !isAdmin &&
           item.key === "agents" &&

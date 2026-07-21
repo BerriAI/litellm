@@ -122,6 +122,16 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByText("Chat")).toBeInTheDocument();
   });
 
+  it("hides PTU Reservations by default", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.queryByText("PTU Reservations")).not.toBeInTheDocument();
+  });
+
+  it("shows PTU Reservations when enablePtuCostAttribution is true", () => {
+    renderWithProviders(<Sidebar {...defaultProps} enablePtuCostAttribution />);
+    expect(screen.getByText("PTU Reservations")).toBeInTheDocument();
+  });
+
   it("expands a nested tab to reveal its children (Tools > Search Tools)", async () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 

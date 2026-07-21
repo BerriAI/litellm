@@ -1861,6 +1861,85 @@ describe("EntityUsageExport utils", () => {
       expect(result.summary.failed_requests).toBe(20);
       expect(result.summary.total_tokens).toBe(4500);
     });
+
+    it("should include total_flat_cost and total_cost in summary when total_flat_cost is present", () => {
+      const spendWithFlat: EntitySpendData = {
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, total_flat_cost: 6.45 },
+      };
+      const result = generateMetadata("team", mockDateRange, [], "daily", spendWithFlat);
+      expect(result.summary.total_flat_cost).toBeCloseTo(6.45, 4);
+      expect(result.summary.total_cost).toBeCloseTo(46.0 + 6.45, 4);
+    });
+
+    it("should omit total_flat_cost and total_cost when total_flat_cost is absent", () => {
+      const result = generateMetadata("team", mockDateRange, [], "daily", mockSpendData);
+      expect(result.summary.total_flat_cost).toBeUndefined();
+      expect(result.summary.total_cost).toBeUndefined();
+    });
+  });
+
+  describe("generateDailyData PTU flat cost", () => {
+    const dayWithFlat: EntitySpendData = {
+      results: [
+        {
+          date: "2025-01-01",
+          breakdown: {
+            entities: {
+              "team-1": {
+                metrics: {
+                  spend: 10,
+                  flat_cost: 6.45,
+                  api_requests: 50,
+                  successful_requests: 50,
+                  failed_requests: 0,
+                  total_tokens: 500,
+                  prompt_tokens: 300,
+                  completion_tokens: 200,
+                  cache_read_input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                },
+                api_key_breakdown: {},
+              },
+            },
+          },
+        },
+      ],
+      metadata: {
+        total_spend: 10,
+        total_flat_cost: 6.45,
+        total_api_requests: 50,
+        total_successful_requests: 50,
+        total_failed_requests: 0,
+        total_tokens: 500,
+      },
+    };
+
+    it("includes Flat Cost ($) and Total Cost ($) columns when total_flat_cost is present", () => {
+      const rows = generateDailyData(dayWithFlat, "Team", {});
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toHaveProperty("Flat Cost ($)");
+      expect(rows[0]).toHaveProperty("Total Cost ($)");
+      expect(rows[0]["Flat Cost ($)"]).toBe("6.4500");
+      expect(rows[0]["Total Cost ($)"]).toBe("16.4500");
+    });
+
+    it("does not include Flat Cost / Total Cost columns when total_flat_cost is absent", () => {
+      const spendWithoutFlat: EntitySpendData = {
+        ...dayWithFlat,
+        metadata: {
+          total_spend: 10,
+          total_api_requests: 50,
+          total_successful_requests: 50,
+          total_failed_requests: 0,
+          total_tokens: 500,
+        },
+      };
+      const rows = generateDailyData(spendWithoutFlat, "User", {});
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).not.toHaveProperty("Flat Cost ($)");
+      expect(rows[0]).not.toHaveProperty("Total Cost ($)");
+    });
   });
 
   describe("handleExportCSV", () => {

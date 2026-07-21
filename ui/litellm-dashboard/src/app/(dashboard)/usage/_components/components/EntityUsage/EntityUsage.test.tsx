@@ -49,6 +49,10 @@ vi.mock("@/components/common_components/team_multi_select", () => ({
   default: () => <div>Team Multi Select</div>,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/ptuReservations/useIsPtuCostAttributionEnabled", () => ({
+  useIsPtuCostAttributionEnabled: () => ({ enabled: false, isLoading: false }),
+}));
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({

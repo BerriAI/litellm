@@ -26,6 +26,7 @@ const SidebarProvider = ({
   const [allowAgentsForTeamAdmins, setAllowAgentsForTeamAdmins] = useState<boolean>(false);
   const [disableVectorStoresForInternalUsers, setDisableVectorStoresForInternalUsers] = useState<boolean>(false);
   const [allowVectorStoresForTeamAdmins, setAllowVectorStoresForTeamAdmins] = useState<boolean>(false);
+  const [enablePtuCostAttribution, setEnablePtuCostAttribution] = useState<boolean>(false);
 
   useEffect(() => {
     const fetchUISettings = async () => {
@@ -65,6 +66,10 @@ const SidebarProvider = ({
         if (settings?.values?.allow_vector_stores_for_team_admins !== undefined) {
           setAllowVectorStoresForTeamAdmins(Boolean(settings.values.allow_vector_stores_for_team_admins));
         }
+
+        if (settings?.values?.enable_ptu_cost_attribution !== undefined) {
+          setEnablePtuCostAttribution(Boolean(settings.values.enable_ptu_cost_attribution));
+        }
       } catch (error) {
         console.error("[SidebarProvider] Failed to fetch UI settings:", error);
       }
@@ -86,6 +91,7 @@ const SidebarProvider = ({
       allowAgentsForTeamAdmins={allowAgentsForTeamAdmins}
       disableVectorStoresForInternalUsers={disableVectorStoresForInternalUsers}
       allowVectorStoresForTeamAdmins={allowVectorStoresForTeamAdmins}
+      enablePtuCostAttribution={enablePtuCostAttribution}
     />
   );
 };

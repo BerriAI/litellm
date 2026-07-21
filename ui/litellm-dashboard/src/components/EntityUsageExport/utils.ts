@@ -104,31 +104,44 @@ export const getEntityBreakdown = (
   return Object.values(entitySpend).sort((a, b) => b.metrics.spend - a.metrics.spend);
 };
 
+// PTU flat cost is only surfaced on the team daily-activity response. Every other
+// entity's metadata omits total_flat_cost, so its presence is the signal for
+// including the extra columns.
+const hasFlatCost = (spendData: EntitySpendData): boolean =>
+  spendData.metadata.total_flat_cost !== undefined && spendData.metadata.total_flat_cost !== null;
+
 export const generateDailyData = (
   spendData: EntitySpendData,
   entityLabel: string,
   teamAliasMap: Record<string, string> = {},
 ): any[] => {
   const dailyBreakdown: any[] = [];
+  const includeFlatCost = hasFlatCost(spendData);
 
   spendData.results.forEach((day) => {
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
       const { id, alias } = resolveEntityDisplay(entity, teamAliasMap);
 
-      dailyBreakdown.push({
+      const row: Record<string, any> = {
         Date: day.date,
         [entityLabel]: alias,
         [`${entityLabel} ID`]: id,
         "Spend ($)": formatNumberWithCommas(data.metrics.spend, 4),
-        Requests: data.metrics.api_requests,
-        "Successful Requests": data.metrics.successful_requests,
-        "Failed Requests": data.metrics.failed_requests,
-        "Total Tokens": data.metrics.total_tokens,
-        "Prompt Tokens": data.metrics.prompt_tokens || 0,
-        "Completion Tokens": data.metrics.completion_tokens || 0,
-        "Cache Read Input Tokens": data.metrics.cache_read_input_tokens || 0,
-        "Cache Creation Input Tokens": data.metrics.cache_creation_input_tokens || 0,
-      });
+      };
+      if (includeFlatCost) {
+        const flatCost = data.metrics.flat_cost || 0;
+        row["Flat Cost ($)"] = formatNumberWithCommas(flatCost, 4);
+        row["Total Cost ($)"] = formatNumberWithCommas((data.metrics.spend || 0) + flatCost, 4);
+      }
+      row.Requests = data.metrics.api_requests;
+      row["Successful Requests"] = data.metrics.successful_requests;
+      row["Failed Requests"] = data.metrics.failed_requests;
+      row["Total Tokens"] = data.metrics.total_tokens;
+      row["Prompt Tokens"] = data.metrics.prompt_tokens || 0;
+      row["Completion Tokens"] = data.metrics.completion_tokens || 0;
+      row["Cache Read Input Tokens"] = data.metrics.cache_read_input_tokens || 0;
+      row["Cache Creation Input Tokens"] = data.metrics.cache_creation_input_tokens || 0;
+      dailyBreakdown.push(row);
     });
   });
 
@@ -331,23 +344,31 @@ export const generateMetadata = (
   selectedFilters: string[],
   exportScope: ExportScope,
   spendData: EntitySpendData,
-): ExportMetadata => ({
-  export_date: new Date().toISOString(),
-  entity_type: entityType,
-  date_range: {
-    from: dateRange.from?.toISOString(),
-    to: dateRange.to?.toISOString(),
-  },
-  filters_applied: selectedFilters.length > 0 ? selectedFilters : "None",
-  export_scope: exportScope,
-  summary: {
+): ExportMetadata => {
+  const summary: ExportMetadata["summary"] = {
     total_spend: spendData.metadata.total_spend,
     total_requests: spendData.metadata.total_api_requests,
     successful_requests: spendData.metadata.total_successful_requests,
     failed_requests: spendData.metadata.total_failed_requests,
     total_tokens: spendData.metadata.total_tokens,
-  },
-});
+  };
+  if (hasFlatCost(spendData)) {
+    const flatCost = spendData.metadata.total_flat_cost ?? 0;
+    summary.total_flat_cost = flatCost;
+    summary.total_cost = spendData.metadata.total_spend + flatCost;
+  }
+  return {
+    export_date: new Date().toISOString(),
+    entity_type: entityType,
+    date_range: {
+      from: dateRange.from?.toISOString(),
+      to: dateRange.to?.toISOString(),
+    },
+    filters_applied: selectedFilters.length > 0 ? selectedFilters : "None",
+    export_scope: exportScope,
+    summary,
+  };
+};
 
 export const handleExportCSV = (
   spendData: EntitySpendData,

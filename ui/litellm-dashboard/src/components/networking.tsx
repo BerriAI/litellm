@@ -645,6 +645,44 @@ export const budgetUpdateCall = async (
   }
 };
 
+export const ptuReservationListCall = async (
+  accessToken: string,
+  filters?: { team_id?: string; model?: string; active_only?: boolean },
+) => {
+  try {
+    const params = new URLSearchParams();
+    if (filters?.team_id) params.set("team_id", filters.team_id);
+    if (filters?.model) params.set("model", filters.model);
+    if (filters?.active_only) params.set("active_only", "true");
+    const query = params.toString();
+    const path = query ? `/ptu_reservation/list?${query}` : `/ptu_reservation/list`;
+    return await apiClient.get(path, { accessToken });
+  } catch (error) {
+    console.error("Failed to list PTU reservations:", error);
+    throw error;
+  }
+};
+
+export const ptuReservationCreateCall = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    return await apiClient.post(`/ptu_reservation/new`, { accessToken, body: { ...formValues } });
+  } catch (error) {
+    console.error("Failed to create PTU reservation:", error);
+    throw error;
+  }
+};
+
+export const ptuReservationCloseCall = async (accessToken: string, id: string, effective_to?: string) => {
+  try {
+    const body: Record<string, any> = { id };
+    if (effective_to) body.effective_to = effective_to;
+    return await apiClient.post(`/ptu_reservation/close`, { accessToken, body });
+  } catch (error) {
+    console.error("Failed to close PTU reservation:", error);
+    throw error;
+  }
+};
+
 export const invitationCreateCall = async (
   accessToken: string,
   userID: string, // Assuming formValues is an object

@@ -40,6 +40,7 @@ import {
 } from "@/components/networking";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
+import { useIsPtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/ptuReservations/useIsPtuCostAttributionEnabled";
 import {
   BreakdownMetrics,
   DailyData,
@@ -75,6 +76,7 @@ interface EntitySpendData {
   results: ExtendedDailyData[];
   metadata: {
     total_spend: number;
+    total_flat_cost?: number;
     total_api_requests: number;
     total_successful_requests: number;
     total_failed_requests: number;
@@ -113,6 +115,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
+
+  const { enabled: ptuAttributionEnabled } = useIsPtuCostAttributionEnabled();
+  const showFlatCost = entityType === "team" && ptuAttributionEnabled;
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -514,13 +519,33 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
               <Col numColSpan={2}>
                 <Card>
                   <Title>{capitalizedEntityLabel} Spend Overview</Title>
-                  <Grid numItems={5} className="gap-4 mt-4">
+                  <Grid numItems={showFlatCost ? 7 : 5} className="gap-4 mt-4">
                     <Card>
                       <Title>Total Spend</Title>
                       <Text className="text-2xl font-bold mt-2">
                         ${formatNumberWithCommas(spendData.metadata.total_spend, 2)}
                       </Text>
                     </Card>
+                    {showFlatCost && (
+                      <>
+                        <Card>
+                          <Title>Flat Cost</Title>
+                          <Text className="text-2xl font-bold mt-2">
+                            ${formatNumberWithCommas(spendData.metadata.total_flat_cost ?? 0, 2)}
+                          </Text>
+                        </Card>
+                        <Card>
+                          <Title>Total Cost</Title>
+                          <Text className="text-2xl font-bold mt-2">
+                            $
+                            {formatNumberWithCommas(
+                              spendData.metadata.total_spend + (spendData.metadata.total_flat_cost ?? 0),
+                              2,
+                            )}
+                          </Text>
+                        </Card>
+                      </>
+                    )}
                     <Card>
                       <Title>Total Requests</Title>
                       <Text className="text-2xl font-bold mt-2">
@@ -557,25 +582,33 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                   </CardHeader>
                   <CardContent>
                     <BarChart
-                      data={[...spendData.results].sort(
-                        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                      )}
+                      data={[...spendData.results]
+                        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                        .map((row) => ({
+                          ...row,
+                          "Request spend": row.metrics.spend ?? 0,
+                          "Flat cost": row.metrics.flat_cost ?? 0,
+                        }))}
                       index="date"
-                      categories={["metrics.spend"]}
-                      colors={["cyan"]}
+                      categories={["Request spend", "Flat cost"]}
+                      colors={["cyan", "violet"]}
+                      stack={true}
                       valueFormatter={valueFormatterSpend}
                       yAxisWidth={100}
-                      showLegend={false}
+                      showLegend={true}
                       customTooltip={({ payload, active }) => {
                         if (!active || !payload?.[0]) return null;
                         const data = payload[0].payload;
                         const entityCount = Object.keys(data.breakdown.entities || {}).length;
+                        const requestSpend = data.metrics.spend ?? 0;
+                        const flatCost = data.metrics.flat_cost ?? 0;
+                        const totalCost = requestSpend + flatCost;
                         return (
                           <div className="bg-white p-4 shadow-lg rounded-lg border">
                             <p className="font-bold">{data.date}</p>
-                            <p className="text-cyan-500">
-                              Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                            </p>
+                            <p className="text-cyan-500">Request spend: ${formatNumberWithCommas(requestSpend, 2)}</p>
+                            <p className="text-violet-500">Flat cost: ${formatNumberWithCommas(flatCost, 2)}</p>
+                            <p className="font-semibold">Total cost: ${formatNumberWithCommas(totalCost, 2)}</p>
                             <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
                             <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
                             <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
