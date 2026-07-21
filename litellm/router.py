@@ -7824,8 +7824,12 @@ class Router:
 
             # `input_cost_per_token` is a LiteLLM_Params field per types/router.py.
             lp = d.get("litellm_params") if isinstance(d, dict) else d.litellm_params
-            lp_dict: Dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
+            lp_dict: Dict[str, Any] = (
+                lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
+            )
             cost = lp_dict.get("input_cost_per_token")
+            if cost is None:
+                cost = mi_dict.get("input_cost_per_token")
             if cost is not None:
                 model_to_cost[name] = float(cost)
 
