@@ -5597,7 +5597,7 @@ class TestMCPServerTimestamps:
     async def test_build_mcp_server_from_table_persists_discovered_oauth_endpoints(self):
         """A DB-backed oauth2 server with no configured endpoints discovers them and must write
         authorization_url, token_url, and scopes back to the row; otherwise the resolved values
-        live only in memory and one failed re-discovery serves 400 "authorization url is not set"
+        live only in memory and one failed re-discovery serves the 400 "authorization url is not configured"
         from /authorize. registration_url must never be persisted because
         _dcr_bridge_relays_client_registration keys off that column."""
         manager = MCPServerManager()
@@ -8936,3 +8936,95 @@ class TestMaterializeAuthHeaders:
 
         assert await _materialize_auth_headers(None) is None
         assert await _materialize_auth_headers(NoOpAuth()) is None
+
+
+class TestUrllessIssuerDiscovery:
+    """LIT-4629: servers with no url (OpenAPI spec_path, stdio) run no resource discovery, so
+    their OAuth endpoints could only ever come from manual entry; an admin-pinned issuer is a
+    url-independent trust anchor (RFC 8414 section 3.3) and must unlock discovery for them."""
+
+    def _urlless_row(self, **overrides):
+        fields = dict(
+            server_id="urlless-1",
+            alias="sheets_urlless",
+            description="spec-only server",
+            url=None,
+            spec_path="https://example.com/sheets-openapi.yaml",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        fields.update(overrides)
+        return LiteLLM_MCPServerTable(**fields)
+
+    @pytest.mark.asyncio
+    async def test_urlless_server_with_issuer_discovers_endpoints(self):
+        """The gate previously required bool(server_url), so a url-less server with an issuer
+        configured never ran the issuer-anchored fetch and /authorize 400d. Kills the mutant that
+        restores the bare bool(server_url) term."""
+        manager = MCPServerManager()
+        row = self._urlless_row(issuer="https://accounts.google.com")
+
+        resolved = MCPOAuthMetadata(
+            authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        resource_rooted = AsyncMock(return_value=None)
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=resolved)) as anchored,
+            patch.object(manager, "_descovery_metadata", new=resource_rooted),
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        anchored.assert_awaited_once_with("https://accounts.google.com", None)
+        resource_rooted.assert_not_awaited()
+        assert built.issuer_is_anchored is True
+        assert built.authorization_url == "https://accounts.google.com/o/oauth2/v2/auth"
+        assert built.token_url == "https://oauth2.googleapis.com/token"
+
+    @pytest.mark.asyncio
+    async def test_urlless_server_without_issuer_stays_undiscovered(self):
+        """With neither a url nor an issuer there is no discovery source; the build must not
+        attempt any fetch and the endpoints stay unset (manual entry remains the only path)."""
+        manager = MCPServerManager()
+        row = self._urlless_row()
+
+        anchored = AsyncMock()
+        resource_rooted = AsyncMock()
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=anchored),
+            patch.object(manager, "_descovery_metadata", new=resource_rooted),
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        anchored.assert_not_awaited()
+        resource_rooted.assert_not_awaited()
+        assert built.authorization_url is None
+        assert built.token_url is None
+        assert built.issuer_is_anchored is False
+
+    @pytest.mark.asyncio
+    async def test_urlless_obo_with_issuer_discovers_token_url(self):
+        """oauth2_token_exchange is not a discovery auth type, so the plain gate relax alone
+        would leave a url-less OBO server undiscovered; with an issuer pinned and no configured
+        exchange endpoint it must resolve token_url through the issuer-anchored fetch. Kills the
+        mutant that drops the OBO widening from the anchor computation."""
+        manager = MCPServerManager()
+        row = self._urlless_row(
+            alias="obo_urlless",
+            auth_type=MCPAuth.oauth2_token_exchange,
+            issuer="https://idp.example.com",
+        )
+
+        resolved = MCPOAuthMetadata(token_url="https://idp.example.com/token")
+        resource_rooted = AsyncMock(return_value=None)
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=resolved)) as anchored,
+            patch.object(manager, "_descovery_metadata", new=resource_rooted),
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        anchored.assert_awaited_once_with("https://idp.example.com", None)
+        resource_rooted.assert_not_awaited()
+        assert built.token_url == "https://idp.example.com/token"
