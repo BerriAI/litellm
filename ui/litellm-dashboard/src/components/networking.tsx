@@ -372,7 +372,7 @@ export function getGlobalLitellmHeaderName(): string {
   return globalLitellmHeaderName;
 }
 
-const apiClient = createApiClient({
+export const apiClient = createApiClient({
   getBaseUrl: getProxyBaseUrl,
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
