@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin } from "antd";
+import { Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -232,6 +233,17 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
   );
 }
 
+function LabelWithInfo({ label, tooltip }: { label: string; tooltip: string }) {
+  return (
+    <Space size={4}>
+      {label}
+      <Tooltip title={tooltip}>
+        <InfoCircleOutlined style={{ color: "#8c8c8c", cursor: "help" }} />
+      </Tooltip>
+    </Space>
+  );
+}
+
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
     <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
@@ -291,8 +303,10 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       metadata.additional_usage_values.cache_read_input_tokens > 0);
 
   const cacheHitValue = String(logEntry.cache_hit ?? "None");
-  const cacheHitColor =
-    cacheHitValue.toLowerCase() === "true" ? "green" : cacheHitValue.toLowerCase() === "false" ? "red" : "default";
+  const cacheHitColor = cacheHitValue.toLowerCase() === "true" ? "green" : "default";
+
+  const cacheReadTokens = metadata?.additional_usage_values?.cache_read_input_tokens;
+  const cacheCreationTokens = metadata?.additional_usage_values?.cache_creation_input_tokens;
 
   const uncachedInputTokens = getUncachedInputTextTokens(metadata);
   const showAnthropicMessagesInputOutput =
@@ -328,17 +342,38 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
 
           {hasCacheActivity && (
             <>
-              <Descriptions.Item label="Cache Hit">
+              <Descriptions.Item
+                label={
+                  <LabelWithInfo
+                    label="Response Cache Hit"
+                    tooltip="Whether LiteLLM served this entire response from its response cache (the exact-match or semantic cache configured under Response Caching). This is separate from provider prompt caching; a value of false does not mean prompt caching failed. Prompt caching is reflected by the Prompt Cache Read / Creation Tokens below."
+                  />
+                }
+              >
                 <Tag color={cacheHitColor}>{cacheHitValue}</Tag>
               </Descriptions.Item>
-              {metadata?.additional_usage_values?.cache_read_input_tokens > 0 && (
-                <Descriptions.Item label="Cache Read Tokens">
-                  {formatNumberWithCommas(metadata.additional_usage_values.cache_read_input_tokens)}
+              {cacheReadTokens > 0 && (
+                <Descriptions.Item
+                  label={
+                    <LabelWithInfo
+                      label="Prompt Cache Read Tokens"
+                      tooltip="Input tokens read from the provider's prompt cache. A non-zero value means provider prompt caching is working for this request, even when Response Cache Hit is false."
+                    />
+                  }
+                >
+                  {formatNumberWithCommas(cacheReadTokens)}
                 </Descriptions.Item>
               )}
-              {metadata?.additional_usage_values?.cache_creation_input_tokens > 0 && (
-                <Descriptions.Item label="Cache Creation Tokens">
-                  {formatNumberWithCommas(metadata.additional_usage_values.cache_creation_input_tokens)}
+              {cacheCreationTokens > 0 && (
+                <Descriptions.Item
+                  label={
+                    <LabelWithInfo
+                      label="Prompt Cache Creation Tokens"
+                      tooltip="Input tokens written to the provider's prompt cache on this request so that subsequent requests can read them back."
+                    />
+                  }
+                >
+                  {formatNumberWithCommas(cacheCreationTokens)}
                 </Descriptions.Item>
               )}
             </>

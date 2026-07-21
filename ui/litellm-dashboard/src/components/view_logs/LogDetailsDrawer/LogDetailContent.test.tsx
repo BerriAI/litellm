@@ -255,6 +255,8 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("2 masked")).toBeInTheDocument();
   });
 
+  const cacheHitTag = () => screen.getByText("Response Cache Hit").closest(".ant-descriptions-item") as HTMLElement;
+
   it("should display cache hit information when cache_hit is true", () => {
     render(
       <LogDetailContent
@@ -271,10 +273,35 @@ describe("LogDetailContent", () => {
       />,
     );
 
-    expect(screen.getByText("Cache Hit")).toBeInTheDocument();
-    expect(screen.getByText("true")).toBeInTheDocument();
-    expect(screen.getByText("Cache Read Tokens")).toBeInTheDocument();
+    expect(screen.getByText("Response Cache Hit")).toBeInTheDocument();
+    expect(within(cacheHitTag()).getByText("true").closest(".ant-tag")).toHaveClass("ant-tag-green");
+    expect(screen.getByText("Prompt Cache Read Tokens")).toBeInTheDocument();
     expect(screen.getByText("100")).toBeInTheDocument();
+  });
+
+  it("should not render a red 'false' tag when only provider prompt caching is active", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          cache_hit: "false",
+          metadata: {
+            status: "success",
+            additional_usage_values: {
+              cache_read_input_tokens: 512,
+              cache_creation_input_tokens: 128,
+            },
+          },
+        })}
+      />,
+    );
+
+    const falseTag = within(cacheHitTag()).getByText("false").closest(".ant-tag") as HTMLElement;
+    expect(falseTag).not.toHaveClass("ant-tag-red");
+
+    expect(screen.getByText("Prompt Cache Read Tokens")).toBeInTheDocument();
+    expect(screen.getByText("512")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Cache Creation Tokens")).toBeInTheDocument();
+    expect(screen.getByText("128")).toBeInTheDocument();
   });
 
   it("should display LiteLLM Overhead when litellm_overhead_time_ms is in metadata", () => {

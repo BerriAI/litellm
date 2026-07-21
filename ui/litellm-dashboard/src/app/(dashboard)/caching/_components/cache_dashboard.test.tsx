@@ -69,6 +69,13 @@ describe("CacheDashboard cache analytics charts", () => {
     adminGlobalCacheActivity.mockResolvedValue(cacheActivity);
   });
 
+  it("labels the dashboard as response caching and distinguishes it from prompt caching", async () => {
+    renderDashboard();
+
+    expect(await screen.findByRole("heading", { name: "Response Caching" })).toBeInTheDocument();
+    expect(screen.getByText(/separate from provider prompt caching/i)).toBeInTheDocument();
+  });
+
   it("renders both chart card titles", async () => {
     renderDashboard();
 
