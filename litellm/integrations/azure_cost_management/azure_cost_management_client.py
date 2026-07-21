@@ -8,18 +8,19 @@ one public method the rollup needs, not a general Cost Management SDK.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable, Optional
 
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 
 class AzureCostManagementError(Exception):
-    """Raised when the Cost Management API returns a non-2xx or an unexpected payload."""
+    """Raised when the Cost Management API returns a non-2xx, network failure, or an unexpected payload."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +28,7 @@ class AzureCostManagementConfig:
     subscription_id: str
     tenant_id: str
     client_id: str
-    client_secret: str
+    client_secret: str = field(repr=False)
     api_version: str = "2023-11-01"
 
     @classmethod
@@ -88,7 +89,7 @@ class AzureCostManagementClient:
         token_provider: Optional[TokenProvider] = None,
     ) -> None:
         self._config = config
-        self._http = http_handler or AsyncHTTPHandler()
+        self._http = http_handler or get_async_httpx_client(httpxSpecialProvider.AzureCostManagement)
         self._token_provider = token_provider or _default_token_provider_factory(config)
         self._last_currency: Optional[str] = None
 
@@ -145,15 +146,14 @@ class AzureCostManagementClient:
             raise AzureCostManagementError(
                 f"Azure Cost Management HTTP {exc.response.status_code}: {exc.response.text}"
             ) from exc
+        except httpx.RequestError as exc:
+            raise AzureCostManagementError(f"Azure Cost Management network error: {exc}") from exc
         return self._parse_cost_and_currency(response.json())
 
     def _parse_cost_and_currency(self, payload: Any) -> float:
-        try:
-            properties = payload.get("properties", {}) if isinstance(payload, dict) else {}
-            rows = properties.get("rows") or []
-            columns = properties.get("columns") or []
-        except AttributeError as exc:
-            raise AzureCostManagementError(f"Unexpected payload shape: {payload!r}") from exc
+        properties = payload.get("properties", {}) if isinstance(payload, dict) else {}
+        rows = properties.get("rows") or []
+        columns = properties.get("columns") or []
 
         if not rows:
             self._last_currency = None

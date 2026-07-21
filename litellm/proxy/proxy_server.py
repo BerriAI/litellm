@@ -7480,10 +7480,7 @@ def _build_azure_cost_fetcher_if_enabled() -> Optional[Any]:
         )
         return None
     try:
-        from litellm.integrations.azure_cost_management import (
-            AzureCostManagementClient,
-            AzureCostManagementError,
-        )
+        from litellm.integrations.azure_cost_management import AzureCostManagementClient
         from litellm.integrations.azure_cost_management.azure_cost_management_client import (
             AzureCostManagementConfig,
         )

@@ -97,9 +97,7 @@ async def test_get_daily_cost_raises_on_http_error():
     response = MagicMock()
     response.status_code = 403
     response.text = "forbidden"
-    http.post = AsyncMock(
-        side_effect=httpx.HTTPStatusError("forbidden", request=MagicMock(), response=response)
-    )
+    http.post = AsyncMock(side_effect=httpx.HTTPStatusError("forbidden", request=MagicMock(), response=response))
 
     client = AzureCostManagementClient(
         config=_config(),
@@ -143,3 +141,31 @@ def test_config_from_env_raises_when_creds_missing(monkeypatch):
     with pytest.raises(AzureCostManagementError) as exc:
         AzureCostManagementConfig.from_env(subscription_id="sub-x")
     assert "AZURE_TENANT_ID" in str(exc.value)
+
+
+def test_client_secret_not_in_repr():
+    """Regression: client_secret must not surface in repr(config) — the field is repr=False."""
+    cfg = AzureCostManagementConfig(
+        subscription_id="sub-x",
+        tenant_id="tenant",
+        client_id="client",
+        client_secret="super-secret-value",
+    )
+    assert "super-secret-value" not in repr(cfg)
+    assert "client_secret" not in repr(cfg)
+
+
+@pytest.mark.asyncio
+async def test_get_daily_cost_wraps_network_errors():
+    """httpx.RequestError family (ConnectError, ReadTimeout, RemoteProtocolError) must surface as AzureCostManagementError."""
+    http = MagicMock()
+    http.post = AsyncMock(side_effect=httpx.ReadTimeout("upstream timeout"))
+    client = AzureCostManagementClient(
+        config=_config(),
+        http_handler=http,
+        token_provider=lambda: "fake-token",
+    )
+
+    with pytest.raises(AzureCostManagementError) as exc:
+        await client.get_daily_cost("/subs/x/deploy/y", date(2026, 7, 15))
+    assert "network error" in str(exc.value).lower()

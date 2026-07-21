@@ -64,14 +64,6 @@ async def _compute_daily_flat_cost(
             return 0.0
         try:
             fetched = await azure_fetcher.get_daily_cost(reservation.azure_resource_id, day)
-            verbose_proxy_logger.info(
-                "PTU rollup: azure_billing reservation=%s day=%s resource=%s returned $%.4f",
-                getattr(reservation, "id", "?"),
-                day.isoformat(),
-                reservation.azure_resource_id,
-                fetched,
-            )
-            return fetched
         except Exception as exc:  # noqa: BLE001  # log and continue; one bad reservation must not stop the batch
             verbose_proxy_logger.error(
                 "PTU rollup: azure fetch failed for reservation=%s day=%s: %s",
@@ -80,6 +72,25 @@ async def _compute_daily_flat_cost(
                 exc,
             )
             return 0.0
+        currency = getattr(azure_fetcher, "last_currency", None)
+        if currency is not None and currency.upper() != "USD":
+            verbose_proxy_logger.warning(
+                "PTU rollup: azure_billing reservation=%s day=%s returned currency=%s; "
+                "skipping write to avoid storing non-USD amount as USD (LiteLLM_DailyTeamSpend "
+                "assumes USD). File a follow-up for currency conversion.",
+                getattr(reservation, "id", "?"),
+                day.isoformat(),
+                currency,
+            )
+            return 0.0
+        verbose_proxy_logger.info(
+            "PTU rollup: azure_billing reservation=%s day=%s resource=%s returned $%.4f",
+            getattr(reservation, "id", "?"),
+            day.isoformat(),
+            reservation.azure_resource_id,
+            fetched,
+        )
+        return fetched
     verbose_proxy_logger.warning(
         "PTU rollup: unknown cost_source=%s on reservation=%s; skipping",
         reservation.cost_source,

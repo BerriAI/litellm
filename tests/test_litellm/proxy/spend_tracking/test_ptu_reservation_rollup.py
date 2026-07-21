@@ -119,11 +119,38 @@ async def test_compute_flat_cost_azure_billing_uses_fetcher_result():
     r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/subs/x/deploy/y")
     fetcher = MagicMock()
     fetcher.get_daily_cost = AsyncMock(return_value=42.5)
+    fetcher.last_currency = "USD"
 
     result = await _compute_daily_flat_cost(r, date(2026, 7, 15), azure_fetcher=fetcher)
 
     assert result == 42.5
     fetcher.get_daily_cost.assert_awaited_once_with("/subs/x/deploy/y", date(2026, 7, 15))
+
+
+@pytest.mark.asyncio
+async def test_compute_flat_cost_azure_billing_returns_zero_on_non_usd_currency():
+    """Non-USD Azure response must not be persisted as USD (silent data corruption)."""
+    r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/subs/x/deploy/y")
+    fetcher = MagicMock()
+    fetcher.get_daily_cost = AsyncMock(return_value=99.9)
+    fetcher.last_currency = "EUR"
+
+    result = await _compute_daily_flat_cost(r, date(2026, 7, 15), azure_fetcher=fetcher)
+
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
+async def test_compute_flat_cost_azure_billing_accepts_missing_currency():
+    """Empty Azure response (no rows) sets last_currency=None; treat as USD path (0.0 is written by the outer skip)."""
+    r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/subs/x/deploy/y")
+    fetcher = MagicMock()
+    fetcher.get_daily_cost = AsyncMock(return_value=0.0)
+    fetcher.last_currency = None
+
+    result = await _compute_daily_flat_cost(r, date(2026, 7, 15), azure_fetcher=fetcher)
+
+    assert result == 0.0
 
 
 @pytest.mark.asyncio
@@ -158,10 +185,9 @@ async def test_rollup_azure_billing_reservation_writes_fetched_amount(mock_prism
     mock_reservation.find_many = AsyncMock(return_value=[reservation])
     fetcher = MagicMock()
     fetcher.get_daily_cost = AsyncMock(return_value=150.0)
+    fetcher.last_currency = "USD"
 
-    result = await run_ptu_reservation_rollup(
-        prisma, target_date=date(2026, 7, 12), azure_fetcher=fetcher
-    )
+    result = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12), azure_fetcher=fetcher)
 
     assert result.rows_written == 1
     fetcher.get_daily_cost.assert_awaited_once_with("/subs/x/deploy/y", date(2026, 7, 12))
@@ -297,9 +323,7 @@ async def test_rollup_queries_active_reservations_at_day_start(mock_prisma):
 @pytest.mark.asyncio
 async def test_rollup_idempotent_second_run_upserts_same_row(mock_prisma):
     prisma, mock_daily, mock_reservation = mock_prisma
-    mock_reservation.find_many = AsyncMock(
-        return_value=[_r(id="res_1", ptu_count=1, cost_per_ptu=200.0)]
-    )
+    mock_reservation.find_many = AsyncMock(return_value=[_r(id="res_1", ptu_count=1, cost_per_ptu=200.0)])
 
     r1 = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12))
     r2 = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12))

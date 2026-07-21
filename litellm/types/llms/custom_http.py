@@ -30,6 +30,7 @@ class httpxSpecialProvider(str, Enum):
     PromptManagement = "prompt_management"
     UI = "ui"
     Sandbox = "sandbox"
+    AzureCostManagement = "azure_cost_management"
 
 
 VerifyTypes = Union[str, bool, ssl.SSLContext]
