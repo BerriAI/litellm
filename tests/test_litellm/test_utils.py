@@ -74,6 +74,19 @@ def test_prompt_tokens_details_no_cache_write_tokens_when_absent():
     assert not hasattr(details, "cache_creation_tokens")
 
 
+def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment():
+    """Assigning either name after construction must mirror to the other, so a
+    caller that sets only one field can't leave the pair silently out of sync."""
+    details = PromptTokensDetailsWrapper(cache_write_tokens=100)
+    assert details.cache_write_tokens == details.cache_creation_tokens == 100
+
+    details.cache_write_tokens = 250
+    assert details.cache_write_tokens == details.cache_creation_tokens == 250
+
+    details.cache_creation_tokens = 375
+    assert details.cache_write_tokens == details.cache_creation_tokens == 375
+
+
 @pytest.fixture
 def local_model_cost_map(monkeypatch):
     original_model_cost = litellm.model_cost
