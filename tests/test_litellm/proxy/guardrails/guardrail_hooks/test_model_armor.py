@@ -885,6 +885,27 @@ async def test_model_armor_api_error_fail_open_file_scan(fail_on_error: bool):
         assert await guardrail._scan_request_files(messages=messages, data=data) is None
 
 
+def test_model_armor_hot_reload_null_stays_sanitized():
+    """update_in_memory_litellm_params assigns raw fields; an explicit null in a
+    hot-reloaded config must not disable sanitization."""
+    from litellm.types.guardrails import LitellmParams
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+    )
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="model_armor", mode="pre_call", sanitize_error_detail=None)
+    )
+    assert guardrail.sanitize_error_detail is True
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="model_armor", mode="pre_call", sanitize_error_detail=False)
+    )
+    assert guardrail.sanitize_error_detail is False
+
+
 def test_model_armor_redactor_depth_cap_fails_closed():
     """Past the recursion cap the redactor must return the redaction sentinel,
     never raw content, and must not raise RecursionError."""

@@ -36,7 +36,7 @@ from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
     MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
     plan_file_scans,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     CallTypes,
@@ -191,6 +191,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _raise_if_fail_closed(self, e: ModelArmorAPIError) -> None:
         if self.optional_params.get("fail_on_error", True):
             raise HTTPException(status_code=400, detail=e.detail) from None
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        super().update_in_memory_litellm_params(litellm_params)
+        self.sanitize_error_detail = self.sanitize_error_detail is not False
 
     def _log_request_debug(
         self,
