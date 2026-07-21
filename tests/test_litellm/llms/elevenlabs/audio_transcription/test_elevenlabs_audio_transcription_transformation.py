@@ -58,6 +58,8 @@ class TestElevenLabsTransformResponse:
                     "words": [
                         {"type": "word", "text": "hello", "start": 0.0, "end": None},
                         {"type": "word", "text": "x", "start": 0.0, "end": "bad"},
+                        None,
+                        "not-a-dict",
                         {"type": "word", "text": "y", "start": 0.0, "end": 2.5},
                     ],
                 }
