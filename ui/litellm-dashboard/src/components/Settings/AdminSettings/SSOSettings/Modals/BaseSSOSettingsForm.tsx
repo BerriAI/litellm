@@ -4,6 +4,7 @@ import { TextInput } from "@tremor/react";
 import { Checkbox, Form, Input, Select } from "antd";
 import React from "react";
 import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
+import { Logo } from "@/components/molecules/logo/Logo";
 
 export interface BaseSSOSettingsFormProps {
   form: any; // Replace with proper Form type if available
@@ -117,10 +118,10 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
               <Select.Option key={value} value={value}>
                 <div style={{ display: "flex", alignItems: "center", padding: "4px 0" }}>
                   {logo && (
-                    <img
+                    <Logo
                       src={logo}
-                      alt={value}
-                      style={{ height: 24, width: 24, marginRight: 12, objectFit: "contain" }}
+                      label={ssoProviderDisplayNames[value] || value}
+                      className="h-6 w-6 mr-3 object-contain"
                     />
                   )}
                   <span>
