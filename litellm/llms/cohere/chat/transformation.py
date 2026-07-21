@@ -167,9 +167,7 @@ class CohereChatConfig(BaseConfig):
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "n":
-                _maybe_drop_unsupported_num_generations(
-                    value=value, drop_params=drop_params
-                )
+                _maybe_drop_unsupported_num_generations(value=value, drop_params=drop_params)
             if param == "top_p":
                 optional_params["p"] = value
             if param == "frequency_penalty":
