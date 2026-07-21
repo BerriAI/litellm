@@ -26,6 +26,7 @@ IS_CI="${CI:-false}"
 CONTAINER_NAME="litellm-e2e-postgres-$$"
 MOCK_PID=""
 PROXY_PID=""
+PROXY_LOG=""
 
 # --- Ensure common tool paths are available (local dev only) ---
 if [ "$IS_CI" = "false" ]; then
@@ -40,6 +41,7 @@ cleanup() {
   echo "Cleaning up..."
   [ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null || true
   [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
+  [ -n "$PROXY_LOG" ] && rm -f "$PROXY_LOG" || true
   if [ "$IS_CI" = "false" ]; then
     docker stop "$CONTAINER_NAME" 2>/dev/null || true
   fi
