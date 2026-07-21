@@ -1516,23 +1516,6 @@
       "count": 2
     }
   },
-  "src/components/ToolPolicies.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 7
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/components/UIAccessControlForm.tsx": {
     "no-restricted-imports": {
       "count": 1
