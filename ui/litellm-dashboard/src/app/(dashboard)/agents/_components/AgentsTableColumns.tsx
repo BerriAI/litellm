@@ -118,7 +118,10 @@ export const getAgentsTableColumns = ({
   },
   {
     id: "created_at",
-    accessorKey: "created_at",
+    accessorFn: (agent) => {
+      const timestamp = agent.created_at ? new Date(agent.created_at).getTime() : 0;
+      return Number.isNaN(timestamp) ? 0 : timestamp;
+    },
     meta: { title: "Created" },
     header: ({ column }) => <DataTableSortHeader column={column} title="Created" />,
     size: 150,

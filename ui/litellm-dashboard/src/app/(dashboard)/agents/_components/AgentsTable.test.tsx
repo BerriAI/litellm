@@ -105,6 +105,24 @@ describe("AgentsTable", () => {
     expect(bodyRows[1].textContent).toContain("Alpha Agent");
   });
 
+  it("sorts agents with no created_at last, never ahead of dated ones", () => {
+    render(
+      <AgentsTable
+        agents={[
+          makeAgent({ agent_id: "old", agent_name: "Alpha Agent", created_at: "2021-06-01T00:00:00Z" }),
+          makeAgent({ agent_id: "undated", agent_name: "Undated Agent", created_at: undefined }),
+          makeAgent({ agent_id: "new", agent_name: "Beta Agent", created_at: "2023-06-01T00:00:00Z" }),
+        ]}
+        {...baseProps}
+      />,
+    );
+
+    const bodyRows = screen.getAllByRole("row").slice(1);
+    expect(bodyRows[0].textContent).toContain("Beta Agent");
+    expect(bodyRows[1].textContent).toContain("Alpha Agent");
+    expect(bodyRows[2].textContent).toContain("Undated Agent");
+  });
+
   it("shows a rich empty state when there are no agents", () => {
     render(<AgentsTable agents={[]} {...baseProps} />);
     expect(screen.getByText("No agents yet")).toBeInTheDocument();

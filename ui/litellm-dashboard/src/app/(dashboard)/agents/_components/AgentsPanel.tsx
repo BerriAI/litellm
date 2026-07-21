@@ -34,21 +34,34 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   useEffect(() => {
-    const fetchInitial = async () => {
+    let cancelled = false;
+    const loadForToken = async () => {
       if (!accessToken) {
+        setAgentsList([]);
         setIsLoading(false);
         return;
       }
+      setIsLoading(true);
       try {
         const response: AgentsResponse = await getAgentsList(accessToken, false);
-        setAgentsList(response.agents || []);
+        if (!cancelled) {
+          setAgentsList(response.agents || []);
+        }
       } catch (error) {
         console.error("Error fetching agents:", error);
+        if (!cancelled) {
+          setAgentsList([]);
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
     };
-    fetchInitial();
+    loadForToken();
+    return () => {
+      cancelled = true;
+    };
   }, [accessToken]);
 
   const refetchAgents = async (healthCheck: boolean) => {

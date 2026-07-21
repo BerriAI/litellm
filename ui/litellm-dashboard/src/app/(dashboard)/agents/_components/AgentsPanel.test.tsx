@@ -20,9 +20,9 @@ vi.mock("./agent_info", () => ({
 
 describe("AgentsPanel", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
-    vi.mocked(networking.deleteAgentCall).mockResolvedValue({});
+    // mockReset (not mockClear) so an unconsumed *Once queue cannot leak into the next test
+    vi.mocked(networking.getAgentsList).mockReset().mockResolvedValue({ agents: [] });
+    vi.mocked(networking.deleteAgentCall).mockReset().mockResolvedValue({});
   });
 
   it("should render the Agents panel title", () => {
@@ -167,6 +167,94 @@ describe("AgentsPanel", () => {
     });
     expect(screen.getByText("No agents yet")).toBeInTheDocument();
     expect(networking.getAgentsList).not.toHaveBeenCalled();
+  });
+
+  it("should not show rows fetched with a previous access token after the token changes", async () => {
+    const agentFor = (name: string) => ({
+      agent_id: `id-${name}`,
+      agent_name: name,
+      litellm_params: { model: "gpt-4" },
+      spend: 0,
+      keys: [],
+    });
+    let resolveSecond: (value: { agents: ReturnType<typeof agentFor>[] }) => void = () => {};
+    vi.mocked(networking.getAgentsList)
+      .mockResolvedValueOnce({ agents: [agentFor("first-token-agent")] })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    const { rerender } = render(<AgentsPanel accessToken="token-a" userRole="Admin" />);
+    expect(await screen.findByText("first-token-agent")).toBeInTheDocument();
+
+    rerender(<AgentsPanel accessToken="token-b" userRole="Admin" />);
+
+    // the previous token's rows must not linger while the new token loads
+    expect(screen.queryByText("first-token-agent")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+
+    await act(async () => {
+      resolveSecond({ agents: [agentFor("second-token-agent")] });
+    });
+    expect(await screen.findByText("second-token-agent")).toBeInTheDocument();
+  });
+
+  it("should drop previous rows when the fetch for a new token fails", async () => {
+    vi.mocked(networking.getAgentsList)
+      .mockResolvedValueOnce({
+        agents: [
+          { agent_id: "stale", agent_name: "Stale Agent", litellm_params: { model: "gpt-4" }, spend: 0, keys: [] },
+        ],
+      })
+      .mockRejectedValueOnce(new Error("unauthorized"));
+
+    const { rerender } = render(<AgentsPanel accessToken="token-a" userRole="Admin" />);
+    expect(await screen.findByText("Stale Agent")).toBeInTheDocument();
+
+    rerender(<AgentsPanel accessToken="token-b" userRole="Admin" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No agents yet")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Stale Agent")).not.toBeInTheDocument();
+  });
+
+  it("should ignore a superseded response so it cannot overwrite the current token's rows", async () => {
+    let resolveFirst: (value: {
+      agents: { agent_id: string; agent_name: string; litellm_params: { model: string }; spend: number; keys: [] }[];
+    }) => void = () => {};
+    vi.mocked(networking.getAgentsList)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        agents: [
+          { agent_id: "current", agent_name: "Current Agent", litellm_params: { model: "gpt-4" }, spend: 0, keys: [] },
+        ],
+      });
+
+    const { rerender } = render(<AgentsPanel accessToken="token-a" userRole="Admin" />);
+    rerender(<AgentsPanel accessToken="token-b" userRole="Admin" />);
+
+    expect(await screen.findByText("Current Agent")).toBeInTheDocument();
+
+    // the slow token-a response lands last and must be discarded
+    await act(async () => {
+      resolveFirst({
+        agents: [
+          { agent_id: "stale", agent_name: "Superseded Agent", litellm_params: { model: "gpt-4" }, spend: 0, keys: [] },
+        ],
+      });
+    });
+
+    expect(screen.queryByText("Superseded Agent")).not.toBeInTheDocument();
+    expect(screen.getByText("Current Agent")).toBeInTheDocument();
   });
 
   it("should keep rows visible during a health-check refetch instead of re-showing the skeleton", async () => {
