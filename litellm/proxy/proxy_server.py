@@ -560,7 +560,10 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseUsageBlock,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    SpeechStreamingResponse,
+)
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -9429,6 +9432,17 @@ async def audio_speech(
             user_api_key_dict=user_api_key_dict, data=data, call_type="aspeech"
         )
 
+        # OpenAI's /v1/audio/speech always streams the response over chunked transfer, so a
+        # client that reads incrementally (with_streaming_response) sees first-audio well before
+        # generation finishes. Ask the handler to forward the upstream stream instead of buffering
+        # the full clip, so the proxy matches that behavior (and passes through stream_format="sse"
+        # frames when requested). This covers OpenAI and every openai-compatible provider routed
+        # through the OpenAI handler (hosted_vllm, etc); providers with their own handler
+        # (azure/elevenlabs/vertex) ignore the flag and keep returning a buffered response. It is
+        # deliberately not called "stream" so it does not trip _is_streaming_request and skip TTS
+        # cost tracking.
+        data["stream_audio"] = True
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call = await route_request(
             data=data,
@@ -9475,6 +9489,18 @@ async def audio_speech(
         if callback_headers:
             custom_headers.update(callback_headers)
 
+        # Streaming TTS (stream_format="sse"): forward the provider's frames as they
+        # arrive so time-to-first-audio reflects first-chunk latency instead of
+        # full-generation latency. The media type mirrors what the provider actually
+        # returned (text/event-stream for speech.audio.delta frames, or audio/* when the
+        # provider ignored stream_format), so nothing is mislabeled.
+        if isinstance(response, SpeechStreamingResponse):
+            return StreamingResponse(
+                response.stream_iterator,  # pyright: ignore[reportArgumentType]  # SSE byte iterator
+                media_type=response.headers.get("content-type") or "text/event-stream",
+                headers=custom_headers,  # pyright: ignore[reportArgumentType]  # header values coerced to str by starlette
+            )
+
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
         request_model = data.get("model", "")
@@ -9488,7 +9514,7 @@ async def audio_speech(
         return StreamingResponse(
             _audio_speech_chunk_generator(response),  # type: ignore[arg-type]
             media_type=media_type,
-            headers=custom_headers,  # type: ignore
+            headers=custom_headers,  # pyright: ignore[reportArgumentType]  # header values coerced to str by starlette
         )
 
     except Exception as e:

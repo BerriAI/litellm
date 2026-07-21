@@ -99,9 +99,7 @@ def patched_transcription(monkeypatch):
         return data
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
-    monkeypatch.setattr(
-        proxy_server, "check_file_size_under_limit", lambda **kwargs: True
-    )
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", lambda **kwargs: True)
 
     async def _form_data(request):
         from starlette.datastructures import FormData, UploadFile
@@ -160,6 +158,150 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+def _patch_speech_streaming(monkeypatch, frames, content_type):
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    from litellm.types.llms.openai import SpeechStreamingResponse
+
+    async def _frames():
+        for frame in frames:
+            yield frame
+
+    headers = {"content-type": content_type} if content_type is not None else {}
+
+    async def _llm_call():
+        return SpeechStreamingResponse(stream_iterator=_frames(), headers=headers)
+
+    async def _fake_route_request(*args, **kwargs):
+        return _llm_call()
+
+    monkeypatch.setattr(proxy_server, "route_request", _fake_route_request)
+
+
+@pytest.fixture
+def patched_speech_sse(monkeypatch):
+    _patch_speech_streaming(
+        monkeypatch,
+        frames=[
+            b'data: {"type":"speech.audio.delta","audio":"AAA"}\n\n',
+            b'data: {"type":"speech.audio.done"}\n\n',
+        ],
+        content_type="text/event-stream; charset=utf-8",
+    )
+    yield
+
+
+@pytest.fixture
+def patched_speech_ignored_stream_format(monkeypatch):
+    _patch_speech_streaming(
+        monkeypatch,
+        frames=[b"ID3\x04mp3-bytes"],
+        content_type="audio/mpeg",
+    )
+    yield
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_audio_speech_sse_streaming(client, auth_as, patched_speech_sse, path):
+    """Streaming TTS (stream_format='sse') forwards speech.audio.delta frames verbatim as
+    text/event-stream, instead of re-chunking a buffered audio/mpeg blob (regression #33974)."""
+    payload = {
+        "model": "gpt-4o-mini-tts",
+        "input": "Hi",
+        "voice": "alloy",
+        "stream_format": "sse",
+    }
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    body = response.content
+    assert b"speech.audio.delta" in body
+    assert b"speech.audio.done" in body
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_audio_speech_streaming_honors_provider_content_type(
+    client, auth_as, patched_speech_ignored_stream_format, path
+):
+    """When the provider ignores stream_format and returns audio/mpeg (e.g. tts-1), the proxy
+    must forward that content-type verbatim rather than mislabeling the bytes as SSE."""
+    payload = {
+        "model": "tts-1",
+        "input": "Hi",
+        "voice": "alloy",
+        "stream_format": "sse",
+    }
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("audio/mpeg")
+    assert response.content == b"ID3\x04mp3-bytes"
+
+
+def test_audio_speech_requests_upstream_streaming(client, auth_as, monkeypatch):
+    """The proxy must ask the handler to stream the upstream (stream_audio=True) even for a plain
+    request with no stream_format, so it matches OpenAI's always-chunked /v1/audio/speech and does
+    not buffer the full clip. Named stream_audio (not stream) so TTS cost tracking is not skipped."""
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    from litellm.types.llms.openai import SpeechStreamingResponse
+
+    captured: dict = {}
+
+    async def _frames():
+        yield b"audio-bytes"
+
+    async def _llm_call():
+        return SpeechStreamingResponse(stream_iterator=_frames(), headers={"content-type": "audio/mpeg"})
+
+    async def _fake_route_request(*args, **kwargs):
+        captured.update(kwargs.get("data", {}))
+        return _llm_call()
+
+    monkeypatch.setattr(proxy_server, "route_request", _fake_route_request)
+
+    payload = {"model": "gpt-4o-mini-tts", "input": "Hi", "voice": "alloy"}
+    with auth_as():
+        response = client.post("/v1/audio/speech", json=payload)
+
+    assert response.status_code == 200
+    assert captured.get("stream_audio") is True
+    assert "stream" not in captured  # must not be "stream" (would skip cost tracking)
+    assert response.headers.get("content-type", "").startswith("audio/mpeg")
+    assert response.content == b"audio-bytes"
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
