@@ -69,6 +69,16 @@ class TestA2AAgentLifecycle:
         assert fetched.agent_name == agent.agent_name
         assert fetched.agent_card_params.protocol_version == "0.3"
 
+    @pytest.mark.covers("other.a2a.register.semver_version_accepted")
+    def test_semver_protocol_version_registers_and_serves(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+        agent = _register(client, resources, "0.3.0")
+        assert agent.agent_card_params.protocol_version.startswith("0.3")
+        card = unwrap(client.agent_card(agent.agent_id, scoped_key))
+        assert card.protocol_version.startswith("0.3")
+        result = unwrap(client.send_message(agent.agent_id, scoped_key, _ask("Say hi in one word"))).result
+        assert result is not None
+        assert result.text != ""
+
     @pytest.mark.covers("other.a2a.discovery.proxy_fronted_card")
     def test_discovery_card_is_proxy_fronted(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
         agent = _register(client, resources, "0.3")
