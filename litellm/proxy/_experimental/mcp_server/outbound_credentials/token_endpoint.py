@@ -70,7 +70,9 @@ class _TokenEndpointResponse(BaseModel):
 class TokenEndpointRejection:
     """The RFC 6749 §5.2 error body of a token-endpoint 4xx, parsed so a caller that knows
     which leg it posted can classify the rejection (an ``invalid_grant`` from a resource
-    authorization server means something different from one at the IdP)."""
+    authorization server means something different from one at the IdP). A 5xx never parses
+    into one: an upstream fault stays retryable upstream_unavailable regardless of any error
+    body it happens to carry."""
 
     status_code: int
     error: str
@@ -81,6 +83,8 @@ RejectionClassifier = Callable[[TokenEndpointRejection], CredError | None]
 
 
 def _parse_token_endpoint_rejection(response: httpx.Response) -> TokenEndpointRejection | None:
+    if not 400 <= response.status_code < 500:
+        return None
     try:
         body = response.json()
     except (json.JSONDecodeError, ValueError):

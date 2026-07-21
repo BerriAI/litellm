@@ -299,26 +299,35 @@ class UpstreamCredentialProvider:
             return None
 
 
-# RFC 6749 §5.2 codes that, from a RESOURCE authorization server redeeming a freshly minted
-# ID-JAG (RFC 7523 jwt-bearer leg), indicate a registration problem the operator must fix, not
-# an outage: the gateway client is unknown there, unauthorized for the grant, the ID-JAG's
-# client_id claim does not match the authenticating client, or the target is wrong.
-_RESOURCE_AS_MISCONFIG_CODES = frozenset({"invalid_grant", "invalid_client", "unauthorized_client", "invalid_target"})
-
-
 def _classify_resource_as_rejection(client_id: str, rejection: TokenEndpointRejection) -> CredError | None:
-    """The resource AS rejecting the jwt-bearer leg with a §5.2 code is an actionable
-    misconfiguration (the assertion was just minted, so expiry is not in play); anything else
-    keeps the default upstream_unavailable mapping."""
-    if rejection.error not in _RESOURCE_AS_MISCONFIG_CODES:
-        return None
+    """A resource-AS §5.2 rejection of the jwt-bearer leg, diagnosed per code so the message
+    never claims more than the code proves: client-authentication codes name the registration,
+    invalid_target names the audience/resource configuration, and invalid_grant (which the EMA
+    profile mandates for a client_id-claim mismatch but also covers assertion-validation
+    failures like clock skew or key propagation) lists both, mismatch first. Anything else,
+    including a 5xx (never parsed into a rejection), keeps the retryable default mapping."""
     described = f" ({rejection.error_description})" if rejection.error_description else ""
-    return CredError.of_misconfigured(
-        f"the resource authorization server rejected the ID-JAG with {rejection.error}{described}; "
-        f"the gateway client {client_id!r} must be registered at the resource authorization server "
-        "and match the ID-JAG's client_id claim (the IdP and the resource server must share the "
-        "gateway's client registration)"
-    )
+    prefix = f"the resource authorization server rejected the ID-JAG with {rejection.error}{described}; "
+    if rejection.error in ("invalid_client", "unauthorized_client"):
+        return CredError.of_misconfigured(
+            prefix + f"the gateway client {client_id!r} failed to authenticate or is not authorized "
+            "for the jwt-bearer grant at the resource authorization server; check its client "
+            "registration and credentials there"
+        )
+    if rejection.error == "invalid_target":
+        return CredError.of_misconfigured(
+            prefix + "the requested target was not accepted; check the server's audience and "
+            "id_jag_resource configuration against what the resource authorization server serves"
+        )
+    if rejection.error == "invalid_grant":
+        return CredError.of_misconfigured(
+            prefix + f"the assertion was rejected; most commonly the gateway client {client_id!r} "
+            "is not the client named in the ID-JAG's client_id claim (the IdP and the resource "
+            "server must share the gateway's client registration), though an assertion-validation "
+            "failure such as clock skew or signing-key propagation produces the same code, so "
+            "retry once before changing configuration"
+        )
+    return None
 
 
 def _id_jag_cache_key(subject_token: str, server_id: str, config: IdJagConfig) -> str:

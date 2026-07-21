@@ -9053,8 +9053,8 @@ class TestIdJagEndpointDiscovery:
 
     def _ema_metadata(self, grant_profiles):
         return MCPOAuthMetadata(
-            token_url="https://ras.example.com/token",
-            discovered_issuer="https://ras.example.com",
+            token_url="https://up.example.com/ras/token",
+            discovered_issuer="https://up.example.com/ras",
             grant_profiles=grant_profiles,
         )
 
@@ -9068,20 +9068,24 @@ class TestIdJagEndpointDiscovery:
         assert needs(None, None) is False
 
     def test_gate_releases_only_advertised_id_jag_capable_endpoints(self):
-        gate = MCPServerManager._gated_id_jag_endpoint
         profile = "urn:ietf:params:oauth:grant-profile:id-jag"
-        assert gate(self._ema_metadata([profile]), "s1") == "https://ras.example.com/token"
-        assert gate(self._ema_metadata([profile, "other"]), "s1") == "https://ras.example.com/token"
-        assert gate(None, "s1") is None
-        assert gate(self._ema_metadata(None), "s1") is None
-        assert gate(self._ema_metadata([]), "s1") is None
-        assert gate(self._ema_metadata(["urn:other:profile"]), "s1") is None
+        server_url = "https://up.example.com/mcp"
+
+        def gate(metadata):
+            return MCPServerManager._gated_id_jag_endpoint(metadata, "s1", server_url=server_url)
+
+        assert gate(self._ema_metadata([profile])) == "https://up.example.com/ras/token"
+        assert gate(self._ema_metadata([profile, "other"])) == "https://up.example.com/ras/token"
+        assert gate(None) is None
+        assert gate(self._ema_metadata(None)) is None
+        assert gate(self._ema_metadata([])) is None
+        assert gate(self._ema_metadata(["urn:other:profile"])) is None
         no_token_url = MCPOAuthMetadata(grant_profiles=[profile])
-        assert gate(no_token_url, "s1") is None
+        assert gate(no_token_url) is None
         guessed = MCPOAuthMetadata(
-            token_url="https://ras.example.com/token", grant_profiles=[profile], from_origin_fallback=True
+            token_url="https://up.example.com/ras/token", grant_profiles=[profile], from_origin_fallback=True
         )
-        assert gate(guessed, "s1") is None
+        assert gate(guessed) is None
 
     @pytest.mark.asyncio
     async def test_build_from_table_autofills_and_persists_gated_id_jag_endpoint(self):
@@ -9095,10 +9099,10 @@ class TestIdJagEndpointDiscovery:
             built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
 
         mock_discovery.assert_awaited_once()
-        assert built.id_jag_resource_token_endpoint == "https://ras.example.com/token"
+        assert built.id_jag_resource_token_endpoint == "https://up.example.com/ras/token"
         mock_persist.assert_awaited_once()
         persist_kwargs = mock_persist.await_args.kwargs
-        assert persist_kwargs["discovered_endpoint"] == "https://ras.example.com/token"
+        assert persist_kwargs["discovered_endpoint"] == "https://up.example.com/ras/token"
         assert persist_kwargs["existing_endpoint"] is None
 
     @pytest.mark.asyncio
@@ -9149,7 +9153,7 @@ class TestIdJagEndpointDiscovery:
             await manager.load_servers_from_config(config)
 
         server = next(iter(manager.config_mcp_servers.values()))
-        assert server.id_jag_resource_token_endpoint == "https://ras.example.com/token"
+        assert server.id_jag_resource_token_endpoint == "https://up.example.com/ras/token"
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_pinned_id_jag_endpoint_skips_discovery(self):
@@ -9191,3 +9195,41 @@ class TestIdJagEndpointDiscovery:
         assert metadata is not None
         assert metadata.grant_profiles == ["urn:ietf:params:oauth:grant-profile:id-jag"]
         assert metadata.token_url == "https://ras.example.com/token"
+
+
+class TestIdJagEndpointSSRFGate:
+    """The discovered leg-2 endpoint later receives a POST with the gateway's client
+    authentication, so a cross-authority value must clear SSRF validation before release;
+    the server's own origin is no pivot and passes."""
+
+    _PROFILE = "urn:ietf:params:oauth:grant-profile:id-jag"
+
+    def _metadata(self, token_url):
+        return MCPOAuthMetadata(
+            token_url=token_url, discovered_issuer="https://ras.example.com", grant_profiles=[self._PROFILE]
+        )
+
+    def test_cross_authority_internal_endpoint_is_refused(self):
+        gated = MCPServerManager._gated_id_jag_endpoint(
+            self._metadata("http://169.254.169.254/token"), "s1", server_url="https://up.example.com/mcp"
+        )
+        assert gated is None
+
+    def test_same_authority_internal_endpoint_passes(self):
+        gated = MCPServerManager._gated_id_jag_endpoint(
+            self._metadata("http://127.0.0.1:8952/ras/token"), "s1", server_url="http://127.0.0.1:8952/mcp"
+        )
+        assert gated == "http://127.0.0.1:8952/ras/token"
+
+    def test_cross_authority_public_endpoint_passes_validation(self):
+        from unittest.mock import patch as _patch
+
+        with _patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.validate_url",
+            return_value=("https://1.2.3.4/token", "ras.example.com"),
+        ) as mock_validate:
+            gated = MCPServerManager._gated_id_jag_endpoint(
+                self._metadata("https://ras.example.com/token"), "s1", server_url="https://up.example.com/mcp"
+            )
+        mock_validate.assert_called_once_with("https://ras.example.com/token")
+        assert gated == "https://ras.example.com/token"

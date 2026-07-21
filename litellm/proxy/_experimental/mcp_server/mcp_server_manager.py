@@ -45,7 +45,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
-from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, validate_url
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -1070,16 +1070,22 @@ class MCPServerManager:
         assertion and skips both the round-trip and the grant-profile gate."""
         return auth_type == MCPAuth.oauth2_id_jag and not id_jag_resource_token_endpoint
 
-    @staticmethod
+    @classmethod
     def _gated_id_jag_endpoint(
+        cls,
         metadata: MCPOAuthMetadata | None,
         server_id: str,
+        server_url: str | None = None,
     ) -> str | None:
         """The discovered leg-2 endpoint, released only when the authorization server passes the
         enterprise-managed-authorization capability gate: the document must be advertised (never an
-        origin-fallback guess) and must list the id-jag grant profile, else an endpoint that cannot
-        serve the jwt-bearer leg would be silently trusted. A rejected discovery leaves the field
-        unset, so the existing fail-closed misconfigured error at client build names the gap."""
+        origin-fallback guess), must list the id-jag grant profile, and a cross-authority endpoint
+        must clear SSRF validation, since the value came from the upstream's own metadata and will
+        later receive a POST carrying the gateway's client authentication and a minted assertion.
+        A same-authority endpoint (the server's own origin) is no pivot beyond the server the
+        gateway already talks to, which keeps intentional internal deployments working. A rejected
+        discovery leaves the field unset, so the existing fail-closed misconfigured error at client
+        build names the gap."""
         if metadata is None or metadata.from_origin_fallback or not metadata.token_url:
             return None
         if not metadata.grant_profiles or _ID_JAG_GRANT_PROFILE not in metadata.grant_profiles:
@@ -1091,6 +1097,19 @@ class MCPServerManager:
                 server_id,
                 metadata.discovered_issuer or metadata.token_url,
                 _ID_JAG_GRANT_PROFILE,
+            )
+            return None
+        if server_url and cls._is_same_authority_metadata_url(metadata.token_url, server_url):
+            return metadata.token_url
+        try:
+            validate_url(metadata.token_url)
+        except SSRFError as exc:
+            verbose_logger.warning(
+                "MCP server %s: discovered ID-JAG resource token endpoint was rejected by SSRF "
+                "validation and will not be autofilled (%s). Pin the endpoint explicitly if this "
+                "internal authorization server is intentional.",
+                server_id,
+                exc,
             )
             return None
         return metadata.token_url
@@ -1462,6 +1481,7 @@ class MCPServerManager:
                 or self._gated_id_jag_endpoint(
                     gated_oauth_metadata if auth_type == MCPAuth.oauth2_id_jag else None,
                     server_name or server_id,
+                    server_url=server_url,
                 ),
                 id_jag_resource=server_config.get("id_jag_resource", None),
                 client_private_key=server_config.get("client_private_key", None),
@@ -1953,6 +1973,7 @@ class MCPServerManager:
             or self._gated_id_jag_endpoint(
                 gated_oauth_metadata if auth_type == MCPAuth.oauth2_id_jag else None,
                 mcp_server.server_id,
+                server_url=server_url,
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
             client_private_key=self._decrypt_credential_field(

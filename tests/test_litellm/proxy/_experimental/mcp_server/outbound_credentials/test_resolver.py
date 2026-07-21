@@ -649,8 +649,19 @@ async def test_id_jag_leg2_carries_a_resource_as_rejection_classifier_and_leg1_d
     )
 
 
-@pytest.mark.parametrize("code", ["invalid_grant", "invalid_client", "unauthorized_client", "invalid_target"])
-def test_resource_as_misconfig_codes_classify_as_misconfigured(code):
+@pytest.mark.parametrize(
+    "code,expected_fragment",
+    [
+        ("invalid_client", "client registration and credentials"),
+        ("unauthorized_client", "client registration and credentials"),
+        ("invalid_target", "audience and"),
+        ("invalid_grant", "client_id claim"),
+    ],
+)
+def test_resource_as_rejections_get_per_code_diagnoses(code, expected_fragment):
+    """The message never claims more than the code proves: authn codes name the registration,
+    invalid_target names the audience config, invalid_grant lists mismatch first and the
+    assertion-validation alternatives (clock skew, key propagation) second."""
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import (
         _classify_resource_as_rejection,
     )
@@ -663,4 +674,8 @@ def test_resource_as_misconfig_codes_classify_as_misconfigured(code):
     )
     assert classified is not None
     assert classified.tag == "misconfigured"
-    assert "gw-client" in classified.summary
+    assert expected_fragment in classified.summary
+    if code == "invalid_grant":
+        assert "retry" in classified.summary
+    if code == "invalid_target":
+        assert "registration" not in classified.summary

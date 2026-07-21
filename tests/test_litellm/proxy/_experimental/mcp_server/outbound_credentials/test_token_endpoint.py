@@ -484,3 +484,23 @@ async def test_fetch_unparseable_rejection_body_keeps_upstream_unavailable(body)
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_fetch_5xx_with_oauth_error_body_stays_upstream_unavailable():
+    """A 5xx is an upstream fault regardless of any error body it carries; only a 4xx is an
+    RFC 6749 rejection eligible for classification."""
+    with patch(
+        _PATCH_TARGET,
+        return_value=_client(_oauth_error_resp(status_code=502, body={"error": "invalid_grant"})),
+    ):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+            classify_rejection=lambda rejection: CredError.of_misconfigured("should not fire"),
+        )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
