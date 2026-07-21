@@ -393,6 +393,50 @@ describe("MCPServerEdit (auth type switch)", () => {
     vi.clearAllMocks();
   });
 
+  it("renders the ID-JAG arm on edit and nulls its shared fields when switching away", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "none",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "oauth2_id_jag",
+          token_exchange_endpoint: "https://org.example.com/oauth2/v1/token",
+          audience: "https://ras.example.com",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token")).toBeInTheDocument();
+    });
+    expect(screen.getByPlaceholderText("https://mcp-as.example.com/oauth2/token")).toBeInTheDocument();
+
+    await selectAntOption("Authentication", "None");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("none");
+    expect(payload.token_exchange_endpoint).toBeNull();
+    expect(payload.audience).toBeNull();
+    expect(payload.subject_token_type).toBeNull();
+  });
+
   it("clears stale oauth2 endpoint overrides when switching to token exchange", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
       ...interactiveOAuthServer,

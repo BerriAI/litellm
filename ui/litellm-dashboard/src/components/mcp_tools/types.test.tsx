@@ -231,3 +231,19 @@ describe("credentialAuthClass", () => {
     expect(credentialAuthClass(null)).toBeNull();
   });
 });
+
+describe("id_jag auth type", () => {
+  it("classifies oauth2_id_jag as the id_jag oauth mode", async () => {
+    const { getMcpOAuthMode, AUTH_TYPE } = await import("./types");
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2_ID_JAG })).toBe("id_jag");
+  });
+
+  it("auto-connects only oauth2_id_jag servers in the Apps grid", async () => {
+    const { isAutoConnectedAuthType, AUTH_TYPE } = await import("./types");
+    expect(isAutoConnectedAuthType(AUTH_TYPE.OAUTH2_ID_JAG)).toBe(true);
+    expect(isAutoConnectedAuthType(AUTH_TYPE.OAUTH2)).toBe(false);
+    expect(isAutoConnectedAuthType(AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE)).toBe(false);
+    expect(isAutoConnectedAuthType(null)).toBe(false);
+    expect(isAutoConnectedAuthType(undefined)).toBe(false);
+  });
+});

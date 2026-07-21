@@ -1058,6 +1058,128 @@ describe("CreateMCPServer", () => {
       });
     });
 
+    it("routes Enterprise-Managed Authorization (ID-JAG) config to the backend payload", async () => {
+      await selectHttpTransport();
+
+      fireEvent.change(getServerNameInput(), { target: { value: "EMA_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://upstream.example.com/mcp" },
+      });
+
+      await selectAntOption("Authentication", "Enterprise-Managed Authorization (ID-JAG)");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token")).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token"), {
+        target: { value: "https://org.example.com/oauth2/v1/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("https://mcp-as.example.com/oauth2/token"), {
+        target: { value: "https://ras.example.com/oauth2/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "ema-client-id" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client secret"), {
+        target: { value: "ema-client-secret" },
+      });
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-ema",
+        server_name: "EMA_Server",
+        alias: "EMA_Server",
+        url: "https://upstream.example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2_id_jag",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("oauth2_id_jag");
+      expect(payload.token_exchange_endpoint).toBe("https://org.example.com/oauth2/v1/token");
+      expect(payload.credentials).toMatchObject({
+        client_id: "ema-client-id",
+        client_secret: "ema-client-secret",
+        id_jag_resource_token_endpoint: "https://ras.example.com/oauth2/token",
+      });
+    });
+
+    it("routes ID-JAG private_key_jwt client auth into nested credentials", async () => {
+      await selectHttpTransport();
+
+      fireEvent.change(getServerNameInput(), { target: { value: "EMA_PK_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://upstream.example.com/mcp" },
+      });
+
+      await selectAntOption("Authentication", "Enterprise-Managed Authorization (ID-JAG)");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token")).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token"), {
+        target: { value: "https://org.example.com/oauth2/v1/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "ema-client-id" },
+      });
+
+      await selectAntOption("Client Authentication", "Private Key JWT");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("-----BEGIN PRIVATE KEY-----")).toBeInTheDocument();
+      });
+      expect(screen.queryByPlaceholderText("Enter OAuth client secret")).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByPlaceholderText("-----BEGIN PRIVATE KEY-----"), {
+        target: { value: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("key-2026-01"), {
+        target: { value: "kid-1" },
+      });
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-ema-pk",
+        server_name: "EMA_PK_Server",
+        alias: "EMA_PK_Server",
+        url: "https://upstream.example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2_id_jag",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("oauth2_id_jag");
+      expect(payload.credentials).toMatchObject({
+        client_id: "ema-client-id",
+        client_private_key: expect.stringContaining("BEGIN PRIVATE KEY"),
+        client_private_key_id: "kid-1",
+      });
+      expect(payload.credentials.client_secret).toBeUndefined();
+    });
+
     it("makes scope required when the Entra OBO profile is selected", async () => {
       await selectHttpTransport();
 

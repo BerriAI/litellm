@@ -40,6 +40,7 @@ export const AUTH_TYPE = {
   BASIC: "basic",
   OAUTH2: "oauth2",
   OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
+  OAUTH2_ID_JAG: "oauth2_id_jag",
   AWS_SIGV4: "aws_sigv4",
   TRUE_PASSTHROUGH: "true_passthrough",
   OAUTH_DELEGATE: "oauth_delegate",
@@ -161,7 +162,14 @@ export const MCP_OAUTH2_FLOW_M2M = "client_credentials";
 
 export const MCP_OAUTH2_FLOW_INTERACTIVE = "authorization_code";
 
-export type McpOAuthMode = "m2m" | "passthrough" | "authorization_code" | "token_exchange";
+export type McpOAuthMode = "m2m" | "passthrough" | "authorization_code" | "token_exchange" | "id_jag";
+
+/** Enterprise-managed authorization: the user's one SSO login is the only interaction, tokens
+ * mint via back-channel exchange, so the Apps grid renders these servers as already connected
+ * with no connect affordance. */
+export function isAutoConnectedAuthType(authType?: string | null): boolean {
+  return authType === AUTH_TYPE.OAUTH2_ID_JAG;
+}
 
 // Classify an OAuth MCP server into the mode that decides how the tool list is
 // authenticated. token_exchange (RFC 8693 / OBO) is its own auth_type
@@ -180,6 +188,7 @@ export function getMcpOAuthMode(s: {
   delegate_auth_to_upstream?: boolean | null;
 }): McpOAuthMode | null {
   if (s.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE) return "token_exchange";
+  if (s.auth_type === AUTH_TYPE.OAUTH2_ID_JAG) return "id_jag";
   if (s.auth_type !== AUTH_TYPE.OAUTH2) return null;
   if (s.oauth2_flow === MCP_OAUTH2_FLOW_M2M) return "m2m";
   return s.delegate_auth_to_upstream ? "passthrough" : "authorization_code";

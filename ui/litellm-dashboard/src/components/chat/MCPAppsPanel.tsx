@@ -13,7 +13,7 @@ import {
   getMCPOAuthUserCredentialStatus,
   listMCPTools,
 } from "../networking";
-import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
+import { AUTH_TYPE, MCPServer, MCPTool, handleTransport, isAutoConnectedAuthType } from "../mcp_tools/types";
 import MessageManager from "@/components/molecules/message_manager";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 
@@ -294,48 +294,55 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             <h2 className="m-0 mb-1 text-[22px] font-bold text-foreground">{name}</h2>
             <p className="m-0 text-sm text-muted-foreground">{detailServer.description ?? "MCP server"}</p>
           </div>
-          {detailServer.auth_type === AUTH_TYPE.OAUTH2 ? (
-            oauthConnected.has(detailServer.server_id) ? (
+          {isAutoConnectedAuthType(detailServer.auth_type) && (
+            <span className="inline-flex items-center gap-1.5 h-[38px] px-3 rounded-md bg-emerald-50 text-emerald-700 text-sm font-semibold">
+              <CheckCircle className="h-4 w-4" />
+              Connected via your organization sign-in
+            </span>
+          )}
+          {!isAutoConnectedAuthType(detailServer.auth_type) &&
+            (detailServer.auth_type === AUTH_TYPE.OAUTH2 ? (
+              oauthConnected.has(detailServer.server_id) ? (
+                <Button
+                  variant="destructive"
+                  onClick={async () => {
+                    try {
+                      await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
+                    } catch (_) {
+                      // Ignore
+                    }
+                    setOauthConnected((prev) => {
+                      const n = new Set(prev);
+                      n.delete(detailServer.server_id);
+                      return n;
+                    });
+                    onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
+                  }}
+                  className="font-semibold h-[38px] min-w-[110px]"
+                >
+                  Disconnect
+                </Button>
+              ) : (
+                <OAuth2ConnectButton
+                  server={detailServer}
+                  accessToken={accessToken}
+                  onConnect={(id) => {
+                    setOauthConnected((prev) => new Set(prev).add(id));
+                  }}
+                  variant="button"
+                />
+              )
+            ) : (
               <Button
-                variant="destructive"
-                onClick={async () => {
-                  try {
-                    await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
-                  } catch (_) {
-                    // Ignore
-                  }
-                  setOauthConnected((prev) => {
-                    const n = new Set(prev);
-                    n.delete(detailServer.server_id);
-                    return n;
-                  });
-                  onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
-                }}
+                variant={isConnected ? "outline" : "default"}
+                disabled={isTogglingOn}
+                onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
                 className="font-semibold h-[38px] min-w-[110px]"
               >
-                Disconnect
+                {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
+                {isConnected ? "Disconnect" : "Connect"}
               </Button>
-            ) : (
-              <OAuth2ConnectButton
-                server={detailServer}
-                accessToken={accessToken}
-                onConnect={(id) => {
-                  setOauthConnected((prev) => new Set(prev).add(id));
-                }}
-                variant="button"
-              />
-            )
-          ) : (
-            <Button
-              variant={isConnected ? "outline" : "default"}
-              disabled={isTogglingOn}
-              onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
-              className="font-semibold h-[38px] min-w-[110px]"
-            >
-              {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
-              {isConnected ? "Disconnect" : "Connect"}
-            </Button>
-          )}
+            ))}
         </div>
 
         <h3 className="m-0 mb-3 text-[15px] font-semibold text-foreground">Information</h3>
@@ -513,22 +520,32 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                     ) : null}
                   </div>
                 </div>
-                {server.auth_type === AUTH_TYPE.OAUTH2 ? (
-                  oauthConnected.has(server.server_id) ? (
-                    <CheckCircle className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                  ) : (
-                    <OAuth2ConnectButton
-                      server={server}
-                      accessToken={accessToken}
-                      onConnect={(id) => {
-                        setOauthConnected((prev) => new Set(prev).add(id));
-                      }}
-                      variant="badge"
-                    />
-                  )
-                ) : isConnected ? (
-                  <span className="w-[7px] h-[7px] rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
-                ) : null}
+                {(() => {
+                  if (isAutoConnectedAuthType(server.auth_type)) {
+                    return <CheckCircle className="h-3.5 w-3.5 text-emerald-600 shrink-0" />;
+                  }
+                  if (server.auth_type === AUTH_TYPE.OAUTH2) {
+                    if (oauthConnected.has(server.server_id)) {
+                      return <CheckCircle className="h-3.5 w-3.5 text-emerald-600 shrink-0" />;
+                    }
+                    return (
+                      <OAuth2ConnectButton
+                        server={server}
+                        accessToken={accessToken}
+                        onConnect={(id) => {
+                          setOauthConnected((prev) => new Set(prev).add(id));
+                        }}
+                        variant="badge"
+                      />
+                    );
+                  }
+                  if (isConnected) {
+                    return (
+                      <span className="w-[7px] h-[7px] rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
+                    );
+                  }
+                  return null;
+                })()}
                 <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
               </div>
             );
