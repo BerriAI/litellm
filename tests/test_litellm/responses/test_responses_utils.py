@@ -278,6 +278,55 @@ class TestResponseAPILoggingUtils:
             and result.prompt_tokens_details.cached_tokens == 2
         )
 
+    def test_transform_response_api_usage_carries_cache_write_tokens_from_object(self):
+        """
+        Regression for https://github.com/BerriAI/litellm/issues/33772.
+
+        When input_tokens_details arrives as a ResponseAPIUsage object (not a dict),
+        the OpenAI(-compatible) `cache_write_tokens` split was dropped, so cost was
+        computed without any cache-write tokens. It must be carried through onto the
+        chat-shaped `cache_creation_tokens`.
+        """
+        from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage
+
+        usage = ResponseAPIUsage(
+            input_tokens=1000,
+            output_tokens=0,
+            total_tokens=1000,
+            input_tokens_details=InputTokensDetails(
+                cached_tokens=0, cache_write_tokens=400
+            ),
+        )
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cache_creation_tokens == 400
+
+    def test_transform_response_api_usage_carries_cache_write_tokens_from_dict(self):
+        """
+        Regression for https://github.com/BerriAI/litellm/issues/33772.
+
+        The dict-shaped usage path must also carry the `cache_write_tokens` split
+        through onto `cache_creation_tokens` so the downstream cost path can price it
+        at the cache-creation rate.
+        """
+        usage = {
+            "input_tokens": 1000,
+            "output_tokens": 0,
+            "total_tokens": 1000,
+            "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 400},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cache_creation_tokens == 400
+
     def test_transform_response_api_usage_with_none_values(self):
         """Test transformation handles None values properly"""
         # Setup

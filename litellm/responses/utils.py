@@ -996,6 +996,10 @@ class ResponseAPILoggingUtils:
                     audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
                     text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
                     image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
+                    cache_creation_tokens=(
+                        getattr(response_api_usage.input_tokens_details, "cache_creation_tokens", None)
+                        or getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None)
+                    ),
                 )
         completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
