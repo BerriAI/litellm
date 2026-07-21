@@ -98,14 +98,26 @@ class UserProvisionerHelpers:
         if not existing_user:
             return None
 
-        # Update the user
+        new_teams = list(dict.fromkeys(new_user_request.teams or []))
+
+        if new_user_request.user_id != existing_user.user_id:
+            await UserRepository(prisma_client).table.update(
+                where={"user_id": existing_user.user_id},
+                data={"user_id": new_user_request.user_id},
+            )
+
+        await _handle_team_membership_changes(
+            user_id=new_user_request.user_id,
+            existing_teams=existing_user.teams or [],
+            new_teams=new_teams,
+        )
+
         updated_user = await UserRepository(prisma_client).table.update(
-            where={"user_id": existing_user.user_id},
+            where={"user_id": new_user_request.user_id},
             data={
-                "user_id": new_user_request.user_id,
                 "user_email": new_user_request.user_email,
                 "user_alias": new_user_request.user_alias,
-                "teams": new_user_request.teams,
+                "teams": new_teams,
                 "metadata": safe_dumps(new_user_request.metadata),
                 **({"user_role": new_user_request.user_role} if admin_group is not None else {}),
             },
