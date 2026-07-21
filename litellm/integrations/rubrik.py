@@ -1076,8 +1076,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # a tool-block explanation to the original text. ``appended`` tells the
         # two apart, and is reused below to recover just the explanation. A text
         # block requires there to have been assistant text to block.
-        appended = bool(sent_content) and returned_content.startswith(sent_content)
-        text_blocked = bool(sent_content) and not appended
+        # Use the documented ``\n\n`` separator to distinguish a tool-block
+        # append from a text replacement that shares the original as a prefix.
+        # Without the separator, a replacement like "Hello, blocked." where the
+        # original was "Hello" would be classified as an append (not a text
+        # block) and silently pass through to the client.
+        appended = bool(sent_content) and returned_content.startswith(f"{sent_content}\n\n")
+        text_blocked = bool(sent_content) and returned_content != sent_content and not appended
 
         if text_blocked:
             return BlockedResponseResult(explanation=returned_content or "Response blocked by policy.")
