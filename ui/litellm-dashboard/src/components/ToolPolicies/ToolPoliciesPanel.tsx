@@ -36,6 +36,11 @@ function toMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+const withTool = (names: ReadonlySet<string>, toolName: string): ReadonlySet<string> => new Set([...names, toolName]);
+
+const withoutTool = (names: ReadonlySet<string>, toolName: string): ReadonlySet<string> =>
+  new Set([...names].filter((name) => name !== toolName));
+
 const TOOLS_QUERY_KEY = "tool-policies";
 
 interface ToolPoliciesPanelProps {
@@ -45,8 +50,8 @@ interface ToolPoliciesPanelProps {
 
 export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToken, onSelectTool }) => {
   const queryClient = useQueryClient();
-  const [savingInput, setSavingInput] = useState<string | null>(null);
-  const [savingOutput, setSavingOutput] = useState<string | null>(null);
+  const [savingInput, setSavingInput] = useState<ReadonlySet<string>>(() => new Set());
+  const [savingOutput, setSavingOutput] = useState<ReadonlySet<string>>(() => new Set());
 
   const queryKey = useMemo(() => [TOOLS_QUERY_KEY, accessToken], [accessToken]);
 
@@ -61,8 +66,11 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
 
   const tools = useMemo(() => query.data ?? [], [query.data]);
 
+  // Cancel first: a list fetch that started before this save would otherwise resolve afterwards
+  // and overwrite the row we just wrote with its pre-save snapshot.
   const patchTool = useCallback(
-    (toolName: string, patch: Partial<ToolRow>) => {
+    async (toolName: string, patch: Partial<ToolRow>) => {
+      await queryClient.cancelQueries({ queryKey });
       queryClient.setQueryData<ToolRow[]>(queryKey, (previous) =>
         (previous ?? []).map((tool) => (tool.tool_name === toolName ? { ...tool, ...patch } : tool)),
       );
@@ -73,14 +81,14 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
   const handleInputPolicyChange = useCallback(
     async (toolName: string, newPolicy: string) => {
       if (accessToken === null) return;
-      setSavingInput(toolName);
+      setSavingInput((previous) => withTool(previous, toolName));
       try {
         await updateToolPolicy(accessToken, toolName, { input_policy: newPolicy });
-        patchTool(toolName, { input_policy: newPolicy });
+        await patchTool(toolName, { input_policy: newPolicy });
       } catch (e) {
         NotificationsManager.fromBackend(`Failed to update input policy: ${toMessage(e, "unknown error")}`);
       } finally {
-        setSavingInput(null);
+        setSavingInput((previous) => withoutTool(previous, toolName));
       }
     },
     [accessToken, patchTool],
@@ -89,14 +97,14 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
   const handleOutputPolicyChange = useCallback(
     async (toolName: string, newPolicy: string) => {
       if (accessToken === null) return;
-      setSavingOutput(toolName);
+      setSavingOutput((previous) => withTool(previous, toolName));
       try {
         await updateToolPolicy(accessToken, toolName, { output_policy: newPolicy });
-        patchTool(toolName, { output_policy: newPolicy });
+        await patchTool(toolName, { output_policy: newPolicy });
       } catch (e) {
         NotificationsManager.fromBackend(`Failed to update output policy: ${toMessage(e, "unknown error")}`);
       } finally {
-        setSavingOutput(null);
+        setSavingOutput((previous) => withoutTool(previous, toolName));
       }
     },
     [accessToken, patchTool],

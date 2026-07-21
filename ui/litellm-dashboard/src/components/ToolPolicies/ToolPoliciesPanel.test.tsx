@@ -67,6 +67,13 @@ const row = (toolId: string): HTMLElement => {
 const policySelect = (toolId: string, kind: "input" | "output"): HTMLElement =>
   within(row(toolId)).getAllByRole("combobox")[kind === "input" ? 0 : 1];
 
+/** Exact selected-value text. Never assert with toHaveTextContent here: it substring-matches, so "untrusted" satisfies "trusted". */
+const policyValue = (toolId: string, kind: "input" | "output"): string =>
+  policySelect(toolId, kind).closest(".ant-select")?.querySelector(".ant-select-selection-item")?.textContent ?? "";
+
+const isSaving = (toolId: string, kind: "input" | "output"): boolean =>
+  policySelect(toolId, kind).closest(".ant-select")?.classList.contains("ant-select-disabled") ?? false;
+
 const chooseOption = async (user: ReturnType<typeof userEvent.setup>, trigger: HTMLElement, label: string) => {
   await user.click(trigger);
   const option = await waitFor(() => {
@@ -176,7 +183,7 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     await chooseOption(user, policySelect("tool-1", "input"), "trusted");
 
     expect(updateToolPolicy).toHaveBeenCalledWith("sk-token", "get_weather", { input_policy: "trusted" });
-    await waitFor(() => expect(within(row("tool-1")).getByText("trusted")).toBeInTheDocument());
+    await waitFor(() => expect(policyValue("tool-1", "input")).toBe("trusted"));
     expect(fetchToolsList).toHaveBeenCalledTimes(1);
   });
 
@@ -190,6 +197,62 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     expect(updateToolPolicy).toHaveBeenCalledWith("sk-token", "get_weather", { output_policy: "trusted" });
   });
 
+  it("should keep every in-flight row disabled when two rows are saved at once", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    updateToolPolicy.mockReturnValue(new Promise(() => {}));
+    renderPanel();
+    await waitForRows();
+
+    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
+    await chooseOption(user, policySelect("tool-2", "input"), "blocked");
+
+    expect(isSaving("tool-2", "input")).toBe(true);
+    expect(isSaving("tool-1", "input")).toBe(true);
+  });
+
+  it("should re-enable only the row whose save finished", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    let finishFirst = () => {};
+    updateToolPolicy
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (finishFirst = () => resolve())))
+      .mockImplementationOnce(() => new Promise(() => {}));
+    renderPanel();
+    await waitForRows();
+
+    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
+    await chooseOption(user, policySelect("tool-2", "input"), "blocked");
+    await act(async () => {
+      finishFirst();
+    });
+
+    expect(isSaving("tool-1", "input")).toBe(false);
+    expect(isSaving("tool-2", "input")).toBe(true);
+  });
+
+  it("should not let an in-flight refresh clobber a policy that just saved", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    let landStaleRefresh = () => {};
+    renderPanel();
+    await waitForRows();
+
+    fetchToolsList.mockImplementationOnce(
+      // resolves with the PRE-save snapshot, i.e. tool-1 still "untrusted"
+      () => new Promise<ToolRow[]>((resolve) => (landStaleRefresh = () => resolve(TOOLS))),
+    );
+    await user.click(screen.getByTestId("datatable-refresh"));
+    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
+    await waitFor(() => expect(policyValue("tool-1", "input")).toBe("trusted"));
+
+    await act(async () => {
+      landStaleRefresh();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+
+    expect(policyValue("tool-1", "input")).toBe("trusted");
+  });
+
   it("should leave the row untouched and report the failure when the patch is rejected", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     updateToolPolicy.mockRejectedValue(new Error("nope"));
@@ -199,7 +262,7 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     await chooseOption(user, policySelect("tool-1", "input"), "trusted");
 
     await waitFor(() => expect(fromBackend).toHaveBeenCalledWith("Failed to update input policy: nope"));
-    expect(policySelect("tool-1", "input").closest(".ant-select")).toHaveTextContent("untrusted");
+    expect(policyValue("tool-1", "input")).toBe("untrusted");
   });
 
   it("should disable only the one cell that is saving", async () => {
@@ -210,11 +273,9 @@ describe("ToolPoliciesPanel inline policy editing", () => {
 
     await chooseOption(user, policySelect("tool-1", "input"), "trusted");
 
-    await waitFor(() =>
-      expect(policySelect("tool-1", "input").closest(".ant-select")).toHaveClass("ant-select-disabled"),
-    );
-    expect(policySelect("tool-1", "output").closest(".ant-select")).not.toHaveClass("ant-select-disabled");
-    expect(policySelect("tool-2", "input").closest(".ant-select")).not.toHaveClass("ant-select-disabled");
+    await waitFor(() => expect(isSaving("tool-1", "input")).toBe(true));
+    expect(isSaving("tool-1", "output")).toBe(false);
+    expect(isSaving("tool-2", "input")).toBe(false);
   });
 });
 

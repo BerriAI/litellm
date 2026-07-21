@@ -27,8 +27,8 @@ interface ToolPoliciesTableProps {
   isRefreshing: boolean;
   onRefresh: () => void;
   onSelectTool: (toolName: string) => void;
-  savingInput: string | null;
-  savingOutput: string | null;
+  savingInput: ReadonlySet<string>;
+  savingOutput: ReadonlySet<string>;
   onInputPolicyChange: (toolName: string, policy: string) => void;
   onOutputPolicyChange: (toolName: string, policy: string) => void;
 }

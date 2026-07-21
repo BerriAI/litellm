@@ -11,8 +11,8 @@ import { PolicySelect } from "./PolicySelect";
 
 interface ToolPoliciesTableColumnsDeps {
   onSelectTool: (toolName: string) => void;
-  savingInput: string | null;
-  savingOutput: string | null;
+  savingInput: ReadonlySet<string>;
+  savingOutput: ReadonlySet<string>;
   onInputPolicyChange: (toolName: string, policy: string) => void;
   onOutputPolicyChange: (toolName: string, policy: string) => void;
 }
@@ -66,7 +66,7 @@ export const getToolPoliciesTableColumns = ({
       <PolicySelect
         value={row.original.input_policy}
         toolName={row.original.tool_name}
-        saving={savingInput === row.original.tool_name}
+        saving={savingInput.has(row.original.tool_name)}
         onChange={onInputPolicyChange}
         policyType="input"
       />
@@ -83,7 +83,7 @@ export const getToolPoliciesTableColumns = ({
       <PolicySelect
         value={row.original.output_policy}
         toolName={row.original.tool_name}
-        saving={savingOutput === row.original.tool_name}
+        saving={savingOutput.has(row.original.tool_name)}
         onChange={onOutputPolicyChange}
         policyType="output"
       />
