@@ -4917,6 +4917,24 @@ def test_validate_chat_completion_tool_choice_raises_bad_request():
     assert exc_info.value.status_code == 400
 
 
+def test_validation_bad_request_carries_a_client_error_type():
+    """The error BODY must agree with the 400 status line.
+
+    The proxy builds its response with type=getattr(e, "type", "None"), and
+    BadRequestError leaves that attribute None. A client that classifies failures
+    by body type would then see an untyped 400.
+    """
+    from litellm.utils import validate_chat_completion_user_messages
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        validate_chat_completion_user_messages(
+            messages=[{"role": "user", "content": [{"role": "user", "content": "hi"}]}]
+        )
+
+    assert exc_info.value.status_code == 400
+    assert getattr(exc_info.value, "type", None) == "invalid_request_error"
+
+
 def test_validation_bad_request_is_not_remapped_to_api_connection_error():
     """exception_type() must pass the 400 through instead of rewrapping it.
 

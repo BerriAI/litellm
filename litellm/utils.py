@@ -7468,8 +7468,16 @@ def _client_side_bad_request(message: str) -> litellm.BadRequestError:
 
     model/llm_provider are deliberately empty: no deployment has been chosen yet, and
     naming one would recreate the false attribution this fixes.
+
+    `type` is set so the proxy's error BODY agrees with the status line. The proxy
+    builds its response with `type=getattr(e, "type", "None")`
+    (litellm/proxy/common_request_processing.py), and BadRequestError leaves that
+    attribute None, so a client classifying failures by body type would read a 400
+    as untyped. "invalid_request_error" is OpenAI's type for this class of error.
     """
-    return litellm.BadRequestError(message=message, model="", llm_provider="")
+    error = litellm.BadRequestError(message=message, model="", llm_provider="")
+    error.type = "invalid_request_error"
+    return error
 
 
 def _first_invalid_content_type(message: AllMessageValues) -> str:
