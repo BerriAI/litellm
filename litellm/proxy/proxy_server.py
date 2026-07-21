@@ -7465,19 +7465,19 @@ def giveup(e):
 
 
 def _build_azure_cost_fetcher_if_enabled() -> Optional[Any]:
-    """Return an AzureCostManagementClient when the pull flag + config + creds are all present, else None.
+    """Return an AzureCostManagementClient when config + creds are present, else None.
 
-    Evaluated at rollup call time so runtime flag toggles take effect without
-    a proxy restart.
+    Presence of general_settings.azure_ptu_billing.subscription_id together with the
+    Entra ID env vars is the sole signal for "operator wants the auto-pull"; if any
+    piece is missing, azure_billing reservations no-op with a warning inside the
+    rollup and manual reservations continue to accrue via the formula.
+
+    Evaluated at rollup call time so runtime config changes take effect without a
+    proxy restart.
     """
-    if not general_settings.get("enable_azure_ptu_billing_pull", False):
-        return None
     azure_ptu_billing = general_settings.get("azure_ptu_billing") or {}
     subscription_id = azure_ptu_billing.get("subscription_id")
     if not subscription_id:
-        verbose_proxy_logger.warning(
-            "enable_azure_ptu_billing_pull is true but general_settings.azure_ptu_billing.subscription_id is not set"
-        )
         return None
     try:
         from litellm.integrations.azure_cost_management import AzureCostManagementClient

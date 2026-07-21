@@ -184,12 +184,7 @@ class UISettings(BaseModel):
 
     enable_ptu_cost_attribution: bool = Field(
         default=False,
-        description="If true, enables admin-registered PTU reservations and daily flat-cost attribution on team daily spend. Governs the /ptu_reservation CRUD endpoints, the daily rollup job, the PTU Reservations UI page, and the Flat Cost column on the Usage page.",
-    )
-
-    enable_azure_ptu_billing_pull: bool = Field(
-        default=False,
-        description="If true and enable_ptu_cost_attribution is also true, reservations with cost_source='azure_billing' fetch daily flat cost from the Azure Cost Management API instead of the manual PTU * cost/day formula. Requires general_settings.azure_ptu_billing.subscription_id and Entra ID env vars (AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET).",
+        description="If true, enables admin-registered PTU reservations and daily flat-cost attribution on team daily spend. Governs the /ptu_reservation CRUD endpoints, the daily rollup job, the PTU Reservations UI page, and the Flat Cost column on the Usage page. When general_settings.azure_ptu_billing.subscription_id and the Entra ID env vars (AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET) are also set, reservations with cost_source='azure_billing' auto-fetch daily flat cost from the Azure Cost Management API; otherwise only manual reservations accrue.",
     )
 
 
@@ -217,7 +212,6 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
     "enable_ptu_cost_attribution",
-    "enable_azure_ptu_billing_pull",
 }
 
 # Flags that must be synced from the persisted UISettings into
@@ -232,7 +226,6 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "allow_vector_stores_for_team_admins",
     "disable_key_generate_for_org_admin",
     "enable_ptu_cost_attribution",
-    "enable_azure_ptu_billing_pull",
 ]
 
 # Extension point: packages outside OSS (e.g. litellm_enterprise) can

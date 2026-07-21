@@ -1391,6 +1391,22 @@ class TestProxySettingEndpoints:
         assert "enable_ptu_cost_attribution" in _RUNTIME_GENERAL_SETTINGS_FLAGS
         assert "enable_ptu_cost_attribution" in ALLOWED_UI_SETTINGS_FIELDS
 
+    def test_azure_pull_is_not_a_separate_flag(self):
+        """Regression: presence of azure_ptu_billing.subscription_id + Entra ID env vars is the sole signal for the auto-pull.
+
+        Adding a second UI flag was confusing and served no purpose; this asserts we don't
+        reintroduce one under this exact name.
+        """
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            _RUNTIME_GENERAL_SETTINGS_FLAGS,
+            ALLOWED_UI_SETTINGS_FIELDS,
+            UISettings,
+        )
+
+        assert "enable_azure_ptu_billing_pull" not in _RUNTIME_GENERAL_SETTINGS_FLAGS
+        assert "enable_azure_ptu_billing_pull" not in ALLOWED_UI_SETTINGS_FIELDS
+        assert "enable_azure_ptu_billing_pull" not in UISettings.model_fields
+
     def test_get_sso_settings_from_database(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

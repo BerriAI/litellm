@@ -58,7 +58,8 @@ async def _compute_daily_flat_cost(
         if azure_fetcher is None or reservation.azure_resource_id is None:
             verbose_proxy_logger.warning(
                 "PTU rollup: reservation=%s cost_source=azure_billing skipped "
-                "(enable_azure_ptu_billing_pull off or azure_resource_id missing)",
+                "(azure_ptu_billing.subscription_id / Entra ID env vars not configured, "
+                "or azure_resource_id missing on the reservation)",
                 getattr(reservation, "id", "?"),
             )
             return 0.0
@@ -155,8 +156,10 @@ async def run_ptu_reservation_rollup(
 
     Defaults to yesterday UTC. ``force=True`` bypasses the feature-flag check
     so the CLI backfill can run when the scheduler is off. ``azure_fetcher``
-    is injected by the proxy startup wiring when ``enable_azure_ptu_billing_pull``
-    is on; azure_billing reservations no-op with a warning when it is None.
+    is injected by the proxy startup wiring when
+    ``general_settings.azure_ptu_billing.subscription_id`` and the Entra ID env
+    vars are configured; azure_billing reservations no-op with a warning when
+    it is None.
     Idempotent under the LiteLLM_DailyTeamSpend unique constraint on every
     invocation path.
     """
