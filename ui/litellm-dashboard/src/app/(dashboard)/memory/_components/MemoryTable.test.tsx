@@ -1,6 +1,7 @@
 import { PaginationState } from "@tanstack/react-table";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import React, { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { MemoryRow } from "@/components/networking";
@@ -132,6 +133,31 @@ describe("MemoryTable", () => {
 
     await user.click(screen.getByTestId("datatable-refresh"));
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the page in range when the rows-per-page selector shrinks the page count", async () => {
+    const user = userEvent.setup();
+    const rowCount = 120;
+    const seen: PaginationState[] = [];
+
+    function Harness() {
+      const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 4, pageSize: 25 });
+      seen.push(pagination);
+      return (
+        <MemoryTable {...baseProps} rowCount={rowCount} pagination={pagination} onPaginationChange={setPagination} />
+      );
+    }
+
+    render(<Harness />);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 5 of 5");
+
+    await user.click(screen.getByTestId("pagination-page-size"));
+    await user.click(await screen.findByRole("option", { name: "100" }));
+
+    const final = seen[seen.length - 1];
+    expect(final.pageSize).toBe(100);
+    expect(final.pageIndex).toBeLessThanOrEqual(Math.ceil(rowCount / final.pageSize) - 1);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
   });
 
   it("renders secondary id and date cells for the row", () => {
