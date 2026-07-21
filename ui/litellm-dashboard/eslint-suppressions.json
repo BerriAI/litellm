@@ -12,14 +12,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/agents/_components/AgentsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/agents/_components/add_agent_form.tsx": {
     "no-nested-ternary": {
       "count": 3
@@ -639,11 +631,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/memory/_components/MemoryView.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -694,11 +681,6 @@
       "count": 1
     },
     "react-hooks/purity": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/organizations/_components/organizations.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
