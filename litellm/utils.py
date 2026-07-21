@@ -7918,7 +7918,12 @@ class ProviderConfigManager:
             from litellm.llms.dashscope.embed.transformation import (
                 DashScopeEmbeddingConfig,
             )
+            from litellm.llms.dashscope.embed.transformation_multimodal import (
+                DashScopeMultimodalEmbeddingConfig,
+            )
 
+            if DashScopeMultimodalEmbeddingConfig.is_multimodal_embedding(model):
+                return DashScopeMultimodalEmbeddingConfig()
             return DashScopeEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
