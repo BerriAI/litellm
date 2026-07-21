@@ -1052,26 +1052,56 @@ class TestCursorMessagesArmToolNormalization:
         assert seen["body"]["messages"] == body["messages"]
 
 
-class TestNestFlatChatToolGrammarFormat:
-    def test_flat_grammar_format_is_wrapped_for_chat(self):
+class TestNestFlatChatToolShapeMatrix:
+    """
+    Cursor mixes Responses API shapes into chat bodies PER LEVEL, independently
+    (live-captured: a pre-nested custom envelope carrying a flat grammar format).
+    Every cell of envelope x format must land on the canonical chat shape.
+    """
+
+    FLAT_GRAMMAR = {"type": "grammar", "definition": "start: patch", "syntax": "lark"}
+    NESTED_GRAMMAR = {"type": "grammar", "grammar": {"definition": "start: patch", "syntax": "lark"}}
+    TEXT = {"type": "text"}
+
+    @pytest.mark.parametrize("envelope", ["flat", "nested"])
+    @pytest.mark.parametrize("format_shape", ["absent", "text", "flat_grammar", "nested_grammar"])
+    def test_every_envelope_and_format_combination_lands_canonical(self, envelope, format_shape):
         from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tools
 
-        result = _nest_flat_chat_tools(
-            [
-                {
-                    "type": "custom",
-                    "name": "ApplyPatch",
-                    "description": "V4A patch",
-                    "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"},
-                }
-            ]
-        )
-        assert result == [
+        format_value = {
+            "absent": None,
+            "text": self.TEXT,
+            "flat_grammar": self.FLAT_GRAMMAR,
+            "nested_grammar": self.NESTED_GRAMMAR,
+        }[format_shape]
+        payload = {"name": "ApplyPatch", "description": "V4A patch"}
+        if format_value is not None:
+            payload["format"] = format_value
+        tool = {"type": "custom", "custom": payload} if envelope == "nested" else {"type": "custom", **payload}
+
+        canonical_payload = {"name": "ApplyPatch", "description": "V4A patch"}
+        if format_shape in ("flat_grammar", "nested_grammar"):
+            canonical_payload["format"] = self.NESTED_GRAMMAR
+        elif format_shape == "text":
+            canonical_payload["format"] = self.TEXT
+
+        assert _nest_flat_chat_tools([tool]) == [{"type": "custom", "custom": canonical_payload}]
+
+    def test_nested_envelope_with_flat_grammar_matches_live_cursor_capture(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tools
+
+        cursor_tool = {
+            "type": "custom",
+            "custom": {
+                "name": "ApplyPatch",
+                "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"},
+            },
+        }
+        assert _nest_flat_chat_tools([cursor_tool]) == [
             {
                 "type": "custom",
                 "custom": {
                     "name": "ApplyPatch",
-                    "description": "V4A patch",
                     "format": {
                         "type": "grammar",
                         "grammar": {"definition": "start: patch", "syntax": "lark"},
@@ -1080,13 +1110,14 @@ class TestNestFlatChatToolGrammarFormat:
             }
         ]
 
-    def test_flat_text_format_is_copied_unchanged(self):
+    def test_canonical_nested_tool_is_returned_equal(self):
         from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tools
 
-        result = _nest_flat_chat_tools(
-            [{"type": "custom", "name": "A", "format": {"type": "text"}}]
-        )
-        assert result == [{"type": "custom", "custom": {"name": "A", "format": {"type": "text"}}}]
+        canonical = {
+            "type": "custom",
+            "custom": {"name": "A", "format": {"type": "grammar", "grammar": {"definition": "d", "syntax": "lark"}}},
+        }
+        assert _nest_flat_chat_tools([canonical]) == [canonical]
 
 
 class TestNestFlatChatToolChoice:

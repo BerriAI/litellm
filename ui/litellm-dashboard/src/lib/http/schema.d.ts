@@ -2628,9 +2628,13 @@ export interface paths {
          *     custom tools) to the chat/completions path while expecting chat completions responses;
          *     those are routed through the Responses API pipeline and converted back. Genuine chat
          *     completions bodies (`messages` present) are routed through the standard chat completions
-         *     pipeline, after nesting any flat Responses-style tool defs Cursor mixes into the chat
-         *     `tools` array (e.g. `{"type": "custom", "name": "ApplyPatch", ...}`) into the chat
-         *     completions shape OpenAI requires (`{"type": "custom", "custom": {...}}`).
+         *     pipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat
+         *     completions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies
+         *     per level, independently: a flat tool def (`{"type": "custom", "name": "ApplyPatch", ...}`)
+         *     gets nested under `custom`, and a flat grammar format
+         *     (`{"type": "grammar", "definition", "syntax"}`) gets wrapped as
+         *     `{"type": "grammar", "grammar": {...}}` wherever it appears, including inside tool defs
+         *     Cursor already sent pre-nested.
          *
          *     ```bash
          *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
