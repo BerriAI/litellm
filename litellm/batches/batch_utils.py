@@ -54,6 +54,17 @@ async def _handle_completed_batch(
         model_name: Optional model name
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
     """
+    # A completed batch whose request lines all failed has no output file - the
+    # results are written to a separate error_file_id and output_file_id is None.
+    # There is nothing to price or measure, so report an empty result set instead
+    # of calling _get_batch_output_file_content_as_dictionary, which raises on a
+    # missing output file. Without this guard the logging worker crashes on every
+    # aretrieve_batch poll and the completed batch's zero-cost accounting is lost.
+    # The generic retrieval helper keeps raising for callers that explicitly ask
+    # for a missing output file.
+    if batch.output_file_id is None:
+        return 0.0, Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), []
+
     # Get batch results
     file_content_dictionary = await _get_batch_output_file_content_as_dictionary(
         batch, custom_llm_provider, litellm_params=litellm_params
