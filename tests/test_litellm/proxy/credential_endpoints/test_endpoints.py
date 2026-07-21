@@ -455,6 +455,72 @@ async def test_update_credential_handles_database_lookup_failure(_connected_db):
 
 
 @pytest.mark.asyncio
+async def test_update_credential_handles_missing_database_client(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=UpdateCredentialItem(
+            credential_info={"access": {"global": True}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_admin(),
+    )
+
+    assert result.code == "500"
+
+
+@pytest.mark.asyncio
+async def test_update_credential_handles_missing_database_credential(_connected_db):
+    _connected_db.find_by_name = AsyncMock(return_value=None)
+    _connected_db.update_by_name = AsyncMock()
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=UpdateCredentialItem(
+            credential_info={"access": {"global": True}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_admin(),
+    )
+
+    assert result.code == "404"
+    _connected_db.find_by_name.assert_awaited_once_with("dest")
+    _connected_db.update_by_name.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_credential_handles_database_write_failure(_connected_db):
+    db_error = ClientNotConnectedError()
+    existing = CredentialItem(
+        credential_name="dest",
+        credential_values={"langfuse_host": "h"},
+        credential_info=_LOGGING_INFO,
+    )
+    _connected_db.find_by_name = AsyncMock(return_value=existing)
+    _connected_db.update_by_name = AsyncMock(side_effect=db_error)
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=UpdateCredentialItem(
+            credential_info={"access": {"global": True}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_admin(),
+    )
+
+    assert result.code == "500"
+    assert result.message == str(db_error)
+    _connected_db.find_by_name.assert_awaited_once_with("dest")
+    _connected_db.update_by_name.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_provider_credential_patch_forbidden_for_non_admin(_connected_db, monkeypatch):
     """A team-admin (or any non-admin) cannot PATCH a non-logging credential.
 
