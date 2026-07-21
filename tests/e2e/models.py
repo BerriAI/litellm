@@ -975,3 +975,23 @@ class SCIMGroupResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
     displayName: str | None = None
+
+
+# ---------- health / lifecycle ----------
+
+
+class ReadinessResponse(BaseModel):
+    """GET /health/readiness (public probe). The low-detail payload a load
+    balancer sees: `status` plus the resolved DB state (`connected`,
+    `disconnected`, or `Not connected`)."""
+
+    status: str
+    db: str | None = None
+
+
+class ReadinessDetailsResponse(ReadinessResponse):
+    """GET /health/readiness/details (authenticated). Extends the public payload
+    with the diagnostics only an authenticated caller may read."""
+
+    litellm_version: str | None = None
+    success_callbacks: list[str] = []
