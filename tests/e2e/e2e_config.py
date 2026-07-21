@@ -72,6 +72,15 @@ POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
 
+# Keycloak, the real OIDC identity provider the JWT-auth suite validates tokens
+# against. The proxy's litellm_jwtauth.issuers must trust the realm below (issuer +
+# JWKS), so KEYCLOAK_URL/KEYCLOAK_REALM here must match the proxy config. Admin
+# creds are the realm-provisioning bootstrap (default is Keycloak's dev bootstrap).
+KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "http://localhost:8080").rstrip("/")
+KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "litellm-e2e")
+KEYCLOAK_ADMIN_USER = os.environ.get("KEYCLOAK_ADMIN_USER", "admin")
+KEYCLOAK_ADMIN_PASSWORD = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "admin")
+
 LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "750"))
 LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
 LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
