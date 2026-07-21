@@ -4080,16 +4080,22 @@ async def _project_max_budget_check(
     if project_object.litellm_budget_table is not None:
         max_budget = project_object.litellm_budget_table.max_budget
 
-    if (
-        max_budget is not None
-        and project_object.spend is not None
-        and math.isfinite(max_budget)
-        and project_object.spend > max_budget
-    ):
+    if max_budget is None or not math.isfinite(max_budget):
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    spend = await get_current_spend(
+        counter_key=f"spend:project:{project_object.project_id}",
+        fallback_spend=project_object.spend or 0.0,
+        max_budget=max_budget,
+    )
+
+    if spend > max_budget:
         if valid_token:
             call_info = CallInfo(
                 token=valid_token.token,
-                spend=project_object.spend,
+                spend=spend,
                 max_budget=max_budget,
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
@@ -4105,9 +4111,9 @@ async def _project_max_budget_check(
             )
 
         raise litellm.BudgetExceededError(
-            current_cost=project_object.spend,
+            current_cost=spend,
             max_budget=max_budget,
-            message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_object.spend}, Max budget: {max_budget}",
+            message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {spend}, Max budget: {max_budget}",
             entity_type=Litellm_EntityType.PROJECT.value,
             entity_id=project_object.project_id,
         )

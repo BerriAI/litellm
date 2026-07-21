@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
     Litellm_EntityType,
+    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -45,6 +46,7 @@ _COUNTER_ENTITY_TYPES: Mapping[str, str] = {
     "EndUser": Litellm_EntityType.END_USER.value,
     "Tag": Litellm_EntityType.TAG.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
+    "Project": Litellm_EntityType.PROJECT.value,
 }
 
 
@@ -138,6 +140,7 @@ async def reserve_budget_for_request(
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
     skip_user_budget_on_team_key: bool = False,
+    project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
 ) -> Optional[dict]:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
@@ -157,6 +160,7 @@ async def reserve_budget_for_request(
         end_user_id=end_user_id,
         end_user_object=end_user_object,
         skip_user_budget_on_team_key=skip_user_budget_on_team_key,
+        project_object=project_object,
     )
     if not counters:
         return None
@@ -313,6 +317,7 @@ async def _get_budget_counters(
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
     skip_user_budget_on_team_key: bool = False,
+    project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
 ) -> List[_BudgetCounter]:
     counters: List[_BudgetCounter] = []
 
@@ -413,6 +418,10 @@ async def _get_budget_counters(
     )
     if org_counter is not None:
         counters.append(org_counter)
+
+    project_counter = _get_project_budget_counter(project_object=project_object)
+    if project_counter is not None:
+        counters.append(project_counter)
 
     return counters
 
@@ -578,6 +587,28 @@ async def _get_org_budget_counter(
         fallback_spend=org_spend,
         entity_type="Organization",
         entity_id=org_id,
+    )
+
+
+def _get_project_budget_counter(
+    project_object: Optional[LiteLLM_ProjectTableCachedObj],
+) -> Optional[_BudgetCounter]:
+    if project_object is None or not project_object.project_id:
+        return None
+
+    max_budget = None
+    if project_object.litellm_budget_table is not None:
+        max_budget = project_object.litellm_budget_table.max_budget
+    if max_budget is None or max_budget <= 0:
+        return None
+
+    return _BudgetCounter(
+        counter_key=f"spend:project:{project_object.project_id}",
+        source_cache_key=f"project_id:{project_object.project_id}",
+        max_budget=float(max_budget),
+        fallback_spend=float(project_object.spend or 0.0),
+        entity_type="Project",
+        entity_id=project_object.project_id,
     )
 
 
