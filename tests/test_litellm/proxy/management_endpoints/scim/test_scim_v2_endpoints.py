@@ -347,8 +347,8 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
     # Step 3: Create a user via SCIM
     scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-        userName="idontexist@krakentest.tech",
-        emails=[SCIMUserEmail(value="idontexist@krakentest.tech")],
+        userName="idontexist@example.com",
+        emails=[SCIMUserEmail(value="idontexist@example.com")],
     )
 
     mock_prisma_client = mocker.MagicMock()
@@ -364,7 +364,7 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
 
     new_user_mock = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
-        AsyncMock(return_value=NewUserRequest(user_id="idontexist@krakentest.tech")),
+        AsyncMock(return_value=NewUserRequest(user_id="idontexist@example.com")),
     )
 
     mocker.patch(

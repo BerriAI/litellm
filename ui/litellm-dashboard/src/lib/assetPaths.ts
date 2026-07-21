@@ -24,5 +24,7 @@ export const resolveLogoSrc = (value: string | null | undefined, root: string = 
   if (!value) return undefined;
   if (EXTERNAL_SRC.test(value)) return value;
   if (value.includes("/_next/")) return value;
+  const prefix = normalizeRootPath(root);
+  if (prefix && (value === prefix || value.startsWith(`${prefix}/`))) return value;
   return withServerRoot(value, root);
 };

@@ -67,4 +67,15 @@ describe("resolveLogoSrc", () => {
     const { resolveLogoSrc } = await importWithRoot("/");
     expect(resolveLogoSrc("/ui/assets/logos/github.svg")).toBe("/ui/assets/logos/github.svg");
   });
+
+  it("does not double-prefix a stored value that already carries the server root path", async () => {
+    const { resolveLogoSrc } = await importWithRoot("/litellm");
+    expect(resolveLogoSrc("/litellm/ui/assets/logos/custom.svg")).toBe("/litellm/ui/assets/logos/custom.svg");
+    expect(resolveLogoSrc("/litellm")).toBe("/litellm");
+  });
+
+  it("still prefixes a path whose first segment merely starts with the root path text", async () => {
+    const { resolveLogoSrc } = await importWithRoot("/litellm");
+    expect(resolveLogoSrc("/litellm-docs/logo.png")).toBe("/litellm/litellm-docs/logo.png");
+  });
 });
