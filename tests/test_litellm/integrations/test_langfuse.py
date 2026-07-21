@@ -482,6 +482,33 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         assert self.last_trace_kwargs.get("id") == "call-id-xyz"
 
+    def test_log_langfuse_v2_does_not_propagate_tags_to_existing_trace(self):
+        payload = self._build_standard_logging_payload()
+        payload["request_tags"] = ["request-tag"]
+        kwargs = self._build_langfuse_kwargs(payload)
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={"existing_trace_id": "existing-trace-id"},
+                litellm_params={"metadata": {}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="INFO",
+                litellm_call_id="call-id-xyz",
+            )
+
+        assert self.mock_langfuse.propagate_attributes.call_args.kwargs["tags"] is None
+
     def test_log_langfuse_v2_uses_litellm_trace_id_fallback_over_call_id(self):
         """
         When standard_logging_object has no trace_id, but kwargs contains

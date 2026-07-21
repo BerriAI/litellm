@@ -716,7 +716,7 @@ class LangFuseLogger:
             propagated_version = trace_version if isinstance(trace_version, str) else None
             trace_release = trace_params.get("release")
             propagated_release = trace_release if isinstance(trace_release, str) else None
-            propagated_tags = tags if tags else None
+            propagated_tags = tags if tags and existing_trace_id is None else None
             trace_name_value = trace_params.get("name")
             propagated_trace_name = (
                 trace_name_value if isinstance(trace_name_value, str) and trace_name_value else trace_name
