@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -742,6 +742,51 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_budget_duration", [True, False])
+async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budget_duration):
+    """The JWT first-login upsert must compute budget_reset_at when
+    default_internal_user_params carries a budget_duration; otherwise the row
+    lands with budget_reset_at=NULL and shows a null reset time until the next
+    reset sweep heals it. Without a budget_duration, no reset time is written."""
+    default_params = {"max_budget": 300.0}
+    if has_budget_duration:
+        default_params["budget_duration"] = "24h"
+    monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    user_id = f"jwt_upsert_reset_at_{has_budget_duration}"
+    try:
+        await get_user_object(
+            user_id=user_id,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
+    except Exception as e:
+        print(e)
+
+    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
+    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
+
+    if has_budget_duration:
+        reset_at = creation_args.get("budget_reset_at")
+        assert isinstance(reset_at, datetime), f"expected a computed budget_reset_at, got {creation_args!r}"
+        assert reset_at > datetime.now(timezone.utc)
+    else:
+        assert "budget_reset_at" not in creation_args
 
 
 @pytest.mark.asyncio
