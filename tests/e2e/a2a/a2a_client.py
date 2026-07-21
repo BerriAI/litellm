@@ -11,6 +11,7 @@ here because only this suite uses them.
 
 from __future__ import annotations
 
+import urllib.request
 import warnings
 from dataclasses import dataclass
 
@@ -33,6 +34,11 @@ class A2ASkill(BaseModel):
     examples: list[str] | None = None
 
 
+class A2AProvider(BaseModel):
+    organization: str
+    url: str
+
+
 class AgentCardParams(BaseModel):
     """The upstream agent card an admin registers. `protocolVersion` is the field the
     proxy validates against SUPPORTED_A2A_PROTOCOL_VERSIONS on registration."""
@@ -49,6 +55,29 @@ class AgentCardParams(BaseModel):
     preferred_transport: str | None = Field(default=None, serialization_alias="preferredTransport")
 
 
+class UpstreamAgentCard(BaseModel):
+    """A real published agent card parsed from a public /.well-known endpoint. Keys on
+    the A2A wire aliases so `model_validate_json` reads the served JSON and
+    `model_dump(by_alias=True)` re-emits it unchanged for verbatim registration; it is
+    only ever fetched-and-validated, never hand-constructed, so aliasing on the wire
+    names does not affect any call site."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    protocol_version: str = Field(alias="protocolVersion")
+    name: str
+    description: str
+    version: str
+    url: str
+    provider: A2AProvider | None = None
+    documentation_url: str | None = Field(default=None, alias="documentationUrl")
+    capabilities: A2ACapabilities = A2ACapabilities()
+    skills: list[A2ASkill]
+    default_input_modes: list[str] = Field(default=["text"], alias="defaultInputModes")
+    default_output_modes: list[str] = Field(default=["text"], alias="defaultOutputModes")
+    preferred_transport: str | None = Field(default=None, alias="preferredTransport")
+
+
 class A2ABridgeParams(BaseModel):
     """litellm_params that route the agent through the completion bridge: an A2A
     message/send is transformed into a litellm.acompletion against this provider."""
@@ -61,8 +90,8 @@ class A2ABridgeParams(BaseModel):
 
 class AgentRegisterBody(BaseModel):
     agent_name: str
-    agent_card_params: AgentCardParams
-    litellm_params: A2ABridgeParams
+    agent_card_params: AgentCardParams | UpstreamAgentCard
+    litellm_params: A2ABridgeParams | None = None
 
 
 class A2ASecurityScheme(BaseModel):
@@ -104,9 +133,32 @@ class A2ATextPart(BaseModel):
     text: str
 
 
+class A2ASearchPropertiesParams(BaseModel):
+    """The strict param schema of the published property agent's `search_properties`
+    skill (unknown keys are rejected upstream), so a natural-language query like
+    "properties for sale in SF under $2M" is expressed as typed fields."""
+
+    un_locode: str | None = None
+    service_type: str | None = None
+    property_type: str | None = None
+    bedrooms_min: int | None = None
+    asking_price_max: float | None = None
+    limit: int | None = None
+
+
+class A2ASkillInvocation(BaseModel):
+    skill: str
+    params: A2ASearchPropertiesParams
+
+
+class A2ADataPart(BaseModel):
+    kind: str = "data"
+    data: A2ASkillInvocation
+
+
 class A2AOutboundMessage(BaseModel):
     role: str = "user"
-    parts: list[A2ATextPart]
+    parts: list[A2ATextPart | A2ADataPart]
     message_id: str = Field(serialization_alias="messageId")
 
 
@@ -134,10 +186,16 @@ class A2AResponseMessage(BaseModel):
     parts: list[A2AResponsePart] = []
 
 
+class A2ATaskStatus(BaseModel):
+    state: str | None = None
+    message: A2AResponseMessage | None = None
+
+
 class A2AResult(BaseModel):
     """A message/send result. In 0.3 the message fields sit directly on the result
-    (`kind`/`role`/`parts`); in 1.0 they are nested under `message`. `text` reads the
-    agent's reply from whichever shape the served version produced."""
+    (`kind`/`role`/`parts`); in 1.0 they are nested under `message`; a real agent that
+    runs a task replies with a `task` whose agent text lives on `status.message`.
+    `text` reads the agent's reply from whichever shape the served version produced."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -146,10 +204,18 @@ class A2AResult(BaseModel):
     message_id: str | None = Field(default=None, alias="messageId")
     parts: list[A2AResponsePart] = []
     message: A2AResponseMessage | None = None
+    status: A2ATaskStatus | None = None
 
     @property
     def text(self) -> str:
-        parts = self.message.parts if self.message is not None else self.parts
+        if self.message is not None:
+            parts = self.message.parts
+        elif self.parts:
+            parts = self.parts
+        elif self.status is not None and self.status.message is not None:
+            parts = self.status.message.parts
+        else:
+            parts = []
         return "".join(part.text or "" for part in parts)
 
     @property
@@ -218,3 +284,13 @@ class A2AClient:
 
 def build_a2a_client(proxy: ProxyClient) -> A2AClient:
     return A2AClient(proxy=proxy)
+
+
+def fetch_agent_card(url: str, *, timeout: float = 20.0) -> UpstreamAgentCard:
+    """Fetch a live A2A agent card from its /.well-known endpoint and parse it into the
+    registration model, so a test can register a real published card verbatim rather
+    than a hand-rolled one."""
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310  # pyright: ignore[reportAny]  # fixed https well-known url; typeshed types urlopen as Any
+        payload: bytes = response.read()  # pyright: ignore[reportAny]  # typeshed types urlopen as Any
+    return UpstreamAgentCard.model_validate_json(payload)

@@ -14,22 +14,28 @@ import pytest
 
 from a2a_client import (
     A2ABridgeParams,
-    A2ACapabilities,
     A2AClient,
+    A2ADataPart,
     A2AJsonRpcRequest,
     A2AMessageSendParams,
     A2AOutboundMessage,
+    A2ASearchPropertiesParams,
     A2ASkill,
+    A2ASkillInvocation,
     A2ATextPart,
     AgentCardParams,
     AgentRegisterBody,
     AgentResponse,
+    fetch_agent_card,
 )
 from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 
 BRIDGE = A2ABridgeParams(custom_llm_provider="anthropic", model="claude-haiku-4-5")
+
+MOVEHOME_AGENT_CARD_URL = "https://movehome.org/.well-known/agent.json"
+MOVEHOME_ORIGIN = "https://movehome.org"
 
 pytestmark = pytest.mark.e2e
 
@@ -50,34 +56,6 @@ def _register(client: A2AClient, resources: ResourceManager, protocol_version: s
     agent = unwrap(client.register_agent(body))
     resources.defer(lambda: client.delete_agent(agent.agent_id))
     return agent
-
-
-def _google_sdk_default_card(marker: str) -> AgentCardParams:
-    """Field-for-field the card the Google a2a-sdk 0.3.x line serves for its helloworld
-    sample, whose ``AgentCard`` defaults ``protocolVersion`` to the full semver "0.3.0"
-    (the shape the v1.92 regression rejected); ``url`` and ``name`` are the
-    deployment-specific fields the SDK requires callers to fill. The url points at a
-    reserved example host: a url-bearing card makes message/send dial that upstream
-    rather than the completion bridge, so the verbatim-card test asserts registration
-    and card serving only."""
-    return AgentCardParams(
-        protocol_version="0.3.0",
-        name=f"E2E A2A sdk {marker}",
-        description="Just a hello world agent",
-        version="1.0.0",
-        url="http://e2e-a2a-upstream.example/",
-        capabilities=A2ACapabilities(streaming=True),
-        skills=[
-            A2ASkill(
-                id="hello_world",
-                name="Returns hello world",
-                description="just returns hello world",
-                tags=["hello world"],
-                examples=["hi", "hello world"],
-            )
-        ],
-        preferred_transport="JSONRPC",
-    )
 
 
 def _register_rejection(client: A2AClient, protocol_version: str) -> Result[AgentResponse]:
@@ -126,21 +104,35 @@ class TestA2AAgentLifecycle:
         assert result is not None
         assert result.text != ""
 
-    @pytest.mark.covers("other.a2a.register.sdk_default_card_accepted")
-    def test_google_sdk_default_card_registers_verbatim(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+    @pytest.mark.covers("other.a2a.message_send.real_world_agent_replies")
+    def test_real_world_agent_replies_to_property_query(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+        upstream = fetch_agent_card(MOVEHOME_AGENT_CARD_URL).model_copy(update={"url": MOVEHOME_ORIGIN})
+        assert upstream.protocol_version == "0.3.0"
         marker = unique_marker()
-        body = AgentRegisterBody(
-            agent_name=f"e2e-a2a-sdk-{marker}",
-            agent_card_params=_google_sdk_default_card(marker),
-            litellm_params=BRIDGE,
-        )
+        body = AgentRegisterBody(agent_name=f"e2e-a2a-real-{marker}", agent_card_params=upstream)
         agent = unwrap(client.register_agent(body))
         resources.defer(lambda: client.delete_agent(agent.agent_id))
         assert agent.agent_card_params.protocol_version == "0.3"
-        card = unwrap(client.agent_card(agent.agent_id, scoped_key))
-        assert card.protocol_version == "0.3"
-        assert card.supported_interfaces is not None
-        assert card.supported_interfaces[0].protocol_version == "0.3"
+        request = A2AJsonRpcRequest(
+            id=f"e2e-{unique_marker()}",
+            params=A2AMessageSendParams(
+                message=A2AOutboundMessage(
+                    parts=[
+                        A2ADataPart(
+                            data=A2ASkillInvocation(
+                                skill="search_properties",
+                                params=A2ASearchPropertiesParams(un_locode="USSFO", service_type="sale", asking_price_max=2_000_000, limit=3),
+                            )
+                        )
+                    ],
+                    message_id=unique_marker(),
+                )
+            ),
+        )
+        response = unwrap(client.send_message(agent.agent_id, scoped_key, request))
+        assert response.error is None
+        assert response.result is not None
+        assert response.result.text.strip() != ""
 
     @pytest.mark.covers("other.a2a.discovery.proxy_fronted_card")
     def test_discovery_card_is_proxy_fronted(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
