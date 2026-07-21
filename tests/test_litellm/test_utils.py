@@ -4917,6 +4917,33 @@ def test_validate_chat_completion_tool_choice_raises_bad_request():
     assert exc_info.value.status_code == 400
 
 
+def test_validate_chat_completion_tool_choice_rejects_non_dict_non_str():
+    """The final tool_choice branch: neither str nor dict (e.g. an int or list)."""
+    from litellm.utils import validate_chat_completion_tool_choice
+
+    for bad in (123, ["function"], 4.5):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            validate_chat_completion_tool_choice(tool_choice=bad)
+        assert exc_info.value.status_code == 400
+        assert "Invalid tool choice" in str(exc_info.value)
+
+
+def test_first_invalid_content_type_falls_back_when_nothing_is_invalid():
+    """The helper's fallback path, reached when no content part is disallowed.
+
+    The raise sites only call it after a violation, so without this the branch is
+    unreachable from the public API and silently uncovered.
+    """
+    from litellm.utils import _first_invalid_content_type
+
+    assert (
+        _first_invalid_content_type({"role": "user", "content": [{"type": "text", "text": "hi"}]})
+        == repr(None)
+    )
+    # Non-list content (a plain string) has no parts to inspect.
+    assert _first_invalid_content_type({"role": "user", "content": "hi"}) == repr(None)
+
+
 def test_validation_bad_request_carries_a_client_error_type():
     """The error BODY must agree with the 400 status line.
 
