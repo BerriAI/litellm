@@ -165,6 +165,10 @@ class CacheConfigRepository(PrismaTableRepository):
     table_name = "litellm_cacheconfig"
 
 
+class SecureShareRepository(PrismaTableRepository):
+    table_name = "litellm_securesharetable"
+
+
 class ManagedVectorStoreIndexRepository(PrismaTableRepository):
     table_name = "litellm_managedvectorstoreindextable"
 

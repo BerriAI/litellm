@@ -31,6 +31,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/oauth/",
     "/invitation/",
     "/jwt/",
+    "/secure_share/",
     # Models & routing config
     "/model/",
     "/v1/model/info",

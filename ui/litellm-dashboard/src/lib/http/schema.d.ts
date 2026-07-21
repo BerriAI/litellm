@@ -12258,6 +12258,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/secure_share/create": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Secure Share */
+        post: operations["create_secure_share_secure_share_create_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/secure_share/{share_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Secure Share */
+        get: operations["get_secure_share_secure_share__share_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Secure Share */
+        delete: operations["delete_secure_share_secure_share__share_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings": {
         parameters: {
             query?: never;
@@ -30821,6 +30856,59 @@ export interface components {
             /** Timeout */
             timeout?: number | null;
         };
+        /** SecureShareCreateRequest */
+        SecureShareCreateRequest: {
+            /**
+             * Ciphertext
+             * @description base64 AES-256-GCM ciphertext of the secret
+             */
+            ciphertext: string;
+            /** @description how long the share stays retrievable */
+            expiry: components["schemas"]["SecureShareExpiry"];
+            /**
+             * Iv
+             * @description base64 AES-GCM initialization vector
+             */
+            iv: string;
+            /**
+             * Salt
+             * @description base64 PBKDF2 salt used to derive the AES key
+             */
+            salt: string;
+        };
+        /** SecureShareCreateResponse */
+        SecureShareCreateResponse: {
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Share Id */
+            share_id: string;
+        };
+        /**
+         * SecureShareExpiry
+         * @enum {string}
+         */
+        SecureShareExpiry: "1h" | "6h" | "1d" | "7d";
+        /** SecureShareGetResponse */
+        SecureShareGetResponse: {
+            /** Ciphertext */
+            ciphertext: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Iv */
+            iv: string;
+            /** Salt */
+            salt: string;
+            /** Share Id */
+            share_id: string;
+        };
         /**
          * Skill
          * @description Represents a skill from the Anthropic Skills API
@@ -48855,6 +48943,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_secure_share_secure_share_create_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecureShareCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecureShareCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_secure_share_secure_share__share_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description id returned by /secure_share/create */
+                share_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecureShareGetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_secure_share_secure_share__share_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description id returned by /secure_share/create */
+                share_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */

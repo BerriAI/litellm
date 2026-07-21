@@ -1438,3 +1438,15 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+model LiteLLM_SecureShareTable {
+  share_id   String   @id @default(uuid())
+  ciphertext String
+  salt       String
+  iv         String
+  expires_at DateTime
+  created_by String
+  created_at DateTime @default(now())
+
+  @@index([expires_at])
+}

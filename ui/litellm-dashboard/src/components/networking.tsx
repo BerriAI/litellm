@@ -3253,6 +3253,62 @@ export const updateCacheSettingsCall = async (accessToken: string, cacheSettings
   }
 };
 
+export interface SecureShareCreatePayload {
+  ciphertext: string;
+  salt: string;
+  iv: string;
+  expiry: string;
+}
+
+export interface SecureShareCreateResponse {
+  share_id: string;
+  expires_at: string;
+}
+
+export interface SecureShareGetResponse {
+  share_id: string;
+  ciphertext: string;
+  salt: string;
+  iv: string;
+  expires_at: string;
+  created_by: string;
+}
+
+export const createSecureShareCall = async (
+  accessToken: string,
+  payload: SecureShareCreatePayload,
+): Promise<SecureShareCreateResponse> => {
+  try {
+    return await apiClient.post<SecureShareCreateResponse>(`/secure_share/create`, {
+      accessToken,
+      body: payload,
+    });
+  } catch (error) {
+    console.error("Failed to create secure share:", error);
+    throw error;
+  }
+};
+
+export const getSecureShareCall = async (accessToken: string, shareId: string): Promise<SecureShareGetResponse> => {
+  try {
+    return await apiClient.get<SecureShareGetResponse>(`/secure_share/${encodeURIComponent(shareId)}`, {
+      accessToken,
+    });
+  } catch (error) {
+    console.error("Failed to fetch secure share:", error);
+    throw error;
+  }
+};
+
+export const deleteSecureShareCall = async (accessToken: string, shareId: string) => {
+  try {
+    return await apiClient.delete(`/secure_share/${encodeURIComponent(shareId)}`, { accessToken });
+  } catch (error) {
+    console.error("Failed to delete secure share:", error);
+    throw error;
+  }
+};
+
 export const getCoordinationRedisSettingsCall = async (
   accessToken: string,
 ): Promise<CoordinationRedisSettingsResponse> => {

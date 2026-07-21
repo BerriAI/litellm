@@ -46,6 +46,7 @@ jobs:
         tests/test_litellm/proxy/rag_endpoints
         tests/test_litellm/proxy/realtime_endpoints
         tests/test_litellm/proxy/ui_crud_endpoints
+        tests/test_litellm/proxy/secure_share
         tests/test_litellm/proxy/utils
       workers: 2
       reruns: 2

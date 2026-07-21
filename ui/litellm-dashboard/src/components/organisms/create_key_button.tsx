@@ -55,6 +55,7 @@ import {
   userFilterUICall,
 } from "../networking";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
+import SecureShareLinkButton from "../secure_share/SecureShareLinkButton";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { simplifyKeyGenerateError } from "./utils";
@@ -1732,7 +1733,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
             <Title>Save your Key</Title>
             <Col numColSpan={1}>
               {apiKey != null ? (
-                <CreatedKeyDisplay apiKey={apiKey} />
+                <>
+                  <CreatedKeyDisplay apiKey={apiKey} />
+                  {keyOwner === "another_user" && <SecureShareLinkButton secret={apiKey} accessToken={accessToken} />}
+                </>
               ) : (
                 <Text>Key being created, this might take 30s</Text>
               )}
