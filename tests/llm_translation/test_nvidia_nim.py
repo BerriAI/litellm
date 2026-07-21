@@ -317,6 +317,7 @@ class TestNvidiaNim(BaseLLMRerankTest):
 from litellm.llms.nvidia_nim.rerank.ranking_transformation import (
     NvidiaNimRankingConfig,
 )
+from litellm.llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
 from litellm.types.rerank import RerankResponse
 
 RANKING_MODEL = "ranking/nvidia/llama-nemotron-rerank-vl-1b-v2"
@@ -483,3 +484,56 @@ async def test_nvidia_nim_ranking_endpoint_image_documents_and_top_n():
         # top_n applied client-side on the converted response
         assert len(response.results) == 1
         assert response.results[0]["index"] == 0
+
+
+class TestNvidiaNimRetrievalRerankRequestTransform:
+    """
+    The default /v1/retrieval/{model}/reranking route keeps its existing
+    contract: top_n still maps to top_k, and structured documents now pass
+    through the same passage preservation as the /v1/ranking route.
+    """
+
+    def _build_request(self, documents, top_n=None):
+        config = NvidiaNimRerankConfig()
+        optional_params = config.map_cohere_rerank_params(
+            non_default_params=None,
+            model="nvidia/llama-3_2-nv-rerankqa-1b-v2",
+            drop_params=False,
+            query="which passage shows a cat?",
+            documents=documents,
+            top_n=top_n,
+        )
+        return config.transform_rerank_request(
+            model="nvidia/llama-3_2-nv-rerankqa-1b-v2",
+            optional_rerank_params=optional_params,
+            headers={},
+        )
+
+    def test_top_n_still_maps_to_top_k(self):
+        request_data = self._build_request(["a", "b"], top_n=1)
+        assert request_data["top_k"] == 1
+        assert "top_n" not in request_data
+
+    def test_string_documents_unchanged(self):
+        request_data = self._build_request(["passage one", "passage two"])
+        assert request_data["passages"] == [
+            {"text": "passage one"},
+            {"text": "passage two"},
+        ]
+
+    def test_text_object_documents_unchanged(self):
+        request_data = self._build_request([TEXT_DOC])
+        assert request_data["passages"] == [TEXT_DOC]
+
+    def test_image_object_documents_are_preserved(self):
+        request_data = self._build_request([IMAGE_DOC, TEXT_DOC])
+        assert request_data["passages"] == [IMAGE_DOC, TEXT_DOC]
+
+    def test_mixed_text_image_documents_are_preserved(self):
+        request_data = self._build_request([MIXED_DOC])
+        assert request_data["passages"] == [MIXED_DOC]
+
+    def test_unsupported_dict_documents_are_stringified(self):
+        doc = {"title": "no supported fields here"}
+        request_data = self._build_request([doc])
+        assert request_data["passages"] == [{"text": json.dumps(doc)}]
