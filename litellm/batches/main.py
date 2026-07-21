@@ -1087,9 +1087,16 @@ def cancel_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "bedrock":
+            from litellm.llms.bedrock.batches.handler import BedrockBatchesHandler
+
+            response = BedrockBatchesHandler.cancel_batch(
+                batch_id=batch_id,
+                **kwargs,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', and 'vertex_ai' are supported.".format(
+                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', and 'bedrock' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
