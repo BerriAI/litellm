@@ -19,9 +19,7 @@ from litellm.proxy import proxy_server
 from .conftest import normalize  # type: ignore[import-not-found]
 
 
-def _stub_model_info_response(
-    model_id: str = "gpt-4", provider: str = "openai"
-) -> dict:
+def _stub_model_info_response(model_id: str = "gpt-4", provider: str = "openai") -> dict:
     return {
         "id": model_id,
         "object": "model",
@@ -59,9 +57,7 @@ def patched_models(monkeypatch):
     def _fake_create_model_info_response(model_id, provider="openai", **kwargs):
         return _stub_model_info_response(model_id=model_id, provider=provider)
 
-    monkeypatch.setattr(
-        proxy_utils, "create_model_info_response", _fake_create_model_info_response
-    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _fake_create_model_info_response)
 
     monkeypatch.setattr(proxy_utils, "validate_model_access", lambda **kwargs: None)
 
@@ -130,3 +126,65 @@ def test_get_model_by_id_not_found(client, auth_as, patched_models, path):
         response = client.get(path)
     assert response.status_code == 404
     assert "not found" in response.text.lower()
+
+
+@pytest.fixture
+def real_provider_models(monkeypatch):
+    """Router with two real deployments, WITHOUT stubbing provider resolution.
+
+    Unlike ``patched_models`` this does not monkeypatch
+    ``create_model_info_response`` or ``litellm.get_llm_provider``, so the
+    real provider ends up in ``owned_by`` and the #32903 regression is
+    observable end to end.
+    """
+    from litellm import Router
+    from litellm.proxy import utils as proxy_utils
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4"},
+            },
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {"model": "anthropic/claude-3-5-sonnet-latest"},
+            },
+        ]
+    )
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return ["gpt-4", "claude-sonnet"]
+
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        _fake_get_available_models_for_user,
+    )
+    monkeypatch.setattr(proxy_utils, "validate_model_access", lambda **kwargs: None)
+
+    return router
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_get_models_reports_real_provider_per_model(client, auth_as, real_provider_models, path):
+    """Regression for #32903: each model reports its own backend provider."""
+    with auth_as():
+        response = client.get(path)
+
+    assert response.status_code == 200
+    owned_by = {m["id"]: m["owned_by"] for m in response.json()["data"]}
+    assert owned_by == {"gpt-4": "openai", "claude-sonnet": "anthropic"}
+
+
+@pytest.mark.parametrize("path", ["/v1/models/claude-sonnet", "/models/claude-sonnet"])
+def test_get_model_by_id_reports_real_provider(client, auth_as, real_provider_models, path):
+    """Regression for #32903 on the single-model endpoint."""
+    with auth_as():
+        response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.json()["owned_by"] == "anthropic"

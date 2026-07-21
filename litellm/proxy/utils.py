@@ -174,6 +174,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.router import Deployment
 
     Span = Union[_Span, Any]
 else:
@@ -6118,6 +6119,25 @@ async def get_available_models_for_user(
     )
 
     return all_models
+
+
+def resolve_deployment_provider(deployment: Optional["Deployment"]) -> str:
+    """
+    Resolve a deployment's real backend provider.
+
+    Falls back to "openai" when the deployment is missing or the provider
+    cannot be resolved, so a single misconfigured deployment can never break a
+    model listing.
+    """
+    if deployment is None:
+        return "openai"
+
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
+    except Exception:  # noqa: BLE001  # get_llm_provider raises ValueError/BadRequestError/bare Exception; fail open to keep the listing working
+        return "openai"
+
+    return provider
 
 
 def create_model_info_response(

@@ -914,3 +914,39 @@ class TestSendEmailStartTls:
         assert isinstance(context, ssl.SSLContext)
         assert context.verify_mode == ssl.CERT_REQUIRED
         assert context.check_hostname is True
+
+
+class TestResolveDeploymentProvider:
+    """Regression tests for issue #32903: model listing must report each
+    deployment's real backend provider, not a hardcoded "openai"."""
+
+    def test_resolves_real_provider_from_deployment(self):
+        from litellm import Router
+        from litellm.proxy.utils import resolve_deployment_provider
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "claude-sonnet",
+                    "litellm_params": {"model": "anthropic/claude-3-5-sonnet-latest"},
+                }
+            ]
+        )
+        deployment = router.get_deployment_by_model_group_name("claude-sonnet")
+
+        assert resolve_deployment_provider(deployment) == "anthropic"
+
+    def test_none_deployment_falls_back_to_openai(self):
+        from litellm.proxy.utils import resolve_deployment_provider
+
+        assert resolve_deployment_provider(None) == "openai"
+
+    def test_provider_resolution_error_fails_open_to_openai(self):
+        from litellm.proxy.utils import resolve_deployment_provider
+
+        deployment = MagicMock()
+        deployment.litellm_params.model = "not-a-real-provider/whatever"
+
+        with patch("litellm.get_llm_provider", side_effect=ValueError("boom")):
+            assert resolve_deployment_provider(deployment) == "openai"
+
