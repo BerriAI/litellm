@@ -817,3 +817,82 @@ class TagListResponse(RootModel[list[TagListEntry]]):
     """GET /tag/list answers with a bare array of tag configs (the stored tags plus
     any dynamically-seen spend tags), not an object wrapping them. Read the rows off
     .root."""
+
+
+# ---------- SSO management ----------
+
+
+class SSOConfigBase(BaseModel):
+    """Fields every SSO provider config shares on PATCH /update/sso_settings.
+    Serialized exclude_none, so a provider body carries only the fields it sets;
+    the endpoint reads every unset field as null and clears its env var, making a
+    single PATCH a full replace of the proxy's SSO state."""
+
+    proxy_base_url: str | None = None
+    user_email: str | None = None
+
+
+class EntraSSOConfig(SSOConfigBase):
+    """Microsoft Entra ID (Azure AD) provider config. `microsoft_client_id` is what
+    makes Entra the active provider; the secret and tenant are the other two vars
+    /sso/readiness requires."""
+
+    microsoft_client_id: str | None = None
+    microsoft_client_secret: str | None = None
+    microsoft_tenant: str | None = None
+
+
+class OktaSSOConfig(SSOConfigBase):
+    """Okta (generic OIDC) provider config. Okta is wired as the "generic" provider,
+    so `generic_client_id` activates it and readiness requires the secret plus the
+    three OIDC endpoint URLs."""
+
+    generic_client_id: str | None = None
+    generic_client_secret: str | None = None
+    generic_authorization_endpoint: str | None = None
+    generic_token_endpoint: str | None = None
+    generic_userinfo_endpoint: str | None = None
+
+
+type SSOConfigBody = EntraSSOConfig | OktaSSOConfig
+
+
+class SSOConfigClear(BaseModel):
+    """Empty PATCH /update/sso_settings body: serializes to {}, which the endpoint
+    reads as every field unset and so clears all SSO env vars back to the
+    unconfigured baseline. Used at teardown to isolate one provider test from the
+    next (the SSO config is a singleton row + live os.environ, not a per-test
+    resource)."""
+
+
+class SSOSettingsValues(BaseModel):
+    """The `values` block of GET /get/sso_settings: the stored provider config with
+    the OAuth client secrets masked. extra=ignore drops the fields a test doesn't
+    read (google_*, role/team mappings, ui_access_mode)."""
+
+    model_config = ConfigDict(extra="ignore")
+    microsoft_client_id: str | None = None
+    microsoft_client_secret: str | None = None
+    microsoft_tenant: str | None = None
+    generic_client_id: str | None = None
+    generic_client_secret: str | None = None
+    generic_authorization_endpoint: str | None = None
+    generic_token_endpoint: str | None = None
+    generic_userinfo_endpoint: str | None = None
+
+
+class SSOSettingsResponse(BaseModel):
+    """GET /get/sso_settings answer: `{values, field_schema}`. Only `values` is read."""
+
+    values: SSOSettingsValues
+
+
+class SSOReadinessResponse(BaseModel):
+    """GET /sso/readiness (the 200 path). `sso_configured` flips true once a provider
+    client id is set; `provider` names the active provider once every required var is
+    present. The 503 "partial config" path is read as a raw ProbeResult instead, so
+    its `missing_environment_variables` list is asserted off the body."""
+
+    status: str
+    sso_configured: bool
+    provider: str | None = None

@@ -9,6 +9,7 @@ import pytest
 
 from management_client import ManagementClient, build_client
 from proxy_client import ProxyClient
+from sso_management_client import SSOManagementClient, build_sso_client
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -21,3 +22,8 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session")
 def client(proxy: ProxyClient) -> ManagementClient:
     return build_client(proxy)
+
+
+@pytest.fixture(scope="session")
+def sso_client(proxy: ProxyClient) -> SSOManagementClient:
+    return build_sso_client(proxy)
