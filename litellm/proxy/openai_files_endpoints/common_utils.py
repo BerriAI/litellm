@@ -1,4 +1,5 @@
 import base64
+import json
 import mimetypes
 import re
 from dataclasses import dataclass, field
@@ -988,6 +989,29 @@ async def get_batch_from_database(
         return None, None
 
 
+def read_stored_batch_attribution(db_batch_object) -> Optional[dict]:
+    """Return the create-time litellm_batch_attribution snapshot stored on a managed object row.
+
+    The snapshot lives in the row's file_object jsonb (stored either as a JSON string or an
+    already-parsed dict); returns None when the row, its file_object, or the snapshot is absent
+    """
+    if db_batch_object is None:
+        return None
+    stored = getattr(db_batch_object, "file_object", None)
+    if isinstance(stored, str):
+        try:
+            stored = json.loads(stored)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(stored, dict):
+        return None
+    metadata = stored.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    snapshot = metadata.get("litellm_batch_attribution")
+    return snapshot if isinstance(snapshot, dict) else None
+
+
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: Union[str, Literal[False]],
@@ -1047,6 +1071,13 @@ async def update_batch_in_database(
 
         # Normalize status for database storage
         db_status = response.status if response.status != "completed" else "complete"
+
+        stored_attribution = read_stored_batch_attribution(db_batch_object)
+        if stored_attribution is not None:
+            response.metadata = {
+                **(getattr(response, "metadata", None) or {}),
+                "litellm_batch_attribution": stored_attribution,
+            }
 
         update_data: dict = {
             "status": db_status,

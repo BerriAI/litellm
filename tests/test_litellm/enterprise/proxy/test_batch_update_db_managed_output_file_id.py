@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     ensure_batch_response_managed_file_ids,
+    read_stored_batch_attribution,
     update_batch_in_database,
 )
 from litellm.types.utils import LiteLLMBatch
@@ -87,6 +88,143 @@ async def test_update_batch_in_database_stores_unified_output_file_id():
     )
     assert stored["output_file_id"] == unified_output_file_id
     assert stored["output_file_id"] != raw_output_file_id
+
+
+_BATCH_ATTRIBUTION = {
+    "user_api_key": "hashed-key-abc",
+    "user_api_key_user_id": "user-real",
+    "user_api_key_team_id": "team-real",
+    "user_api_key_alias": "prod-key",
+    "user_api_key_team_alias": "prod-team",
+    "user_api_key_user_email": "real@corp.com",
+    "request_tags": ["feature-x"],
+}
+
+
+def _db_batch_object_with_snapshot(
+    *, batch_id: str, status: str, file_object=None
+) -> SimpleNamespace:
+    if file_object is None:
+        file_object = json.dumps(
+            {
+                "id": batch_id,
+                "status": status,
+                "metadata": {"litellm_batch_attribution": _BATCH_ATTRIBUTION},
+            }
+        )
+    return SimpleNamespace(
+        created_by="user-real",
+        team_id="team-real",
+        status=status,
+        file_object=file_object,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_batch_in_database_preserves_attribution_snapshot():
+    """Regression: overwriting file_object on a status change must not erase the create-time
+    litellm_batch_attribution snapshot; the provider response never carries it, so it has to be
+    carried forward from the stored row or the completed batch loses key-level spend attribution
+    """
+    batch_id = "batch_attr_preserve"
+    unified_batch_id = "litellm_proxy;model_id:my-model;llm_batch_id:batch_attr_preserve"
+
+    response = _build_batch_response(
+        batch_id=batch_id,
+        status="completed",
+        output_file_id="file-rawoutput789",
+        hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
+    )
+    assert response.metadata is None
+
+    db_batch_object = _db_batch_object_with_snapshot(
+        batch_id=batch_id, status="in_progress"
+    )
+    mock_prisma = _build_prisma_mock()
+
+    await update_batch_in_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        response=response,
+        managed_files_obj=_build_managed_files_mock(),
+        prisma_client=mock_prisma,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-real"),
+    )
+
+    stored = json.loads(
+        mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs["data"][
+            "file_object"
+        ]
+    )
+    assert stored["metadata"]["litellm_batch_attribution"] == _BATCH_ATTRIBUTION
+
+
+@pytest.mark.asyncio
+async def test_update_batch_in_database_no_snapshot_leaves_response_metadata_untouched():
+    """When the stored row has no snapshot, nothing is injected into the response metadata."""
+    batch_id = "batch_attr_absent"
+    unified_batch_id = "litellm_proxy;model_id:my-model;llm_batch_id:batch_attr_absent"
+
+    response = _build_batch_response(
+        batch_id=batch_id,
+        status="completed",
+        output_file_id="file-rawoutput789",
+        hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
+    )
+
+    db_batch_object = _db_batch_object_with_snapshot(
+        batch_id=batch_id,
+        status="in_progress",
+        file_object=json.dumps({"id": batch_id, "status": "in_progress"}),
+    )
+    mock_prisma = _build_prisma_mock()
+
+    await update_batch_in_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        response=response,
+        managed_files_obj=_build_managed_files_mock(),
+        prisma_client=mock_prisma,
+        verbose_proxy_logger=MagicMock(),
+        db_batch_object=db_batch_object,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-real"),
+    )
+
+    stored = json.loads(
+        mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs["data"][
+            "file_object"
+        ]
+    )
+    assert "litellm_batch_attribution" not in (stored.get("metadata") or {})
+
+
+def test_read_stored_batch_attribution_from_json_string():
+    row = _db_batch_object_with_snapshot(batch_id="b1", status="in_progress")
+    assert read_stored_batch_attribution(row) == _BATCH_ATTRIBUTION
+
+
+def test_read_stored_batch_attribution_from_parsed_dict():
+    row = SimpleNamespace(
+        file_object={"metadata": {"litellm_batch_attribution": _BATCH_ATTRIBUTION}}
+    )
+    assert read_stored_batch_attribution(row) == _BATCH_ATTRIBUTION
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        None,
+        SimpleNamespace(file_object=None),
+        SimpleNamespace(file_object="not-json"),
+        SimpleNamespace(file_object=json.dumps({"id": "b1"})),
+        SimpleNamespace(file_object=json.dumps({"metadata": {}})),
+        SimpleNamespace(file_object=json.dumps({"metadata": {"litellm_batch_attribution": "wrong-type"}})),
+    ],
+)
+def test_read_stored_batch_attribution_returns_none_when_absent(row):
+    assert read_stored_batch_attribution(row) is None
 
 
 @pytest.mark.asyncio
