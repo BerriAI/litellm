@@ -2282,7 +2282,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth",
     )
-    custom_ui_auth: Optional[str] = Field(
+    custom_ui_auth: str | None = Field(
         None,
         description=(
             "override authenticate_user with your own auth script - "
