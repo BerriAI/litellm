@@ -18,8 +18,6 @@ from typing import (
 )
 
 from packaging.version import Version
-from opentelemetry import trace as otel_trace
-
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
@@ -1086,6 +1084,8 @@ def log_provider_specific_information_as_span(
 
 def _set_langfuse_release(release: str | None) -> None:
     if release:
+        from opentelemetry import trace as otel_trace
+
         otel_trace.get_current_span().set_attribute("langfuse.release", release)
 
 
