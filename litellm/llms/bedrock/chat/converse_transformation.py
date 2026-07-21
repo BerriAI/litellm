@@ -410,16 +410,22 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS models: passed through unchanged via additionalModelRequestFields.
+        - Non-Anthropic reasoning models: passed through unchanged via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
+        base_model = BedrockModelInfo.get_base_model(model)
         if "gpt-oss" in model:
             optional_params["reasoning_effort"] = reasoning_effort
         elif self._is_nova_2_model(model):
             reasoning_config = self._transform_reasoning_effort_to_reasoning_config(reasoning_effort)
             optional_params.update(reasoning_config)
+        elif not base_model.startswith("anthropic") and (
+            supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
+        ):
+            optional_params["reasoning_effort"] = reasoning_effort
         else:
             mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
@@ -942,9 +948,7 @@ class AmazonConverseConfig(BaseConfig):
                         optional_params=optional_params, tools=[grounding_tool]
                     )
 
-        # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
-        # Nova 2 handles token budgeting differently through reasoningConfig
-        if "gpt-oss" not in model and not self._is_nova_2_model(model):
+        if "thinking" in optional_params:
             self.update_optional_params_with_thinking_tokens(
                 non_default_params=non_default_params, optional_params=optional_params
             )
