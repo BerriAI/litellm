@@ -349,6 +349,13 @@ spec:
           ports:
             - name: http
               containerPort: 4000
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 120
           env:
             - name: DATABASE_HOST
               value: $POSTGRES_HOST
