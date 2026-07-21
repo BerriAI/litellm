@@ -1022,7 +1022,12 @@ def responses_api_bridge_check(
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
     # those keys.
     #
-    # - gpt-5.4+: tools + reasoning_effort (original) or any reasoning-summary alias.
+    # - gpt-5.4+: function tools with reasoning active must be bridged. OpenAI enables
+    #   reasoning by default for these models (unset reasoning_effort means medium
+    #   server-side), and Chat Completions rejects tools whenever reasoning is on
+    #   ("Function tools with reasoning_effort are not supported ... use /v1/responses
+    #   or set reasoning_effort to 'none'"), so only an explicit ``"none"`` keeps the
+    #   request chat-servable.
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     if (
@@ -1030,8 +1035,10 @@ def responses_api_bridge_check(
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
-        and reasoning_effort is not None
-        and (reasoning_summary is not None or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and tools))
+        and (
+            (reasoning_effort is not None and reasoning_summary is not None)
+            or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and tools and reasoning_effort != "none")
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
