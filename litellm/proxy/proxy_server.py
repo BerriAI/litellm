@@ -3473,6 +3473,7 @@ _DB_OVERLAY_REMOTE_MODULE_STR_FIELDS: Dict[str, Tuple[str, ...]] = {
         "custom_key_generate",
         "custom_key_update",
         "custom_sso",
+        "custom_ui_auth",
         "custom_ui_sso_sign_in_handler",
     ),
 }

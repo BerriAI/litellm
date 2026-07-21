@@ -186,19 +186,24 @@ def test_login_form_uses_custom_ui_auth_when_configured(client, monkeypatch):
     request, username and password) instead of the built-in authenticate_user,
     and still completes the normal redirect + cookie flow."""
     from litellm.proxy import proxy_server as ps
+    from litellm.proxy.auth.login_utils import LoginResult, create_ui_token_object
 
     _install_login_mocks(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object", create_ui_token_object
+    )
 
     calls = []
 
     async def _fake_custom_ui_auth(request, username, password):
         calls.append((username, password))
-        fake = MagicMock()
-        fake.user_id = "custom-u-1"
-        fake.user_email = "custom@example.invalid"
-        fake.user_role = "proxy_admin"
-        fake.key = "sk-fake-custom-ui-key"
-        return fake
+        return LoginResult(
+            user_id="custom-u-1",
+            key="sk-fake-custom-ui-key",
+            user_email="custom@example.invalid",
+            user_role="proxy_admin",
+            login_method="username_password",
+        )
 
     monkeypatch.setattr(ps, "user_custom_ui_auth", _fake_custom_ui_auth)
 
@@ -289,21 +294,30 @@ def test_v2_login_authenticate_failure_500(client, monkeypatch):
 
 def test_v2_login_uses_custom_ui_auth_when_configured(client, monkeypatch):
     """Pin: when user_custom_ui_auth is set, POST /v2/login calls it instead
-    of the built-in authenticate_user and still returns {redirect_url, token}."""
+    of the built-in authenticate_user and still returns {redirect_url, token}.
+
+    Exercises the real create_ui_token_object, see comment on the /login
+    variant of this test above.
+    """
     from litellm.proxy import proxy_server as ps
+    from litellm.proxy.auth.login_utils import LoginResult, create_ui_token_object
 
     _install_login_mocks(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object", create_ui_token_object
+    )
 
     calls = []
 
     async def _fake_custom_ui_auth(request, username, password):
         calls.append((username, password))
-        fake = MagicMock()
-        fake.user_id = "custom-u-1"
-        fake.user_email = "custom@example.invalid"
-        fake.user_role = "proxy_admin"
-        fake.key = "sk-fake-custom-ui-key"
-        return fake
+        return LoginResult(
+            user_id="custom-u-1",
+            key="sk-fake-custom-ui-key",
+            user_email="custom@example.invalid",
+            user_role="proxy_admin",
+            login_method="username_password",
+        )
 
     monkeypatch.setattr(ps, "user_custom_ui_auth", _fake_custom_ui_auth)
 

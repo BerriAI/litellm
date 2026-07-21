@@ -2284,7 +2284,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     custom_ui_auth: Optional[str] = Field(
         None,
-        description="override authenticate_user",
+        description=(
+            "override authenticate_user with your own auth script - "
+            "`async def custom_ui_auth(request: Request, username: str, password: str) -> LoginResult` "
+            "(see litellm.proxy.auth.login_utils.LoginResult)"
+        ),
     )
     max_parallel_requests: Optional[int] = Field(
         None,
