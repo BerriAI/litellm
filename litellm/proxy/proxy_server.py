@@ -3882,7 +3882,7 @@ class ProxyConfig:
         del config["include"]
         return config
 
-    async def save_config(self, new_config: dict):
+    async def save_config(self, new_config: dict, include_env_vars: bool = False):
         global prisma_client, general_settings, user_config_file_path, store_model_in_db
         # Load existing config
         ## DB - writes valid config to db
@@ -3898,6 +3898,17 @@ class ProxyConfig:
 
             # Make a copy to avoid mutating the original config
             config_to_save = new_config.copy()
+
+            # environment_variables are persisted to the DB only when a caller
+            # explicitly opts in. Most callers reach save_config after
+            # get_config() merged YAML + OS env into new_config (with
+            # os.environ/ placeholders already resolved to plaintext), so
+            # persisting them here would snapshot file/container env vars into
+            # a config row that then shadows those sources on every restart.
+            # The dedicated /config/update path writes env vars directly, so
+            # no current caller needs include_env_vars=True.
+            if not include_env_vars:
+                config_to_save.pop("environment_variables", None)
 
             # SECURITY: Always encrypt environment_variables before DB write.
             # _encrypt_env_variables_for_db is idempotent — a caller that
@@ -3915,6 +3926,38 @@ class ProxyConfig:
             ## YAML
             with open(f"{user_config_file_path}", "w") as config_file:
                 yaml.dump(new_config, config_file, default_flow_style=False)
+
+    async def save_environment_variables(self, updates: dict[str, str | None]) -> None:
+        """Persist specific environment variables to the DB config row.
+
+        Each key in ``updates`` is written to the ``environment_variables``
+        config row; a ``None`` value deletes that key. Env vars the caller does
+        not name are preserved, so a caller that owns a couple of keys can
+        update just those without snapshotting unrelated (YAML/OS-sourced)
+        values the way a full ``save_config`` write would. No-op when config is
+        not DB-backed.
+        """
+        global prisma_client, general_settings, store_model_in_db
+        if prisma_client is None or not (general_settings.get("store_model_in_db", False) is True or store_model_in_db):
+            return
+
+        row = await ConfigRepository(prisma_client).table.find_first(where={"param_name": "environment_variables"})
+        existing: dict = dict(row.param_value) if row is not None and row.param_value is not None else {}
+
+        to_set = {k: v for k, v in updates.items() if v is not None}
+        encrypted = self._encrypt_env_variables_for_db(environment_variables=to_set) if to_set else {}
+        deleted_keys = {k for k, v in updates.items() if v is None}
+        merged = {**{k: v for k, v in existing.items() if k not in deleted_keys}, **encrypted}
+
+        serialized = json.dumps(merged)
+        await ConfigRepository(prisma_client).table.upsert(
+            where={"param_name": "environment_variables"},
+            data={
+                "create": {"param_name": "environment_variables", "param_value": serialized},
+                "update": {"param_value": serialized},
+            },
+        )
+        await invalidate_config_param("environment_variables")
 
     def _check_for_os_environ_vars(
         self, config: dict, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
