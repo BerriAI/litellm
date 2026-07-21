@@ -590,7 +590,7 @@ class TestOvalixGuardrail:
             assert guardrail._get_actor({"metadata": {"user_api_key_user_email": "a@b.com"}}) == "a@b.com"
             assert guardrail._get_actor({"metadata": {"user_api_key_user_id": "uid-1"}}) == "uid-1"
             assert guardrail._get_actor({"litellm_metadata": {"user_api_key_user_id": "uid-2"}}) == "uid-2"
-            assert guardrail._get_actor({}) == "unknown"
+            assert guardrail._get_actor({}) == ""
         finally:
             for k in _ovalix_env():
                 if k in os.environ:
@@ -992,6 +992,45 @@ async def test_all_allow_passes_through():
     with patch.object(g._async_handler, "post", new=_post_returning(lambda body: _ALLOW)):
         result = await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
     assert result["texts"] == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_actor_sent_to_tracker_is_raw_identifier_not_hash():
+    g = _static_guardrail()
+    request_data = {"metadata": {"user_api_key_user_email": "user@example.com"}}
+    inputs = GenericGuardrailAPIInputs(texts=["hi"])
+    seen = {}
+
+    async def _post(url, headers=None, json=None):
+        seen["last"] = json
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request", logging_obj=None)
+    assert seen["last"]["actor"] == "user@example.com"
+    assert seen["last"]["session_id"] != "user@example.com"
+    assert g._get_tracker_actor_id(request_data) in seen["last"]["session_id"]
+
+
+@pytest.mark.asyncio
+async def test_empty_user_sends_empty_actor_matching_reference():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(texts=["hi"])
+    seen = {}
+
+    async def _post(url, headers=None, json=None):
+        seen["last"] = json
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert seen["last"]["actor"] == ""
 
 
 @pytest.mark.asyncio
