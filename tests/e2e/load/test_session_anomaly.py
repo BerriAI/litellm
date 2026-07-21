@@ -4,7 +4,14 @@ from itertools import count, repeat
 
 import pytest
 
-from session_anomaly import TurnMetric, settled_spend, summarize
+from e2e_http import NetworkError, Success
+from session_anomaly import (
+    SessionMessagesResponse,
+    TurnMetric,
+    retried,
+    settled_spend,
+    summarize,
+)
 
 
 def _ok_turn(turn_index: int) -> TurnMetric:
@@ -51,6 +58,42 @@ class TestSummarizePlannedTurns:
 
         assert report.failed_turns == 0
         assert report.error_ratio == 0.0
+
+
+class TestRetried:
+    def test_transient_failures_then_success_returns_the_success(self) -> None:
+        outcome = Success(data=SessionMessagesResponse())
+        calls = iter(
+            (NetworkError(message="overloaded"), NetworkError(message="overloaded"), outcome)
+        )
+
+        result = retried(lambda: next(calls), attempts=3, sleep=lambda _: None)
+
+        assert result is outcome
+
+    def test_exhausted_attempts_return_the_last_failure(self) -> None:
+        last_attempt = NetworkError(message="still overloaded")
+        never_reached = NetworkError(message="a fourth attempt would break the budget")
+        calls = iter(
+            (NetworkError(message="overloaded"), last_attempt, never_reached)
+        )
+
+        result = retried(lambda: next(calls), attempts=2, sleep=lambda _: None)
+
+        assert result is last_attempt
+        assert next(calls) is never_reached
+
+    def test_first_try_success_never_sleeps(self) -> None:
+        def sleep_means_retry(_: float) -> None:
+            raise AssertionError("slept after a successful attempt")
+
+        result = retried(
+            lambda: Success(data=SessionMessagesResponse()),
+            attempts=3,
+            sleep=sleep_means_retry,
+        )
+
+        assert isinstance(result, Success)
 
 
 class TestSettledSpend:
