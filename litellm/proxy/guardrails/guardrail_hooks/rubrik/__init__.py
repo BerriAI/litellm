@@ -24,12 +24,25 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     """
     import litellm
 
+    # `LitellmParams.__init__` converts an omitted `default_on` to `False`
+    # before we receive it, so `litellm_params.default_on` is always `bool`
+    # and never `None`. Read the raw config dict to distinguish an explicit
+    # `default_on: false` from the absent case, which for Rubrik should
+    # default to `True` (the guardrail is meant to be on by default).
+    raw_litellm_params = guardrail.get("litellm_params") or {}
+    raw_default_on = (
+        raw_litellm_params.get("default_on")
+        if isinstance(raw_litellm_params, dict)
+        else getattr(raw_litellm_params, "default_on", None)
+    )
+    default_on = litellm_params.default_on if raw_default_on is not None else True
+
     rubrik_callback = RubrikLogger(
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
-        default_on=litellm_params.default_on,
+        default_on=default_on,
     )
 
     litellm.logging_callback_manager.add_litellm_callback(rubrik_callback)
