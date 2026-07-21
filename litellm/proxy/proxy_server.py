@@ -4752,6 +4752,14 @@ class ProxyConfig:
                     config_file_path=config_file_path,
                 )
 
+            ## provider-pinned standard routes (/{provider}/v1/chat/completions, /{provider}/v1/messages)
+            if general_settings.get("pinned_provider_routes", None) is not None:
+                from litellm.proxy.pinned_provider_routes import (  # noqa: PLC0415
+                    initialize_pinned_provider_routes,
+                )
+
+                initialize_pinned_provider_routes(app=app, general_settings=general_settings)
+
             ## ADMIN UI ACCESS ##
             ui_access_mode = general_settings.get("ui_access_mode", "all")  # can be either ["admin_only" or "all"]
             ### ALLOWED IP ###
