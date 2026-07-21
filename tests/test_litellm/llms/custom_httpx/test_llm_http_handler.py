@@ -23,7 +23,10 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _google_genai_streaming_hidden_params,
 )
-from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
+    MockResponsesAPIStreamingIterator,
+)
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TranscriptionResponse
@@ -400,6 +403,34 @@ async def test_async_response_api_handler_returns_iterator_when_the_caller_reque
 
     assert isinstance(result, BaseResponsesAPIStreamingIterator)
     config.transform_response_api_response.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_fake_stream_still_returns_mock_iterator():
+    handler = BaseLLMHTTPHandler()
+    config = _chatgpt_style_config(ResponsesAPIResponse(id="resp_fake", created_at=0, output=[], status="completed"))
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    result = await handler.async_response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={"stream": True},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=_responses_logging_obj(),
+        client=client,
+        fake_stream=True,
+    )
+
+    assert isinstance(result, MockResponsesAPIStreamingIterator)
+    assert client.post.call_args.kwargs["json"].get("stream") is None
 
 
 def test_get_agentic_loop_settings_defaults_and_overrides():
