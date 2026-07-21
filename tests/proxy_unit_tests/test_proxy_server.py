@@ -1258,8 +1258,8 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         tx_cm = MagicMock()
         tx_cm.__aenter__ = AsyncMock(return_value=tx_mock)
         tx_cm.__aexit__ = AsyncMock(return_value=None)
-        original_tx = litellm.proxy.proxy_server.prisma_client.db.tx
-        litellm.proxy.proxy_server.prisma_client.db.tx = MagicMock(
+        original_tx = litellm.proxy.proxy_server.prisma_client.tx
+        litellm.proxy.proxy_server.prisma_client.tx = MagicMock(
             return_value=tx_cm
         )
 
@@ -1284,7 +1284,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         )
 
         litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
-        litellm.proxy.proxy_server.prisma_client.db.tx = original_tx
+        litellm.proxy.proxy_server.prisma_client.tx = original_tx
 
 
 @pytest.mark.parametrize("team_member_role", ["admin", "user"])
@@ -1446,11 +1446,6 @@ async def test_create_team_member_add_team_admin(
         mock_litellm_usertable.find_unique = AsyncMock(return_value=None)
 
         team_mock_client = AsyncMock()
-        original_val = getattr(
-            litellm.proxy.proxy_server.prisma_client.db, "litellm_teamtable"
-        )
-        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
-
         team_mock_client.update = AsyncMock(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
@@ -1461,39 +1456,41 @@ async def test_create_team_member_add_team_admin(
         tx_cm = MagicMock()
         tx_cm.__aenter__ = AsyncMock(return_value=tx_mock)
         tx_cm.__aexit__ = AsyncMock(return_value=None)
-        original_tx = litellm.proxy.proxy_server.prisma_client.db.tx
-        litellm.proxy.proxy_server.prisma_client.db.tx = MagicMock(
-            return_value=tx_cm
-        )
 
-        try:
-            await team_member_add(
-                data=team_member_add_request,
-                user_api_key_dict=valid_token,
+        with (
+            patch.object(
+                litellm.proxy.proxy_server.prisma_client.db,
+                "litellm_teamtable",
+                team_mock_client,
+            ),
+            patch.object(
+                litellm.proxy.proxy_server.prisma_client,
+                "tx",
+                MagicMock(return_value=tx_cm),
+            ),
+        ):
+            try:
+                await team_member_add(
+                    data=team_member_add_request,
+                    user_api_key_dict=valid_token,
+                )
+            except HTTPException as e:
+                if user_role == "user":
+                    assert e.status_code == 403
+                    return
+                else:
+                    raise e
+
+            mock_client.assert_called()
+
+            assert (
+                mock_client.call_args.kwargs["data"]["create"]["max_budget"]
+                == litellm.max_internal_user_budget
             )
-        except HTTPException as e:
-            if user_role == "user":
-                assert e.status_code == 403
-                return
-            else:
-                raise e
-
-        mock_client.assert_called()
-
-        print(f"mock_client.call_args: {mock_client.call_args}")
-        print("mock_client.call_args.kwargs: {}".format(mock_client.call_args.kwargs))
-
-        assert (
-            mock_client.call_args.kwargs["data"]["create"]["max_budget"]
-            == litellm.max_internal_user_budget
-        )
-        assert (
-            mock_client.call_args.kwargs["data"]["create"]["budget_duration"]
-            == litellm.internal_user_budget_duration
-        )
-
-        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
-        litellm.proxy.proxy_server.prisma_client.db.tx = original_tx
+            assert (
+                mock_client.call_args.kwargs["data"]["create"]["budget_duration"]
+                == litellm.internal_user_budget_duration
+            )
 
 
 @pytest.mark.asyncio

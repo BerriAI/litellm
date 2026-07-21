@@ -1739,7 +1739,7 @@ async def test_add_team_members_reconciles_against_freshly_locked_row():
     tx_cm.__aexit__ = AsyncMock(return_value=None)
 
     prisma_client = MagicMock()
-    prisma_client.db.tx = MagicMock(return_value=tx_cm)
+    prisma_client.tx = MagicMock(return_value=tx_cm)
 
     with patch(
         "litellm.proxy.management_endpoints.team_endpoints._process_team_members",

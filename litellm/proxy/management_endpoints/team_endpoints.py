@@ -2408,7 +2408,7 @@ async def _add_team_members_to_team(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
-    async with prisma_client.db.tx() as tx:
+    async with prisma_client.tx() as tx:
         locked_rows = await tx.query_raw(
             'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
             data.team_id,
