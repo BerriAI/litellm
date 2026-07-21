@@ -270,6 +270,11 @@ PG_PRINCIPAL_COUNT="$(printf '%s\n' "SELECT count(*) FROM pg_roles WHERE rolname
   psql "host=$POSTGRES_HOST port=5432 dbname=postgres user=$ADMIN_DISPLAY_NAME sslmode=require" \
   --tuples-only --no-align --set=ON_ERROR_STOP=1 --set=identity_name="$IDENTITY_NAME" \
   )"
+printf 'GRANT USAGE, CREATE ON SCHEMA public TO :"identity_name";\n' |
+  PGPASSWORD="$POSTGRES_ADMIN_TOKEN" docker run --rm -i -e PGPASSWORD postgres:16-alpine \
+  psql "host=$POSTGRES_HOST port=5432 user=$ADMIN_DISPLAY_NAME dbname=litellm sslmode=require" \
+  --set=ON_ERROR_STOP=1 --set=identity_name="$IDENTITY_NAME" \
+  >/dev/null
 unset POSTGRES_ADMIN_TOKEN PGPASSWORD
 [[ "$PG_PRINCIPAL_COUNT" == "1" ]] || die "PostgreSQL managed-identity principal was not created."
 
@@ -345,7 +350,7 @@ spec:
           image: $IMAGE_REFERENCE
           imagePullPolicy: IfNotPresent
           command: ["/app/.venv/bin/litellm"]
-          args: ["--config", "/config/config.yaml", "--port", "4000", "--azure_postgresql_auth"]
+          args: ["--config", "/config/config.yaml", "--port", "4000", "--azure_postgresql_auth", "--enforce_prisma_migration_check"]
           ports:
             - name: http
               containerPort: 4000
@@ -357,6 +362,8 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 120
           env:
+            - name: LITELLM_LOG
+              value: INFO
             - name: DATABASE_HOST
               value: $POSTGRES_HOST
             - name: DATABASE_PORT
@@ -532,6 +539,7 @@ cat >"$EVIDENCE_FILE" <<EOF
 - Readiness HTTP status: $READINESS_HTTP
 - Readiness status: healthy
 - Database status: connected
+- Prisma migration success enforced: true
 - Token refresh loop started: true
 - Token refresh scheduled: true
 - Proactive token refresh background task started: true
