@@ -159,6 +159,7 @@ class BinaryStream(BaseModel):
     call_id: str | None = None
     transfer_encoding: str | None = None
     content_length: str | None = None
+    error_body: str | None = None
     chunk_count: int = 0
     total_bytes: int = 0
 
@@ -469,31 +470,33 @@ def stream_binary(
             stream=True,
             timeout=timeout,
         )
-    except requests.RequestException:
-        return BinaryStream(status_code=-1)
-    content_type = _hdr(resp, "content-type")
-    call_id = _hdr(resp, "x-litellm-call-id")
-    transfer_encoding = _hdr(resp, "transfer-encoding")
-    content_length = _hdr(resp, "content-length")
-    if not (200 <= resp.status_code < 300):
+    except requests.RequestException as exc:
+        return BinaryStream(status_code=-1, error_body=str(exc)[:300])
+    with resp:
+        content_type = _hdr(resp, "content-type")
+        call_id = _hdr(resp, "x-litellm-call-id")
+        transfer_encoding = _hdr(resp, "transfer-encoding")
+        content_length = _hdr(resp, "content-length")
+        if not (200 <= resp.status_code < 300):
+            return BinaryStream(
+                status_code=resp.status_code,
+                content_type=content_type,
+                call_id=call_id,
+                transfer_encoding=transfer_encoding,
+                content_length=content_length,
+                error_body=resp.text[:300],
+            )
+        raw_chunks = cast("Iterator[bytes]", resp.iter_content(chunk_size=chunk_size))
+        chunks = tuple(chunk for chunk in raw_chunks if chunk)
         return BinaryStream(
             status_code=resp.status_code,
             content_type=content_type,
             call_id=call_id,
             transfer_encoding=transfer_encoding,
             content_length=content_length,
+            chunk_count=len(chunks),
+            total_bytes=sum(len(chunk) for chunk in chunks),
         )
-    raw_chunks = cast("Iterator[bytes]", resp.iter_content(chunk_size=chunk_size))
-    chunks = tuple(chunk for chunk in raw_chunks if chunk)
-    return BinaryStream(
-        status_code=resp.status_code,
-        content_type=content_type,
-        call_id=call_id,
-        transfer_encoding=transfer_encoding,
-        content_length=content_length,
-        chunk_count=len(chunks),
-        total_bytes=sum(len(chunk) for chunk in chunks),
-    )
 
 
 def download(

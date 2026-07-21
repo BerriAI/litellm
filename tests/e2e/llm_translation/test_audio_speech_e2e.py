@@ -62,7 +62,7 @@ class TestAudioSpeech:
             "begin playback well before the whole clip has finished generating.",
         )
         assert result.ok, (
-            f"/audio/speech stream failed (status {result.status_code})"
+            f"/audio/speech stream failed (status {result.status_code}); body={result.error_body}"
         )
         assert "audio" in (result.content_type or ""), (
             f"/audio/speech content-type is not audio: {result.content_type!r}"
