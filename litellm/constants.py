@@ -1645,3 +1645,15 @@ ADVISOR_TOOL_DESCRIPTION: str = (
     "want to verify your reasoning, or face a complex decision. "
     "Describe your question or challenge clearly in the 'question' field."
 )
+
+# Mapping of lowercase weekday names to Python datetime.weekday() integers.
+# Used by budget reset logic to determine which day weekly budgets reset on.
+WEEKDAYS: dict[str, int] = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
