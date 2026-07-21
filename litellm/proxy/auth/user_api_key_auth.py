@@ -1295,6 +1295,7 @@ async def _user_api_key_auth_builder(
                     team_id = result["team_id"]
                     team_object = result["team_object"]
                     user_id = result["user_id"]
+                    user_email = result["user_email"]
                     user_object = result["user_object"]
                     end_user_id = result["end_user_id"]
                     org_id = result["org_id"]
@@ -1319,6 +1320,7 @@ async def _user_api_key_auth_builder(
                             api_key=None,
                             user_role=LitellmUserRoles.PROXY_ADMIN,
                             user_id=user_id,
+                            user_email=user_email,
                             team_id=team_id,
                             team_alias=(team_object.team_alias if team_object is not None else None),
                             team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
@@ -1344,6 +1346,7 @@ async def _user_api_key_auth_builder(
                             else LitellmUserRoles.INTERNAL_USER
                         ),
                         user_id=user_id,
+                        user_email=user_email,
                         org_id=org_id,
                         parent_otel_span=parent_otel_span,
                         end_user_id=end_user_id,
@@ -1385,6 +1388,7 @@ async def _user_api_key_auth_builder(
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
+                            auto_registered.user_email = user_email
                             valid_token = auto_registered
                             api_key = valid_token.token or ""
 
