@@ -91,6 +91,9 @@ ANOMALY_MAX_P95_TURN_SECONDS = float(
 ANOMALY_MAX_KEY_SPEND_USD = float(
     os.environ.get("E2E_ANOMALY_MAX_KEY_SPEND_USD", "0.60")
 )
+ANOMALY_SPEND_SETTLE_SECONDS = float(
+    os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
+)
 
 
 def require_env(*names: str) -> tuple[str, ...]:
