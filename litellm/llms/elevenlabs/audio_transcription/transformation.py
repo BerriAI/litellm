@@ -140,6 +140,19 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                             }
                         )
 
+            # ElevenLabs does not return a top-level duration; derive it from
+            # the last timestamp so per-second cost tracking
+            # (input_cost_per_second x duration) bills the real audio length
+            # instead of 0.
+            duration = 0.0
+            for word_data in response_json.get("words") or []:
+                try:
+                    duration = max(duration, float(word_data.get("end") or 0.0))
+                except (TypeError, ValueError):
+                    continue
+            if duration > 0:
+                response["duration"] = duration
+
             # Store full response in hidden params
             response._hidden_params = response_json
 
