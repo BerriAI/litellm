@@ -21,16 +21,39 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
-      - name: Update JSON Data
-        run: |
-          uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
       - name: Create Pull Request
-        run: |
-          git add model_prices_and_context_window.json 
-          git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
-          gh pr create --title "Update model_prices_and_context_window.json file" \
-            --body "Automated update for model_prices_and_context_window.json" \
-            --head auto-update-price-and-context-window-$(date +'%Y-%m-%d') \
-            --base main
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch || github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          BRANCH_NAME="auto-update-price-and-context-window-$(date +'%Y-%m-%d')"
+          git fetch origin "${BASE_BRANCH}" "${BRANCH_NAME}" || true
+          if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
+            git checkout -B "${BRANCH_NAME}" "origin/${BRANCH_NAME}"
+            git merge --no-edit "origin/${BASE_BRANCH}"
+          else
+            git checkout -b "${BRANCH_NAME}" "origin/${BASE_BRANCH}"
+          fi
+          uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
+          git add model_prices_and_context_window.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')"
+          fi
+          if git diff --quiet "origin/${BASE_BRANCH}" -- model_prices_and_context_window.json; then
+            echo "Pricing file matches ${BASE_BRANCH}; nothing to publish."
+          else
+            git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
+            if [ "$(gh pr list --head "${BRANCH_NAME}" --state open --json number --jq 'length')" -gt 0 ]; then
+              echo "PR already exists for ${BRANCH_NAME}."
+            else
+              gh pr create --title "Update model_prices_and_context_window.json file" \
+                --body "Automated update for model_prices_and_context_window.json" \
+                --head "${BRANCH_NAME}" \
+                --base "${BASE_BRANCH}"
+            fi
+          fi
