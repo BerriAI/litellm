@@ -2147,11 +2147,6 @@
       "count": 1
     }
   },
-  "src/components/team/available_teams.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/team/member_permissions.tsx": {
     "no-restricted-imports": {
       "count": 1
