@@ -498,8 +498,13 @@ describe("Status column reflects blocked / expiry / scim metadata", () => {
 
     renderWithProviders(<VirtualKeysTable />);
 
+    const tag = await screen.findByTestId(`key-status-${mockKey.token_id}`);
+    expect(tag).toHaveTextContent("Active");
+
+    const user = userEvent.setup();
+    await user.hover(tag);
     await waitFor(() => {
-      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Active");
+      expect(screen.getByText(/not blocked and has not expired/i)).toBeInTheDocument();
     });
   });
 
