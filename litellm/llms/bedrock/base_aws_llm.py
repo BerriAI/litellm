@@ -97,6 +97,7 @@ class BaseAWSLLM:
             "aws_sts_endpoint",
             "aws_bedrock_runtime_endpoint",
             "aws_external_id",
+            "aws_session_tags",
         ]
 
     def _get_ssl_verify(self, ssl_verify: Optional[Union[bool, str]] = None):
@@ -196,6 +197,7 @@ class BaseAWSLLM:
         aws_web_identity_token: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
         aws_external_id: Optional[str] = None,
+        aws_session_tags: Optional[List[dict]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ):
         """
@@ -305,6 +307,7 @@ class BaseAWSLLM:
                 aws_region_name=aws_region_name,
                 aws_sts_endpoint=aws_sts_endpoint,
                 aws_external_id=aws_external_id,
+                aws_session_tags=aws_session_tags,
                 ssl_verify=ssl_verify,
             )
             return credentials
@@ -935,6 +938,7 @@ class BaseAWSLLM:
         aws_session_name: str,
         web_identity_token_file: str,
         aws_external_id: Optional[str] = None,
+        aws_session_tags: Optional[List[dict]] = None,
         aws_sts_endpoint: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
@@ -993,9 +997,10 @@ class BaseAWSLLM:
             "RoleSessionName": aws_session_name,
         }
 
-        # Add ExternalId parameter if provided
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
+        if aws_session_tags:
+            assume_role_params["Tags"] = aws_session_tags
 
         return sts_client_with_creds.assume_role(**assume_role_params)
 
@@ -1004,6 +1009,7 @@ class BaseAWSLLM:
         aws_role_name: str,
         aws_session_name: str,
         aws_external_id: Optional[str] = None,
+        aws_session_tags: Optional[List[dict]] = None,
         aws_sts_endpoint: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
@@ -1033,9 +1039,10 @@ class BaseAWSLLM:
             "RoleSessionName": aws_session_name,
         }
 
-        # Add ExternalId parameter if provided
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
+        if aws_session_tags:
+            assume_role_params["Tags"] = aws_session_tags
 
         return sts_client.assume_role(**assume_role_params)
 
@@ -1066,6 +1073,7 @@ class BaseAWSLLM:
         aws_region_name: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
         aws_external_id: Optional[str] = None,
+        aws_session_tags: Optional[List[dict]] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> Tuple[Credentials, Optional[int]]:
         """
@@ -1094,6 +1102,7 @@ class BaseAWSLLM:
                         aws_session_name,
                         web_identity_token_file,
                         aws_external_id,
+                        aws_session_tags=aws_session_tags,
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
                     )
@@ -1102,6 +1111,7 @@ class BaseAWSLLM:
                         aws_role_name,
                         aws_session_name,
                         aws_external_id,
+                        aws_session_tags=aws_session_tags,
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
                     )
@@ -1144,9 +1154,10 @@ class BaseAWSLLM:
             "RoleSessionName": aws_session_name,
         }
 
-        # Add ExternalId parameter if provided
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
+        if aws_session_tags:
+            assume_role_params["Tags"] = aws_session_tags
 
         try:
             sts_response = sts_client.assume_role(**assume_role_params)
@@ -1347,6 +1358,7 @@ class BaseAWSLLM:
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_external_id = optional_params.pop("aws_external_id", None)
+        aws_session_tags = optional_params.pop("aws_session_tags", None)
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -1359,6 +1371,7 @@ class BaseAWSLLM:
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
 
         return Boto3CredentialsInfo(
