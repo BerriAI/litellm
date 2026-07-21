@@ -113,24 +113,20 @@ describe("provider_info_helpers", () => {
     });
   });
 
-  describe("provider logo asset paths", () => {
-    // Regression: a relative "../ui/assets/logos/" base resolved to
-    // "/ui/ui/assets/logos/..." (404) on the public model hub at
-    // /ui/model_hub_table/, which sits a level below the /ui/ SPA. Root-absolute
-    // paths resolve correctly at any route depth.
-    it("should expose every provider logo as a root-absolute /ui path", () => {
+  describe("provider logo bundled assets", () => {
+    it("should expose every provider logo as a truthy bundled URL, never a raw /ui/assets path", () => {
       const logos = Object.values(providerLogoMap);
       expect(logos.length).toBeGreaterThan(0);
       logos.forEach((logo) => {
-        expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
-        expect(logo).not.toContain("../");
+        expect(typeof logo).toBe("string");
+        expect(logo.length).toBeGreaterThan(0);
+        expect(logo.startsWith("/ui/assets/")).toBe(false);
       });
     });
 
-    it("should resolve a provider logo to a root-absolute path via getProviderLogoAndName", () => {
+    it("should resolve a provider to its own bundled logo via getProviderLogoAndName", () => {
       const { logo } = getProviderLogoAndName("openai");
-      expect(logo.startsWith("/ui/assets/logos/")).toBe(true);
-      expect(logo).not.toContain("../");
+      expect(logo).toContain("openai_small");
     });
   });
 
@@ -430,20 +426,19 @@ describe("getProviderLogoAndName under a custom server_root_path", () => {
     vi.doUnmock("@/lib/serverRootPath");
   });
 
-  // Regression: under SERVER_ROOT_PATH=/litellm the logo must be requested at
-  // /litellm/ui/assets/logos/... A bare /ui/... path is served off the root and
-  // 404s behind the reverse proxy.
-  it("prefixes the server root path onto the resolved logo", async () => {
+  it("returns the bundled logo URL untouched under a sub-path mount", async () => {
     vi.resetModules();
     vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/litellm" }));
-    const { getProviderLogoAndName } = await import("./provider_info_helpers");
-    expect(getProviderLogoAndName("openai").logo).toBe("/litellm/ui/assets/logos/openai_small.svg");
+    const helpers = await import("./provider_info_helpers");
+    const { logo } = helpers.getProviderLogoAndName("openai");
+    expect(logo).toBe(helpers.providerLogoMap[helpers.Providers.OpenAI]);
+    expect(logo.startsWith("/litellm")).toBe(false);
   });
 
-  it("leaves the logo at /ui/... when mounted at the root", async () => {
+  it("returns the bundled logo URL untouched at the root mount", async () => {
     vi.resetModules();
     vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/" }));
-    const { getProviderLogoAndName } = await import("./provider_info_helpers");
-    expect(getProviderLogoAndName("openai").logo).toBe("/ui/assets/logos/openai_small.svg");
+    const helpers = await import("./provider_info_helpers");
+    expect(helpers.getProviderLogoAndName("openai").logo).toBe(helpers.providerLogoMap[helpers.Providers.OpenAI]);
   });
 });

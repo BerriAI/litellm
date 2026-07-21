@@ -48,6 +48,16 @@ describe("resolveLogoSrc", () => {
     expect(resolveLogoSrc("//cdn.example.com/x.svg")).toBe("//cdn.example.com/x.svg");
   });
 
+  it("passes bundled /_next/ asset URLs through untouched even under a sub-path mount", async () => {
+    const { resolveLogoSrc } = await importWithRoot("/litellm");
+    expect(resolveLogoSrc("/_next/static/media/openai_small.abc123.svg")).toBe(
+      "/_next/static/media/openai_small.abc123.svg",
+    );
+    expect(resolveLogoSrc("/litellm-asset-prefix/_next/static/media/openai_small.abc123.svg")).toBe(
+      "/litellm-asset-prefix/_next/static/media/openai_small.abc123.svg",
+    );
+  });
+
   it("roots a local asset path using the live server root path", async () => {
     const { resolveLogoSrc } = await importWithRoot("/litellm");
     expect(resolveLogoSrc("/ui/assets/logos/github.svg")).toBe("/litellm/ui/assets/logos/github.svg");
