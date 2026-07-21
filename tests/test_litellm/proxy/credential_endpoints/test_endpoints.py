@@ -14,6 +14,7 @@ import sys
 
 import pytest
 from fastapi import HTTPException
+from prisma.errors import ClientNotConnectedError
 from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, os.path.abspath("../../../.."))
@@ -48,10 +49,17 @@ def _connected_db(monkeypatch):
     repo = MagicMock()
     repo.create = AsyncMock()
     repo.delete_by_name = AsyncMock()
+    repo.update_by_name = AsyncMock()
+
+    async def _find_by_name(name: str) -> CredentialItem | None:
+        return next(
+            (credential for credential in litellm.credential_list if credential.credential_name == name),
+            None,
+        )
+
+    repo.find_by_name = AsyncMock(side_effect=_find_by_name)
     monkeypatch.setattr(endpoints, "CredentialsRepository", lambda _client: repo)
-    monkeypatch.setattr(
-        endpoints.CredentialAccessor, "upsert_credentials", lambda creds: None
-    )
+    monkeypatch.setattr(endpoints.CredentialAccessor, "upsert_credentials", lambda creds: None)
     return repo
 
 
@@ -130,9 +138,7 @@ async def test_update_logging_credential_forbidden_for_non_admin(_connected_db):
 
 
 @pytest.mark.asyncio
-async def test_update_existing_logging_credential_forbidden_even_without_logging_patch(
-    _connected_db, monkeypatch
-):
+async def test_update_existing_logging_credential_forbidden_even_without_logging_patch(_connected_db, monkeypatch):
     """A non-admin cannot edit a stored logging credential's values, even with a patch
     that omits credential_info (the gate consults the in-memory credential too)."""
     monkeypatch.setattr(
@@ -234,9 +240,7 @@ def test_update_db_credential_preserves_untouched_access_subfields():
 
 
 @pytest.mark.asyncio
-async def test_delete_logging_credential_forbidden_for_non_admin(
-    _connected_db, monkeypatch
-):
+async def test_delete_logging_credential_forbidden_for_non_admin(_connected_db, monkeypatch):
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -260,9 +264,7 @@ async def test_delete_logging_credential_forbidden_for_non_admin(
 
 
 @pytest.mark.asyncio
-async def test_update_db_only_logging_credential_forbidden_for_non_admin(
-    _connected_db, monkeypatch
-):
+async def test_update_db_only_logging_credential_forbidden_for_non_admin(_connected_db, monkeypatch):
     """A logging credential that exists ONLY in the DB (not resident in the
     in-memory ``credential_list`` -- e.g. created on another scaled instance or
     before a restart) must still gate a non-admin update. The gate falls back to
@@ -292,9 +294,7 @@ async def test_update_db_only_logging_credential_forbidden_for_non_admin(
 
 
 @pytest.mark.asyncio
-async def test_delete_db_only_logging_credential_forbidden_for_non_admin(
-    _connected_db, monkeypatch
-):
+async def test_delete_db_only_logging_credential_forbidden_for_non_admin(_connected_db, monkeypatch):
     """Same DB-only fallback for delete: a non-admin can't delete a logging
     credential that is resident only in the DB."""
     monkeypatch.setattr(litellm, "credential_list", [])
@@ -332,9 +332,7 @@ def _team_admin_of(team_ids):
     Combined with ``_patch_team_admin_lookup`` it mimics the real
     ``_caller_grantable_team_ids`` resolution without touching the DB.
     """
-    return UserAPIKeyAuth(
-        api_key="k", user_role=LitellmUserRoles.INTERNAL_USER, user_id="ta-demo"
-    )
+    return UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.INTERNAL_USER, user_id="ta-demo")
 
 
 @pytest.fixture
@@ -368,9 +366,7 @@ def _resident_logging_dest():
 
 
 @pytest.mark.asyncio
-async def test_team_admin_can_append_own_team_to_access(
-    _connected_db, _patch_team_admin_lookup, monkeypatch
-):
+async def test_team_admin_can_append_own_team_to_access(_connected_db, _patch_team_admin_lookup, monkeypatch):
     monkeypatch.setattr(litellm, "credential_list", [_resident_logging_dest()])
     _connected_db.find_by_name = AsyncMock(return_value=_resident_logging_dest())
     _connected_db.update_by_name = AsyncMock()
@@ -388,13 +384,144 @@ async def test_team_admin_can_append_own_team_to_access(
         user_api_key_dict=_team_admin_of(["team-T"]),
     )
     assert result["success"] is True
+    _connected_db.find_by_name.assert_awaited_once_with("dest")
     _connected_db.update_by_name.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_provider_credential_patch_forbidden_for_non_admin(
-    _connected_db, monkeypatch
-):
+async def test_team_admin_cannot_replay_stale_global_scope(_connected_db, _patch_team_admin_lookup, monkeypatch):
+    cached = CredentialItem(
+        credential_name="dest",
+        credential_values={"langfuse_host": "h"},
+        credential_info={
+            **_DEST_WITH_TEAMS,
+            "access": {"global": False, "teams": ["team-existing"]},
+        },
+    )
+    authoritative = CredentialItem(
+        credential_name="dest",
+        credential_values={"langfuse_host": "h"},
+        credential_info={
+            **_DEST_WITH_TEAMS,
+            "access": {"global": True, "teams": ["team-existing"]},
+        },
+    )
+    monkeypatch.setattr(litellm, "credential_list", [cached])
+    _connected_db.find_by_name = AsyncMock(return_value=authoritative)
+    _connected_db.update_by_name = AsyncMock()
+    _patch_team_admin_lookup["ids"] = frozenset({"team-T"})
+
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.update_credential(
+            request=MagicMock(),
+            fastapi_response=MagicMock(),
+            credential=UpdateCredentialItem(
+                credential_info={
+                    "access": {
+                        "global": False,
+                        "teams": ["team-existing", "team-T"],
+                    }
+                },
+            ),
+            credential_name="dest",
+            user_api_key_dict=_team_admin_of(["team-T"]),
+        )
+
+    assert exc.value.status_code == 403
+    _connected_db.find_by_name.assert_awaited_once_with("dest")
+    _connected_db.update_by_name.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_credential_handles_database_lookup_failure(_connected_db):
+    db_error = ClientNotConnectedError()
+    _connected_db.find_by_name = AsyncMock(side_effect=db_error)
+    _connected_db.update_by_name = AsyncMock()
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=UpdateCredentialItem(
+            credential_info={"access": {"global": True}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_admin(),
+    )
+
+    assert result.code == "500"
+    assert result.message == str(db_error)
+    _connected_db.find_by_name.assert_awaited_once_with("dest")
+    _connected_db.update_by_name.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_credential_handles_missing_database_client(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=UpdateCredentialItem(
+            credential_info={"access": {"global": True}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_admin(),
+    )
+
+    assert result.code == "500"
+
+
+@pytest.mark.asyncio
+async def test_update_credential_handles_missing_database_credential(_connected_db):
+    _connected_db.find_by_name = AsyncMock(return_value=None)
+    _connected_db.update_by_name = AsyncMock()
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=UpdateCredentialItem(
+            credential_info={"access": {"global": True}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_admin(),
+    )
+
+    assert result.code == "404"
+    _connected_db.find_by_name.assert_awaited_once_with("dest")
+    _connected_db.update_by_name.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_credential_handles_database_write_failure(_connected_db):
+    db_error = ClientNotConnectedError()
+    existing = CredentialItem(
+        credential_name="dest",
+        credential_values={"langfuse_host": "h"},
+        credential_info=_LOGGING_INFO,
+    )
+    _connected_db.find_by_name = AsyncMock(return_value=existing)
+    _connected_db.update_by_name = AsyncMock(side_effect=db_error)
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=UpdateCredentialItem(
+            credential_info={"access": {"global": True}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_admin(),
+    )
+
+    assert result.code == "500"
+    assert result.message == str(db_error)
+    _connected_db.find_by_name.assert_awaited_once_with("dest")
+    _connected_db.update_by_name.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_provider_credential_patch_forbidden_for_non_admin(_connected_db, monkeypatch):
     """A team-admin (or any non-admin) cannot PATCH a non-logging credential.
 
     The route gate was widened to let team-admins reach /credentials/{name}
@@ -428,9 +555,7 @@ async def test_provider_credential_patch_forbidden_for_non_admin(
 
 
 @pytest.mark.asyncio
-async def test_provider_credential_access_patch_bypass_forbidden(
-    _connected_db, _patch_team_admin_lookup, monkeypatch
-):
+async def test_provider_credential_access_patch_bypass_forbidden(_connected_db, _patch_team_admin_lookup, monkeypatch):
     """Cursor BugBot regression: a team-admin can't sneak `access.teams` onto
     a PROVIDER credential to route through the decider instead of the admin
     gate.
@@ -467,9 +592,7 @@ async def test_provider_credential_access_patch_bypass_forbidden(
 
 
 @pytest.mark.asyncio
-async def test_team_admin_can_revoke_own_team_grant(
-    _connected_db, _patch_team_admin_lookup, monkeypatch
-):
+async def test_team_admin_can_revoke_own_team_grant(_connected_db, _patch_team_admin_lookup, monkeypatch):
     """A team-admin saving an access list without their own team_id revokes it."""
     existing = CredentialItem(
         credential_name="dest",
@@ -502,9 +625,7 @@ async def test_team_admin_can_revoke_own_team_grant(
 
 
 @pytest.mark.asyncio
-async def test_team_admin_cannot_grant_foreign_team(
-    _connected_db, _patch_team_admin_lookup, monkeypatch
-):
+async def test_team_admin_cannot_grant_foreign_team(_connected_db, _patch_team_admin_lookup, monkeypatch):
     monkeypatch.setattr(litellm, "credential_list", [_resident_logging_dest()])
     _patch_team_admin_lookup["ids"] = frozenset({"team-T"})
 
@@ -515,9 +636,7 @@ async def test_team_admin_cannot_grant_foreign_team(
             credential=CredentialItem(
                 credential_name="dest",
                 credential_values={},
-                credential_info={
-                    "access": {"teams": ["team-existing", "team-foreign"]}
-                },
+                credential_info={"access": {"teams": ["team-existing", "team-foreign"]}},
             ),
             credential_name="dest",
             user_api_key_dict=_team_admin_of(["team-T"]),
@@ -527,9 +646,7 @@ async def test_team_admin_cannot_grant_foreign_team(
 
 
 @pytest.mark.asyncio
-async def test_team_admin_cannot_rotate_credential_values(
-    _connected_db, _patch_team_admin_lookup, monkeypatch
-):
+async def test_team_admin_cannot_rotate_credential_values(_connected_db, _patch_team_admin_lookup, monkeypatch):
     monkeypatch.setattr(litellm, "credential_list", [_resident_logging_dest()])
     _patch_team_admin_lookup["ids"] = frozenset({"team-T"})
 
@@ -552,9 +669,7 @@ async def test_team_admin_cannot_rotate_credential_values(
 
 
 @pytest.mark.asyncio
-async def test_team_admin_cannot_flip_global(
-    _connected_db, _patch_team_admin_lookup, monkeypatch
-):
+async def test_team_admin_cannot_flip_global(_connected_db, _patch_team_admin_lookup, monkeypatch):
     monkeypatch.setattr(litellm, "credential_list", [_resident_logging_dest()])
     _patch_team_admin_lookup["ids"] = frozenset({"team-T"})
 
@@ -575,9 +690,7 @@ async def test_team_admin_cannot_flip_global(
 
 
 @pytest.mark.asyncio
-async def test_get_credentials_shows_only_in_scope_destinations_for_non_admin(
-    monkeypatch, _patch_team_admin_lookup
-):
+async def test_get_credentials_shows_only_in_scope_destinations_for_non_admin(monkeypatch, _patch_team_admin_lookup):
     """Leak regression (Veria #1): a non-proxy-admin sees only destinations granted
     to a scope they administer, not every logging destination. The caller admins
     team-existing, so they see the destination granted to team-existing but never
@@ -618,9 +731,7 @@ async def test_get_credentials_shows_only_in_scope_destinations_for_non_admin(
 
 
 @pytest.mark.asyncio
-async def test_get_credentials_masks_otel_headers_only_for_non_admin(
-    monkeypatch, _patch_team_admin_lookup
-):
+async def test_get_credentials_masks_otel_headers_only_for_non_admin(monkeypatch, _patch_team_admin_lookup):
     raw_headers = "Authorization=Bearer collector-secret,x-api-key=api-secret"
     monkeypatch.setattr(
         litellm,
@@ -656,9 +767,7 @@ async def test_get_credentials_masks_otel_headers_only_for_non_admin(
 
 
 @pytest.mark.asyncio
-async def test_get_credentials_hides_out_of_scope_destination(
-    monkeypatch, _patch_team_admin_lookup
-):
+async def test_get_credentials_hides_out_of_scope_destination(monkeypatch, _patch_team_admin_lookup):
     """The exact leak: a team-admin of an unrelated team must see none of another
     team's destinations. Pre-fix, get_credentials returned every logging
     destination to any team/org admin regardless of the destination's access."""
@@ -683,9 +792,7 @@ async def test_get_credentials_hides_out_of_scope_destination(
 
 
 @pytest.mark.asyncio
-async def test_get_credentials_shows_org_scoped_destination_to_org_admin(
-    monkeypatch, _patch_team_admin_lookup
-):
+async def test_get_credentials_shows_org_scoped_destination_to_org_admin(monkeypatch, _patch_team_admin_lookup):
     """An org-admin sees a destination granted to their org via access.orgs, matched
     against the org-admin scope (not just team ids)."""
     monkeypatch.setattr(
@@ -708,18 +815,14 @@ async def test_get_credentials_shows_org_scoped_destination_to_org_admin(
     response = await endpoints.get_credentials(
         request=MagicMock(),
         fastapi_response=MagicMock(),
-        user_api_key_dict=UserAPIKeyAuth(
-            api_key="k", user_role=LitellmUserRoles.INTERNAL_USER, user_id="oa"
-        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.INTERNAL_USER, user_id="oa"),
     )
     names = [c["credential_name"] for c in response["credentials"]]
     assert names == ["org-dest"]
 
 
 @pytest.mark.asyncio
-async def test_get_credentials_forbidden_for_plain_user(
-    monkeypatch, _patch_team_admin_lookup
-):
+async def test_get_credentials_forbidden_for_plain_user(monkeypatch, _patch_team_admin_lookup):
     """Veria F2 regression: a plain internal_user (no team-admin or
     org-admin status anywhere) gets 403, NOT a filtered list. The previous
     handler returned destination names, hosts, and scope metadata to any
@@ -773,9 +876,7 @@ def test_patch_credentials_route_targets_update_credential():
 
 
 @pytest.mark.asyncio
-async def test_patch_credentials_does_not_leak_credential_type(
-    _connected_db, _patch_team_admin_lookup, monkeypatch
-):
+async def test_patch_credentials_does_not_leak_credential_type(_connected_db, _patch_team_admin_lookup, monkeypatch):
     """Existence-oracle regression: a team-admin probing a credential they don't own
     must NOT be able to distinguish "logging credential, not yours" from
     "provider credential" or "doesn't exist" by comparing 403 detail strings.
@@ -847,9 +948,7 @@ async def test_patch_credentials_echoes_foreign_team_id_to_legit_team_admin(
             request=MagicMock(),
             fastapi_response=MagicMock(),
             credential=UpdateCredentialItem(
-                credential_info={
-                    "access": {"teams": ["team-existing", "team-foreign"]}
-                },
+                credential_info={"access": {"teams": ["team-existing", "team-foreign"]}},
             ),
             credential_name="dest",
             user_api_key_dict=_team_admin_of(["team-T"]),
@@ -892,9 +991,7 @@ async def test_get_credentials_returns_all_for_proxy_admin(monkeypatch):
     )
     names = sorted(c["credential_name"] for c in response["credentials"])
     assert names == ["generic-otel", "openai", "poc-langfuse"]
-    generic = next(
-        c for c in response["credentials"] if c["credential_name"] == "generic-otel"
-    )
+    generic = next(c for c in response["credentials"] if c["credential_name"] == "generic-otel")
     assert generic["credential_values"]["otel_headers"] == raw_headers
 
 
