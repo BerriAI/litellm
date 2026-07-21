@@ -58,6 +58,19 @@ die() {
   exit 1
 }
 
+retry_postgres_busy() {
+  postgres_attempt=1
+  while ! "$@" 2>"$TMP_DIR/postgres-operation.err"; do
+    if ! rg -q 'ServerIsBusy|AnotherOperationInProgress' "$TMP_DIR/postgres-operation.err" || \
+      [[ "$postgres_attempt" -ge 30 ]]; then
+      sed -n '1,20p' "$TMP_DIR/postgres-operation.err" >&2
+      return 1
+    fi
+    sleep 10
+    postgres_attempt=$((postgres_attempt + 1))
+  done
+}
+
 group_exists() {
   [[ "$(az group exists --name "$1" 2>/dev/null)" == "true" ]]
 }
@@ -183,13 +196,13 @@ unset POSTGRES_BODY
 az resource wait --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_NAME" \
   --resource-type Microsoft.DBforPostgreSQL/flexibleServers \
   --custom "properties.state=='Ready'" --interval 20 --timeout 1800 --only-show-errors
-az postgres flexible-server firewall-rule create --resource-group "$RESOURCE_GROUP" \
+retry_postgres_busy az postgres flexible-server firewall-rule create --resource-group "$RESOURCE_GROUP" \
   --server-name "$POSTGRES_NAME" --name operator-bootstrap \
   --start-ip-address "$PUBLIC_IP" --end-ip-address "$PUBLIC_IP" --only-show-errors >/dev/null
 
 ADMIN_BODY="$(jq -cn --arg name "$ADMIN_DISPLAY_NAME" --arg tenant "$TENANT_ID" \
   '{properties:{principalName:$name,principalType:"User",tenantId:$tenant}}')"
-az rest --method put \
+retry_postgres_busy az rest --method put \
   --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.DBforPostgreSQL/flexibleServers/$POSTGRES_NAME/administrators/$ADMIN_OBJECT_ID?api-version=2024-08-01" \
   --body "$ADMIN_BODY" --only-show-errors >/dev/null
 unset ADMIN_BODY
