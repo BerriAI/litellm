@@ -526,3 +526,103 @@ def test_delta_serialization_contract():
     keys = list(extra_dump.keys())
     assert extra_dump["custom_field"] == "v"
     assert keys.index("custom_field") < keys.index("content")
+
+
+def test_safe_attribute_model_delattr():
+    """
+    SafeAttributeModel.__delattr__ must remove a field from the instance so it
+    is omitted from model_dump (OpenAI spec), whether the field is a declared
+    model field or an extra, and deleting a missing attribute must be a no-op.
+    """
+    from litellm.types.utils import Message
+
+    # Unset optional declared fields are dropped during __init__ -> absent from dump
+    msg = Message(content="hi", role="assistant")
+    assert not hasattr(msg, "audio")
+    assert not hasattr(msg, "reasoning_content")
+    assert "audio" not in msg.model_dump()
+    assert "reasoning_content" not in msg.model_dump()
+
+    # Explicitly deleting a present declared field removes it from the dump
+    msg2 = Message(content="hi", role="assistant", reasoning_content="because")
+    assert msg2.reasoning_content == "because"
+    del msg2.reasoning_content
+    assert not hasattr(msg2, "reasoning_content")
+    assert "reasoning_content" not in msg2.model_dump()
+
+    # Extra fields (extra='allow') are still deletable via the fallback path
+    msg3 = Message(content="hi", role="assistant", custom_field=123)
+    assert msg3.custom_field == 123
+    del msg3.custom_field
+    assert not hasattr(msg3, "custom_field")
+    assert "custom_field" not in msg3.model_dump()
+
+    # Deleting a non-existent attribute is a silent no-op
+    msg4 = Message(content="hi", role="assistant")
+    del msg4.does_not_exist
+
+
+def test_delattr_fast_path_matches_pydantic_exactly():
+    """
+    The fast path must be observationally identical to pydantic's own
+    __delattr__ for a declared field, including model_fields_set membership and
+    the exclude_unset dump, both of which the fast path never touches. Deleting
+    the same field through the fast path and through pydantic's __delattr__
+    (reached by skipping SafeAttributeModel in the MRO) must leave identical
+    state, so if a future pydantic release makes __delattr__ mutate
+    __pydantic_fields_set__ the two diverge and this fails rather than silently
+    shifting the serialization contract.
+    """
+    from litellm.types.utils import Message, SafeAttributeModel
+
+    def observe(m: Message) -> tuple:
+        return (
+            hasattr(m, "reasoning_content"),
+            "reasoning_content" in m.model_fields_set,
+            "reasoning_content" in m.model_dump(),
+            "reasoning_content" in m.model_dump(exclude_unset=True),
+        )
+
+    fast = Message(content="hi", role="assistant", reasoning_content="x")
+    del fast.reasoning_content
+
+    control = Message(content="hi", role="assistant", reasoning_content="x")
+    super(SafeAttributeModel, control).__delattr__("reasoning_content")
+
+    assert observe(fast) == observe(control)
+    # A deleted field is gone from __dict__ (so absent from both dumps) yet
+    # stays in model_fields_set, since neither delete path clears fields_set.
+    assert observe(fast) == (False, True, False, False)
+
+
+def test_delattr_fast_path_missing_attribute_is_noop():
+    """
+    The declared-field fast path must stay a silent no-op when the object delete
+    fails: the field passes the __dict__ membership guard but is already gone by
+    the time object.__delattr__ runs. This models a concurrent removal of the same
+    field on a shared response object. Previously the fast-path delete ran outside
+    the AttributeError handler, so the error leaked onto the Message/Delta/Choices/
+    Usage construction hot path instead of being swallowed like the slow path.
+
+    _VanishingDict reports every key as present (passing the guard) while storing
+    nothing, so the real object.__delattr__ still raises AttributeError.
+    """
+    from litellm.types.utils import SafeAttributeModel
+
+    class _VanishingDict(dict):
+        def __contains__(self, key: object) -> bool:
+            return True
+
+    class _RacyModel(SafeAttributeModel):
+        __pydantic_fields__ = {"x": object()}
+        model_config: dict = {}
+
+        def __init__(self) -> None:
+            self.__dict__ = _VanishingDict()
+
+    racy = _RacyModel()
+    assert "x" in racy.__dict__
+    assert "x" not in dict.keys(racy.__dict__)
+
+    del racy.x
+    del racy.x
