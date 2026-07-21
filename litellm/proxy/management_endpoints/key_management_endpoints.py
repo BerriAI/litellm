@@ -1671,9 +1671,7 @@ async def generate_key_fn(
         raise handle_exception_on_proxy(e)
 
 
-def _ensure_service_account_id_in_metadata(
-    metadata: dict | None, key_alias: str | None
-) -> dict | None:
+def _ensure_service_account_id_in_metadata(metadata: dict | None, key_alias: str | None) -> dict | None:
     """Merge the LiteLLM-internal ``service_account_id`` into caller metadata.
 
     Keys created via ``/key/service-account/generate`` are identified by
@@ -1791,9 +1789,7 @@ async def generate_service_account_key_fn(
         user_api_key_dict=user_api_key_dict,
     )
 
-    data.metadata = _ensure_service_account_id_in_metadata(
-        metadata=data.metadata, key_alias=data.key_alias
-    )
+    data.metadata = _ensure_service_account_id_in_metadata(metadata=data.metadata, key_alias=data.key_alias)
 
     await validate_team_id_used_in_service_account_request(
         team_id=data.team_id,
