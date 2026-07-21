@@ -2941,6 +2941,23 @@
         "rerank": false,
         "a2a": false
       }
+    },
+    "huawei_maas": {
+      "display_name": "Huawei Cloud MaaS (`huawei_maas`)",
+      "url": "https://docs.litellm.ai/docs/providers/huawei_maas",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "files": true,
+        "rerank": false
+      }
     }
   },
   "endpoints": {
