@@ -512,3 +512,85 @@ async def test_source_concurrent_expired_fetches_refresh_once():
     results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"))
     assert all(isinstance(r, UsableSsoAssertion) for r in results)
     assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_memoizes_usable_lookups_within_ttl():
+    """A usable assertion is served from the in-process memo, so repeated egress calls do not
+    pay a DB read per call; the memo expires with the TTL and the row is re-read."""
+    clock = {"now": datetime.now(timezone.utc)}
+    fetches: list[str] = []
+    stored = _stored(3600)
+
+    async def fetch(user_id: str):
+        fetches.append(user_id)
+        return stored
+
+    async def persist(user_id, assertion):
+        return None
+
+    async def post(url, form):
+        return None
+
+    source = LiveSsoAssertionSource(
+        fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"], memo_ttl_seconds=60.0
+    )
+    first = await source.fetch_usable("alice")
+    second = await source.fetch_usable("alice")
+    assert isinstance(first, UsableSsoAssertion) and isinstance(second, UsableSsoAssertion)
+    assert fetches == ["alice"]
+    clock["now"] = clock["now"] + timedelta(seconds=61)
+    third = await source.fetch_usable("alice")
+    assert isinstance(third, UsableSsoAssertion)
+    assert fetches == ["alice", "alice"]
+
+
+@pytest.mark.asyncio
+async def test_source_never_memoizes_absence_so_a_fresh_login_is_seen_immediately():
+    fetches: list[str] = []
+    state = {"stored": None}
+
+    async def fetch(user_id: str):
+        fetches.append(user_id)
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        return None
+
+    async def post(url, form):
+        return None
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    assert isinstance(await source.fetch_usable("alice"), NoSsoAssertion)
+    state["stored"] = _stored(3600)
+    assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
+    assert fetches == ["alice", "alice"]
+
+
+@pytest.mark.asyncio
+async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
+    """A store read failure must fail closed as absent (never raise into egress), and a warm
+    memo entry keeps serving through the outage."""
+    calls = {"n": 0}
+    stored = _stored(3600)
+
+    async def flaky_fetch(user_id: str):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("db down")
+        return stored
+
+    async def persist(user_id, assertion):
+        return None
+
+    async def post(url, form):
+        return None
+
+    clock = {"now": datetime.now(timezone.utc)}
+    source = LiveSsoAssertionSource(
+        fetch=flaky_fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"], memo_ttl_seconds=60.0
+    )
+    assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
+    assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
+    clock["now"] = clock["now"] + timedelta(seconds=61)
+    assert isinstance(await source.fetch_usable("alice"), NoSsoAssertion)

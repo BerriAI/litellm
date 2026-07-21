@@ -21,6 +21,8 @@ import hashlib
 from functools import partial
 from typing import Protocol
 
+import jwt
+
 import httpx
 from typing_extensions import assert_never
 
@@ -88,14 +90,18 @@ _GATEWAY_INTERNAL_TOKEN_PREFIXES = ("llm_session_", "llm_srefresh_", "sk-")
 
 
 def _exchangeable_inbound_token(subject: Subject) -> str | None:
-    """The inbound bearer when it is plausibly an enterprise IdP identity assertion (JWT-shaped
-    and not a gateway-minted credential), else None so sourcing falls to the stored assertion."""
+    """The inbound bearer when it is plausibly an enterprise IdP identity assertion (a decodable
+    JWT and not a gateway-minted credential), else None so sourcing falls to the stored
+    assertion. A real decode, not a shape check: an opaque bearer that happens to contain two
+    dots must never be disclosed to an external token endpoint."""
     if subject.inbound_token is None:
         return None
     token = subject.inbound_token.get_secret_value()
     if token.startswith(_GATEWAY_INTERNAL_TOKEN_PREFIXES):
         return None
-    if token.count(".") != 2:
+    try:
+        jwt.decode(token, options={"verify_signature": False})
+    except Exception:  # noqa: BLE001  # any decode failure means not a JWT; fall to the stored assertion
         return None
     return token
 

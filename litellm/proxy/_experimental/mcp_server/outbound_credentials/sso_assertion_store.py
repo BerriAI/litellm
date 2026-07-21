@@ -40,6 +40,10 @@ _MAYBE_STR_ADAPTER: TypeAdapter[str | None] = TypeAdapter(str | None)
 # to the exchange with less lifetime than the two token-endpoint legs need to complete.
 _ASSERTION_EXPIRY_BUFFER_SECONDS = 30
 
+# How long a usable assertion is served from the in-process memo before the DB row is re-read;
+# bounds how long a re-login on another pod goes unseen (the superseded assertion stays valid).
+_ASSERTION_MEMO_TTL_SECONDS = 60.0
+
 
 class SSOIdentityAssertion(BaseModel):
     """The IdP material an EMA exchange needs: ``id_token`` is the RFC 8693 subject token,
@@ -288,7 +292,16 @@ class LiveSsoAssertionSource:
     """The resolver's view of the assertion store: one stored assertion made usable, or its
     typed absence. Renewal is single-flighted per user (in-process; concurrent pods may both
     refresh, which is last-write-wins on the row and harmless unless the IdP one-time-uses
-    refresh tokens, in which case the loser reads Expired and the next login heals it)."""
+    refresh tokens, in which case the loser reads Expired and the next login heals it).
+
+    Usable results are memoized in-process for a short TTL (capped by the assertion's remaining
+    life), the same read-through contract the per-user OAuth store keeps in front of the DB, so
+    an egress call served by the exchange cache does not pay a DB read and a warm entry keeps
+    serving through a store outage. Only Usable is memoized: an absent row must be re-checked so
+    a fresh login is visible immediately, and the staleness bound is one TTL on other pods (the
+    superseded assertion remains valid, so the cached exchange it keys stays correct). A store
+    read failure reads as absent, loudly logged; the store, not this source, declines to cache
+    the failure."""
 
     def __init__(
         self,
@@ -297,17 +310,35 @@ class LiveSsoAssertionSource:
         post: SsoTokenEndpointPost = _post_sso_token_endpoint,
         getenv: Callable[[str], str | None] = os.getenv,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        memo_ttl_seconds: float = _ASSERTION_MEMO_TTL_SECONDS,
     ) -> None:
         self._fetch = fetch
         self._persist = persist
         self._post = post
         self._getenv = getenv
         self._now = now
+        self._memo_ttl_seconds = memo_ttl_seconds
+        self._usable_memo: dict[str, tuple[UsableSsoAssertion, datetime]] = {}
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     async def fetch_usable(self, user_id: str) -> SsoAssertionLookup:
         if not user_id:
             return NoSsoAssertion()
+        memoized = self._memoized(user_id)
+        if memoized is not None:
+            return memoized
+        try:
+            lookup = await self._fetch_usable_uncached(user_id)
+        except Exception as exc:  # noqa: BLE001  # a store outage fails closed as absent, never a 500
+            verbose_proxy_logger.warning(
+                "SSO assertion store read failed for user_id=%s; treating as absent: %s", user_id, exc
+            )
+            return NoSsoAssertion()
+        if isinstance(lookup, UsableSsoAssertion):
+            self._memoize(user_id, lookup)
+        return lookup
+
+    async def _fetch_usable_uncached(self, user_id: str) -> SsoAssertionLookup:
         stored = await self._fetch(user_id)
         if stored is None:
             return NoSsoAssertion()
@@ -323,6 +354,24 @@ class LiveSsoAssertionSource:
             if refreshed is None:
                 return ExpiredSsoAssertion()
             return UsableSsoAssertion(assertion=refreshed)
+
+    def _memoized(self, user_id: str) -> UsableSsoAssertion | None:
+        entry = self._usable_memo.get(user_id)
+        if entry is None:
+            return None
+        lookup, valid_until = entry
+        if self._now() >= valid_until:
+            self._usable_memo.pop(user_id, None)
+            return None
+        return lookup
+
+    def _memoize(self, user_id: str, lookup: UsableSsoAssertion) -> None:
+        horizon = self._now() + timedelta(seconds=self._memo_ttl_seconds)
+        expires_at = lookup.assertion.expires_at
+        if expires_at is not None:
+            horizon = min(horizon, expires_at - timedelta(seconds=_ASSERTION_EXPIRY_BUFFER_SECONDS))
+        if horizon > self._now():
+            self._usable_memo[user_id] = (lookup, horizon)
 
     async def _refresh(self, user_id: str, stored: SSOIdentityAssertion) -> SSOIdentityAssertion | None:
         if stored.refresh_token is None:
