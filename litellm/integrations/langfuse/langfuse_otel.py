@@ -105,7 +105,6 @@ class LangfuseOtelLogger(OpenTelemetry):
             "generation_name": LangfuseSpanAttributes.GENERATION_NAME,
             "generation_id": LangfuseSpanAttributes.GENERATION_ID,
             "parent_observation_id": LangfuseSpanAttributes.PARENT_OBSERVATION_ID,
-            "version": LangfuseSpanAttributes.GENERATION_VERSION,
             "mask_input": LangfuseSpanAttributes.MASK_INPUT,
             "mask_output": LangfuseSpanAttributes.MASK_OUTPUT,
             "user_id": LangfuseSpanAttributes.TRACE_USER_ID,
@@ -114,7 +113,6 @@ class LangfuseOtelLogger(OpenTelemetry):
             "tags": LangfuseSpanAttributes.TAGS,
             "trace_name": LangfuseSpanAttributes.TRACE_NAME,
             "trace_id": LangfuseSpanAttributes.TRACE_ID,
-            "trace_version": LangfuseSpanAttributes.TRACE_VERSION,
             "trace_release": LangfuseSpanAttributes.TRACE_RELEASE,
             "existing_trace_id": LangfuseSpanAttributes.EXISTING_TRACE_ID,
             "update_trace_keys": LangfuseSpanAttributes.UPDATE_TRACE_KEYS,
@@ -135,6 +133,14 @@ class LangfuseOtelLogger(OpenTelemetry):
                 span,
                 LangfuseSpanAttributes.TRACE_METADATA.value,
                 trace_metadata,
+            )
+
+        version = metadata.get("version") if metadata.get("version") is not None else metadata.get("trace_version")
+        if version is not None:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.GENERATION_VERSION.value,
+                version,
             )
 
         for key, enum_attr in mapping.items():

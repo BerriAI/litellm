@@ -18,6 +18,7 @@ from typing import (
 )
 
 from packaging.version import Version
+from opentelemetry import trace as otel_trace
 
 import litellm
 from litellm._logging import verbose_logger
@@ -713,6 +714,8 @@ class LangFuseLogger:
             )
             trace_version = trace_params.get("version")
             propagated_version = trace_version if isinstance(trace_version, str) else None
+            trace_release = trace_params.get("release")
+            propagated_release = trace_release if isinstance(trace_release, str) else None
             propagated_tags = tags if tags else None
             trace_name_value = trace_params.get("name")
             propagated_trace_name = (
@@ -726,24 +729,21 @@ class LangFuseLogger:
                 tags=propagated_tags,
                 trace_name=propagated_trace_name,
             ):
-                trace = self.Langfuse.start_observation(
+                with self.Langfuse.start_as_current_observation(
                     trace_context=trace_context,
-                    name=propagated_trace_name or generation_name,
-                    input=trace_params.get("input"),
-                    output=trace_params.get("output"),
-                    metadata=propagated_metadata,
-                    version=propagated_version,
-                    level=level,
-                    status_message=trace_params.get("status_message"),
-                )
-                log_provider_specific_information_as_span(trace, clean_metadata)
-                self._log_guardrail_information_as_span(
-                    trace=trace,
-                    standard_logging_object=standard_logging_object,
-                )
-                generation_client = trace.start_observation(**generation_params)
-                generation_client.end()
-                trace.end()
+                    **generation_params,
+                ) as generation_client:
+                    _set_langfuse_release(propagated_release)
+                    log_provider_specific_information_as_span(
+                        generation_client,
+                        clean_metadata,
+                        propagated_release,
+                    )
+                    self._log_guardrail_information_as_span(
+                        trace=generation_client,
+                        standard_logging_object=standard_logging_object,
+                        release=propagated_release,
+                    )
 
             return trace_context["trace_id"], generation_client.id
         except Exception:
@@ -920,6 +920,7 @@ class LangFuseLogger:
         self,
         trace: "LangfuseSpan",
         standard_logging_object: Optional[StandardLoggingPayload],
+        release: str | None = None,
     ):
         """
         Log guardrail information as a span
@@ -948,7 +949,7 @@ class LangFuseLogger:
                 )
                 continue
 
-            span = trace.start_observation(
+            with trace.start_as_current_observation(
                 name="guardrail",
                 as_type="guardrail",
                 input=guardrail_entry.get("guardrail_request", None),
@@ -958,10 +959,9 @@ class LangFuseLogger:
                     "guardrail_mode": guardrail_entry.get("guardrail_mode", None),
                     "guardrail_masked_entity_count": guardrail_entry.get("masked_entity_count", None),
                 },
-            )
-
-            verbose_logger.debug(f"Logged guardrail information as span: {span}")
-            span.end()
+            ) as span:
+                _set_langfuse_release(release)
+                verbose_logger.debug(f"Logged guardrail information as span: {span}")
 
 
 def _add_prompt_to_generation_params(
@@ -1041,6 +1041,7 @@ def _add_prompt_to_generation_params(
 def log_provider_specific_information_as_span(
     trace: "LangfuseSpan",
     clean_metadata,
+    release: str | None = None,
 ):
     """
     Logs provider-specific information as spans.
@@ -1064,23 +1065,28 @@ def log_provider_specific_information_as_span(
             for elem in vertex_ai_grounding_metadata:
                 if isinstance(elem, dict):
                     for key, value in elem.items():
-                        span = trace.start_observation(
+                        with trace.start_as_current_observation(
                             name=key,
                             input=value,
-                        )
-                        span.end()
+                        ):
+                            _set_langfuse_release(release)
                 else:
-                    span = trace.start_observation(
+                    with trace.start_as_current_observation(
                         name="vertex_ai_grounding_metadata",
                         input=elem,
-                    )
-                    span.end()
+                    ):
+                        _set_langfuse_release(release)
         else:
-            span = trace.start_observation(
+            with trace.start_as_current_observation(
                 name="vertex_ai_grounding_metadata",
                 input=vertex_ai_grounding_metadata,
-            )
-            span.end()
+            ):
+                _set_langfuse_release(release)
+
+
+def _set_langfuse_release(release: str | None) -> None:
+    if release:
+        otel_trace.get_current_span().set_attribute("langfuse.release", release)
 
 
 def log_requester_metadata(clean_metadata: dict):

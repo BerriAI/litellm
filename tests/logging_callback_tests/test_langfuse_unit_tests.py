@@ -306,9 +306,16 @@ def test_langfuse_v4_observations_propagate_trace_attributes():
         metadata={
             "session_id": "session-123",
             "trace_id": "a" * 32,
+            "parent_observation_id": "b" * 16,
             "trace_name": "completion-trace",
             "trace_version": "v4",
+            "trace_release": "release-123",
             "trace_metadata": {"request_type": "completion"},
+            "hidden_params": {
+                "vertex_ai_grounding_metadata": {
+                    "grounding": "enabled",
+                }
+            },
         },
         litellm_params={"metadata": {}},
         output={"role": "assistant", "content": "Hello"},
@@ -332,11 +339,16 @@ def test_langfuse_v4_observations_propagate_trace_attributes():
     assert trace_id == "a" * 32
     assert generation_id is not None
     assert len(spans) == 2
+    generation_span = next(span for span in spans if span.attributes["langfuse.observation.type"] == "generation")
+    provider_span = next(span for span in spans if span is not generation_span)
+    assert generation_span.parent.span_id == int("b" * 16, 16)
+    assert provider_span.parent.span_id == generation_span.context.span_id
     for span in spans:
         assert span.attributes["user.id"] == "user-123"
         assert span.attributes["session.id"] == "session-123"
         assert span.attributes["langfuse.trace.name"] == "completion-trace"
         assert span.attributes["langfuse.version"] == "v4"
+        assert span.attributes["langfuse.release"] == "release-123"
         assert span.attributes["langfuse.trace.metadata.request_type"] == "completion"
 
 
@@ -375,7 +387,7 @@ def test_langfuse_v4_observations_do_not_use_historical_end_times():
 
     langfuse_client.flush()
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 2
+    assert len(spans) == 1
     assert all(span.end_time >= span.start_time for span in spans)
 
 

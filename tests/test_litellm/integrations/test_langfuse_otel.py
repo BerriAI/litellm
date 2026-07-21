@@ -210,7 +210,6 @@ class TestLangfuseOtelIntegration:
                 LangfuseSpanAttributes.TRACE_NAME.value: "trace-name",
                 LangfuseSpanAttributes.TRACE_ID.value: "traceid",  # stripped dashes
                 f"{LangfuseSpanAttributes.TRACE_METADATA.value}.k": "v",
-                LangfuseSpanAttributes.TRACE_VERSION.value: "t-ver",
                 LangfuseSpanAttributes.TRACE_RELEASE.value: "rel-1",
                 LangfuseSpanAttributes.EXISTING_TRACE_ID.value: "existing-id",
                 LangfuseSpanAttributes.UPDATE_TRACE_KEYS.value: json.dumps(["key1", "key2"]),
@@ -224,6 +223,20 @@ class TestLangfuseOtelIntegration:
             }
 
             assert actual == expected, "Mismatch between expected and actual OTEL attribute mapping."
+
+    def test_trace_version_is_used_when_generation_version_is_missing(self):
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        span = MagicMock()
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_metadata_attributes(span, {"trace_version": "trace-v"})
+
+        mock_safe_set_attribute.assert_called_once_with(
+            span,
+            LangfuseSpanAttributes.GENERATION_VERSION.value,
+            "trace-v",
+        )
 
     @pytest.mark.parametrize("metadata_key", ["user_id", "trace_user_id"])
     def test_set_langfuse_user_id_attribute(self, metadata_key):

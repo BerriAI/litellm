@@ -40,30 +40,25 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_client = MagicMock()
         # Mock the client attribute to prevent errors during logger initialization
         self.mock_langfuse_client.client = MagicMock()
-        self.mock_langfuse_trace = MagicMock()
         self.mock_langfuse_generation = MagicMock()
         self.mock_langfuse_generation.trace_id = "test-trace-id"
         self.mock_langfuse_generation.id = "test-generation-id"
-        self.mock_langfuse_trace.trace_id = "test-trace-id"
-
-        # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
-        self.mock_langfuse_span = MagicMock()
-        self.mock_langfuse_span.end = MagicMock()
-        self.mock_langfuse_trace.start_observation.return_value = self.mock_langfuse_generation
+        self.mock_generation_context = MagicMock()
+        self.mock_generation_context.__enter__.return_value = self.mock_langfuse_generation
 
         # Setup the trace and generation chain
         self.last_trace_kwargs = {}
 
-        def _trace_side_effect(*args, **kwargs):
+        def _observation_side_effect(*args, **kwargs):
             propagated = self.mock_langfuse.propagate_attributes.call_args.kwargs
             self.last_trace_kwargs = {
                 **kwargs,
                 "id": kwargs["trace_context"]["trace_id"],
                 "session_id": propagated.get("session_id"),
             }
-            return self.mock_langfuse_trace
+            return self.mock_generation_context
 
-        self.mock_langfuse_client.start_observation.side_effect = _trace_side_effect
+        self.mock_langfuse_client.start_as_current_observation.side_effect = _observation_side_effect
         self.mock_langfuse_client.create_trace_id.side_effect = lambda seed=None: (
             seed or "00000000000000000000000000000001"
         )
@@ -300,17 +295,14 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         """
         # Reset the mock to ensure clean state; clear side_effect so return_value takes effect
         self.mock_langfuse_client.reset_mock(side_effect=True)
-        self.mock_langfuse_trace.reset_mock(side_effect=True)
         self.mock_langfuse_generation.reset_mock(side_effect=True)
 
         # Re-setup the trace and generation chain with clean state
         self.mock_langfuse_generation.id = "test-generation-id"
-        self.mock_langfuse_trace.trace_id = "test-trace-id"
-        mock_span = MagicMock()
-        mock_span.end = MagicMock()
-        self.mock_langfuse_trace.start_observation.return_value = self.mock_langfuse_generation
+        self.mock_generation_context = MagicMock()
+        self.mock_generation_context.__enter__.return_value = self.mock_langfuse_generation
 
-        self.mock_langfuse_client.start_observation.return_value = self.mock_langfuse_trace
+        self.mock_langfuse_client.start_as_current_observation.return_value = self.mock_generation_context
         self.mock_langfuse_client.create_trace_id.side_effect = lambda seed=None: (
             seed or "00000000000000000000000000000001"
         )
@@ -372,10 +364,8 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             except Exception as e:
                 self.fail(f"_log_langfuse_v2 raised an exception: {e}")
 
-            self.mock_langfuse_client.start_observation.assert_called()
-
-            self.mock_langfuse_trace.start_observation.assert_called_once()
-            call_args, call_kwargs = self.mock_langfuse_trace.start_observation.call_args
+            self.mock_langfuse_client.start_as_current_observation.assert_called()
+            call_args, call_kwargs = self.mock_langfuse_client.start_as_current_observation.call_args
 
             usage_details_arg = call_kwargs.get("usage_details")
 
