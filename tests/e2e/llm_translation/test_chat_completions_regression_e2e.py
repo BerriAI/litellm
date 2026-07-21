@@ -106,6 +106,26 @@ def _assert_weather_tool_call(response: ChatResponse) -> None:
     args = _WeatherArgs.model_validate_json(weather.function.arguments)
     assert args.location.strip(), f"get_weather arguments missing location: {weather.function.arguments}"
 
+
+class _Person(BaseModel):
+    name: str
+    age: int
+
+
+_PERSON_SCHEMA: dict[str, object] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "person",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+            "required": ["name", "age"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 CHAT_MODELS: tuple[tuple[str, str], ...] = (
     ("gpt-5.5", "openai"),
     ("claude-haiku-4-5", "anthropic"),
@@ -396,6 +416,79 @@ class TestOpenAIChatCompletions:
             )
         )
         _assert_weather_tool_call(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.structured_output.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_openai_chat_structured_output_conforms_to_schema(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        require_env("OPENAI_API_KEY")
+        model = f"e2e-openai-schema-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[ChatMessage(role="user", content="Extract the person. John Doe is 42 years old.")],
+                    response_format=_PERSON_SCHEMA,
+                    max_tokens=128,
+                ),
+            )
+        )
+        assert response.choices, f"structured output returned no choices: {response}"
+        content = response.choices[0].message.content if response.choices[0].message else None
+        assert content, f"structured output returned empty content: {response}"
+        person = _Person.model_validate_json(content)
+        assert person.name.strip() and person.age == 42, (
+            f"schema-constrained extraction was wrong: {person}"
+        )
+
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.thinking.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_openai_chat_reasoning_reports_reasoning_tokens(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        require_env("OPENAI_API_KEY")
+        model = f"e2e-openai-reasoning-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content="A train travels 60 miles in 1.5 hours. What is its average speed in mph?",
+                        )
+                    ],
+                    reasoning_effort="low",
+                    max_tokens=2048,
+                ),
+            )
+        )
+        assert response.choices, f"reasoning call returned no choices: {response}"
+        message = response.choices[0].message
+        assert message and message.content and message.content.strip(), f"reasoning call had no answer: {response}"
+        details = response.usage.completion_tokens_details if response.usage else None
+        assert details and details.reasoning_tokens and details.reasoning_tokens > 0, (
+            f"a reasoning model must report reasoning tokens, got usage={response.usage}"
+        )
 
 
 class TestBedrockConverseChatCompletions:

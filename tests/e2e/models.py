@@ -180,6 +180,7 @@ class ChatBody(BaseModel):
     tools: list[ChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+    response_format: dict[str, object] | None = None
 
 
 class RouterSettingsOverride(BaseModel):
@@ -226,6 +227,10 @@ class PromptTokensDetails(BaseModel):
     cached_tokens: int | None = None
 
 
+class CompletionTokensDetails(BaseModel):
+    reasoning_tokens: int | None = None
+
+
 class Usage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -233,6 +238,7 @@ class Usage(BaseModel):
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
 
 class ChatResponse(BaseModel):
