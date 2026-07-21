@@ -433,8 +433,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         This prevents circular references in logging.
         """
         metadata = request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
-        # Redaction ownership is at the write sites: every writer of _model_armor_response
-        # already stored the sanitized form via _build_logging_response
         guardrail_response = metadata.get("_model_armor_response", {})
 
         # Determine status – default to "success" but prefer the explicit value if present.
