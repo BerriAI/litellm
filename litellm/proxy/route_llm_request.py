@@ -362,6 +362,8 @@ async def route_request(
     for _key in _MOCK_TESTING_KWARG_NAMES:
         data.pop(_key, None)
 
+    data.pop("enable_tag_filtering", None)
+
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
     is_proxy_admin_without_team = team_id is None and _is_proxy_admin_request(data)
@@ -409,6 +411,8 @@ async def route_request(
             "num_retries",
             "timeout",
             "model_group_retry_policy",
+            "routing_strategy",
+            "enable_tag_filtering",
         ]
 
         # Merge override settings into data (only if not already set in request)

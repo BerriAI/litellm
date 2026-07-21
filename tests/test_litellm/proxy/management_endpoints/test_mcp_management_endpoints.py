@@ -5376,3 +5376,41 @@ async def test_edit_mcp_server_snapshot_failure_skips_purge_but_edit_succeeds():
 
     assert result.server_id == server_id
     mock_purge.assert_not_awaited()
+
+
+def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
+    """The OpenAPI quick-picker registry ships as a bundled JSON file; a malformed file or entry
+    silently degrades the picker to empty (the endpoint swallows load errors), so pin the file's
+    shape here: it must parse, and every entry needs the fields the create-form prefill reads.
+    OAuth-capable entries must carry both endpoint URLs; a catalog entry with a blank
+    authorization_url would recreate the exact 400 ("authorization url is not set") the catalog
+    exists to prevent for spec-only servers, which never run OAuth endpoint discovery."""
+    import json
+    import os
+
+    registry_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "..", "..", "litellm", "proxy", "openapi_registry.json",
+    )
+    with open(registry_path) as f:
+        registry = json.load(f)
+
+    apis = registry["apis"]
+    assert apis, "registry must not be empty"
+    names = [entry["name"] for entry in apis]
+    assert len(names) == len(set(names)), "duplicate registry entry names"
+    for google_entry in ("google_sheets", "google_drive", "google_calendar", "google_docs"):
+        assert google_entry in names, f"LIT-4629: {google_entry} must be in the catalog"
+
+    for entry in apis:
+        for required in ("name", "title", "description", "icon_url", "spec_url"):
+            assert entry.get(required), f"{entry.get('name')}: missing {required}"
+        assert entry["spec_url"].startswith("https://"), f"{entry['name']}: non-https spec_url"
+        oauth = entry.get("oauth")
+        if oauth is not None:
+            for required in ("authorization_url", "token_url"):
+                assert oauth.get(required, "").startswith("https://"), (
+                    f"{entry['name']}: oauth.{required} must be a non-empty https URL"
+                )
+        for tool in entry.get("key_tools", []):
+            assert tool.get("name") and tool.get("description"), f"{entry['name']}: malformed key_tool"

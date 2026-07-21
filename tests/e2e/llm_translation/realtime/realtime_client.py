@@ -22,7 +22,7 @@ from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
 from e2e_config import PROXY_BASE_URL, unique_marker
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from models import LiteLLMParamsBody
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -329,7 +329,7 @@ class RealtimeSession:
 
 @dataclass(frozen=True, slots=True)
 class RealtimeClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def provision(self, provider: RealtimeProvider) -> tuple[str, str]:
         """Register this provider's realtime deployment through /model/new and return
@@ -338,7 +338,7 @@ class RealtimeClient:
         show up as a realtime model on /model/info. add_deployment runs synchronously,
         so the deployment is connectable as soon as this returns."""
         model_name = f"{provider.alias}-{unique_marker()}"
-        model_id = self.gateway.create_model(
+        model_id = self.proxy.create_model(
             model_name, provider.litellm_params, mode="realtime"
         )
         return model_name, model_id
@@ -355,5 +355,5 @@ class RealtimeClient:
             yield RealtimeSession(connection=connection)
 
 
-def build_client() -> RealtimeClient:
-    return RealtimeClient(gateway=build_gateway())
+def build_client(proxy: ProxyClient) -> RealtimeClient:
+    return RealtimeClient(proxy=proxy)

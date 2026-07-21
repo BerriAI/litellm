@@ -7,6 +7,7 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -329,6 +330,70 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
                 request_body=request_body, request_headers=headers
             )
         assert result == "body-user"
+
+
+def _request_dispatched_to(endpoint) -> Request:
+    """Build a minimal Request whose FastAPI-resolved endpoint is ``endpoint``,
+    mirroring what Starlette sets in ``scope`` once routing has matched."""
+    return Request(scope={"type": "http", "headers": [], "endpoint": endpoint})
+
+
+def _pass_through_endpoint():
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    def endpoint():  # stand-in for create_pass_through_route's handler
+        ...
+
+    setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return endpoint
+
+
+def test_get_model_from_request_skips_pass_through_dispatched_request():
+    """When FastAPI dispatched the request to a user-defined pass-through handler,
+    the body `model` names an upstream model and must not be treated as a LiteLLM
+    model for allowlist/budget enforcement."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "upstream-special-model"},
+            route="/my-custom-endpoint",
+            request=_request_dispatched_to(_pass_through_endpoint()),
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_enforces_when_builtin_handler_dispatched():
+    """A custom pass-through path that collides with a built-in route resolves to the
+    built-in handler (no marker), so the body `model` must still be extracted and
+    enforced. Same request path as above, but dispatched to a non-pass-through
+    endpoint: the model must NOT be suppressed."""
+
+    def builtin_chat_completions():
+        ...
+
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            request=_request_dispatched_to(builtin_chat_completions),
+        )
+        == "gpt-4o"
+    )
+
+
+def test_get_model_from_request_no_request_extracts_model():
+    """Callers without a request object (e.g. budget reservation) still extract the
+    model; the pass-through suppression only applies to a dispatched pass-through
+    handler."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+        )
+        == "gpt-4o"
+    )
 
 
 def test_get_model_from_request_supports_google_model_names_with_slashes():
@@ -1877,6 +1942,91 @@ class TestIsRequestBodySafeBlocksRivaUseSsl:
             )
             is True
         )
+
+
+class TestIsRequestBodySafeBlocksBedrockTags:
+    """``bedrock_tags`` lands as AWS resource tags on Bedrock batch jobs
+    created with the proxy's AWS identity, so a caller-supplied value can
+    forge ownership or cost-allocation labels; like
+    ``aws_bedrock_project_id`` it is blocked without an admin opt-in."""
+
+    def test_bedrock_tags_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="bedrock_tags"):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-opus",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_bedrock_tags(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="bedrock-batch-opus",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_bedrock_tags(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch-opus",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-opus-4-7",
+                        "configurable_clientside_auth_params": ["bedrock_tags"],
+                    },
+                }
+            ]
+        )
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=router,
+                model="bedrock-batch-opus",
+            )
+            is True
+        )
+
+    def test_per_deployment_opt_in_for_other_param_still_rejects_bedrock_tags(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch-opus",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-opus-4-7",
+                        "configurable_clientside_auth_params": ["api_base"],
+                    },
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="bedrock_tags"):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=router,
+                model="bedrock-batch-opus",
+            )
 
 
 # ── is_request_body_safe nested-config recursion (VERIA-6) ────────────────────

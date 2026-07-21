@@ -3,7 +3,7 @@ import React, { useState, useEffect } from "react";
 import { Button } from "@tremor/react";
 import { Modal, Select } from "antd";
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "@/components/networking";
-import PromptTable from "./prompt_table";
+import PromptTable from "./PromptTable";
 import PromptInfoView from "./prompt_info";
 import AddPromptForm from "./add_prompt_form";
 import PromptEditorView from "./prompt_editor_view";
@@ -17,7 +17,7 @@ interface PromptsProps {
 
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [promptsList, setPromptsList] = useState<PromptSpec[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedEnvironment, setSelectedEnvironment] = useState<string | undefined>(undefined);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -32,6 +32,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
   const fetchPrompts = async () => {
     if (!accessToken) {
+      setIsLoading(false);
       return;
     }
 

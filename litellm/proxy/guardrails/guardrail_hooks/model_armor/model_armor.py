@@ -32,7 +32,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
-    MAX_FILE_ATTACHMENTS_PER_REQUEST,
     MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
     plan_file_scans,
 )
@@ -383,10 +382,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         Each attachment is sent through the byte API and a MATCH_FOUND raises a 400 before the
         request reaches the LLM. File scanning does not support masking (Model Armor returns
-        findings, not a sanitized document), so it only blocks. Anything the guardrail cannot
-        scan - a file_id or remote URL reference with no inline bytes, a document over the 4 MB
-        byte limit, or more attachments than the per-request cap - is a guardrail failure and
-        blocks unless the operator has opted into fail-open via fail_on_error=False.
+        findings, not a sanitized document), so it only blocks. A file_id or remote URL reference
+        with no inline bytes and a document over the 4 MB byte limit are guardrail failures that
+        block unless the operator has opted into fail-open via fail_on_error=False.
+
+        skip_unscannable_attachments decouples reference-only attachments from fail_on_error: when
+        enabled, attachments Model Armor cannot scan (file_id, gs://, or http(s) references with no
+        inline bytes, and inline content whose base64 will not decode) pass through instead of
+        blocking, while fail_on_error still governs real Model Armor API errors.
         """
         from litellm.proxy.common_utils.callback_utils import (
             _get_or_create_proxy_metadata_bucket,
@@ -395,7 +398,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         plan = plan_file_scans(messages)
         attachments = plan.attachments
-        unscannable_references = plan.unscannable_count
+        skip_unscannable = bool(self.optional_params.get("skip_unscannable_attachments", False))
+        if skip_unscannable and plan.unscannable_count > 0:
+            verbose_proxy_logger.warning(
+                "Model Armor: allowing %d unscannable attachment(s) through because "
+                "skip_unscannable_attachments is enabled",
+                plan.unscannable_count,
+            )
+        unscannable_references = 0 if skip_unscannable else plan.unscannable_count
         if not attachments and unscannable_references == 0:
             return
 
@@ -414,14 +424,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             if fail_on_error:
                 metadata["_model_armor_status"] = "blocked"
                 raise self._unscannable_block_error(reason)
-
-        if len(attachments) > MAX_FILE_ATTACHMENTS_PER_REQUEST:
-            reason = f"{len(attachments)} attachments exceed the per-request scan limit of {MAX_FILE_ATTACHMENTS_PER_REQUEST}"
-            verbose_proxy_logger.warning("Model Armor: %s", reason)
-            if fail_on_error:
-                metadata["_model_armor_status"] = "blocked"
-                raise self._unscannable_block_error(reason)
-            attachments = attachments[:MAX_FILE_ATTACHMENTS_PER_REQUEST]
 
         for attachment in attachments:
             if len(attachment.file_bytes) > MODEL_ARMOR_MAX_FILE_SIZE_BYTES:
