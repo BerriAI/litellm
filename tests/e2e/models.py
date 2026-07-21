@@ -126,9 +126,26 @@ class ChatMetadata(BaseModel):
     tags: list[str] | None = None
 
 
+class ImageUrl(BaseModel):
+    url: str
+
+
+class TextContentPart(BaseModel):
+    type: str = "text"
+    text: str
+
+
+class ImageContentPart(BaseModel):
+    type: str = "image_url"
+    image_url: ImageUrl
+
+
+ContentPart = TextContentPart | ImageContentPart
+
+
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str | list[ContentPart]
 
 
 class CacheControl(BaseModel):
