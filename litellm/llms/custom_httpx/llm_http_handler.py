@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import ssl
 from contextlib import asynccontextmanager
 from functools import lru_cache

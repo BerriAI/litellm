@@ -361,6 +361,14 @@ def test_fingerprint_agentic_tools_is_deterministic():
     assert handler._fingerprint_agentic_tools(tools_a) == handler._fingerprint_agentic_tools(tools_b)
 
 
+@pytest.fixture
+def force_python_messages_path(monkeypatch):
+    import litellm.rust_bridge.messages as rust_messages_bridge
+
+    monkeypatch.setattr(rust_messages_bridge, "load_rust_amessages", lambda: None)
+    monkeypatch.setattr(rust_messages_bridge, "load_rust_messages", lambda: None)
+
+
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_extra_headers():
     """
@@ -443,7 +451,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
 
 
 @pytest.mark.asyncio
-async def test_async_anthropic_messages_handler_streaming_forwards_provider_response_headers():
+async def test_async_anthropic_messages_handler_streaming_forwards_provider_response_headers(force_python_messages_path):
     """
     Regression test for LIT-3724 (issue 2): streaming /v1/messages responses
     dropped the upstream provider's HTTP response headers, so Bedrock's
@@ -1129,7 +1137,7 @@ def test_resolve_anthropic_messages_timeout(
 
 
 @pytest.mark.asyncio
-async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeypatch):
+async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeypatch, force_python_messages_path):
     from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 
     monkeypatch.setattr(litellm, "callbacks", [])
@@ -1177,7 +1185,7 @@ async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_async_anthropic_messages_handler_forwards_stream_timeout(monkeypatch):
+async def test_async_anthropic_messages_handler_forwards_stream_timeout(monkeypatch, force_python_messages_path):
     from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 
     monkeypatch.setattr(litellm, "callbacks", [])
@@ -1582,7 +1590,7 @@ def test_async_compact_handler_sends_json_when_not_signed():
 
 
 @pytest.mark.asyncio
-async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks():
+async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(force_python_messages_path):
     """
     Regression: async_anthropic_messages_handler must inject api_key into the
     kwargs dict forwarded to _call_agentic_completion_hooks.
