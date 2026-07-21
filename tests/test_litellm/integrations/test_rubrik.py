@@ -1073,9 +1073,10 @@ class TestInitializationEdgeCases:
 
 @pytest.mark.asyncio
 class TestAclose:
-    async def test_aclose_cancels_task_and_closes_moderation_client(self, mock_env):
-        """aclose() must cancel the periodic flush task and close the dedicated
-        moderation HTTP client."""
+    async def test_aclose_cancels_task_does_not_close_shared_client(self, mock_env):
+        """aclose() cancels the periodic flush task but does NOT close the shared
+        moderation_client — closing a shared cached client would break other
+        RubrikLogger instances that share the same connection pool."""
         with patch("asyncio.create_task", Mock()):
             handler = RubrikLogger()
 
@@ -1089,10 +1090,10 @@ class TestAclose:
         await handler.aclose()
 
         mock_task.cancel.assert_called_once()
-        handler.moderation_client.close.assert_awaited_once()
+        handler.moderation_client.close.assert_not_awaited()
 
-    async def test_aclose_with_none_task_only_closes_client(self, mock_env):
-        """aclose() must still close the client even when the periodic task is None."""
+    async def test_aclose_with_none_task_does_not_close_client(self, mock_env):
+        """aclose() with no flush task still does not close the shared client."""
         with patch("asyncio.create_task", Mock()):
             handler = RubrikLogger()
 
@@ -1102,7 +1103,7 @@ class TestAclose:
 
         await handler.aclose()
 
-        handler.moderation_client.close.assert_awaited_once()
+        handler.moderation_client.close.assert_not_awaited()
 
 
 # -- apply_guardrail edge cases -----------------------------------------------
