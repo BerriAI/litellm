@@ -22,7 +22,7 @@ import React, { useEffect, useState } from "react";
 
 import { Button as Button2, Form, Input, Modal, Select, Typography } from "antd";
 import EmailSettings from "./email_settings";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Logo } from "@/components/molecules/logo/Logo";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const { Title, Paragraph } = Typography;
@@ -69,6 +69,12 @@ interface genericCallbackParams {
 }
 
 const assetsLogoFolder = "/ui/assets/logos/";
+
+export const backendCallbackLogoSrc = (logo: string | null | undefined): string | undefined => {
+  if (!logo) return undefined;
+  if (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http")) return logo;
+  return `${assetsLogoFolder}${logo}`;
+};
 
 interface DynamicParamsFieldsProps {
   params: string[];
@@ -145,7 +151,7 @@ interface CallbackSelectorProps {
   disabled?: boolean;
 }
 
-const CallbackSelector: React.FC<CallbackSelectorProps> = ({
+export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
   callbackConfigs,
   selectedCallback,
   onCallbackChange,
@@ -170,25 +176,14 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
         onChange={onCallbackChange}
       >
         {callbackConfigs.map((callbackConfig) => {
-          const logo = callbackConfig.logo;
-          const logoSrc = resolveLogoSrc(
-            logo && (logo.includes("/") || logo.startsWith("data:") || logo.startsWith("http"))
-              ? logo
-              : `${assetsLogoFolder}${logo}`,
-          );
-
           return (
             <SelectItem key={callbackConfig.id} value={callbackConfig.id}>
               <div className="flex items-center space-x-3 py-1">
                 <div className="w-6 h-6 flex items-center justify-center">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={logoSrc}
-                    alt={`${callbackConfig.displayName} logo`}
+                  <Logo
+                    src={backendCallbackLogoSrc(callbackConfig.logo)}
+                    label={callbackConfig.displayName}
                     className="w-6 h-6 rounded-sm object-contain"
-                    onError={(e) => {
-                      e.currentTarget.style.display = "none";
-                    }}
                   />
                 </div>
                 <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>

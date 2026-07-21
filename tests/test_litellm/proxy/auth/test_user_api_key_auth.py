@@ -4562,6 +4562,9 @@ async def test_temp_budget_increase_applied_for_cached_key():
     Seed the auth cache with a key whose spend (5.0) exceeds its original
     max_budget (2.0) but is under the effective budget (2.0 + 100.0). The cache-hit
     request must not raise and the resolved token must carry max_budget == 102.0.
+
+    Resolving twice must yield 102.0 both times and leave the cached object at the
+    original 2.0: the increase is derived per request, never compounded or persisted.
     """
     from datetime import datetime, timedelta
 
@@ -4607,14 +4610,22 @@ async def test_temp_budget_increase_applied_for_cached_key():
             new_callable=AsyncMock,
         ),
     ):
-        result = await _user_api_key_auth_builder(
-            request=mock_request,
-            api_key=f"Bearer {api_key}",
-            azure_api_key_header="",
-            anthropic_api_key_header=None,
-            google_ai_studio_api_key_header=None,
-            azure_apim_header=None,
-            request_data={"model": "gpt-4o-mini"},
+        results = tuple(
+            [
+                await _user_api_key_auth_builder(
+                    request=mock_request,
+                    api_key=f"Bearer {api_key}",
+                    azure_api_key_header="",
+                    anthropic_api_key_header=None,
+                    google_ai_studio_api_key_header=None,
+                    azure_apim_header=None,
+                    request_data={"model": "gpt-4o-mini"},
+                )
+                for _ in range(2)
+            ]
         )
 
-    assert result.max_budget == 102.0
+    assert all(result.max_budget == 102.0 for result in results)
+
+    cached_after = await user_api_key_cache.async_get_cache(key=hashed_token)
+    assert cached_after.max_budget == 2.0

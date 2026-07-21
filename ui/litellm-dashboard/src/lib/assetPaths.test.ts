@@ -48,6 +48,16 @@ describe("resolveLogoSrc", () => {
     expect(resolveLogoSrc("//cdn.example.com/x.svg")).toBe("//cdn.example.com/x.svg");
   });
 
+  it("passes bundled /_next/ asset URLs through untouched even under a sub-path mount", async () => {
+    const { resolveLogoSrc } = await importWithRoot("/litellm");
+    expect(resolveLogoSrc("/_next/static/media/openai_small.abc123.svg")).toBe(
+      "/_next/static/media/openai_small.abc123.svg",
+    );
+    expect(resolveLogoSrc("/litellm-asset-prefix/_next/static/media/openai_small.abc123.svg")).toBe(
+      "/litellm-asset-prefix/_next/static/media/openai_small.abc123.svg",
+    );
+  });
+
   it("roots a local asset path using the live server root path", async () => {
     const { resolveLogoSrc } = await importWithRoot("/litellm");
     expect(resolveLogoSrc("/ui/assets/logos/github.svg")).toBe("/litellm/ui/assets/logos/github.svg");
@@ -56,5 +66,16 @@ describe("resolveLogoSrc", () => {
   it("leaves a local asset path unchanged at the default root", async () => {
     const { resolveLogoSrc } = await importWithRoot("/");
     expect(resolveLogoSrc("/ui/assets/logos/github.svg")).toBe("/ui/assets/logos/github.svg");
+  });
+
+  it("does not double-prefix a stored value that already carries the server root path", async () => {
+    const { resolveLogoSrc } = await importWithRoot("/litellm");
+    expect(resolveLogoSrc("/litellm/ui/assets/logos/custom.svg")).toBe("/litellm/ui/assets/logos/custom.svg");
+    expect(resolveLogoSrc("/litellm")).toBe("/litellm");
+  });
+
+  it("still prefixes a path whose first segment merely starts with the root path text", async () => {
+    const { resolveLogoSrc } = await importWithRoot("/litellm");
+    expect(resolveLogoSrc("/litellm-docs/logo.png")).toBe("/litellm/litellm-docs/logo.png");
   });
 });

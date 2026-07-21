@@ -406,6 +406,15 @@ model LiteLLM_MCPServerOAuthClient {
   updated_at  DateTime @default(now()) @updatedAt @map("updated_at")
 }
 
+// The enterprise IdP identity assertion captured at SSO login, one row per user.
+// assertion_b64 is an encrypted JSON payload: {id_token, refresh_token?, issuer?, expires_at?}.
+model LiteLLM_SSOIdentityAssertion {
+  user_id       String   @id
+  assertion_b64 String
+  created_at    DateTime @default(now()) @map("created_at")
+  updated_at    DateTime @default(now()) @updatedAt @map("updated_at")
+}
+
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @id

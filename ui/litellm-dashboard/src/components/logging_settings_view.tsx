@@ -2,7 +2,7 @@ import React from "react";
 import { Tag } from "antd";
 import { CogIcon, BanIcon } from "@heroicons/react/outline";
 import { callbackInfo, callback_map, reverse_callback_map } from "./callback_info_helpers";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Logo } from "@/components/molecules/logo/Logo";
 
 interface LoggingConfig {
   callback_name: string;
@@ -117,7 +117,6 @@ export function LoggingSettingsView({
           <div className="space-y-3">
             {loggingConfigs.map((config, index) => {
               const displayName = getLoggingDisplayName(config.callback_name);
-              const logoUrl = resolveLogoSrc(callbackInfo[displayName]?.logo);
 
               return (
                 <div
@@ -125,11 +124,11 @@ export function LoggingSettingsView({
                   className="flex items-center justify-between p-3 rounded-lg bg-blue-50 border border-blue-200"
                 >
                   <div className="flex items-center gap-3">
-                    {logoUrl ? (
-                      <img src={logoUrl} alt={displayName} className="w-5 h-5 object-contain" />
-                    ) : (
-                      <CogIcon className="h-5 w-5 text-gray-400" />
-                    )}
+                    <Logo
+                      src={callbackInfo[displayName]?.logo}
+                      label={displayName}
+                      className="w-5 h-5 object-contain"
+                    />
                     <div>
                       <span className="block font-medium text-blue-800">{displayName}</span>
                       <span className="block text-xs text-blue-600">
@@ -163,7 +162,6 @@ export function LoggingSettingsView({
             {disabledCallbacks.map((callbackName, index) => {
               // Handle both display names and internal values
               const displayName = reverse_callback_map[callbackName] || callbackName;
-              const logoUrl = resolveLogoSrc(callbackInfo[displayName]?.logo);
 
               return (
                 <div
@@ -171,11 +169,11 @@ export function LoggingSettingsView({
                   className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-200"
                 >
                   <div className="flex items-center gap-3">
-                    {logoUrl ? (
-                      <img src={logoUrl} alt={displayName} className="w-5 h-5 object-contain" />
-                    ) : (
-                      <BanIcon className="h-5 w-5 text-gray-400" />
-                    )}
+                    <Logo
+                      src={callbackInfo[displayName]?.logo}
+                      label={displayName}
+                      className="w-5 h-5 object-contain"
+                    />
                     <div>
                       <span className="block font-medium text-red-800">{displayName}</span>
                       <span className="block text-xs text-red-600">Disabled for this key</span>
