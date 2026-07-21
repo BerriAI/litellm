@@ -457,12 +457,20 @@ def is_claude_code_user_agent(user_agent: str) -> bool:
     return user_agent.startswith("claude-cli/")
 
 
-def should_auto_drop_params_for_claude_code(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
-    """drop_params defaults to on for Claude Code so its Anthropic-specific
-    params (e.g. thinking) don't fail requests routed to non-Anthropic
-    providers. An explicit drop_params from the caller or in the operator's
-    ``litellm_settings`` always wins over this default."""
-    if not is_claude_code_user_agent(user_agent):
+def is_codex_user_agent(user_agent: str) -> bool:
+    """Codex identifies itself as ``codex_cli_rs/<version> ...`` (TUI),
+    ``codex_exec/<version> ...`` (exec mode), or ``codex_vscode/<version> ...``
+    (IDE extension); all share the ``codex_`` prefix."""
+    return user_agent.startswith("codex_")
+
+
+def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
+    """drop_params defaults to on for agentic CLIs so their client-specific
+    params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
+    requests routed to providers that reject them. An explicit drop_params
+    from the caller or in the operator's ``litellm_settings`` always wins
+    over this default."""
+    if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
     if "drop_params" in data:
         return False
@@ -1687,7 +1695,7 @@ async def add_litellm_data_to_request(
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    if should_auto_drop_params_for_claude_code(user_agent, data, proxy_config):
+    if should_auto_drop_params_for_agentic_cli(user_agent, data, proxy_config):
         data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
