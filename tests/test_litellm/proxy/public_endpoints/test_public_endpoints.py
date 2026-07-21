@@ -243,6 +243,35 @@ def test_bedrock_mantle_provider_fields():
     assert fields_by_key["api_base"]["field_type"] == "text"
 
 
+def test_siliconflow_provider_fields():
+    """SiliconFlow must be present in /public/providers/fields so the Add Model
+    dropdown can expose it in the dashboard.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    siliconflow = next((p for p in providers if p["provider"] == "SiliconFlow"), None)
+    assert siliconflow is not None, "SiliconFlow provider entry not found"
+    assert siliconflow["provider_display_name"] == "SiliconFlow"
+    assert siliconflow["litellm_provider"] == "siliconflow"
+    assert siliconflow["default_model_placeholder"].startswith("siliconflow/")
+
+    fields_by_key = {f["key"]: f for f in siliconflow["credential_fields"]}
+    assert "api_base" in fields_by_key
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["placeholder"] == "https://api.siliconflow.cn/v1"
+
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 def test_google_ai_studio_provider_fields_expose_api_base():
     """The Google AI Studio (gemini) credential form must let admins set a custom
     api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted

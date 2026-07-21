@@ -2661,6 +2661,34 @@
     "default_model_placeholder": "sap/gpt-4"
   },
   {
+    "provider": "SiliconFlow",
+    "provider_display_name": "SiliconFlow",
+    "litellm_provider": "siliconflow",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.siliconflow.cn/v1",
+        "tooltip": "Optional. Leave blank to use LiteLLM's default SiliconFlow API base.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "sk-...",
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "siliconflow/deepseek-ai/DeepSeek-V4-Flash"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",

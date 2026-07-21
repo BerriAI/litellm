@@ -94,6 +94,11 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should resolve the siliconflow provider value to the SiliconFlow display name", () => {
+      const result = getProviderLogoAndName("siliconflow");
+      expect(result.displayName).toBe(Providers.SiliconFlow);
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
@@ -201,6 +206,10 @@ describe("provider_info_helpers", () => {
 
     it("should return watsonx placeholder for Watsonx provider", () => {
       expect(getPlaceholder(Providers.WATSONX)).toBe("watsonx/ibm/granite-3-3-8b-instruct");
+    });
+
+    it("should return a siliconflow placeholder for SiliconFlow provider", () => {
+      expect(getPlaceholder(Providers.SiliconFlow)).toBe("siliconflow/deepseek-ai/DeepSeek-V4-Flash");
     });
 
     it("should return zai/glm-4.5 placeholder for Z.AI provider", () => {
@@ -349,6 +358,18 @@ describe("provider_info_helpers", () => {
       expect(result).toContain("fireworks-base");
       expect(result).toContain("fireworks-embed");
       expect(result).not.toContain("openai-model");
+    });
+
+    it("should return only siliconflow models when called with 'SiliconFlow' provider key", () => {
+      const modelMap = {
+        "siliconflow/deepseek-ai/DeepSeek-V4-Flash": { litellm_provider: "siliconflow" },
+        "siliconflow/Qwen/Qwen3.6-35B-A3B": { litellm_provider: "siliconflow" },
+        "openai/gpt-4o": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("SiliconFlow" as Providers, modelMap);
+      expect(result).toContain("siliconflow/deepseek-ai/DeepSeek-V4-Flash");
+      expect(result).toContain("siliconflow/Qwen/Qwen3.6-35B-A3B");
+      expect(result).not.toContain("openai/gpt-4o");
     });
 
     it("should filter out models with null values", () => {
