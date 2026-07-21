@@ -8031,3 +8031,120 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_authorize_wall_names_the_fix_for_urlless_servers():
+    """LIT-4629: the authorize wall previously said only "authorization url is not set" with no
+    hint that spec-only servers never discover; the detail must now name both remedies (manual
+    Authorization URL + Token URL, or an Issuer for RFC 8414 discovery)."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-wall",
+        name="sheets_wall",
+        server_name="sheets_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authorize_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_id="client",
+            redirect_uri="http://localhost/callback",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Authorization URL and Token URL" in detail_text
+    assert "Issuer" in detail_text
+
+
+@pytest.mark.asyncio
+async def test_token_wall_names_the_fix_for_urlless_servers():
+    """The /token wall is the second stop on the same misconfiguration (LIT-4629): after an admin
+    fills only the Authorization URL, the code exchange dies here; the detail must name the
+    remedies like the authorize wall does."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-token-wall",
+        name="sheets_token_wall",
+        server_name="sheets_token_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="client",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Token URL manually" in detail_text
+    assert "Issuer" in detail_text
+
+
+@pytest.mark.asyncio
+async def test_register_wall_names_the_fix_for_urlless_servers():
+    """The /register wall serves the same missing-authorization-url 400 as authorize; its detail
+    must carry the same actionable remedies."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-register-wall",
+        name="sheets_register_wall",
+        server_name="sheets_register_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_client_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_name="client",
+            grant_types=None,
+            response_types=None,
+            token_endpoint_auth_method=None,
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Authorization URL and Token URL" in detail_text
+    assert "Issuer" in detail_text
