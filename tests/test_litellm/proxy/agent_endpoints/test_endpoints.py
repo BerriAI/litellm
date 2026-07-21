@@ -580,6 +580,12 @@ class TestAgentProtocolVersionValidation:
         assert "Unsupported protocolVersion '0.2.6'" in resp.json()["detail"]
         self.mock_registry.add_agent_to_db.assert_not_awaited()
 
+    def test_malformed_protocol_version_is_rejected(self):
+        resp = self._create_agent_with_protocol_version("0.3.garbage")
+        assert resp.status_code == 400
+        assert "Unsupported protocolVersion '0.3.garbage'" in resp.json()["detail"]
+        self.mock_registry.add_agent_to_db.assert_not_awaited()
+
 
 class TestCheckAgentManagementPermission:
     """Unit tests for the _check_agent_management_permission helper."""
