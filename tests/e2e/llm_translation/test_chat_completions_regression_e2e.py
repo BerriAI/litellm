@@ -19,9 +19,10 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import BaseModel
 
 from e2e_config import require_env, unique_marker
-from e2e_http import unwrap
+from e2e_http import StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, LiteLLMParamsBody
 from passthrough_client import PassthroughClient
@@ -30,6 +31,48 @@ pytestmark = pytest.mark.e2e
 
 COHERE_BACKEND = "cohere/command-r-08-2024"
 GEMINI_BACKEND = "gemini/gemini-2.5-flash"
+OPENAI_BACKEND = "openai/gpt-5.6"
+BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+class _StreamDelta(BaseModel):
+    content: str | None = None
+
+
+class _StreamChoice(BaseModel):
+    delta: _StreamDelta = _StreamDelta()
+
+
+class _StreamChunk(BaseModel):
+    choices: list[_StreamChoice] = []
+
+
+def _streamed_text(events: list[str]) -> str:
+    """Concatenate the delta content across streamed chunks. Parsing every event as
+    JSON also fails loudly on a truncated or garbled chunk (the vertex/gemini image
+    streaming regression class), so an incomplete stream cannot pass as content."""
+    chunks = [_StreamChunk.model_validate_json(event) for event in events]
+    return "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices)
+
+
+def _assert_streamed_completion(result: StreamingResponse) -> None:
+    """A streamed /chat/completions must deliver real content, not a clean-but-empty
+    stream (the #28991 class on the streaming path)."""
+    assert result.ok and result.is_streaming, f"stream was not established: {result}"
+    assert result.stream_error is None, f"stream carried an error event: {result.stream_error}"
+    assert result.chunks > 1, f"stream did not deliver multiple chunks: {result}"
+    assert _streamed_text(result.stream_events).strip(), (
+        f"stream completed with no content deltas: {result.stream_events[:3]}"
+    )
+
+
+def _bedrock_params() -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model=BEDROCK_CONVERSE_BACKEND,
+        aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+        aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+        aws_region_name="os.environ/AWS_REGION",
+    )
 
 CHAT_MODELS: tuple[tuple[str, str], ...] = (
     ("gpt-5.5", "openai"),
@@ -219,3 +262,134 @@ class TestHostedVllmChat:
         assert response.choices, f"hosted_vllm chat returned no choices: {response}"
         content = response.choices[0].message.content if response.choices[0].message else None
         assert content and content.strip(), f"hosted_vllm empty content: {response}"
+
+
+class TestOpenAIChatCompletions:
+    """OpenAI /chat/completions, the SDK path the customer runs against the proxy.
+
+    The streamed call must deliver real content deltas (a clean-but-empty stream is
+    the regression), and a non-streamed call must be costed so per-request spend and
+    the response-cost header stay accurate.
+    """
+
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.basic.stream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_openai_chat_streams_real_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        require_env("OPENAI_API_KEY")
+        model = f"e2e-openai-chat-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
+                max_tokens=64,
+                stream=True,
+            ),
+        )
+        _assert_streamed_completion(result)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.basic.nonstream.cost_logged",
+        exercised_on=["chat_completions"],
+    )
+    def test_openai_chat_logs_cost(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        require_env("OPENAI_API_KEY")
+        model = f"e2e-openai-cost-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[ChatMessage(role="user", content=f"Reply with the single word pong. {unique_marker()}")],
+                    max_tokens=16,
+                ),
+            )
+        )
+        assert response.choices, f"openai chat returned no choices: {response}"
+
+        rows = client.proxy.poll_logs_for_key(
+            key, min_rows=1, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
+        )
+        priced = [r for r in rows if (r.spend or 0) > 0]
+        assert priced, f"openai chat was not costed on key ...{key[-6:]}: {rows}"
+        assert priced[0].status == "success", f"openai chat spend status={priced[0].status!r}"
+
+
+class TestBedrockConverseChatCompletions:
+    """Bedrock Converse via /chat/completions, the customer's AWS stack. A non-OpenAI
+    provider must return real content on both the non-streamed and streamed paths.
+    """
+
+    def _register(self, client: PassthroughClient, resources: ResourceManager, prefix: str) -> str:
+        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
+        model = f"{prefix}-{unique_marker()}"
+        model_id = client.proxy.create_model(model, _bedrock_params())
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        return model
+
+    @pytest.mark.covers(
+        "llm.chat_completions.bedrock_converse.basic.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_bedrock_converse_chat_returns_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-bedrock-chat")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[ChatMessage(role="user", content=f"Reply with the single word pong. {unique_marker()}")],
+                    max_tokens=32,
+                ),
+            )
+        )
+        assert response.choices, f"bedrock converse chat returned no choices: {response}"
+        content = response.choices[0].message.content if response.choices[0].message else None
+        assert content and content.strip(), f"bedrock converse returned empty content: {response}"
+
+    @pytest.mark.covers(
+        "llm.chat_completions.bedrock_converse.basic.stream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_bedrock_converse_chat_streams_real_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-bedrock-stream")
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
+                max_tokens=64,
+                stream=True,
+            ),
+        )
+        _assert_streamed_completion(result)
