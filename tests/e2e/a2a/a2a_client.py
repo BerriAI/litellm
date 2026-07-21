@@ -11,13 +11,12 @@ here because only this suite uses them.
 
 from __future__ import annotations
 
-import urllib.request
 import warnings
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from e2e_http import NoBody, Result, is_ok
+from e2e_http import NoBody, Result, get_external, is_ok
 from proxy_client import ProxyClient
 
 
@@ -286,11 +285,8 @@ def build_a2a_client(proxy: ProxyClient) -> A2AClient:
     return A2AClient(proxy=proxy)
 
 
-def fetch_agent_card(url: str, *, timeout: float = 20.0) -> UpstreamAgentCard:
+def fetch_agent_card(url: str, *, timeout: float = 20.0) -> Result[UpstreamAgentCard]:
     """Fetch a live A2A agent card from its /.well-known endpoint and parse it into the
     registration model, so a test can register a real published card verbatim rather
     than a hand-rolled one."""
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310  # pyright: ignore[reportAny]  # fixed https well-known url; typeshed types urlopen as Any
-        payload: bytes = response.read()  # pyright: ignore[reportAny]  # typeshed types urlopen as Any
-    return UpstreamAgentCard.model_validate_json(payload)
+    return get_external(url, response_type=UpstreamAgentCard, timeout=timeout)

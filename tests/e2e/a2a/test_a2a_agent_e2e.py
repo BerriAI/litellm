@@ -106,7 +106,7 @@ class TestA2AAgentLifecycle:
 
     @pytest.mark.covers("other.a2a.message_send.real_world_agent_replies")
     def test_real_world_agent_replies_to_property_query(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
-        upstream = fetch_agent_card(MOVEHOME_AGENT_CARD_URL).model_copy(update={"url": MOVEHOME_ORIGIN})
+        upstream = unwrap(fetch_agent_card(MOVEHOME_AGENT_CARD_URL)).model_copy(update={"url": MOVEHOME_ORIGIN})
         assert upstream.protocol_version == "0.3.0"
         marker = unique_marker()
         body = AgentRegisterBody(agent_name=f"e2e-a2a-real-{marker}", agent_card_params=upstream)
