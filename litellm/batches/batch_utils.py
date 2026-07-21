@@ -55,7 +55,7 @@ async def _handle_completed_batch(
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
     """
     # All-error batches can complete with output_file_id=None and only an error_file_id.
-    if batch.output_file_id is None:
+    if batch.output_file_id is None and getattr(batch, "error_file_id", None) is not None:
         return 0.0, Usage(), []
 
     # Get batch results

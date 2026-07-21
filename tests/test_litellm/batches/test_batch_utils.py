@@ -600,7 +600,7 @@ async def test_calculate_batch_cost_and_usage_orchestration(monkeypatch):
 # =========================================================================== #
 
 
-def _batch(output_file_id):
+def _batch(output_file_id, error_file_id=None):
     from litellm.types.llms.openai import Batch
 
     return Batch(
@@ -612,6 +612,7 @@ def _batch(output_file_id):
         object="batch",
         status="completed",
         output_file_id=output_file_id,
+        error_file_id=error_file_id,
     )
 
 
@@ -720,7 +721,10 @@ async def test_handle_completed_batch_all_error_batch_no_output_file(monkeypatch
 
     monkeypatch.setattr(bu, "_get_batch_output_file_content_as_dictionary", fake_get_content)
 
-    cost, usage, models = await bu._handle_completed_batch(_batch(None), custom_llm_provider="openai")
+    cost, usage, models = await bu._handle_completed_batch(
+        _batch(None, error_file_id="file-err"),
+        custom_llm_provider="openai",
+    )
 
     assert cost == 0.0
     assert usage.total_tokens == 0
@@ -728,6 +732,13 @@ async def test_handle_completed_batch_all_error_batch_no_output_file(monkeypatch
     assert usage.completion_tokens == 0
     assert models == []
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_batch_missing_output_without_error_file_still_raises():
+    """Completed batches with no output and no error file keep the explicit fetch error."""
+    with pytest.raises(ValueError, match="Output file id is None"):
+        await bu._handle_completed_batch(_batch(None), custom_llm_provider="openai")
 
 
 # =========================================================================== #
