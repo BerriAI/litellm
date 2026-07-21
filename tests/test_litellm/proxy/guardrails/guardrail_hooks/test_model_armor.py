@@ -408,8 +408,9 @@ async def test_model_armor_api_error_handling():
             "metadata": {"guardrails": ["model-armor-test"]},
         }
 
-        # Should raise HTTPException for API error
-        with pytest.raises(HTTPException) as exc_info:
+        # An API failure propagates as ModelArmorAPIError, not a content-block
+        # HTTPException, so guardrail trace status stays guardrail_failed_to_respond
+        with pytest.raises(ModelArmorAPIError) as exc_info:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=mock_cache,
@@ -417,7 +418,6 @@ async def test_model_armor_api_error_handling():
                 call_type="completion",
             )
 
-        assert exc_info.value.status_code == 400
         assert exc_info.value.detail == "Model Armor API error (upstream 500)"
         assert "Internal Server Error" not in str(exc_info.value.detail)
 
@@ -627,7 +627,7 @@ async def test_model_armor_streaming_block_yields_sse_error():
 
 
 @pytest.mark.asyncio
-async def test_model_armor_api_failure_returns_400():
+async def test_model_armor_api_failure_raises_sanitized_error():
     """Test that Model Armor API failures raise HTTP 400, not the upstream status code."""
     guardrail = ModelArmorGuardrail(
         template_id="test-template",
@@ -720,14 +720,13 @@ async def test_model_armor_api_error_honors_fail_open(fail_on_error: bool):
 
     with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=masked)):
         if fail_on_error:
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ModelArmorAPIError) as exc_info:
                 await guardrail.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
                     cache=MagicMock(spec=DualCache),
                     data=request_data,
                     call_type="completion",
                 )
-            assert exc_info.value.status_code == 400
             assert exc_info.value.detail == "Model Armor API error (upstream 503)"
             assert marker not in str(exc_info.value.detail)
         else:
@@ -766,22 +765,21 @@ async def test_model_armor_api_error_fail_open_moderation_and_post_call(fail_on_
     ]
 
     if fail_on_error:
-        with pytest.raises(HTTPException) as mod_exc:
+        with pytest.raises(ModelArmorAPIError) as mod_exc:
             await guardrail.async_moderation_hook(
                 data=dict(request_data),
                 user_api_key_dict=UserAPIKeyAuth(),
                 call_type="completion",
             )
-        assert mod_exc.value.status_code == 400
         assert mod_exc.value.detail == "Model Armor API error (upstream 503)"
 
-        with pytest.raises(HTTPException) as post_exc:
+        with pytest.raises(ModelArmorAPIError) as post_exc:
             await guardrail.async_post_call_success_hook(
                 data=dict(request_data),
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=mock_llm_response,
             )
-        assert post_exc.value.status_code == 400
+        assert post_exc.value.detail == "Model Armor API error (upstream 503)"
     else:
         moderated = await guardrail.async_moderation_hook(
             data=dict(request_data),
@@ -838,7 +836,7 @@ async def test_model_armor_api_error_fail_open_streaming(fail_on_error: bool):
         assert len(chunks) == 1
         assert isinstance(chunks[0], str)
         assert "Model Armor API error (upstream 503)" in chunks[0]
-        assert '"code": "400"' in chunks[0]
+        assert '"code": "500"' in chunks[0]
     else:
         assert len(chunks) == 1
         assert isinstance(chunks[0], litellm.ModelResponseStream)
@@ -877,9 +875,8 @@ async def test_model_armor_api_error_fail_open_file_scan(fail_on_error: bool):
     data = {"metadata": {}}
 
     if fail_on_error:
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ModelArmorAPIError) as exc_info:
             await guardrail._scan_request_files(messages=messages, data=data)
-        assert exc_info.value.status_code == 400
         assert exc_info.value.detail == "Model Armor API error (upstream 503)"
     else:
         assert await guardrail._scan_request_files(messages=messages, data=data) is None

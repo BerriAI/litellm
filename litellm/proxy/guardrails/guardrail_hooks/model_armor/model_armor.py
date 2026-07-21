@@ -189,7 +189,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _raise_if_fail_closed(self, e: ModelArmorAPIError) -> None:
         if self.optional_params.get("fail_on_error", True):
-            raise HTTPException(status_code=400, detail=e.detail) from None
+            raise e from None
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         super().update_in_memory_litellm_params(litellm_params)
@@ -914,7 +914,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
                 except ModelArmorAPIError as e:
                     if self.optional_params.get("fail_on_error", True):
-                        error_obj = {"message": e.detail, "code": "400"}
+                        error_obj = {"message": e.detail, "code": "500"}
                         yield f"data: {json.dumps({'error': error_obj})}\n\n"
                         return
                 except HTTPException as e:
