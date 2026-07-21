@@ -136,12 +136,12 @@ async def test_retention_gate_requires_an_id_jag_server():
         patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
         patch("litellm.proxy.proxy_server.prisma_client", _make_prisma({}, db_has_id_jag_server=False)),
     ):
-        manager.get_registry.return_value = {
+        manager.config_mcp_servers = {
             "s1": _server_with_auth(MCPAuth.oauth2),
             "s2": _server_with_auth(None),
         }
         assert await ema_assertion_retention_enabled() is False
-        manager.get_registry.return_value = {
+        manager.config_mcp_servers = {
             "s1": _server_with_auth(MCPAuth.oauth2),
             "s2": _server_with_auth(MCPAuth.oauth2_id_jag),
         }
@@ -149,12 +149,11 @@ async def test_retention_gate_requires_an_id_jag_server():
 
 
 @pytest.mark.asyncio
-async def test_retention_gate_falls_back_to_db_when_registry_is_cold():
-    """A server added on another pod (or before this pod's DB load) is invisible to the local
-    registry; the gate must still enable retention off the authoritative DB row, and read
-    False only when neither the registry nor the DB knows an id_jag server."""
+async def test_retention_gate_reads_the_db_when_config_declares_no_id_jag_server():
+    """A DB-backed server added on another pod (or before this pod's DB load) must still enable
+    retention off the authoritative DB row; False only when neither authority knows one."""
     with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager:
-        manager.get_registry.return_value = {"s1": _server_with_auth(MCPAuth.oauth2)}
+        manager.config_mcp_servers = {"s1": _server_with_auth(MCPAuth.oauth2)}
         db_backed = _make_prisma({}, db_has_id_jag_server=True)
         with patch("litellm.proxy.proxy_server.prisma_client", db_backed):
             assert await ema_assertion_retention_enabled() is True
@@ -166,6 +165,23 @@ async def test_retention_gate_falls_back_to_db_when_registry_is_cold():
 
 
 @pytest.mark.asyncio
+async def test_retention_gate_never_consults_the_registry_snapshot():
+    """The registry is a per-process snapshot of DB state, stale in either direction: trusting
+    it positively would keep retaining bearer material after the last EMA server was removed on
+    another pod, trusting it negatively would drop writes for one added elsewhere. The gate must
+    judge only the config declaration and the DB row, so a stale snapshot listing an id_jag
+    server changes nothing."""
+    with (
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
+        patch("litellm.proxy.proxy_server.prisma_client", _make_prisma({}, db_has_id_jag_server=False)),
+    ):
+        manager.config_mcp_servers = {}
+        manager.get_registry.return_value = {"stale": _server_with_auth(MCPAuth.oauth2_id_jag)}
+        assert await ema_assertion_retention_enabled() is False
+        manager.get_registry.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_retain_persists_when_only_the_db_knows_the_id_jag_server():
     stored = {}
     prisma = _make_prisma(stored, db_has_id_jag_server=True)
@@ -173,7 +189,7 @@ async def test_retain_persists_when_only_the_db_knows_the_id_jag_server():
         patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
     ):
-        manager.get_registry.return_value = {}
+        manager.config_mcp_servers = {}
         await retain_sso_identity_assertion_for_ema(
             user_id="user-a", assertion=assertion_from_sso_login(_make_id_token(), None)
         )
@@ -247,7 +263,7 @@ async def test_retain_noop_when_no_id_jag_server():
         patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
     ):
-        manager.get_registry.return_value = {"s1": _server_with_auth(MCPAuth.oauth2)}
+        manager.config_mcp_servers = {"s1": _server_with_auth(MCPAuth.oauth2)}
         await retain_sso_identity_assertion_for_ema(
             user_id="user-a", assertion=assertion_from_sso_login(_make_id_token(), None)
         )
@@ -263,7 +279,7 @@ async def test_retain_persists_when_id_jag_server_registered():
         patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
     ):
-        manager.get_registry.return_value = {"s1": _server_with_auth(MCPAuth.oauth2_id_jag)}
+        manager.config_mcp_servers = {"s1": _server_with_auth(MCPAuth.oauth2_id_jag)}
         await retain_sso_identity_assertion_for_ema(
             user_id="user-a", assertion=assertion_from_sso_login(_make_id_token(), None)
         )
@@ -289,7 +305,7 @@ async def test_retain_swallows_store_failure():
         patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
     ):
-        manager.get_registry.return_value = {"s1": _server_with_auth(MCPAuth.oauth2_id_jag)}
+        manager.config_mcp_servers = {"s1": _server_with_auth(MCPAuth.oauth2_id_jag)}
         await retain_sso_identity_assertion_for_ema(
             user_id="user-a", assertion=assertion_from_sso_login(_make_id_token(), None)
         )

@@ -86,19 +86,20 @@ def assertion_from_sso_login(id_token: object, refresh_token: object) -> SSOIden
 
 async def ema_assertion_retention_enabled() -> bool:
     """Whether any MCP server uses ``oauth2_id_jag``, evaluated per login so the gateway only
-    retains bearer material while an EMA upstream exists to spend it on. The local registry is
-    the fast path; when it has none, the DB is consulted as the authoritative source, because
-    the registry is a per-process snapshot while the assertion write targets the shared DB. A
-    server added on another pod (or not yet loaded during startup) must still enable retention
-    here, or the drop only surfaces later as an unexplained challenge at the EMA upstream."""
+    retains bearer material while an EMA upstream exists to spend it on. Judged against the two
+    configuration authorities: the pod-local config declaration and the shared DB row. The
+    in-memory registry is deliberately not consulted in either direction; it is a per-process
+    snapshot of the DB state that can be stale both ways (a server added on another pod would
+    silently drop the write, one removed on another pod would keep retaining bearer material),
+    and a gate guarding a shared-DB write must judge against that storage's authority."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # avoids import cycle
         global_mcp_server_manager,
     )
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global
     from litellm.types.mcp import MCPAuth  # noqa: PLC0415  # runtime global
 
-    servers = global_mcp_server_manager.get_registry().values()
-    if any(server.auth_type == MCPAuth.oauth2_id_jag for server in servers):
+    config_servers = global_mcp_server_manager.config_mcp_servers.values()
+    if any(server.auth_type == MCPAuth.oauth2_id_jag for server in config_servers):
         return True
     if prisma_client is None:
         return False
