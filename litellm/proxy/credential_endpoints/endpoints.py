@@ -160,34 +160,6 @@ async def _caller_grantable_team_ids(
     return (await _caller_admin_scope(user_api_key_dict, prisma_client)).team_ids
 
 
-def _credential_in_memory(credential_name: str) -> CredentialItem | None:
-    return next(
-        (cred for cred in litellm.credential_list if cred.credential_name == credential_name),
-        None,
-    )
-
-
-async def _credential_for_admin_gate(credential_name: str, prisma_client: object) -> CredentialItem | None:
-    """Authoritative credential lookup for the admin gate on update/delete.
-
-    The in-process ``litellm.credential_list`` can be stale: a credential created
-    via the API on another horizontally-scaled instance, or before a restart,
-    exists only in the DB. Gating on the in-memory copy alone would let a logging
-    credential that isn't resident be updated/deleted without the proxy-admin
-    check. Prefer the in-memory copy, fall back to the DB so the gate sees the
-    real ``credential_info``.
-    """
-    existing = _credential_in_memory(credential_name)
-    if existing is not None:
-        return existing
-    if prisma_client is None:
-        return None
-    try:
-        return await CredentialsRepository(prisma_client).find_by_name(credential_name)
-    except Exception:  # noqa: BLE001  # treat any lookup failure as credential-not-found
-        return None
-
-
 class CredentialHelperUtils:
     @staticmethod
     def encrypt_credential_values(
@@ -615,7 +587,15 @@ async def update_credential(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    existing = await _credential_for_admin_gate(credential_name, prisma_client)
+    if prisma_client is None:
+        return handle_exception_on_proxy(
+            HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        )
+    credentials_repository = CredentialsRepository(prisma_client)
+    existing = await credentials_repository.find_by_name(credential_name)
     await _authorize_credential_patch(
         credential_name=credential_name,
         patch=credential,
@@ -623,19 +603,12 @@ async def update_credential(
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
     )
+    if existing is None:
+        return handle_exception_on_proxy(HTTPException(status_code=404, detail="Credential not found in DB."))
     validate_credential_access(credential.credential_info)
 
     try:
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": CommonProxyErrors.db_not_connected_error.value},
-            )
-        credentials_repository = CredentialsRepository(prisma_client)
-        db_credential = await credentials_repository.find_by_name(credential_name)
-        if db_credential is None:
-            raise HTTPException(status_code=404, detail="Credential not found in DB.")
-        merged_credential = update_db_credential(db_credential, _patch_to_credential_item(credential, credential_name))
+        merged_credential = update_db_credential(existing, _patch_to_credential_item(credential, credential_name))
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
         await credentials_repository.update_by_name(
             credential_name,

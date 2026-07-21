@@ -6,7 +6,7 @@ The v2 resolver is opt-in via `--use_v2_migration_resolver` / the
 """
 
 import subprocess
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -32,9 +32,7 @@ def _fake_migrate_deploy_failure(returncode: int, stderr: str):
 def test_v2_p3018_permission_error_raises_runtime_error(monkeypatch, tmp_path):
     """v2: a permission failure during migrate deploy raises RuntimeError."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
     monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
     (tmp_path / "schema.prisma").write_text("// stub")
 
@@ -50,9 +48,7 @@ def test_v2_p3018_permission_error_raises_runtime_error(monkeypatch, tmp_path):
 def test_v2_non_idempotent_p3009_raises_runtime_error(monkeypatch, tmp_path):
     """v2: a non-idempotent migration failure raises (no silent recovery)."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
     monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
     (tmp_path / "schema.prisma").write_text("// stub")
 
@@ -176,20 +172,14 @@ def test_v2_warn_ahead_of_head_swallows_db_errors(monkeypatch, tmp_path):
     ProxyExtrasDBManager._warn_if_db_ahead_of_head(str(tmp_path))
 
 
-def test_v2_resolve_specific_migration_failure_raises_runtime_error(
-    monkeypatch, tmp_path
-):
+def test_v2_resolve_specific_migration_failure_raises_runtime_error(monkeypatch, tmp_path):
     """If marking a migration as applied fails inside P3009 idempotent
     recovery, the subprocess error must be re-raised as RuntimeError so
     proxy_cli.py catches it cleanly (instead of leaking CalledProcessError)."""
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
     monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
     (tmp_path / "schema.prisma").write_text("// stub")
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_roll_back_migration", lambda *a, **kw: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_roll_back_migration", lambda *a, **kw: None)
 
     # First call: migrate deploy -> P3009 idempotent error.
     # Recovery path tries _resolve_specific_migration; that also raises.
@@ -201,26 +191,17 @@ def test_v2_resolve_specific_migration_failure_raises_runtime_error(
             output="",
         )
 
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_resolve_specific_migration", _failing_resolve
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_resolve_specific_migration", _failing_resolve)
 
-    stderr = (
-        "Error: P3009\nMigration `20260101000000_some_migration` failed\n"
-        "relation already exists"
-    )
+    stderr = "Error: P3009\nMigration `20260101000000_some_migration` failed\nrelation already exists"
     with patch("subprocess.run", side_effect=_fake_migrate_deploy_failure(1, stderr)):
-        with pytest.raises(
-            RuntimeError, match="Failed to mark migration .* as applied"
-        ):
+        with pytest.raises(RuntimeError, match="Failed to mark migration .* as applied"):
             ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
 
 
 def test_v2_does_not_call_resolve_all_migrations(monkeypatch, tmp_path):
     """v2 must never call _resolve_all_migrations — that's the bug it fixes."""
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
     monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
     (tmp_path / "schema.prisma").write_text("// stub")
 
@@ -240,3 +221,37 @@ def test_v2_does_not_call_resolve_all_migrations(monkeypatch, tmp_path):
     ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
     assert ok is True
     assert resolve_called["n"] == 0, "v2 must not invoke the diff-and-force recovery"
+
+
+def test_v2_recovers_multiple_idempotent_migrations_in_one_invocation(monkeypatch, tmp_path):
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    migration_names = tuple(f"2026010100000{index}_migration_{index}" for index in range(5))
+    failures = tuple(
+        subprocess.CalledProcessError(
+            returncode=1,
+            cmd="prisma migrate deploy",
+            stderr=(f"Error: P3018\nMigration name: {migration_name}\nrelation already exists"),
+            output="",
+        )
+        for migration_name in migration_names
+    )
+
+    class FakeResult:
+        stdout = "Applied migration.\n"
+        stderr = ""
+
+    run = MagicMock(side_effect=(*failures, FakeResult()))
+    roll_back = MagicMock()
+    resolve = MagicMock()
+    monkeypatch.setattr("subprocess.run", run)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_roll_back_migration", roll_back)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_resolve_specific_migration", resolve)
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert ok is True
+    assert run.call_count == 6
+    assert roll_back.call_args_list == [call(name) for name in migration_names]
+    assert resolve.call_args_list == [call(name) for name in migration_names]
