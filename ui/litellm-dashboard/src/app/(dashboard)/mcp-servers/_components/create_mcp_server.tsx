@@ -25,6 +25,7 @@ import OAuthFormFields from "./OAuthFormFields";
 import TruePassthroughWarning from "./TruePassthroughWarning";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
+import IdJagFormFields from "./IdJagFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -61,6 +62,7 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
   AUTH_TYPE.OAUTH2,
   AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
+  AUTH_TYPE.OAUTH2_ID_JAG,
   AUTH_TYPE.AWS_SIGV4,
   AUTH_TYPE.TRUE_PASSTHROUGH,
   AUTH_TYPE.OAUTH_DELEGATE,
@@ -140,6 +142,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
+  const isIdJagAuthType = authType === AUTH_TYPE.OAUTH2_ID_JAG;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
@@ -1071,7 +1074,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     children: (
                       <>
                         <Form.Item name="auth_type" rules={[{ required: true, message: "Please select an auth type" }]}>
-                          <Select placeholder="Select auth type" className="rounded-lg" size="large">
+                          <Select placeholder="Select auth type" className="rounded-lg" size="large" virtual={false}>
                             <Select.Option value="none">None</Select.Option>
                             <Select.Option value="api_key">API Key</Select.Option>
                             <Select.Option value="bearer_token">Bearer Token</Select.Option>
@@ -1079,6 +1082,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="basic">Basic Auth</Select.Option>
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
+                            <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                             <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
                             <Select.Option value="oauth_delegate">
@@ -1144,6 +1148,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         )}
 
                         {isTokenExchangeAuthType && <TokenExchangeFormFields />}
+                        {isIdJagAuthType && <IdJagFormFields />}
                       </>
                     ),
                   },

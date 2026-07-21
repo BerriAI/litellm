@@ -1058,6 +1058,73 @@ describe("CreateMCPServer", () => {
       });
     });
 
+    it("routes ID-JAG (Okta Cross App Access) config to the backend payload", async () => {
+      await selectHttpTransport();
+
+      fireEvent.change(getServerNameInput(), { target: { value: "IdJag_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://upstream.example.com/mcp" },
+      });
+
+      await selectAntOption("Authentication", "ID-JAG (Okta Cross App Access)");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-okta-domain.okta.com/oauth2/v1/token")).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText("https://your-okta-domain.okta.com/oauth2/v1/token"), {
+        target: { value: "https://acme.okta.com/oauth2/v1/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("api://your-mcp-resource"), {
+        target: { value: "api://mcp-resource" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("https://mcp.example.com/oauth2/token"), {
+        target: { value: "https://mcp.example.com/oauth2/token" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("https://mcp.example.com"), {
+        target: { value: "https://mcp.example.com" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client ID"), {
+        target: { value: "idjag-client-id" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Enter OAuth client secret"), {
+        target: { value: "idjag-client-secret" },
+      });
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-idjag",
+        server_name: "IdJag_Server",
+        alias: "IdJag_Server",
+        url: "https://upstream.example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2_id_jag",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("oauth2_id_jag");
+      expect(payload.token_exchange_endpoint).toBe("https://acme.okta.com/oauth2/v1/token");
+      expect(payload.audience).toBe("api://mcp-resource");
+      expect(payload.credentials).toMatchObject({
+        client_id: "idjag-client-id",
+        client_secret: "idjag-client-secret",
+        id_jag_resource_token_endpoint: "https://mcp.example.com/oauth2/token",
+        id_jag_resource: "https://mcp.example.com",
+      });
+    });
+
     it("makes scope required when the Entra OBO profile is selected", async () => {
       await selectHttpTransport();
 
