@@ -697,6 +697,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         oauth_passthrough: oauthPassthroughRaw,
         dcr_bridge: dcrBridgeRaw,
         token_validation_json: rawTokenValidationJson,
+        id_jag_client_auth_method: idJagClientAuthMethodRaw,
         ...restValues
       } = values;
 
@@ -947,6 +948,28 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       // merge overrides the stored keys, returning the server to dynamic client registration.
       if (removeStoredApp && isClientForwardedTokenMode(restValues.auth_type)) {
         payload.credentials = { client_id: null, client_secret: null };
+      }
+
+      // The selected ID-JAG client-auth method is authoritative: explicit-null the other
+      // method's stored fields so the backend's credentials merge cannot keep it alive.
+      if (restValues.auth_type === AUTH_TYPE.OAUTH2_ID_JAG) {
+        const idJagMethodNulls =
+          (idJagClientAuthMethodRaw ?? "client_secret") === "private_key_jwt"
+            ? { client_secret: null }
+            : { client_private_key: null, client_private_key_id: null, client_assertion_signing_alg: null };
+        payload.credentials = { ...(payload.credentials ?? {}), ...idJagMethodNulls };
+      }
+
+      // Leaving ID-JAG for another credentials-bearing auth type: explicit-null the ID-JAG
+      // blob fields, or a same-credential-class merge keeps the stale endpoint and key.
+      if (mcpServer.auth_type === AUTH_TYPE.OAUTH2_ID_JAG && restValues.auth_type !== AUTH_TYPE.OAUTH2_ID_JAG) {
+        payload.credentials = {
+          ...(payload.credentials ?? {}),
+          id_jag_resource_token_endpoint: null,
+          client_private_key: null,
+          client_private_key_id: null,
+          client_assertion_signing_alg: null,
+        };
       }
 
       const updated = await updateMCPServer(accessToken, payload);

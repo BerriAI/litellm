@@ -435,6 +435,12 @@ describe("MCPServerEdit (auth type switch)", () => {
     expect(payload.token_exchange_endpoint).toBeNull();
     expect(payload.audience).toBeNull();
     expect(payload.subject_token_type).toBeNull();
+    expect(payload.credentials).toMatchObject({
+      id_jag_resource_token_endpoint: null,
+      client_private_key: null,
+      client_private_key_id: null,
+      client_assertion_signing_alg: null,
+    });
   });
 
   it("clears stale oauth2 endpoint overrides when switching to token exchange", async () => {

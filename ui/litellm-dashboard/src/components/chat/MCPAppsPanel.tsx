@@ -300,6 +300,17 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
               Connected via your organization sign-in
             </span>
           )}
+          {isAutoConnectedAuthType(detailServer.auth_type) && (
+            <Button
+              variant={isConnected ? "outline" : "default"}
+              disabled={isTogglingOn}
+              onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
+              className="font-semibold h-[38px] min-w-[110px]"
+            >
+              {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
+              {isConnected ? "Remove from chat" : "Add to chat"}
+            </Button>
+          )}
           {!isAutoConnectedAuthType(detailServer.auth_type) &&
             (detailServer.auth_type === AUTH_TYPE.OAUTH2 ? (
               oauthConnected.has(detailServer.server_id) ? (

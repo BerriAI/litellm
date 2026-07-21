@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { Form, Input, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 
@@ -19,7 +19,10 @@ const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, toolt
 
 const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
-  const [clientAuthMethod, setClientAuthMethod] = useState<"client_secret" | "private_key_jwt">("client_secret");
+  const form = Form.useFormInstance();
+  const clientAuthMethod =
+    (Form.useWatch("id_jag_client_auth_method", form) as "client_secret" | "private_key_jwt" | undefined) ??
+    "client_secret";
 
   return (
     <>
@@ -31,6 +34,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
           />
         }
         name="token_exchange_endpoint"
+        preserve={false}
         rules={[{ required: !isEditing, message: "The IdP token exchange endpoint is required for ID-JAG" }]}
       >
         <Input placeholder="https://your-org.okta.com/oauth2/v1/token" className={fieldClassName} />
@@ -43,6 +47,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
           />
         }
         name={["credentials", "id_jag_resource_token_endpoint"]}
+        preserve={false}
       >
         <Input placeholder="https://mcp-as.example.com/oauth2/token" className={fieldClassName} />
       </Form.Item>
@@ -54,6 +59,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
           />
         }
         name={["credentials", "client_id"]}
+        preserve={false}
         rules={[{ required: !isEditing, message: "Client ID is required for ID-JAG" }]}
       >
         <Input.Password placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
@@ -62,15 +68,16 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         label={
           <FieldLabel
             label="Client Authentication"
-            tooltip="How the gateway authenticates to both token endpoints: a shared client secret, or a private key signing a JWT client assertion (private_key_jwt)."
+            tooltip="How the gateway authenticates to both token endpoints: a shared client secret, or a private key signing a JWT client assertion (private_key_jwt). The selected method is authoritative; the other method's stored fields are cleared on save."
           />
         }
+        name="id_jag_client_auth_method"
+        initialValue="client_secret"
+        preserve={false}
       >
         <Select<"client_secret" | "private_key_jwt">
           className="rounded-lg"
           size="large"
-          value={clientAuthMethod}
-          onChange={setClientAuthMethod}
           options={[
             { value: "client_secret", label: <span className="font-medium">Client Secret</span> },
             { value: "private_key_jwt", label: <span className="font-medium">Private Key JWT</span> },
@@ -86,6 +93,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
             />
           }
           name={["credentials", "client_secret"]}
+          preserve={false}
           rules={[{ required: !isEditing, message: "Client Secret is required for ID-JAG" }]}
         >
           <Input.Password placeholder={`Enter OAuth client secret${placeholderSuffix}`} className={fieldClassName} />
@@ -101,6 +109,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
               />
             }
             name={["credentials", "client_private_key"]}
+            preserve={false}
             rules={[{ required: !isEditing, message: "A private key is required for private_key_jwt" }]}
           >
             <Input.TextArea
@@ -117,6 +126,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
               />
             }
             name={["credentials", "client_private_key_id"]}
+            preserve={false}
           >
             <Input placeholder="key-2026-01" className={fieldClassName} />
           </Form.Item>
@@ -128,6 +138,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
               />
             }
             name={["credentials", "client_assertion_signing_alg"]}
+            preserve={false}
           >
             <Input placeholder="RS256" className={fieldClassName} />
           </Form.Item>
@@ -141,12 +152,14 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
           />
         }
         name="audience"
+        preserve={false}
       >
         <Input placeholder="https://mcp-as.example.com" className={fieldClassName} />
       </Form.Item>
       <Form.Item
         label={<FieldLabel label="Scopes (optional)" tooltip="Scopes requested in the ID-JAG exchange." />}
         name={["credentials", "scopes"]}
+        preserve={false}
       >
         <Select mode="tags" tokenSeparators={[","]} placeholder="Add scopes" className="rounded-lg" size="large" />
       </Form.Item>

@@ -62,7 +62,7 @@ describe("MCPAppsPanel enterprise-managed authorization", () => {
     expect(networking.getMCPOAuthUserCredentialStatus).not.toHaveBeenCalled();
   });
 
-  it("shows the connected badge and no connect affordance in the id_jag detail pane", async () => {
+  it("shows the connected badge with chat selection but no credential connect in the id_jag detail pane", async () => {
     renderPanel();
 
     await waitFor(() => {
@@ -75,6 +75,12 @@ describe("MCPAppsPanel enterprise-managed authorization", () => {
     });
     expect(screen.queryByRole("button", { name: /^Connect$/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Disconnect$/ })).not.toBeInTheDocument();
+
+    const addButton = screen.getByRole("button", { name: /Add to chat/ });
+    fireEvent.click(addButton);
+    await waitFor(() => {
+      expect(networking.listMCPTools).toHaveBeenCalledWith("sk-test", "srv-ema");
+    });
   });
 
   it("keeps the plain Connect toggle for a non id_jag server", async () => {

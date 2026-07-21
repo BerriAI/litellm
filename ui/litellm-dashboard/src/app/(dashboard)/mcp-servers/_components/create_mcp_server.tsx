@@ -445,6 +445,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         oauth_passthrough: oauthPassthroughRaw,
         dcr_bridge: dcrBridgeRaw,
         token_validation_json: rawTokenValidationJson,
+        id_jag_client_auth_method: idJagClientAuthMethodRaw,
         ...restValues
       } = values;
 
@@ -577,6 +578,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
       if (includeCredentials && submitCredentials && Object.keys(submitCredentials).length > 0) {
         payload.credentials = submitCredentials;
+      }
+
+      // The selected ID-JAG client-auth method is authoritative: null the other method's
+      // fields so the backend's credentials merge cannot keep a stale method alive.
+      if (restValues.auth_type === AUTH_TYPE.OAUTH2_ID_JAG) {
+        const idJagMethodNulls =
+          (idJagClientAuthMethodRaw ?? "client_secret") === "private_key_jwt"
+            ? { client_secret: null }
+            : { client_private_key: null, client_private_key_id: null, client_assertion_signing_alg: null };
+        payload.credentials = { ...(payload.credentials ?? {}), ...idJagMethodNulls };
       }
 
       // An interactive (oauth2) create persists its DCR-minted client from the ref (kept out of the
