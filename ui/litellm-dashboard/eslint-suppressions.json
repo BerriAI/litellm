@@ -639,11 +639,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/memory/_components/MemoryView.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
     "no-restricted-imports": {
       "count": 1
