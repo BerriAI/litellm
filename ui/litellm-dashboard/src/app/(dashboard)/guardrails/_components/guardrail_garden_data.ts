@@ -433,6 +433,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     providerKey: "Xecguard",
   },
   {
+    id: "deepkeep",
+    name: "DeepKeep AI Firewall",
+    description:
+      "DeepKeep AI Firewall for comprehensive LLM security — prompt injection detection, PII protection, content moderation, and policy enforcement with configurable guardrail pipelines.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}deepkeep.svg`,
+    tags: ["Security", "Prompt Injection", "PII", "Firewall"],
+    providerKey: "Deepkeep",
+  },
+  {
     id: "repelloai",
     name: "RepelloAI Argus",
     description:
