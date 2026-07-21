@@ -16,9 +16,13 @@ truth, the same contract as the per-user OAuth credential store.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+import os
+import weakref
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Literal
 
 import jwt
 from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationError
@@ -31,6 +35,10 @@ if TYPE_CHECKING:
 _ASSERTION_DECRYPT_LOG_KEY = "sso_identity_assertion"
 _STR_ADAPTER: TypeAdapter[str] = TypeAdapter(str)
 _MAYBE_STR_ADAPTER: TypeAdapter[str | None] = TypeAdapter(str | None)
+
+# An assertion this close to expiry is treated as expired, so a subject token is never handed
+# to the exchange with less lifetime than the two token-endpoint legs need to complete.
+_ASSERTION_EXPIRY_BUFFER_SECONDS = 30
 
 
 class SSOIdentityAssertion(BaseModel):
@@ -196,6 +204,163 @@ async def rotate_sso_identity_assertions_master_key(prisma_client: PrismaClient,
         sum(outcomes),
         len(outcomes) - sum(outcomes),
     )
+
+
+class UsableSsoAssertion(BaseModel):
+    """A stored assertion that is currently exchangeable (unexpired, possibly just refreshed)."""
+
+    model_config = ConfigDict(frozen=True)
+    state: Literal["usable"] = "usable"
+    assertion: SSOIdentityAssertion
+
+
+class NoSsoAssertion(BaseModel):
+    """No stored assertion exists for the user (or the caller has no user identity)."""
+
+    model_config = ConfigDict(frozen=True)
+    state: Literal["absent"] = "absent"
+
+
+class ExpiredSsoAssertion(BaseModel):
+    """A stored assertion exists but is expired and could not be renewed; only a fresh
+    interactive sign-in can produce a new one, so the caller owes the user a re-login
+    challenge rather than a missing-precondition error."""
+
+    model_config = ConfigDict(frozen=True)
+    state: Literal["expired"] = "expired"
+
+
+SsoAssertionLookup = UsableSsoAssertion | NoSsoAssertion | ExpiredSsoAssertion
+
+SsoTokenEndpointPost = Callable[[str, dict[str, str]], Awaitable[dict[str, object] | None]]
+
+
+class _SsoRefreshClient(BaseModel):
+    """The gateway's own SSO client registration at the IdP. The stored refresh token was
+    issued to THIS client (the generic SSO app), never to an ``id_jag`` server's client, so
+    renewing the assertion must authenticate as it or the IdP answers ``invalid_grant``."""
+
+    model_config = ConfigDict(frozen=True)
+    client_id: str
+    client_secret: SecretStr | None
+    token_endpoint: str
+
+
+def _sso_refresh_client_from_env(getenv: Callable[[str], str | None]) -> _SsoRefreshClient | None:
+    client_id = getenv("GENERIC_CLIENT_ID")
+    token_endpoint = getenv("GENERIC_TOKEN_ENDPOINT")
+    if not client_id or not token_endpoint:
+        return None
+    secret = getenv("GENERIC_CLIENT_SECRET")
+    return _SsoRefreshClient(
+        client_id=client_id,
+        client_secret=SecretStr(secret) if secret else None,
+        token_endpoint=token_endpoint,
+    )
+
+
+def _assertion_is_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
+    if assertion.expires_at is None:
+        return False
+    return assertion.expires_at <= now + timedelta(seconds=_ASSERTION_EXPIRY_BUFFER_SECONDS)
+
+
+async def _post_sso_token_endpoint(url: str, form: dict[str, str]) -> dict[str, object] | None:
+    from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
+        get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # http_handler is untyped
+    )
+    from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415
+
+    # A failed refresh is a miss, never a raise; the caller maps it onto the 401 challenge.
+    try:
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)  # pyright: ignore[reportUnknownVariableType]  # http_handler is untyped
+        response = await client.post(url, headers={"Accept": "application/json"}, data=form)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # httpx handler partially typed
+        response.raise_for_status()  # pyright: ignore[reportUnknownMemberType]  # httpx handler partially typed
+        body: dict[str, object] = response.json()  # pyright: ignore[reportUnknownMemberType]  # validated field-by-field by the caller
+    except Exception as exc:  # noqa: BLE001  # any transport/status failure = refresh miss
+        verbose_proxy_logger.warning("SSO assertion refresh request failed: %s", exc)
+        return None
+    else:
+        return body
+
+
+class LiveSsoAssertionSource:
+    """The resolver's view of the assertion store: one stored assertion made usable, or its
+    typed absence. Renewal is single-flighted per user (in-process; concurrent pods may both
+    refresh, which is last-write-wins on the row and harmless unless the IdP one-time-uses
+    refresh tokens, in which case the loser reads Expired and the next login heals it)."""
+
+    def __init__(
+        self,
+        fetch: Callable[[str], Awaitable[SSOIdentityAssertion | None]] = fetch_sso_identity_assertion,
+        persist: Callable[[str, SSOIdentityAssertion], Awaitable[None]] = persist_sso_identity_assertion,
+        post: SsoTokenEndpointPost = _post_sso_token_endpoint,
+        getenv: Callable[[str], str | None] = os.getenv,
+        now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
+        self._fetch = fetch
+        self._persist = persist
+        self._post = post
+        self._getenv = getenv
+        self._now = now
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+
+    async def fetch_usable(self, user_id: str) -> SsoAssertionLookup:
+        if not user_id:
+            return NoSsoAssertion()
+        stored = await self._fetch(user_id)
+        if stored is None:
+            return NoSsoAssertion()
+        if not _assertion_is_expired(stored, self._now()):
+            return UsableSsoAssertion(assertion=stored)
+        async with self._lock(user_id):
+            rechecked = await self._fetch(user_id)
+            if rechecked is None:
+                return NoSsoAssertion()
+            if not _assertion_is_expired(rechecked, self._now()):
+                return UsableSsoAssertion(assertion=rechecked)
+            refreshed = await self._refresh(user_id, rechecked)
+            if refreshed is None:
+                return ExpiredSsoAssertion()
+            return UsableSsoAssertion(assertion=refreshed)
+
+    async def _refresh(self, user_id: str, stored: SSOIdentityAssertion) -> SSOIdentityAssertion | None:
+        if stored.refresh_token is None:
+            return None
+        client = _sso_refresh_client_from_env(self._getenv)
+        if client is None:
+            verbose_proxy_logger.warning(
+                "Stored SSO assertion for user_id=%s is expired and the SSO client env "
+                "(GENERIC_CLIENT_ID/GENERIC_TOKEN_ENDPOINT) is not set; cannot refresh.",
+                user_id,
+            )
+            return None
+        form = {
+            "grant_type": "refresh_token",
+            "refresh_token": stored.refresh_token.get_secret_value(),
+            "client_id": client.client_id,
+            **({"client_secret": client.client_secret.get_secret_value()} if client.client_secret else {}),
+        }
+        body = await self._post(client.token_endpoint, form)
+        if body is None:
+            return None
+        rotated = body.get("refresh_token")
+        carried_refresh = rotated if isinstance(rotated, str) and rotated else stored.refresh_token.get_secret_value()
+        refreshed = assertion_from_sso_login(body.get("id_token"), carried_refresh)
+        if refreshed is None:
+            verbose_proxy_logger.warning(
+                "SSO assertion refresh for user_id=%s returned no usable id_token; treating as expired.", user_id
+            )
+            return None
+        await self._persist(user_id, refreshed)
+        return refreshed
+
+    def _lock(self, user_id: str) -> asyncio.Lock:
+        lock = self._locks.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[user_id] = lock
+        return lock
 
 
 async def retain_sso_identity_assertion_for_ema(user_id: str, assertion: SSOIdentityAssertion | None) -> None:

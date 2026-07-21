@@ -90,6 +90,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
 from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    LiveSsoAssertionSource,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
     build_token_exchanger,
 )
@@ -809,6 +812,25 @@ def _caller_authorization_fans_out(
     )
 
 
+def _obo_retry_covers_caller(
+    auth_type: MCPAuthType | None,
+    subject_token: str | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> bool:
+    """Whether the invalidate-and-retry path has a subject to re-mint with after an upstream 401.
+
+    ``token_exchange`` re-mints only from the caller's inbound token. ``id_jag`` also re-mints
+    from the stored SSO assertion, which the resolver looks up by the caller's user id, so a
+    caller with a user identity but no inbound assertion (an admission-key or session caller)
+    must route through the retry path too or its rejected cached bearer is never evicted.
+    """
+    if auth_type not in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag):
+        return False
+    if subject_token:
+        return True
+    return auth_type == MCPAuth.oauth2_id_jag and user_api_key_auth is not None and bool(user_api_key_auth.user_id)
+
+
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[tuple[int, Optional[str]]]:
@@ -1153,6 +1175,7 @@ class MCPServerManager:
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
+            sso_assertions=LiveSsoAssertionSource(),
         )
         self.registry: dict[str, MCPServer] = {}
         self.config_mcp_servers: dict[str, MCPServer] = {}
@@ -4788,7 +4811,7 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        if mcp_server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag) and subject_token:
+        if _obo_retry_covers_caller(mcp_server.auth_type, subject_token, user_api_key_auth):
             # OBO / ID-JAG: the exchanged token may have been revoked/rotated upstream since it was
             # cached, so an upstream 401 gets one invalidate + re-mint + retry. Gated to these modes;
             # all others keep the plain single call below.

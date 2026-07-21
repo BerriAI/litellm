@@ -341,3 +341,174 @@ async def test_rotation_skips_unreadable_rows_but_rotates_readable_ones():
     await rotate_sso_identity_assertions_master_key(prisma_client=prisma, new_master_key="another-new-salt-key-0000")
     assert stored["bad"] == "garbage-blob"
     assert stored["good"] != good_blob_before
+
+
+# -- LiveSsoAssertionSource: the resolver-facing usable-assertion lookup + refresh -------------
+
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (  # noqa: E402
+    ExpiredSsoAssertion,
+    LiveSsoAssertionSource,
+    NoSsoAssertion,
+    SSOIdentityAssertion,
+    UsableSsoAssertion,
+)
+from pydantic import SecretStr  # noqa: E402
+
+_SSO_ENV = {
+    "GENERIC_CLIENT_ID": "sso-client",
+    "GENERIC_CLIENT_SECRET": "sso-secret",
+    "GENERIC_TOKEN_ENDPOINT": "https://idp.example.com/token",
+}
+
+
+def _stored(expires_in_seconds: int | None, refresh_token: str | None = "rt_stored") -> SSOIdentityAssertion:
+    return SSOIdentityAssertion(
+        id_token=SecretStr(_make_id_token()),
+        refresh_token=SecretStr(refresh_token) if refresh_token else None,
+        expires_at=(
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+            if expires_in_seconds is not None
+            else None
+        ),
+    )
+
+
+def _source(stored: SSOIdentityAssertion | None, post_bodies: list, env: dict | None = None):
+    fetches: list[str] = []
+    persisted: list[tuple[str, SSOIdentityAssertion]] = []
+    posts: list[tuple[str, dict]] = []
+    state = {"stored": stored}
+
+    async def fetch(user_id: str):
+        fetches.append(user_id)
+        return state["stored"]
+
+    async def persist(user_id: str, assertion: SSOIdentityAssertion):
+        persisted.append((user_id, assertion))
+        state["stored"] = assertion
+
+    async def post(url: str, form: dict):
+        posts.append((url, dict(form)))
+        return post_bodies.pop(0) if post_bodies else None
+
+    environment = _SSO_ENV if env is None else env
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=environment.get)
+    return source, fetches, persisted, posts
+
+
+@pytest.mark.asyncio
+async def test_source_empty_user_id_is_absent_without_a_db_read():
+    source, fetches, _, _ = _source(_stored(3600), [])
+    assert isinstance(await source.fetch_usable(""), NoSsoAssertion)
+    assert fetches == []
+
+
+@pytest.mark.asyncio
+async def test_source_missing_row_is_absent():
+    source, _, _, posts = _source(None, [])
+    assert isinstance(await source.fetch_usable("alice"), NoSsoAssertion)
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_source_unexpired_assertion_is_usable_without_refresh():
+    stored = _stored(3600)
+    source, _, _, posts = _source(stored, [])
+    lookup = await source.fetch_usable("alice")
+    assert isinstance(lookup, UsableSsoAssertion)
+    assert lookup.assertion.id_token.get_secret_value() == stored.id_token.get_secret_value()
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_source_near_expiry_assertion_counts_as_expired():
+    """A token inside the buffer would die mid-exchange; it must refresh, not be served."""
+    source, _, _, posts = _source(_stored(10, refresh_token=None), [])
+    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_source_expired_with_refresh_renews_persists_and_returns_usable():
+    new_id_token = _make_id_token(exp_offset=7200)
+    source, _, persisted, posts = _source(
+        _stored(-100), [{"id_token": new_id_token, "refresh_token": "rt_rotated", "access_token": "at"}]
+    )
+    lookup = await source.fetch_usable("alice")
+    assert isinstance(lookup, UsableSsoAssertion)
+    assert lookup.assertion.id_token.get_secret_value() == new_id_token
+    assert lookup.assertion.refresh_token is not None
+    assert lookup.assertion.refresh_token.get_secret_value() == "rt_rotated"
+    assert len(persisted) == 1 and persisted[0][0] == "alice"
+    url, form = posts[0]
+    assert url == "https://idp.example.com/token"
+    assert form["grant_type"] == "refresh_token"
+    assert form["refresh_token"] == "rt_stored"
+    assert form["client_id"] == "sso-client"
+    assert form["client_secret"] == "sso-secret"
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_without_rotated_token_carries_the_stored_one_forward():
+    source, _, _, _ = _source(_stored(-100), [{"id_token": _make_id_token(exp_offset=7200)}])
+    lookup = await source.fetch_usable("alice")
+    assert isinstance(lookup, UsableSsoAssertion)
+    assert lookup.assertion.refresh_token is not None
+    assert lookup.assertion.refresh_token.get_secret_value() == "rt_stored"
+
+
+@pytest.mark.asyncio
+async def test_source_expired_without_refresh_token_is_expired():
+    source, _, _, posts = _source(_stored(-100, refresh_token=None), [])
+    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_source_expired_with_no_sso_env_is_expired_without_a_post():
+    source, _, _, posts = _source(_stored(-100), [], env={})
+    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    assert posts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [None, {}, {"id_token": ""}, {"id_token": 123}, {"access_token": "at-only"}])
+async def test_source_refresh_yielding_no_usable_id_token_is_expired(body):
+    source, _, persisted, _ = _source(_stored(-100), [body])
+    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    assert persisted == []
+
+
+@pytest.mark.asyncio
+async def test_source_concurrent_expired_fetches_refresh_once():
+    """Two flights hit the same expired assertion; the single-flight lock makes the second
+    re-read the row the first refreshed instead of spending the refresh token again. The fake
+    post yields to the loop so the flights genuinely interleave."""
+    import asyncio
+
+    fetches: list[str] = []
+    posts: list[tuple[str, dict]] = []
+    state = {"stored": _stored(-100)}
+    bodies = [{"id_token": _make_id_token(exp_offset=7200)}, {"id_token": _make_id_token(exp_offset=7200)}]
+
+    async def fetch(user_id: str):
+        await asyncio.sleep(0)
+        fetches.append(user_id)
+        return state["stored"]
+
+    async def persist(user_id: str, assertion: SSOIdentityAssertion):
+        await asyncio.sleep(0)
+        state["stored"] = assertion
+
+    async def post(url: str, form: dict):
+        posts.append((url, dict(form)))
+        await asyncio.sleep(0)
+        return bodies.pop(0)
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"))
+    assert all(isinstance(r, UsableSsoAssertion) for r in results)
+    assert len(posts) == 1

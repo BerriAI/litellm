@@ -9240,3 +9240,31 @@ class TestDiscoveryFailureLogging:
         assert "typo_row" in caplog.text
         assert "authorization_url, token_url" in caplog.text
         assert "unresolved" in caplog.text
+@pytest.mark.parametrize(
+    "auth_type,subject_token,user_id,expected",
+    [
+        (MCPAuth.oauth2_token_exchange, "hdr.jwt.sig", None, True),
+        (MCPAuth.oauth2_token_exchange, None, "alice", False),
+        (MCPAuth.oauth2_id_jag, "hdr.jwt.sig", None, True),
+        (MCPAuth.oauth2_id_jag, None, "alice", True),
+        (MCPAuth.oauth2_id_jag, None, None, False),
+        (MCPAuth.oauth2_id_jag, None, "", False),
+        (MCPAuth.oauth2, "hdr.jwt.sig", "alice", False),
+        (None, "hdr.jwt.sig", "alice", False),
+    ],
+)
+def test_obo_retry_covers_caller_matrix(auth_type, subject_token, user_id, expected):
+    """token_exchange re-mints only from the inbound token; id_jag also re-mints from the
+    stored SSO assertion keyed by user id, so an id_jag caller with a user identity but no
+    inbound assertion must still route through the invalidate-and-retry path."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _obo_retry_covers_caller
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    auth = UserAPIKeyAuth(api_key="sk-x", user_id=user_id) if user_id is not None else None
+    assert _obo_retry_covers_caller(auth_type, subject_token, auth) is expected
+
+
+def test_obo_retry_requires_an_authenticated_caller_for_stored_assertion_retry():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _obo_retry_covers_caller
+
+    assert _obo_retry_covers_caller(MCPAuth.oauth2_id_jag, None, None) is False
