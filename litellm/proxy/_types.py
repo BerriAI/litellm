@@ -2719,6 +2719,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
+    rpm_limit: Optional[int] = None
+    tpm_limit: Optional[int] = None
     models: List[str] = []
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None

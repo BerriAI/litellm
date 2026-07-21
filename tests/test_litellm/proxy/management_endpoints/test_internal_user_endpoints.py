@@ -2537,6 +2537,55 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
 
 
 @pytest.mark.asyncio
+async def test_user_info_v2_includes_user_rate_limits(mocker):
+    """GET /v2/user/info should return user-level rpm_limit and tpm_limit."""
+    from fastapi import Request
+
+    from litellm.proxy._types import UserInfoV2Response
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = {
+        "user_id": "v2-rate-limit-user",
+        "spend": 0.0,
+        "max_budget": None,
+        "rpm_limit": 600,
+        "tpm_limit": 120000,
+        "models": [],
+        "teams": [],
+    }
+
+    async def mock_find_unique(*args, **kwargs):
+        if kwargs.get("where", {}).get("user_id") == "v2-rate-limit-user":
+            return mock_user_row
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    admin_key = UserAPIKeyAuth(
+        user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    response = await user_info_v2(
+        request=mock_request,
+        user_id="v2-rate-limit-user",
+        user_api_key_dict=admin_key,
+    )
+
+    assert isinstance(response, UserInfoV2Response)
+    assert response.rpm_limit == 600
+    assert response.tpm_limit == 120000
+
+
+@pytest.mark.asyncio
 async def test_user_info_v2_redacts_scim_enterprise_metadata(mocker):
     """
     SCIM enterprise attributes are persisted in metadata for reporting, but
