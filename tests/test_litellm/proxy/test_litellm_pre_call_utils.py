@@ -2560,6 +2560,108 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
+def test_add_litellm_metadata_from_anthropic_user_id_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_anthropic_user_id_dict_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": {
+                "device_id": "device",
+                "account_uuid": "account",
+                "session_id": "sess_4f8c1d2a-1234",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["user_id"] == "sess_4f8c1d2a-1234"
+    assert data["metadata"]["session_id"] == "sess_4f8c1d2a-1234"
+    assert data["litellm_session_id"] == "sess_4f8c1d2a-1234"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id():
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_body-session-id",
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id_dict():
+    data = {
+        "metadata": {
+            "user_id": {
+                "session_id": "body-session-id",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        "user_abc123_account__session_",
+        "user_abc123_account_",
+        "user_abc123_account__session_invalid!",
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_ignores_invalid_session_id(user_id: str):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        {},
+        {"session_id": 123},
+        {"session_id": "invalid session id"},
+        {"session_id": ""},
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_dict_ignores_invalid_session_id(
+    user_id: object,
+):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
 def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
     headers = {
@@ -4992,17 +5094,23 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
         ("claude-cli/2.0.69 (external, cli)", False, None, False),
         ("claude-cli/2.0.69 (external, cli)", None, False, None),
         ("claude-cli/2.0.69 (external, cli)", None, True, None),
+        ("codex_cli_rs/0.144.5 (Mac OS 26.4.0; arm64) WezTerm", None, None, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, None, True),
+        ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, None, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, None, False),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, True, None),
         ("PostmanRuntime/7.53.0", None, None, None),
         (None, None, None, None),
     ],
 )
-async def test_add_litellm_data_to_request_claude_code_drop_params(
+async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     user_agent, request_drop_params, operator_drop_params, expected_drop_params
 ):
-    """Claude Code sends Anthropic-specific params that fail on non-Anthropic
-    providers, so its user agent must turn on drop_params automatically,
-    without overriding an explicit caller value, an explicit operator-level
-    litellm_settings value, or affecting other clients.
+    """Claude Code sends Anthropic-specific params and Codex sends
+    service_tier, both of which fail on providers that reject them, so those
+    user agents must turn on drop_params automatically, without overriding an
+    explicit caller value, an explicit operator-level litellm_settings value,
+    or affecting other clients.
     """
     headers = {"Content-Type": "application/json"}
     if user_agent is not None:

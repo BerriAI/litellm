@@ -4,6 +4,7 @@ import time
 from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
@@ -19,6 +20,7 @@ from litellm.types.llms.bedrock import (
     BedrockOutputDataConfig,
     BedrockS3InputDataConfig,
     BedrockS3OutputDataConfig,
+    BedrockTag,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -37,6 +39,18 @@ from ..common_utils import CommonBatchFilesUtils
 _S3_BATCH_FILE_UUID_SUFFIX_PATTERN = re.compile(
     r"-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.jsonl$"
 )
+
+_BEDROCK_TAGS_ADAPTER: TypeAdapter[list[BedrockTag]] = TypeAdapter(list[BedrockTag])
+
+
+def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
+    try:
+        return _BEDROCK_TAGS_ADAPTER.validate_python(raw_tags, strict=True)
+    except ValidationError as e:
+        raise ValueError(
+            "Invalid 'bedrock_tags' value. Expected a list of {'key': <str>, 'value': <str>} dicts, "
+            f"e.g. [{{'key': 'team', 'value': 'genai'}}]. Got: {raw_tags!r}"
+        ) from e
 
 
 class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
@@ -200,6 +214,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "outputDataConfig": output_data_config,
             "roleArn": role_arn,
         }
+
+        config_bedrock_tags = litellm_params.get("bedrock_tags")
+        bedrock_tags = config_bedrock_tags if config_bedrock_tags is not None else optional_params.get("bedrock_tags")
+        if bedrock_tags is not None:
+            bedrock_request["tags"] = _validate_bedrock_tags(bedrock_tags)
 
         # Add optional parameters if provided
         completion_window = create_batch_data.get("completion_window")

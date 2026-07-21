@@ -19,6 +19,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Awaitable,
+    Callable,
     ClassVar,
     Dict,
     List,
@@ -49,7 +50,7 @@ from litellm.proxy._types import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -103,6 +104,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -2583,41 +2585,30 @@ class ProxyLogging:
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
 
-    def _release_max_parallel_requests_on_disconnect(
+    async def _arelease_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict | None = None,
     ) -> None:
         """
         Release the api-key max_parallel_requests slot when a streaming
-        response is cancelled mid-flight (client disconnect). Neither the
-        success nor failure logging callback fires on the resulting
-        CancelledError / GeneratorExit, so the pre-call +1 would otherwise
-        leak.
+        response is cancelled mid-flight (client disconnect) and no logging
+        callback fired for it. Neither the success nor failure callback runs on
+        the resulting CancelledError / GeneratorExit, so the pre-call +1 would
+        otherwise leak.
 
-        Must be called from the outermost streaming generator (the one
-        Starlette drives and closes on disconnect). A nested iterator-hook
-        generator only receives GeneratorExit when it is garbage collected,
-        which is non-deterministic, so the refund cannot live there.
-
-        Scheduled fire-and-forget (no await) because awaiting is not
-        permitted while unwinding a GeneratorExit.
+        Awaited from the shielded streaming cleanup rather than scheduled
+        fire-and-forget, so the caller can make it the single owner of the
+        release: when a disconnect-time success event does fire (partial-spend
+        billing or a deferred-guardrail flush), that event's own limiter
+        callback releases the slot and this is not called at all. Two
+        concurrent releases of the same acquisition would otherwise race and
+        double-decrement under the limiter's in-memory fallback.
         """
         limiter = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
             return
-        try:
-            asyncio.create_task(
-                limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
-            )
-        except RuntimeError:
-            # No running event loop (e.g. interpreter/loop shutdown); the
-            # counter's window TTL will reclaim the slot.
-            verbose_proxy_logger.warning(
-                "parallel_request_limiter_v3: could not schedule "
-                "max_parallel_requests release on disconnect; no running "
-                "event loop. Slot will be reclaimed when its TTL expires"
-            )
+        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
@@ -3329,7 +3320,24 @@ class PrismaClient:
                 elif query_type == "find_all" and reset_at is not None:
                     response = await UserRepository(self).table.find_many(
                         where={  # type: ignore
-                            "budget_reset_at": {"lt": reset_at},
+                            # A user seeded from default_internal_user_params
+                            # (or created via /user/new without an explicit
+                            # budget_reset_at) has budget_duration set but
+                            # budget_reset_at = NULL. `{"lt": reset_at}` never
+                            # matches NULL, so such users would never be reset
+                            # and their spend would accumulate for the lifetime
+                            # of the row, silently exceeding max_budget. Treat a
+                            # NULL budget_reset_at with a non-NULL budget_duration
+                            # as due, matching the budget-table query below.
+                            "OR": [
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                                {"budget_reset_at": {"lt": reset_at}},
+                            ],
                         }
                     )
                 elif query_type == "find_all" and user_id_list is not None:
@@ -3415,7 +3423,18 @@ class PrismaClient:
                 elif query_type == "find_all" and reset_at is not None:
                     response = await TeamRepository(self).table.find_many(
                         where={  # type: ignore
-                            "budget_reset_at": {"lt": reset_at},
+                            # Same NULL budget_reset_at gap as the user query
+                            # above: a team with a budget_duration but no
+                            # initialized budget_reset_at would never be reset.
+                            "OR": [
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                                {"budget_reset_at": {"lt": reset_at}},
+                            ],
                         }
                     )
                 elif query_type == "find_all" and user_id is not None:
@@ -6107,6 +6126,7 @@ def create_model_info_response(
     include_metadata: bool = False,
     fallback_type: Optional[str] = None,
     llm_router: Optional["Router"] = None,
+    get_model_info: Callable[[str], ModelInfo] = litellm.get_model_info,
 ) -> ModelInfoResponse:
     """
     Create a standardized OpenAI-compatible model object.
@@ -6124,25 +6144,33 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    # Surface context-window limits for OpenAI-compatible discovery clients.
-    # Only emitted when known, so wildcard routes and limitless backends stay clean.
-    # Limits are best-effort enrichment, so a single malformed deployment degrades
-    # to the base response rather than 500-ing the whole listing.
+    try:
+        model_cost_info: ModelInfo | None = get_model_info(model_id)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "create_model_info_response: cost map lookup failed for %s: %s",
+            model_id,
+            e,
+        )
+        model_cost_info = None
+
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    if model_cost_info is not None:
+        max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
+        max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
+
     if llm_router is not None:
-        try:
-            model_group_info = llm_router.get_model_group_info(model_id)
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "create_model_info_response: get_model_group_info failed for %s: %s",
-                model_id,
-                e,
-            )
-            model_group_info = None
-        if model_group_info is not None:
-            if model_group_info.max_input_tokens is not None:
-                base["max_input_tokens"] = int(model_group_info.max_input_tokens)
-            if model_group_info.max_output_tokens is not None:
-                base["max_output_tokens"] = int(model_group_info.max_output_tokens)
+        configured_input, configured_output = llm_router.get_configured_token_limits(model_id)
+        if configured_input is not None:
+            max_input_tokens = configured_input
+        if configured_output is not None:
+            max_output_tokens = configured_output
+
+    if max_input_tokens is not None:
+        base["max_input_tokens"] = max_input_tokens
+    if max_output_tokens is not None:
+        base["max_output_tokens"] = max_output_tokens
 
     if not include_metadata:
         return base

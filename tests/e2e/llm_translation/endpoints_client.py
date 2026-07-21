@@ -10,39 +10,72 @@ so the assertion is on real content, not just a 200.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel
 
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from e2e_http import StreamingResponse
-from models import ChatMessage, LiteLLMParamsBody
+from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
+
+__all__ = [
+    "CacheControl",
+    "RichMessage",
+    "TextBlock",
+]
+
+
+class FunctionParameterProperty(BaseModel):
+    type: str
+    description: str | None = None
+
+
+class FunctionParameters(BaseModel):
+    type: Literal["object"] = "object"
+    properties: dict[str, FunctionParameterProperty]
+    required: list[str] = []
+
+
+class ResponsesFunctionTool(BaseModel):
+    type: Literal["function"] = "function"
+    name: str
+    description: str | None = None
+    parameters: FunctionParameters
+
+
+class ResponsesInputTextPart(BaseModel):
+    type: Literal["input_text"] = "input_text"
+    text: str
+
+
+class ResponsesInputImagePart(BaseModel):
+    type: Literal["input_image"] = "input_image"
+    image_url: str
+
+
+ResponsesInputContentPart = ResponsesInputTextPart | ResponsesInputImagePart
+
+
+class ResponsesInputMessage(BaseModel):
+    role: Literal["user", "assistant", "system"] = "user"
+    content: list[ResponsesInputContentPart]
+
+
+ResponsesInput = str | list[ResponsesInputMessage]
 
 
 class ResponsesRequest(BaseModel):
     model: str
-    input: str
+    input: ResponsesInput
     instructions: str | None = None
+    stream: bool = False
+    tools: list[ResponsesFunctionTool] | None = None
 
 
 class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[ChatMessage]
-
-
-class CacheControl(BaseModel):
-    type: str = "ephemeral"
-
-
-class TextBlock(BaseModel):
-    type: str = "text"
-    text: str
-    cache_control: CacheControl | None = None
-
-
-class RichMessage(BaseModel):
-    role: str
-    content: list[TextBlock]
 
 
 class RichMessagesRequest(BaseModel):
@@ -85,6 +118,9 @@ class ResponsesOutputContent(BaseModel):
 class ResponsesOutputItem(BaseModel):
     type: str | None = None
     content: list[ResponsesOutputContent] = []
+    name: str | None = None
+    arguments: str | None = None
+    call_id: str | None = None
 
 
 class ResponsesResult(BaseModel):
@@ -98,6 +134,29 @@ class ResponsesResult(BaseModel):
         return "".join(
             content.text or "" for item in self.output for content in item.content
         )
+
+    @property
+    def function_calls(self) -> tuple[ResponsesOutputItem, ...]:
+        return tuple(
+            item
+            for item in self.output
+            if item.type == "function_call"
+            and item.name is not None
+            and item.arguments is not None
+        )
+
+
+class ResponsesStreamEvent(BaseModel):
+    event_id: str | None = None
+
+
+class ResponsesStreamEventType(BaseModel):
+    type: str
+
+
+class ResponsesOutputTextDeltaEvent(ResponsesStreamEvent):
+    type: Literal["response.output_text.delta"]
+    delta: str
 
 
 class AnthropicContentBlock(BaseModel):
@@ -156,25 +215,70 @@ class ImagesResult(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class EndpointsClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
-        return self.gateway.create_model(model_name, litellm_params)
+        return self.proxy.create_model(model_name, litellm_params)
 
     def delete_model(self, model_id: str) -> None:
-        self.gateway.delete_model(model_id)
+        self.proxy.delete_model(model_id)
 
-    def _send(self, path: str, key: str, body: BaseModel) -> StreamingResponse:
-        return self.gateway.transport.send(
-            path, headers=self.gateway.transport.bearer(key), json=body
+    def _send(
+        self, path: str, key: str, body: BaseModel, *, stream: bool = False
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            path,
+            headers=self.proxy.transport.bearer(key),
+            json=body,
+            stream=stream,
         )
 
-    def responses(self, key: str, model: str, text: str) -> StreamingResponse:
+    def responses(
+        self, key: str, model: str, text: str, *, stream: bool = False
+    ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
             key,
             ResponsesRequest(
-                model=model, input=text, instructions="You are a helpful assistant"
+                model=model,
+                input=text,
+                instructions="You are a helpful assistant",
+                stream=stream,
+            ),
+            stream=stream,
+        )
+
+    def responses_vision(
+        self, key: str, model: str, text: str, image_url: str
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/responses",
+            key,
+            ResponsesRequest(
+                model=model,
+                input=[
+                    ResponsesInputMessage(
+                        content=[
+                            ResponsesInputTextPart(text=text),
+                            ResponsesInputImagePart(image_url=image_url),
+                        ]
+                    )
+                ],
+                instructions="You are a helpful assistant",
+            ),
+        )
+
+    def responses_with_tools(
+        self, key: str, model: str, text: str, tools: list[ResponsesFunctionTool]
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/responses",
+            key,
+            ResponsesRequest(
+                model=model,
+                input=text,
+                instructions="You are a helpful assistant",
+                tools=tools,
             ),
         )
 
@@ -216,5 +320,5 @@ class EndpointsClient:
         )
 
 
-def build_endpoints_client() -> EndpointsClient:
-    return EndpointsClient(gateway=build_gateway())
+def build_endpoints_client(proxy: ProxyClient) -> EndpointsClient:
+    return EndpointsClient(proxy=proxy)

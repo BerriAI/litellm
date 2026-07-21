@@ -1292,6 +1292,7 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
+RETURN_RAW_MODEL_NAME_METADATA_KEY = "_complexity_router_return_raw_model_name"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
     "Truncation is a DB storage safeguard. "
@@ -1517,6 +1518,12 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "cost_discount_config",
     "cost_margin_config",
     "budget_exceeded_throttle_percentage",
+    # Every field editable from the Admin UI (proxy_server._GENERAL_SETTINGS_UI_LITELLM_FIELDS)
+    # must be listed here so a DB write from one worker overrides the live litellm attribute on
+    # the others when config reloads; otherwise peer workers stay on their startup value.
+    # test_general_settings_ui_fields_are_db_overridable enforces that pairing.
+    "enable_anthropic_prompt_caching",
+    "anthropic_prompt_caching_ttl",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

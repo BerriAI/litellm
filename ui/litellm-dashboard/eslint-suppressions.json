@@ -12,14 +12,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/agents/_components/AgentsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/agents/_components/add_agent_form.tsx": {
     "no-nested-ternary": {
       "count": 3
@@ -639,11 +631,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/memory/_components/MemoryView.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -694,11 +681,6 @@
       "count": 1
     },
     "react-hooks/purity": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/organizations/_components/organizations.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -878,19 +860,6 @@
       "count": 1
     },
     "react-hooks/immutability": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/policies/_components/attachment_table.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/policies/_components/attachment_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1079,7 +1048,7 @@
   },
   "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "no-nested-ternary": {
-      "count": 3
+      "count": 1
     },
     "no-restricted-imports": {
       "count": 2
@@ -1885,20 +1854,7 @@
       "count": 1
     }
   },
-  "src/components/model_add/AddCredentialModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/EditCredentialModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/model_add/credentials.tsx": {
+  "src/components/model_add/CredentialModal.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2169,11 +2125,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/team/available_teams.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
