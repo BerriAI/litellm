@@ -5,6 +5,7 @@ import os
 import random
 import time
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
@@ -1020,9 +1021,18 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         returned_tool_calls = message.get("tool_calls") or []
         returned_content = message.get("content") or ""
 
-        allowed_ids = {tc["id"] for tc in returned_tool_calls if tc.get("id")}
-        allowed_tools = [tc for tc in all_tool_calls if tc.id in allowed_ids]
-        tools_blocked = len(allowed_tools) < len(all_tool_calls)
+        # Use Counter so duplicate IDs are handled correctly: if the model
+        # emits two calls with the same ID (one allowed, one prohibited) and
+        # the service returns only the allowed one, a set-based check would
+        # miss the block. Counter preserves multiplicity.
+        returned_id_counts: Counter[str] = Counter(
+            tc["id"] for tc in returned_tool_calls if tc.get("id")
+        )
+        required_id_counts: Counter[str] = Counter(tc.id for tc in all_tool_calls if tc.id)
+        tools_blocked = not all(
+            returned_id_counts.get(tc_id, 0) >= count
+            for tc_id, count in required_id_counts.items()
+        )
 
         # The webhook either replaces content wholesale (text block) or appends
         # a tool-block explanation to the original text. ``appended`` tells the
