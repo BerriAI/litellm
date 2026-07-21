@@ -26,7 +26,6 @@ from typing import (
     AsyncGenerator,
     Callable,
     Dict,
-    FrozenSet,
     Generator,
     List,
     Literal,
@@ -517,7 +516,7 @@ class Router:
         self.model_name_to_deployment_indices: Dict[str, List[int]] = {}
         # Maps (team_id, team_public_model_name) -> list of indices in model_list
         self.team_model_to_deployment_indices: Dict[Tuple[str, str], List[int]] = {}
-        self.team_public_model_names: FrozenSet[str] = frozenset()
+        self.team_public_model_names: frozenset[str] = frozenset()
 
         # Initialize cache attributes that ``_invalidate_model_group_info_cache``
         # touches *before* the first ``set_model_list`` below (which calls
