@@ -250,7 +250,7 @@ jq -e --arg subject "system:serviceaccount:$NAMESPACE:$SERVICE_ACCOUNT" \
   <<<"$FEDERATION_JSON" >/dev/null || die "Federated credential does not match the service account."
 
 POSTGRES_ADMIN_TOKEN="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
-printf '%s\n' "SELECT * FROM pgaadauth_create_principal_with_oid(:'identity_name', :'principal_id', 'service', false);" | \
+printf '%s\n' "SELECT * FROM pgaadauth_create_principal_with_oid(:'identity_name', :'principal_id', 'service', false, false);" | \
   PGPASSWORD="$POSTGRES_ADMIN_TOKEN" docker run --rm -i -e PGPASSWORD postgres:16-alpine \
   psql "host=$POSTGRES_HOST port=5432 dbname=postgres user=$ADMIN_DISPLAY_NAME sslmode=require" \
   --set=ON_ERROR_STOP=1 --set=identity_name="$IDENTITY_NAME" \
