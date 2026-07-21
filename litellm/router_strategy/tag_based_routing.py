@@ -7,8 +7,9 @@ Use this to route requests between Teams
 """
 
 import re
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, Optional, Union
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.types.router import RouterErrors
 
@@ -129,15 +130,34 @@ def _exclude_deployments(
     return [d for d in deployments if not excluded_set.intersection(d.get("litellm_params", {}).get("tags") or [])]
 
 
+def _raise_no_deployments_for_tags(model: str, request_tags: Any) -> NoReturn:
+    """No deployment matches the request's tags: raise a typed, NON-retryable
+    client error.
+
+    ``litellm.BadRequestError`` carries ``status_code=400``, so
+    ``Router.should_retry_this_error`` re-raises it immediately
+    (``litellm._should_retry(400)`` is False) instead of burning
+    ``num_retries`` on a request that can never succeed — a plain
+    ``ValueError`` here previously cost multiple retry sleeps before
+    surfacing. The message keeps the
+    ``RouterErrors.no_deployments_with_tag_routing`` marker plus the model
+    and tags so callers (and the proxy's ProxyException mapping) can name
+    what was pinned.
+    """
+    raise litellm.BadRequestError(
+        message=(f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"),
+        model=model,
+        llm_provider="",
+    )
+
+
 def _require_candidates(
     candidates: list[Any],
     model: str,
     request_tags: Any,
 ) -> list[Any]:
     if not candidates:
-        raise ValueError(
-            f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
-        )
+        _raise_no_deployments_for_tags(model=model, request_tags=request_tags)
     return candidates
 
 
@@ -245,10 +265,7 @@ async def get_deployments_for_tag(
                     default_deployments.append(deployment)
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
-                raise ValueError(
-                    f"{RouterErrors.no_deployments_with_tag_routing.value}."
-                    f" Passed model={model} and tags={request_tags}"
-                )
+                _raise_no_deployments_for_tags(model=model, request_tags=request_tags)
 
             return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
 

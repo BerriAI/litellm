@@ -24,7 +24,9 @@ Enable via::
       pinned_provider_routes: [azure, azure_ai, bedrock, vertex_ai, gemini, fireworks, baseten]
 
 Without that setting the module registers nothing, so vanilla deployments
-are entirely unaffected.
+are entirely unaffected. ``openai`` and ``anthropic`` are refused as pinned
+prefixes (``PINNED_PREFIX_DENYLIST``): their trees are live credentialed
+pass-through surfaces that a pinned literal route would shadow.
 
 Registration order is load-bearing: the provider pass-through catch-alls
 (``/gemini/{endpoint:path}``, ``/bedrock/{endpoint:path}``,
@@ -46,6 +48,8 @@ The ``/v1/messages`` delegate is imported inside the handler:
 defeat that startup laziness.
 """
 
+import asyncio
+import importlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Optional
 
@@ -82,6 +86,19 @@ PINNED_TAG_ALIASES: dict[str, str] = {"gemini": "vertex_ai"}
 # names: "fireworks" deployments use custom_llm_provider "fireworks_ai",
 # but the public route prefix and the pin tag keep the short name.
 _EXTRA_ALLOWED_PREFIXES: frozenset[str] = frozenset({"fireworks"})
+
+# Provider prefixes that must NEVER be pinned: "/openai/..." and
+# "/anthropic/..." are live credentialed pass-through surfaces
+# (LiteLLMRoutes.mapped_pass_through_routes + the passthrough routers), so a
+# pinned literal route spliced ahead of them would shadow real client
+# traffic on those trees. Warn + skip instead of registering.
+PINNED_PREFIX_DENYLIST: frozenset[str] = frozenset({"openai", "anthropic"})
+
+# Module path of the heavy, lazily-attached messages-dialect delegate
+# (see litellm/proxy/_lazy_features.py). Imported off the event loop at
+# registration time so the FIRST pinned /v1/messages request does not stall
+# the loop for the 1-3 s the import takes.
+_ANTHROPIC_ENDPOINTS_MODULE = "litellm.proxy.anthropic_endpoints.endpoints"
 
 
 def get_pin_tag(provider: str) -> str:
@@ -202,6 +219,50 @@ def _first_matching_route_index(app: "FastAPI", paths: list[str]) -> int:
     return len(app.router.routes)
 
 
+def _schedule_messages_dialect_warmup() -> None:
+    """Kick the heavy ``anthropic_endpoints`` import onto the default executor.
+
+    Mirrors the executor pattern ``litellm/proxy/_lazy_features.py`` uses in
+    ``_force_load`` (``loop.run_in_executor(None, importlib.import_module,
+    ...)``): the import runs off the event loop, so the first pinned
+    ``/v1/messages`` request finds the module already in ``sys.modules``
+    instead of paying a multi-second, loop-blocking import inline. Outside a
+    running loop (unit tests, sync callers) this is a silent no-op — the
+    handler's inline import remains the correctness fallback either way.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.run_in_executor(None, importlib.import_module, _ANTHROPIC_ENDPOINTS_MODULE)
+
+
+def _remove_stale_pinned_routes(app: "FastAPI", desired_paths: set[str]) -> list[str]:
+    """Drop previously-registered pinned routes that are no longer configured.
+
+    Re-init hygiene for config reloads: pinned routes are identified by the
+    ``_pinned_provider_route`` marker their handlers carry (app-scoped — no
+    cross-app module state), and any marked route whose path is not in
+    ``desired_paths`` is removed. Returns the removed paths.
+    """
+    removed: list[str] = []
+    kept: list = []
+    for route in app.router.routes:
+        if (
+            isinstance(route, APIRoute)
+            and getattr(route.endpoint, "_pinned_provider_route", None) is not None
+            and route.path not in desired_paths
+        ):
+            removed.append(route.path)
+            continue
+        kept.append(route)
+    if removed:
+        app.router.routes[:] = kept
+        app.openapi_schema = None  # rebuilt on next /openapi.json request
+        verbose_proxy_logger.info("pinned_provider_routes: removed stale routes %s", removed)
+    return removed
+
+
 def initialize_pinned_provider_routes(
     app: "FastAPI",
     general_settings: Optional[dict],
@@ -209,22 +270,28 @@ def initialize_pinned_provider_routes(
     """Register the pinned provider routes named in
     ``general_settings.pinned_provider_routes``. Returns the list of route
     paths registered by THIS call (empty when disabled / already registered).
+
+    Also removes pinned routes registered by a PREVIOUS call that are no
+    longer configured (config reload hygiene) — including all of them when
+    the setting is absent or empty.
     """
-    if not general_settings:
-        return []
-    configured = general_settings.get(PINNED_PROVIDER_ROUTES_SETTING)
-    if not configured:
-        return []
-    if not isinstance(configured, list):
+    configured = (general_settings or {}).get(PINNED_PROVIDER_ROUTES_SETTING)
+    if configured is not None and not isinstance(configured, list):
         verbose_proxy_logger.warning(
             "pinned_provider_routes: expected a list of provider names, got %r — ignoring.",
             type(configured).__name__,
         )
         return []
+    if not configured:
+        # Disabled (setting absent or []): a reload that dropped the setting
+        # must also drop any routes an earlier config registered.
+        _remove_stale_pinned_routes(app, desired_paths=set())
+        return []
 
     known_prefixes = _known_provider_prefixes()
     pinned_router = APIRouter()
     registered_paths: list[str] = []
+    desired_paths: set[str] = set()
     seen: set[str] = set()
 
     for provider in configured:
@@ -234,6 +301,15 @@ def initialize_pinned_provider_routes(
         if provider in seen:
             continue
         seen.add(provider)
+        if provider in PINNED_PREFIX_DENYLIST:
+            verbose_proxy_logger.warning(
+                "pinned_provider_routes: refusing to pin %r — /%s/* is a live "
+                "credentialed pass-through surface (mapped_pass_through_routes), "
+                "and a pinned literal route would shadow it. Skipping.",
+                provider,
+                provider,
+            )
+            continue
         if provider not in known_prefixes:
             verbose_proxy_logger.warning(
                 "pinned_provider_routes: unknown provider %r — no routes registered for it.",
@@ -244,6 +320,7 @@ def initialize_pinned_provider_routes(
         pin_tag = get_pin_tag(provider)
         chat_path = f"/{provider}/v1/chat/completions"
         messages_path = f"/{provider}/v1/messages"
+        desired_paths.update((chat_path, messages_path))
 
         if not _existing_literal_post_route(app, chat_path):
             pinned_router.add_api_route(
@@ -266,6 +343,10 @@ def initialize_pinned_provider_routes(
             )
             registered_paths.append(messages_path)
 
+    # Config-reload hygiene: drop pinned routes from a previous call that are
+    # no longer configured, BEFORE splicing in the new ones.
+    _remove_stale_pinned_routes(app, desired_paths=desired_paths)
+
     if not registered_paths:
         return []
 
@@ -279,6 +360,11 @@ def initialize_pinned_provider_routes(
     del app.router.routes[start:]
     app.router.routes[insert_at:insert_at] = new_routes
     app.openapi_schema = None  # rebuilt on next /openapi.json request
+
+    if any(path.endswith("/v1/messages") for path in registered_paths):
+        # Cold-start hygiene: pre-import the heavy messages-dialect delegate
+        # off the event loop so the first pinned request doesn't stall.
+        _schedule_messages_dialect_warmup()
 
     verbose_proxy_logger.info("pinned_provider_routes: registered %s", registered_paths)
     return registered_paths

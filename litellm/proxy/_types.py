@@ -436,6 +436,11 @@ class LiteLLMRoutes(enum.Enum):
         "/mistral",
         "/milvus",
         "/watsonx",
+        # provider-pinned standard routes (litellm/proxy/pinned_provider_routes.py):
+        # fireworks/baseten have no pass-through catch-all, but their pinned
+        # literal routes must count as LLM API routes for non-admin keys.
+        "/fireworks",
+        "/baseten",
     ]
 
     #########################################################
@@ -3390,7 +3395,11 @@ class ProxyException(Exception):
         if "No healthy deployment available" in self.message or "No deployments available" in self.message:
             self.code = "429"
         elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
-            self.code = "401"
+            # Tag-based routing found no eligible deployment for the request's
+            # tags (e.g. a provider-pinned route whose pin tag matches nothing).
+            # This is a client-addressable request problem, not an auth
+            # failure — surface 400, not 401.
+            self.code = "400"
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
