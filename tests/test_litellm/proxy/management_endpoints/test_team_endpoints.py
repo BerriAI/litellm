@@ -4485,7 +4485,7 @@ async def test_new_team_standalone_validates_against_user_models(monkeypatch):
         # Verify exception details
         assert exc_info.value.code == "400"
         assert "Model not in allowed user models" in str(exc_info.value.message)
-        assert "no-default-models" in str(exc_info.value.message)
+        assert "allowed models=[]" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
@@ -9729,6 +9729,7 @@ class TestSelfServeTeamLimitInheritance:
         result = _inherit_caller_limits_for_self_served_team(
             data=NewTeamRequest(team_alias="t", models=[]),
             user_api_key_dict=caller,
+            user_obj=None,
         )
         assert result.models == ["gpt-5", "gpt-5-mini"]
 
@@ -9742,6 +9743,7 @@ class TestSelfServeTeamLimitInheritance:
         result = _inherit_caller_limits_for_self_served_team(
             data=NewTeamRequest(team_alias="t"),
             user_api_key_dict=caller,
+            user_obj=None,
         )
         assert result.tpm_limit == 1000
         assert result.rpm_limit == 10
@@ -9766,6 +9768,7 @@ class TestSelfServeTeamLimitInheritance:
         result = _inherit_caller_limits_for_self_served_team(
             data=NewTeamRequest(team_alias="t"),
             user_api_key_dict=caller,
+            user_obj=None,
         )
         assert result.tpm_limit == 100
         assert result.rpm_limit == 5
@@ -9781,6 +9784,7 @@ class TestSelfServeTeamLimitInheritance:
         result = _inherit_caller_limits_for_self_served_team(
             data=NewTeamRequest(team_alias="t"),
             user_api_key_dict=caller,
+            user_obj=None,
         )
         assert result.tpm_limit == 100
         assert result.rpm_limit == 5
@@ -9798,6 +9802,7 @@ class TestSelfServeTeamLimitInheritance:
         result = _inherit_caller_limits_for_self_served_team(
             data=NewTeamRequest(team_alias="t", tpm_limit=100000, rpm_limit=9999, max_budget=1000.0),
             user_api_key_dict=caller,
+            user_obj=None,
         )
         assert result.tpm_limit == 100
         assert result.rpm_limit == 5
@@ -9813,6 +9818,7 @@ class TestSelfServeTeamLimitInheritance:
         result = _inherit_caller_limits_for_self_served_team(
             data=NewTeamRequest(team_alias="t", models=["a"], tpm_limit=1000, rpm_limit=50, max_budget=25.0),
             user_api_key_dict=caller,
+            user_obj=None,
         )
         assert result.models == ["a"]
         assert result.tpm_limit == 1000
@@ -9836,6 +9842,7 @@ class TestSelfServeTeamLimitInheritance:
         result = _inherit_caller_limits_for_self_served_team(
             data=NewTeamRequest(team_alias="t"),
             user_api_key_dict=caller,
+            user_obj=None,
         )
         assert result.models == []
         assert result.tpm_limit is None
@@ -9854,8 +9861,161 @@ class TestSelfServeTeamLimitInheritance:
         result = _inherit_caller_limits_for_self_served_team(
             data=NewTeamRequest(team_alias="t"),
             user_api_key_dict=caller,
+            user_obj=None,
         )
         assert result.max_budget is None
+
+    def _user(self, **kwargs):
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        return LiteLLM_UserTable(user_id="u1", **kwargs)
+
+    def test_unrestricted_key_falls_back_to_user_models(self):
+        """A key with models=[] is nominally unrestricted, but on a personal
+        key the user's own model list still gates every call, so the team must
+        inherit the user's models rather than become an all-models team."""
+        from litellm.proxy._types import NewTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _inherit_caller_limits_for_self_served_team,
+        )
+
+        caller = self._caller(models=[])
+        result = _inherit_caller_limits_for_self_served_team(
+            data=NewTeamRequest(team_alias="t"),
+            user_api_key_dict=caller,
+            user_obj=self._user(models=["gpt-5"]),
+        )
+        assert result.models == ["gpt-5"]
+
+    def test_key_and_user_models_intersect(self):
+        from litellm.proxy._types import NewTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _inherit_caller_limits_for_self_served_team,
+        )
+
+        caller = self._caller(models=["gpt-5", "gpt-5-mini"])
+        result = _inherit_caller_limits_for_self_served_team(
+            data=NewTeamRequest(team_alias="t"),
+            user_api_key_dict=caller,
+            user_obj=self._user(models=["gpt-5-mini", "claude-opus-4-8"]),
+        )
+        assert result.models == ["gpt-5-mini"]
+
+    def test_all_proxy_models_user_sentinel_keeps_key_scope(self):
+        from litellm.proxy._types import NewTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _inherit_caller_limits_for_self_served_team,
+        )
+
+        caller = self._caller(models=["gpt-5"])
+        result = _inherit_caller_limits_for_self_served_team(
+            data=NewTeamRequest(team_alias="t"),
+            user_api_key_dict=caller,
+            user_obj=self._user(models=["all-proxy-models"]),
+        )
+        assert result.models == ["gpt-5"]
+
+
+class TestEffectiveCallerModelScope:
+    def test_both_layers_unrestricted_is_none(self):
+        from litellm.proxy.management_endpoints.team_endpoints import _effective_caller_model_scope
+
+        assert _effective_caller_model_scope(key_models=[], user_models=None) is None
+        assert _effective_caller_model_scope(key_models=[], user_models=[]) is None
+        assert _effective_caller_model_scope(key_models=["all-proxy-models"], user_models=["all-proxy-models"]) is None
+
+    def test_single_restricted_layer_wins(self):
+        from litellm.proxy.management_endpoints.team_endpoints import _effective_caller_model_scope
+
+        assert _effective_caller_model_scope(key_models=["m-a"], user_models=None) == ["m-a"]
+        assert _effective_caller_model_scope(key_models=[], user_models=["m-b"]) == ["m-b"]
+
+    def test_intersection_when_both_restricted(self):
+        from litellm.proxy.management_endpoints.team_endpoints import _effective_caller_model_scope
+
+        assert _effective_caller_model_scope(key_models=["m-a", "m-b"], user_models=["m-b", "m-c"]) == ["m-b"]
+
+    def test_no_default_models_grants_nothing(self):
+        from litellm.proxy.management_endpoints.team_endpoints import _effective_caller_model_scope
+
+        assert _effective_caller_model_scope(key_models=[], user_models=["no-default-models"]) == []
+
+
+class TestCheckUserTeamLimitsModelScope:
+    def _caller(self, **kwargs):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        return UserAPIKeyAuth(api_key="sk-test", user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER, **kwargs)
+
+    def _user(self, **kwargs):
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        return LiteLLM_UserTable(user_id="u1", **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_rejects_model_beyond_user_scope_despite_unrestricted_key(self):
+        """Greptile P2 regression: with a models=[] key, the user's own model
+        restrictions must still bound the team's model list."""
+        from litellm.proxy._types import NewTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import _check_user_team_limits
+
+        with pytest.raises(HTTPException) as exc:
+            await _check_user_team_limits(
+                data=NewTeamRequest(team_alias="t", models=["gpt-5"]),
+                user_api_key_dict=self._caller(models=[]),
+                user_obj=self._user(models=["gpt-5-mini"]),
+            )
+        assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_team_models_when_scope_restricted(self):
+        """An empty team model list means all proxy models, so it must be
+        rejected whenever the caller's effective scope is restricted."""
+        from litellm.proxy._types import NewTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import _check_user_team_limits
+
+        with pytest.raises(HTTPException) as exc:
+            await _check_user_team_limits(
+                data=NewTeamRequest(team_alias="t", models=[]),
+                user_api_key_dict=self._caller(models=[]),
+                user_obj=self._user(models=["gpt-5-mini"]),
+            )
+        assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_allows_models_within_scope(self):
+        from litellm.proxy._types import NewTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import _check_user_team_limits
+
+        await _check_user_team_limits(
+            data=NewTeamRequest(team_alias="t", models=["gpt-5-mini"]),
+            user_api_key_dict=self._caller(models=[]),
+            user_obj=self._user(models=["gpt-5-mini", "gpt-5"]),
+        )
+
+    @pytest.mark.asyncio
+    async def test_unrestricted_caller_allows_empty_models(self):
+        from litellm.proxy._types import NewTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import _check_user_team_limits
+
+        await _check_user_team_limits(
+            data=NewTeamRequest(team_alias="t", models=[]),
+            user_api_key_dict=self._caller(models=[]),
+            user_obj=self._user(models=[]),
+        )
+
+    @pytest.mark.asyncio
+    async def test_budget_check_uses_injected_user_obj(self):
+        from litellm.proxy._types import NewTeamRequest
+        from litellm.proxy.management_endpoints.team_endpoints import _check_user_team_limits
+
+        with pytest.raises(HTTPException) as exc:
+            await _check_user_team_limits(
+                data=NewTeamRequest(team_alias="t", models=["gpt-5"], max_budget=100.0),
+                user_api_key_dict=self._caller(models=[]),
+                user_obj=self._user(models=["gpt-5"], max_budget=10.0),
+            )
+        assert exc.value.status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -9870,8 +10030,9 @@ class TestSelfServeTeamLimitInheritance:
 async def test_new_team_self_serve_inheritance_call_site(flag_enabled, caller_role, expect_inherited):
     """LIT-3254: new_team applies caller-limit inheritance exactly when
     allow_user_team_creation is on AND the caller is an INTERNAL_USER.
-    Org admins and flag-off callers keep today's behavior (an omitted models
-    list stays empty)."""
+    For org admins and flag-off callers no inheritance runs, so their omitted
+    model list (= all proxy models) now fails validation against the caller's
+    restricted key instead of silently minting an all-models team."""
     from fastapi import Request
 
     from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
@@ -9935,21 +10096,25 @@ async def test_new_team_self_serve_inheritance_call_site(flag_enabled, caller_ro
         mock_prisma.db.litellm_teammembership = MagicMock()
         mock_prisma.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
 
-        await new_team(
-            data=team_request,
-            http_request=dummy_request,
-            user_api_key_dict=caller,
-        )
-
-        created_row = mock_prisma.db.litellm_teamtable.create.call_args.kwargs["data"]
         if expect_inherited:
+            await new_team(
+                data=team_request,
+                http_request=dummy_request,
+                user_api_key_dict=caller,
+            )
+            created_row = mock_prisma.db.litellm_teamtable.create.call_args.kwargs["data"]
             assert created_row["models"] == ["gpt-5"]
             assert created_row["tpm_limit"] == 1000
             assert created_row["rpm_limit"] == 10
         else:
-            assert created_row["models"] == []
-            assert created_row.get("tpm_limit") is None
-            assert created_row.get("rpm_limit") is None
+            with pytest.raises((HTTPException, ProxyException)) as exc:
+                await new_team(
+                    data=team_request,
+                    http_request=dummy_request,
+                    user_api_key_dict=caller,
+                )
+            assert str(getattr(exc.value, "status_code", None) or exc.value.code) == "400"
+            mock_prisma.db.litellm_teamtable.create.assert_not_called()
 
 
 @pytest.mark.asyncio

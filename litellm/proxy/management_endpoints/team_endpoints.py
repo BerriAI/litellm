@@ -786,22 +786,55 @@ async def _check_org_team_limits(
     )
 
 
-def _tightest_cap(*caps: Optional[float]) -> Optional[float]:
+def _tightest_cap(*caps: float | None) -> float | None:
     set_caps = tuple(cap for cap in caps if cap is not None)
     return min(set_caps) if set_caps else None
+
+
+def _effective_caller_model_scope(
+    key_models: list[str],
+    user_models: list[str] | None,
+) -> list[str] | None:
+    """The models a caller may grant to a new team, or None when unrestricted.
+
+    A key with `models=[]` is nominally unrestricted, but on a personal key the
+    user's own model list still gates every call at request time, so the
+    caller's true authority is the intersection of both layers. Reading the key
+    layer alone would let a restricted user mint an all-models team.
+    `all-proxy-models` (or an empty list) marks a layer unrestricted;
+    `no-default-models` marks it as granting nothing, yielding an empty scope.
+    """
+
+    def _restriction(models: list[str] | None) -> list[str] | None:
+        if not models:
+            return None
+        if SpecialModelNames.no_default_models.value in models:
+            return []
+        if SpecialModelNames.all_proxy_models.value in models:
+            return None
+        return models
+
+    key_scope = _restriction(key_models)
+    user_scope = _restriction(user_models)
+    if key_scope is None:
+        return user_scope
+    if user_scope is None:
+        return key_scope
+    return [m for m in key_scope if m in user_scope]
 
 
 def _inherit_caller_limits_for_self_served_team(
     data: NewTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
+    user_obj: LiteLLM_UserTable | None,
 ) -> NewTeamRequest:
     """Clamp a self-served team to the creating user's effective limits.
 
     A self-served team must never be wider than its creator. The creator's
     authority spans two layers: the calling key (`tpm_limit`/`rpm_limit`/
     `models`) and the underlying user (`user_tpm_limit`/`user_rpm_limit`/
-    `user_max_budget`). The primary caller is a UI SSO session whose key
-    carries no tpm/rpm and only a tiny per-session `max_budget`
+    `user_max_budget`/`models`). The primary caller is a UI SSO session whose
+    key carries no tpm/rpm and only a tiny per-session `max_budget`
     (`max_ui_session_budget`), so reading key limits alone would leave the team
     uncapped. We take the tightest of both layers per dimension and clamp the
     team down to it, filling unset fields and shrinking any value (including one
@@ -812,9 +845,13 @@ def _inherit_caller_limits_for_self_served_team(
     effective_tpm = _tightest_cap(user_api_key_dict.tpm_limit, user_api_key_dict.user_tpm_limit)
     effective_rpm = _tightest_cap(user_api_key_dict.rpm_limit, user_api_key_dict.user_rpm_limit)
     effective_budget = user_api_key_dict.user_max_budget
+    effective_models = _effective_caller_model_scope(
+        key_models=list(user_api_key_dict.models),
+        user_models=list(user_obj.models) if user_obj is not None else None,
+    )
     return data.model_copy(
         update={
-            "models": data.models if data.models else list(user_api_key_dict.models),
+            "models": data.models if data.models else list(effective_models or []),
             "tpm_limit": _tightest_cap(data.tpm_limit, effective_tpm),
             "rpm_limit": _tightest_cap(data.rpm_limit, effective_rpm),
             "max_budget": _tightest_cap(data.max_budget, effective_budget),
@@ -825,15 +862,17 @@ def _inherit_caller_limits_for_self_served_team(
 async def _check_user_team_limits(
     data: Union[NewTeamRequest, UpdateTeamRequest],
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-    user_api_key_cache: Any,
+    user_obj: LiteLLM_UserTable | None,
 ) -> None:
     """
     Enforce the caller's personal limits when CREATING a standalone team.
 
     This validates the requested team budget / models / tpm / rpm against the
     caller's own limits, so a non-admin user cannot mint a brand-new team that
-    is richer than themselves.
+    is richer than themselves. Model scope is the intersection of the key's and
+    the user's model lists (see _effective_caller_model_scope); when that scope
+    is restricted, an empty team model list is rejected too, because an empty
+    list would grant the team every proxy model.
 
     Only used by /team/new for standalone teams (organization_id is None).
     /team/update does NOT call this — an existing team's admin is already
@@ -841,14 +880,7 @@ async def _check_user_team_limits(
     wallet. Org-scoped teams use _check_org_team_limits() instead.
     """
     # Validate team budget against user's max_budget
-    if data.max_budget is not None and user_api_key_dict.user_id is not None:
-        user_obj = await get_user_object(
-            user_id=user_api_key_dict.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-        )
-
+    if data.max_budget is not None:
         if user_obj is not None and user_obj.max_budget is not None and data.max_budget > user_obj.max_budget:
             raise HTTPException(
                 status_code=400,
@@ -857,14 +889,25 @@ async def _check_user_team_limits(
                 },
             )
 
-    # Validate team models against user's allowed models
-    if data.models is not None and len(user_api_key_dict.models) > 0:
+    # Validate team models against the caller's effective model scope
+    effective_models = _effective_caller_model_scope(
+        key_models=list(user_api_key_dict.models),
+        user_models=list(user_obj.models) if user_obj is not None else None,
+    )
+    if effective_models is not None:
+        if not data.models:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"An empty team model list would grant access to all proxy models, which exceeds the caller's allowed models. Allowed models={effective_models}. User id={user_api_key_dict.user_id}"
+                },
+            )
         for m in data.models:
-            if m not in user_api_key_dict.models:
+            if m not in effective_models:
                 raise HTTPException(
                     status_code=400,
                     detail={
-                        "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
+                        "error": f"Model not in allowed user models. User allowed models={effective_models}. User id={user_api_key_dict.user_id}"
                     },
                 )
 
@@ -1165,6 +1208,15 @@ async def new_team(
             # Only validate user budget/models/tpm/rpm for standalone teams (not org-scoped)
             # For org-scoped teams, validation is done by _check_org_team_limits()
             if data.organization_id is None:
+                try:
+                    caller_user_obj = await get_user_object(
+                        user_id=user_api_key_dict.user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=False,
+                    )
+                except ValueError:
+                    caller_user_obj = None
                 if (
                     user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
                     and RouteChecks._user_team_creation_enabled()
@@ -1172,12 +1224,12 @@ async def new_team(
                     data = _inherit_caller_limits_for_self_served_team(
                         data=data,
                         user_api_key_dict=user_api_key_dict,
+                        user_obj=caller_user_obj,
                     )
                 await _check_user_team_limits(
                     data=data,
                     user_api_key_dict=user_api_key_dict,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
+                    user_obj=caller_user_obj,
                 )
 
         if _should_auto_add_team_creator(user_api_key_dict, general_settings):
