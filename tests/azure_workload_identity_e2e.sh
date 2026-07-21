@@ -250,19 +250,22 @@ jq -e --arg subject "system:serviceaccount:$NAMESPACE:$SERVICE_ACCOUNT" \
   <<<"$FEDERATION_JSON" >/dev/null || die "Federated credential does not match the service account."
 
 POSTGRES_ADMIN_TOKEN="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
-PGPASSWORD="$POSTGRES_ADMIN_TOKEN" docker run --rm -e PGPASSWORD postgres:16-alpine \
+printf '%s\n' "SELECT * FROM pgaadauth_create_principal_with_oid(:'identity_name', :'principal_id', 'service', false);" | \
+  PGPASSWORD="$POSTGRES_ADMIN_TOKEN" docker run --rm -i -e PGPASSWORD postgres:16-alpine \
   psql "host=$POSTGRES_HOST port=5432 dbname=postgres user=$ADMIN_DISPLAY_NAME sslmode=require" \
-  --set=identity_name="$IDENTITY_NAME" --set=principal_id="$IDENTITY_PRINCIPAL_ID" \
-  --command="SELECT * FROM pgaadauth_create_principal_with_oid(:'identity_name', :'principal_id', 'service', false);" \
+  --set=ON_ERROR_STOP=1 --set=identity_name="$IDENTITY_NAME" \
+  --set=principal_id="$IDENTITY_PRINCIPAL_ID" \
   >/dev/null
-PGPASSWORD="$POSTGRES_ADMIN_TOKEN" docker run --rm -e PGPASSWORD postgres:16-alpine \
+printf '%s\n' 'CREATE DATABASE litellm OWNER :"identity_name";' | \
+  PGPASSWORD="$POSTGRES_ADMIN_TOKEN" docker run --rm -i -e PGPASSWORD postgres:16-alpine \
   psql "host=$POSTGRES_HOST port=5432 dbname=postgres user=$ADMIN_DISPLAY_NAME sslmode=require" \
-  --set=identity_name="$IDENTITY_NAME" \
-  --command='CREATE DATABASE litellm OWNER :"identity_name";' >/dev/null
-PG_PRINCIPAL_COUNT="$(PGPASSWORD="$POSTGRES_ADMIN_TOKEN" docker run --rm -e PGPASSWORD postgres:16-alpine \
+  --set=ON_ERROR_STOP=1 --set=identity_name="$IDENTITY_NAME" \
+  >/dev/null
+PG_PRINCIPAL_COUNT="$(printf '%s\n' "SELECT count(*) FROM pg_roles WHERE rolname = :'identity_name';" | \
+  PGPASSWORD="$POSTGRES_ADMIN_TOKEN" docker run --rm -i -e PGPASSWORD postgres:16-alpine \
   psql "host=$POSTGRES_HOST port=5432 dbname=postgres user=$ADMIN_DISPLAY_NAME sslmode=require" \
-  --tuples-only --no-align --set=identity_name="$IDENTITY_NAME" \
-  --command="SELECT count(*) FROM pg_roles WHERE rolname = :'identity_name';")"
+  --tuples-only --no-align --set=ON_ERROR_STOP=1 --set=identity_name="$IDENTITY_NAME" \
+  )"
 unset POSTGRES_ADMIN_TOKEN PGPASSWORD
 [[ "$PG_PRINCIPAL_COUNT" == "1" ]] || die "PostgreSQL managed-identity principal was not created."
 
