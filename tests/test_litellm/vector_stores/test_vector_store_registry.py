@@ -16,9 +16,16 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import (
+    IndexCreateLiteLLMParams,
+    LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
+)
 from litellm.vector_stores.main import search
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.vector_stores.vector_store_registry import (
+    VectorStoreIndexRegistry,
+    VectorStoreRegistry,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -187,3 +194,88 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+def _managed_vector_store(vector_store_id: str) -> LiteLLM_ManagedVectorStore:
+    return LiteLLM_ManagedVectorStore(
+        vector_store_id=vector_store_id,
+        custom_llm_provider="openai",
+        vector_store_name=f"store_{vector_store_id}",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+def _managed_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStoreIndex:
+    return LiteLLM_ManagedVectorStoreIndex(
+        id=f"id_{index_name}",
+        index_name=index_name,
+        litellm_params=IndexCreateLiteLLMParams(
+            vector_store_index=index_name,
+            vector_store_name=f"store_{index_name}",
+        ),
+    )
+
+
+def test_registries_do_not_share_default_storage():
+    """
+    A registry built without arguments must own its own storage.
+
+    Regression test: both registries used a mutable `= []` default, so the list was created once at
+    def-time and shared by every no-arg instance. Mutating one registry leaked into the next one,
+    which on the proxy meant a fresh registry inherited another's vector stores (and their
+    credential references).
+    """
+    first_registry = VectorStoreRegistry()
+    first_registry.add_vector_store_to_registry(_managed_vector_store("vs_leak"))
+    assert first_registry.vector_stores[0]["vector_store_id"] == "vs_leak"
+
+    assert VectorStoreRegistry().vector_stores == []
+
+    first_index_registry = VectorStoreIndexRegistry()
+    first_index_registry.upsert_vector_store_index(_managed_vector_store_index("idx_leak"))
+    assert first_index_registry.vector_store_indexes[0].index_name == "idx_leak"
+
+    assert VectorStoreIndexRegistry().vector_store_indexes == []
+
+
+def test_registries_do_not_alias_caller_list():
+    """
+    The constructor must copy the caller's list rather than alias it.
+
+    Otherwise registry mutations write back into a list the caller still owns; the proxy passes
+    lists freshly read from the DB, and `load_vector_stores_from_config` appends into whatever it
+    was handed.
+    """
+    caller_vector_stores = [_managed_vector_store("vs_1")]
+    registry = VectorStoreRegistry(caller_vector_stores)
+    registry.add_vector_store_to_registry(_managed_vector_store("vs_2"))
+
+    assert len(registry.vector_stores) == 2
+    assert len(caller_vector_stores) == 1
+
+    caller_indexes = [_managed_vector_store_index("idx_1")]
+    index_registry = VectorStoreIndexRegistry(caller_indexes)
+    index_registry.upsert_vector_store_index(_managed_vector_store_index("idx_2"))
+
+    assert len(index_registry.vector_store_indexes) == 2
+    assert len(caller_indexes) == 1
+
+
+def test_delete_vector_store_index_removes_by_name():
+    """
+    Regression test: delete_vector_store_index compared each stored index object against the
+    index-name string, which is never equal, so the delete was an unconditional no-op.
+    """
+    registry = VectorStoreIndexRegistry(
+        [_managed_vector_store_index("idx_a"), _managed_vector_store_index("idx_b")]
+    )
+
+    registry.delete_vector_store_index("idx_a")
+
+    assert [index.index_name for index in registry.vector_store_indexes] == ["idx_b"]
+    assert registry.get_vector_store_index_by_name("idx_a") is None
+    assert registry.is_vector_store_index("idx_b") is True
+
+    registry.delete_vector_store_index("idx_does_not_exist")
+    assert [index.index_name for index in registry.vector_store_indexes] == ["idx_b"]

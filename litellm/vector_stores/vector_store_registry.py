@@ -25,8 +25,8 @@ else:
 
 
 class VectorStoreIndexRegistry:
-    def __init__(self, vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = []):
-        self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = vector_store_indexes
+    def __init__(self, vector_store_indexes: Optional[List[LiteLLM_ManagedVectorStoreIndex]] = None):
+        self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = list(vector_store_indexes or ())
 
     def get_vector_store_indexes(self) -> List[LiteLLM_ManagedVectorStoreIndex]:
         """
@@ -55,11 +55,11 @@ class VectorStoreIndexRegistry:
                 return
         self.vector_store_indexes.append(vector_store_index)
 
-    def delete_vector_store_index(self, vector_store_index: str):
+    def delete_vector_store_index(self, index_name: str):
         """
         Deletes a vector store index from the registry
         """
-        self.vector_store_indexes = [index for index in self.vector_store_indexes if index != vector_store_index]
+        self.vector_store_indexes = [index for index in self.vector_store_indexes if index.index_name != index_name]
 
     def is_vector_store_index(self, vector_store_index_name: str) -> bool:
         """
@@ -94,8 +94,8 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: List[LiteLLM_ManagedVectorStore] = []):
-        self.vector_stores: List[LiteLLM_ManagedVectorStore] = vector_stores
+    def __init__(self, vector_stores: Optional[List[LiteLLM_ManagedVectorStore]] = None):
+        self.vector_stores: List[LiteLLM_ManagedVectorStore] = list(vector_stores or ())
         self.vector_store_ids_to_vector_store_map: Dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: Dict) -> VectorStoreToolParams:
