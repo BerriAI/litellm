@@ -54,6 +54,10 @@ async def _handle_completed_batch(
         model_name: Optional model name
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
     """
+    # All-error batches can complete with output_file_id=None and only an error_file_id.
+    if batch.output_file_id is None:
+        return 0.0, Usage(), []
+
     # Get batch results
     file_content_dictionary = await _get_batch_output_file_content_as_dictionary(
         batch, custom_llm_provider, litellm_params=litellm_params
