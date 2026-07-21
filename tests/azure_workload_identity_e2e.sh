@@ -205,7 +205,7 @@ az redis create --resource-group "$RESOURCE_GROUP" --name "$REDIS_NAME" --locati
   --only-show-errors >/dev/null
 REDIS_JSON="$(az redis show -g "$RESOURCE_GROUP" -n "$REDIS_NAME" -o json)"
 REDIS_HOST="$(jq -r '.hostName' <<<"$REDIS_JSON")"
-jq -e '(.redisConfiguration["aad-enabled"] | tostring | ascii_downcase) == "true"
+jq -e '((.redisConfiguration.aadEnabled // .redisConfiguration["aad-enabled"]) | tostring | ascii_downcase) == "true"
   and .disableAccessKeyAuthentication == true
   and .enableNonSslPort == false
   and .minimumTlsVersion == "1.2"' <<<"$REDIS_JSON" >/dev/null || die "Redis security settings are incorrect."
