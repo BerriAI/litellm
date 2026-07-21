@@ -70,6 +70,17 @@ vi.mock("./AccessGroupsModal/AccessGroupCreateModal", () => ({
     ) : null,
 }));
 
+const makeGroups = (count: number): AccessGroupResponse[] =>
+  Array.from({ length: count }, (_, index) => {
+    const suffix = String(index + 1).padStart(2, "0");
+    return {
+      ...mockAccessGroups[0],
+      access_group_id: `ag-${suffix}`,
+      access_group_name: `Group ${suffix}`,
+      description: `Group ${suffix} description`,
+    };
+  });
+
 const openRowMenu = async (user: ReturnType<typeof userEvent.setup>, groupId: string) => {
   await user.click(screen.getByTestId(`access-group-actions-${groupId}`));
   return screen.findByTestId("access-group-action-delete");
@@ -218,6 +229,21 @@ describe("AccessGroupsPage", () => {
     const dialog = screen.getByRole("dialog", { name: "Delete Access Group" });
     await user.click(within(dialog).getByRole("button", { name: /delete/i }));
     expect(mockMutate).toHaveBeenCalledWith("ag-1", expect.any(Object));
+  });
+
+  it("still shows matches when searching from a later page", async () => {
+    const user = userEvent.setup();
+    mockUseAccessGroups.mockReturnValue({ data: makeGroups(25), isLoading: false });
+    renderWithProviders(<AccessGroupsPage />);
+
+    await user.click(screen.getByTestId("pagination-next"));
+    expect(screen.getByText("ag-11")).toBeInTheDocument();
+    expect(screen.queryByText("ag-01")).not.toBeInTheDocument();
+
+    // The only match lives on page 1, so the page index must reset or the table reads as empty.
+    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "ag-01");
+    expect(await screen.findByText("ag-01")).toBeInTheDocument();
+    expect(screen.queryByText("No matching access groups")).not.toBeInTheDocument();
   });
 
   it("hides the Create button and row actions for a non-admin", () => {
