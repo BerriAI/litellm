@@ -24,6 +24,10 @@ for command_name in az git kubectl docker curl jq openssl rg; do
     exit 2
   }
 done
+docker buildx version >/dev/null 2>&1 || {
+  echo "Missing required Docker Buildx plugin." >&2
+  exit 2
+}
 if [[ -n "$PR_NUMBER" || "$POST_PR_COMMENT" == "1" ]]; then
   command -v gh >/dev/null 2>&1 || {
     echo "Missing required command for PR verification/publication: gh" >&2
@@ -299,9 +303,10 @@ jq -e --arg object_id "$IDENTITY_PRINCIPAL_ID" \
   <<<"$REDIS_POLICY_JSON" >/dev/null || die "Redis access policy does not match the managed identity."
 
 IMAGE_TAG="wi-e2e-${GIT_SHA}"
-az acr build --registry "$ACR_NAME" --image "litellm:$IMAGE_TAG" \
-  --file gateway/Dockerfile . --only-show-errors
 ACR_LOGIN_SERVER="$(az acr show -g "$RESOURCE_GROUP" -n "$ACR_NAME" --query loginServer -o tsv)"
+az acr login --name "$ACR_NAME" --only-show-errors >/dev/null
+docker buildx build --platform linux/amd64 --file gateway/Dockerfile \
+  --tag "${ACR_LOGIN_SERVER}/litellm:$IMAGE_TAG" --push .
 IMAGE_DIGEST="$(az acr repository show -n "$ACR_NAME" --image "litellm:$IMAGE_TAG" --query digest -o tsv)"
 [[ "$IMAGE_DIGEST" == sha256:* ]] || die "ACR did not return an immutable digest."
 IMAGE_REFERENCE="${ACR_LOGIN_SERVER}/litellm@${IMAGE_DIGEST}"
