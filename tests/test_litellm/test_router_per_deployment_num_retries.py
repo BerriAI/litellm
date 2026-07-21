@@ -11,6 +11,7 @@ from unittest.mock import patch
 import litellm
 from litellm import Router
 from litellm.types.router import RetryPolicy
+from litellm.integrations.custom_logger import CustomLogger
 
 
 class TestPerDeploymentNumRetries:
@@ -464,3 +465,113 @@ class TestNoProviderRetryAmplification:
                     num_retries=num_retries,
                 )
         assert counter["n"] > num_retries + 1
+
+
+class _AttemptCounter(CustomLogger):
+    """Counts upstream call attempts via the pre-call hook (one per attempt)."""
+
+    def __init__(self):
+        self.attempts = 0
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        self.attempts += 1
+
+
+class TestRequestNumRetriesBeatsGlobal:
+    """
+    A per-request num_retries (request body or the x-litellm-num-retries header, both of
+    which arrive as the num_retries kwarg) must take precedence over the global
+    litellm.num_retries (litellm_settings.num_retries on the proxy) during retry handling.
+
+    The regression: the @client wrapper stamped the global litellm.num_retries onto the
+    raised exception, and async_function_with_retries then adopted that stamped value,
+    overwriting the request-level num_retries it had already resolved. This exercises the
+    real retry loop end to end (the failing call flows through the wrapped litellm.acompletion),
+    which the kwargs-merge-only test above does not.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_litellm_globals(self):
+        prev_num_retries = litellm.num_retries
+        prev_callbacks = litellm.callbacks
+        yield
+        litellm.num_retries = prev_num_retries
+        litellm.callbacks = prev_callbacks
+
+    @staticmethod
+    def _router(global_num_retries):
+        return Router(
+            model_list=[
+                {
+                    "model_name": "mock",
+                    "litellm_params": {
+                        "model": "openai/mock",
+                        "api_key": "sk-fake",
+                        "mock_response": "litellm.InternalServerError",
+                    },
+                }
+            ],
+            num_retries=global_num_retries,
+        )
+
+    async def _count_attempts(self, *, global_num_retries, request_num_retries):
+        counter = _AttemptCounter()
+        litellm.callbacks = [counter]
+        litellm.num_retries = global_num_retries
+        router = self._router(global_num_retries)
+        kwargs = {"model": "mock", "messages": [{"role": "user", "content": "hi"}]}
+        if request_num_retries is not None:
+            kwargs["num_retries"] = request_num_retries
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.InternalServerError):
+                await router.acompletion(**kwargs)
+        return counter.attempts
+
+    @pytest.mark.asyncio
+    async def test_request_num_retries_overrides_global(self):
+        """global=3 + request=1 -> 2 attempts (1 initial + 1 retry), not 4 (1 + global 3)."""
+        attempts = await self._count_attempts(global_num_retries=3, request_num_retries=1)
+        assert attempts == 2
+
+    @pytest.mark.asyncio
+    async def test_request_num_retries_zero_disables_retries_despite_global(self):
+        """global=3 + request=0 -> a single attempt (retries disabled by the request)."""
+        attempts = await self._count_attempts(global_num_retries=3, request_num_retries=0)
+        assert attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_global_num_retries_applies_when_request_omits_it(self):
+        """No request num_retries -> the global still applies: 1 initial + 3 retries = 4."""
+        attempts = await self._count_attempts(global_num_retries=3, request_num_retries=None)
+        assert attempts == 4
+
+    @pytest.mark.asyncio
+    async def test_deployment_num_retries_reaches_wrapper_when_no_request_value(self):
+        """
+        With no request value and the router default at 0, a deployment's
+        litellm_params.num_retries reaches the wrapped call, is carried on the raised
+        exception, and is applied: deployment 2 -> 1 initial + 2 retries = 3 (not 1).
+        """
+        counter = _AttemptCounter()
+        litellm.callbacks = [counter]
+        litellm.num_retries = None
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "mock",
+                    "litellm_params": {
+                        "model": "openai/mock",
+                        "api_key": "sk-fake",
+                        "mock_response": "litellm.InternalServerError",
+                        "num_retries": 2,
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.InternalServerError):
+                await router.acompletion(
+                    model="mock", messages=[{"role": "user", "content": "hi"}]
+                )
+        assert counter.attempts == 3
