@@ -752,6 +752,97 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
+    """
+    The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
+    deployments in sync must be scheduled at the configured
+    proxy_config_reload_interval_seconds, not a hardcoded value.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    mock_scheduler = MagicMock()
+
+    configured_interval = 47
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config_reload_interval_seconds",
+            configured_interval,
+        ),
+        patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=mock_scheduler),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    scheduled_seconds = {
+        job_call.kwargs["id"]: job_call.kwargs.get("seconds")
+        for job_call in mock_scheduler.add_job.call_args_list
+        if "id" in job_call.kwargs
+    }
+    assert scheduled_seconds["add_deployment_job"] == configured_interval
+    assert scheduled_seconds["get_credentials_job"] == configured_interval
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_interval(monkeypatch):
+    """
+    A non-positive proxy_config_reload_interval_seconds (misconfig via env/config/DB) would
+    make APScheduler reject the job and crash startup, so the scheduler must fall back to the
+    30s default instead of forwarding the bad value.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    mock_scheduler = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch("litellm.proxy.proxy_server.proxy_config_reload_interval_seconds", 0),
+        patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=mock_scheduler),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    scheduled_seconds = {
+        job_call.kwargs["id"]: job_call.kwargs.get("seconds")
+        for job_call in mock_scheduler.add_job.call_args_list
+        if "id" in job_call.kwargs
+    }
+    assert scheduled_seconds["add_deployment_job"] == 30
+    assert scheduled_seconds["get_credentials_job"] == 30
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_false(monkeypatch):
     """
     Regression (LIT-4128): MCP servers created via the UI are persisted to the DB

@@ -1469,6 +1469,7 @@ _batch_polling_env = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
 PROXY_BATCH_POLLING_ENABLED = _batch_polling_env == "true"
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605))
 PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
+PROXY_CONFIG_RELOAD_INTERVAL_SECONDS = get_env_int("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS", 30)
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions

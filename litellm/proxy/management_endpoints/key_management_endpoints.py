@@ -42,6 +42,9 @@ from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_user_credentials_master_key,
     rotate_mcp_user_env_vars_master_key,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    rotate_sso_identity_assertions_master_key,
+)
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (
@@ -4241,6 +4244,15 @@ async def _rotate_master_key(
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user env vars: %s", str(e))
+
+    # 4d. process SSO identity assertion table (EMA subject tokens)
+    try:
+        await rotate_sso_identity_assertions_master_key(
+            prisma_client=prisma_client,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
 
     # 5. process credentials table
     try:
