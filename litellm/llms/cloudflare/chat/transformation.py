@@ -91,20 +91,20 @@ class CloudflareChatConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> list[AllMessageValues]: ...
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[list[AllMessageValues], Coroutine[Any, Any, list[AllMessageValues]]]:
         """
         Cloudflare Workers AI requires message content to be a string, so OpenAI
         content-part arrays have to be flattened before the request is sent
