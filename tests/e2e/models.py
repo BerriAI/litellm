@@ -115,6 +115,18 @@ class KeyInfoResponse(BaseModel):
 # ---------- customers ----------
 
 
+class CustomerNewBody(BaseModel):
+    user_id: str
+
+
+class CustomerResponse(BaseModel):
+    user_id: str | None = None
+
+
+class CustomerInfoParams(BaseModel):
+    end_user_id: str
+
+
 class CustomerDeleteBody(BaseModel):
     user_ids: list[str]
 
