@@ -36,6 +36,7 @@ from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
     MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
     plan_file_scans,
 )
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -60,15 +61,13 @@ class ModelArmorAPIError(Exception):
         self.detail = detail
 
 
-_SCANNED_CONTENT_KEYS = frozenset({"text", "sanitizedText", "findings"})
-
-_REDACT_MAX_DEPTH = 20
+_SCANNED_CONTENT_KEYS = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
 
 RedactablePayload = Union[dict, list, str, int, float, bool, None]
 
 
 def _redact_scanned_content(payload: RedactablePayload, depth: int = 0) -> RedactablePayload:
-    if depth >= _REDACT_MAX_DEPTH:
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         return "[REDACTED]"
     if isinstance(payload, dict):
         return {

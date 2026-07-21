@@ -909,14 +909,14 @@ def test_model_armor_hot_reload_null_stays_sanitized():
 def test_model_armor_redactor_depth_cap_fails_closed():
     """Past the recursion cap the redactor must return the redaction sentinel,
     never raw content, and must not raise RecursionError."""
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
     from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
-        _REDACT_MAX_DEPTH,
         _redact_scanned_content,
     )
 
     marker = "SYNTHETIC_DEEP_MARKER"
     payload: dict = {"safe_key": marker, "items": [{"safe_key": marker}]}
-    for _ in range(_REDACT_MAX_DEPTH + 5):
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 5):
         payload = {"nested": payload}
 
     redacted = _redact_scanned_content(payload)
@@ -924,6 +924,21 @@ def test_model_armor_redactor_depth_cap_fails_closed():
 
     shallow = _redact_scanned_content({"filterResults": [{"text": marker, "matchState": "MATCH_FOUND"}]})
     assert shallow == {"filterResults": [{"text": "[REDACTED]", "matchState": "MATCH_FOUND"}]}
+
+    uri_payload = _redact_scanned_content(
+        {
+            "maliciousUriFilterResult": {
+                "matchState": "MATCH_FOUND",
+                "maliciousUriMatchedItems": [{"uri": f"https://evil.example/{marker}"}],
+            }
+        }
+    )
+    assert uri_payload == {
+        "maliciousUriFilterResult": {
+            "matchState": "MATCH_FOUND",
+            "maliciousUriMatchedItems": "[REDACTED]",
+        }
+    }
 
 
 @pytest.mark.asyncio
