@@ -1070,6 +1070,32 @@ async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, monkeypatch):
+    """general_settings.proxy_config_reload_interval_seconds must reach the proxy_server
+    module global that schedules the DB config-reload jobs, so operators can tune multi-pod
+    convergence from config.yaml."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings:\n"
+        "  proxy_config_reload_interval_seconds: 47\n"
+        "litellm_settings: {}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    original = proxy_server.proxy_config_reload_interval_seconds
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        assert proxy_server.proxy_config_reload_interval_seconds == 47
+    finally:
+        proxy_server.proxy_config_reload_interval_seconds = original
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_missing_file_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
