@@ -174,6 +174,13 @@ it("should render VirtualKeysTable component", () => {
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
+it("shows the Budget Reset column by default", async () => {
+  renderWithProviders(<VirtualKeysTable />);
+  await waitFor(() => {
+    expect(screen.getByText("Budget Reset")).toBeInTheDocument();
+  });
+});
+
 it("left-anchors the create-key CTA below the title, between the header and the table toolbar", () => {
   renderWithProviders(<VirtualKeysTable headerActions={<button>Create New Key</button>} />);
 

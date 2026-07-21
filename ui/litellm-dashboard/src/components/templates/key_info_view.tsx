@@ -534,6 +534,9 @@ export default function KeyInfoView({
                 <div className="mt-2">
                   <Title>${formatNumberWithCommas(currentKeyData.spend, 4)}</Title>
                   <Text>of {budgetDisplay}</Text>
+                  {currentKeyData.budget_reset_at && (
+                    <Text>Resets {formatTimestamp(currentKeyData.budget_reset_at)}</Text>
+                  )}
                 </div>
               </Card>
 
@@ -748,6 +751,15 @@ export default function KeyInfoView({
                       {currentKeyData.max_budget !== null
                         ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
                         : "Unlimited"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Budget Reset</Text>
+                    <Text>
+                      {currentKeyData.budget_reset_at
+                        ? `${currentKeyData.budget_duration ? `Every ${currentKeyData.budget_duration}, next ` : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
+                        : "Never"}
                     </Text>
                   </div>
 

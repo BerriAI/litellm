@@ -363,6 +363,5 @@ export const KEY_TABLE_HIDDEN_COLUMNS: Record<string, boolean> = {
   created_by: false,
   updated_at: false,
   expires: false,
-  budget_reset_at: false,
   rate_limits: false,
 };
