@@ -500,8 +500,63 @@ async def test_update_customer_updates_existing_budget_with_duration_and_reset_a
     await update_end_user(update_request, mock_user_api_key_dict)
 
     mock_prisma_client.db.litellm_budgettable.update.assert_called_once()
-    update_data = mock_prisma_client.db.litellm_budgettable.update.call_args[1]["data"]
+    update_call = mock_prisma_client.db.litellm_budgettable.update.call_args
+    assert update_call[1]["where"] == {"budget_id": "existing-budget-123"}
+    update_data = update_call[1]["data"]
     assert update_data["budget_duration"] == "1mo"
+    assert update_data["budget_reset_at"] is not None
+    assert not mock_prisma_client.db.litellm_budgettable.create.called
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+@patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+async def test_update_customer_updates_existing_budget_max_budget_and_duration(
+    mock_prisma_client, mock_user_api_key_dict, mock_existing_customer
+):
+    """
+    Regression for #33941 / Greptile P2: updating an existing linked budget via
+    /customer/update must persist both max_budget and budget_duration together.
+    """
+    mock_existing_customer.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "litellm_budget_table": {
+            "budget_id": "existing-budget-123",
+            "max_budget": 25.0,
+            "budget_duration": "7d",
+        },
+    }
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=mock_existing_customer
+    )
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock(
+        return_value=MagicMock(budget_id="existing-budget-123")
+    )
+
+    mock_updated_user = MagicMock()
+    mock_updated_user.model_dump.return_value = {
+        "user_id": "test-bug-repro@example.com",
+        "blocked": False,
+        "budget_id": "existing-budget-123",
+    }
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=mock_updated_user
+    )
+
+    update_request = UpdateCustomerRequest(
+        user_id="test-bug-repro@example.com",
+        max_budget=100.0,
+        budget_duration="30d",
+    )
+
+    await update_end_user(update_request, mock_user_api_key_dict)
+
+    mock_prisma_client.db.litellm_budgettable.update.assert_called_once()
+    update_data = mock_prisma_client.db.litellm_budgettable.update.call_args[1]["data"]
+    assert update_data["max_budget"] == 100.0
+    assert update_data["budget_duration"] == "30d"
     assert update_data["budget_reset_at"] is not None
     assert not mock_prisma_client.db.litellm_budgettable.create.called
 
