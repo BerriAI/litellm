@@ -10,7 +10,8 @@ import {
   CredentialItem,
 } from "@/components/networking";
 import { VectorStore } from "@/components/vector_store_management/types";
-import { Providers, provider_map, getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { Providers, provider_map } from "@/components/provider_info_helpers";
+import { getVectorStoreProviderLogoAndName } from "@/components/vector_store_providers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import VectorStoreTester from "./VectorStoreTester";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -276,11 +277,11 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       <div className="flex items-center space-x-2 mt-1">
                         {(() => {
                           const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
-                          const { displayName } = getProviderLogoAndName(provider);
+                          const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
 
                           return (
                             <>
-                              <Logo provider={provider} label={displayName} className="w-5 h-5" />
+                              <Logo src={logo} label={displayName} className="w-5 h-5" />
                               <Badge color="blue">{displayName}</Badge>
                             </>
                           );

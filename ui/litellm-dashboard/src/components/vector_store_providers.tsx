@@ -1,4 +1,4 @@
-import { Providers, providerLogoMap } from "@/components/provider_info_helpers";
+import { getProviderLogoAndName, Providers, providerLogoMap } from "@/components/provider_info_helpers";
 import milvusLogo from "../../public/assets/logos/milvus.svg";
 import postgresqlLogo from "../../public/assets/logos/postgresql.svg";
 import s3VectorLogo from "../../public/assets/logos/s3_vector.png";
@@ -199,6 +199,17 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       type: "select",
     },
   ],
+};
+
+export const getVectorStoreProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
+  const enumKey = Object.keys(vectorStoreProviderMap).find(
+    (key) => vectorStoreProviderMap[key].toLowerCase() === providerValue.toLowerCase(),
+  );
+  if (!enumKey) {
+    return getProviderLogoAndName(providerValue);
+  }
+  const displayName = VectorStoreProviders[enumKey as keyof typeof VectorStoreProviders];
+  return { logo: vectorStoreProviderLogoMap[displayName], displayName };
 };
 
 export const getProviderSpecificFields = (providerValue: string): VectorStoreFieldConfig[] => {
