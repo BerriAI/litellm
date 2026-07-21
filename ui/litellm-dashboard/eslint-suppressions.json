@@ -697,11 +697,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/organizations/_components/organizations.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/playground/components/chat_ui/AdditionalModelSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
