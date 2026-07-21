@@ -303,6 +303,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
+from litellm.proxy.config_resolvers import resolve_fields
+from litellm.proxy.config_resolvers.alerting import (
+    EMAIL_DESCRIPTORS,
+    SLACK_DESCRIPTORS,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -1158,9 +1163,9 @@ _OPENAPI_HTTP_METHODS = {
 # Credentials surfaced by `/get/config/callbacks` in the alerting block: the
 # full Slack incoming-webhook URL is itself a credential, and the SMTP
 # password is a service password. Masked on read so plaintext never reaches
-# the UI. Kept here at module scope to match the analogous
-# `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
-# and cache endpoint files.
+# the UI. Kept here at module scope to match the analogous descriptor
+# `is_secret` flags in litellm.proxy.config_resolvers and the
+# `_CACHE_SENSITIVE_FIELDS` constant in the cache endpoint file.
 _ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
 
 
@@ -15456,14 +15461,10 @@ async def get_config(
         _alerting = _general_settings.get("alerting", [])
         alerting_data = []
         if "slack" in _alerting:
-            _slack_vars = [
-                "SLACK_WEBHOOK_URL",
-            ]
-            _slack_env_vars = {
-                _var: (value if (value := environment_variables.get(_var)) is not None else os.getenv(_var))
-                for _var in _slack_vars
-            }
-            _slack_env_vars = _apply_alerting_env_role_gate(_slack_env_vars, is_full_admin)
+            _slack_values, _ = resolve_fields(
+                SLACK_DESCRIPTORS, environment_variables, os.environ, empty_db_is_set=True
+            )
+            _slack_env_vars = _apply_alerting_env_role_gate(_slack_values, is_full_admin)
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
@@ -15479,19 +15480,8 @@ async def get_config(
                 }
             )
         # pass email alerting vars
-        _email_vars = [
-            "SMTP_HOST",
-            "SMTP_PORT",
-            "SMTP_USERNAME",
-            "SMTP_PASSWORD",
-            "SMTP_SENDER_EMAIL",
-            "TEST_EMAIL_ADDRESS",
-            "EMAIL_LOGO_URL",
-            "EMAIL_SUPPORT_CONTACT",
-        ]
-        _email_env_vars = _apply_alerting_env_role_gate(
-            {_var: environment_variables.get(_var) for _var in _email_vars}, is_full_admin
-        )
+        _email_values, _ = resolve_fields(EMAIL_DESCRIPTORS, environment_variables, os.environ, empty_db_is_set=True)
+        _email_env_vars = _apply_alerting_env_role_gate(_email_values, is_full_admin)
 
         alerting_data.append(
             {

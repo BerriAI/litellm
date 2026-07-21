@@ -1174,6 +1174,113 @@ def test_get_config_returns_email_settings(monkeypatch):
     assert "*" in variables["SMTP_PASSWORD"]
 
 
+def _get_email_alert_variables(monkeypatch, config_data):
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    email_alert = next((a for a in response.json()["alerts"] if a["name"] == "email"), None)
+    assert email_alert is not None
+    return email_alert["variables"]
+
+
+def test_get_config_returns_email_settings_set_only_in_process_env(monkeypatch):
+    """
+    Regression for LIT-4165.
+
+    SMTP supplied purely as process env vars (helm/terraform, no UI writes) is
+    live at runtime because litellm/proxy/utils.py::send_email resolves every
+    field from os.getenv. The /get/config/callbacks email block only read the
+    config/DB environment_variables overlay though, so those deployments saw an
+    empty Email Server Settings page and could not tell SMTP was configured.
+    The slack block one branch above already fell back to os.getenv.
+    """
+    smtp_password = "env-only-app-password"
+    monkeypatch.setenv("SMTP_HOST", "smtp.env-host.com")
+    monkeypatch.setenv("SMTP_PORT", "2525")
+    monkeypatch.setenv("SMTP_TLS", "False")
+    monkeypatch.setenv("SMTP_USERNAME", "env-user")
+    monkeypatch.setenv("SMTP_PASSWORD", smtp_password)
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@env-host.com")
+    monkeypatch.setenv("TEST_EMAIL_ADDRESS", "admin@env-host.com")
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {},
+        },
+    )
+
+    # Every one of these was None before the fix, despite SMTP working.
+    assert variables["SMTP_HOST"] == "smtp.env-host.com"
+    assert variables["SMTP_PORT"] == "2525"
+    assert variables["SMTP_TLS"] == "False"
+    assert variables["SMTP_USERNAME"] == "env-user"
+    assert variables["SMTP_SENDER_EMAIL"] == "alerts@env-host.com"
+    assert variables["TEST_EMAIL_ADDRESS"] == "admin@env-host.com"
+
+    # An env-sourced secret is masked exactly like a stored one.
+    assert variables["SMTP_PASSWORD"] not in (None, smtp_password)
+    assert "*" in variables["SMTP_PASSWORD"]
+
+
+def test_get_config_email_settings_prefer_stored_over_process_env(monkeypatch):
+    """
+    Stored environment_variables win over the process environment, matching the
+    load order in ProxyConfig.get_config, which pushes stored values into
+    os.environ. Only a field with no stored entry falls back to os.getenv.
+    """
+    monkeypatch.setenv("SMTP_HOST", "smtp.env-host.com")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@env-host.com")
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {"SMTP_HOST": "smtp.stored-host.com"},
+        },
+    )
+
+    assert variables["SMTP_HOST"] == "smtp.stored-host.com"
+    assert variables["SMTP_SENDER_EMAIL"] == "alerts@env-host.com"
+
+
+def test_get_config_email_settings_absent_everywhere_stay_none(monkeypatch):
+    """A field set in neither source is reported unset rather than invented."""
+    for var in ("SMTP_HOST", "SMTP_PORT", "SMTP_TLS", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_SENDER_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
+
+    variables = _get_email_alert_variables(
+        monkeypatch,
+        {
+            "litellm_settings": {},
+            "general_settings": {"alerting": ["email"]},
+            "environment_variables": {},
+        },
+    )
+
+    assert variables["SMTP_HOST"] is None
+    assert variables["SMTP_PASSWORD"] is None
+
+
 def test_get_config_returns_slack_webhook(monkeypatch):
     """
     Same double-decryption regression as the email block (issue #19221): the
