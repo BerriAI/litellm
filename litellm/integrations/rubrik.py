@@ -334,6 +334,15 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if the prompt is blocked."""
         messages = inputs.get("structured_messages")
         if not messages:
+            # For non-chat request types (e.g. /v1/completions), litellm
+            # supplies the prompt as ``texts`` with no structured_messages.
+            # Synthesise a user-message so the webhook can evaluate the prompt.
+            texts = inputs.get("texts")
+            if texts:
+                joined = "\n".join(t for t in texts if t)
+                if joined:
+                    messages = [{"role": "user", "content": joined}]
+        if not messages:
             return inputs
 
         payload = self._build_prompt_moderation_payload(inputs, request_data)
@@ -713,6 +722,14 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         exception we no-op; LiteLLM's standard failure plumbing handles those.
         """
         if not isinstance(original_exception, ModifyResponseException):
+            return
+
+        # Guard by guardrail_name so that when multiple Rubrik instances are
+        # registered, only the instance that raised the block handles it.
+        # The failure hook is called for every registered callback; without
+        # this check the first instance pops the stash and the originating
+        # instance finds None and silently skips logging.
+        if getattr(original_exception, "guardrail_name", None) != self.guardrail_name:
             return
 
         logging_obj = request_data.pop("_rubrik_logging_obj", None)
