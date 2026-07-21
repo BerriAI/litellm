@@ -554,6 +554,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # real parent span.
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
+        # Re-assert the authenticated identity after the client merge so a request body
+        # cannot spoof the owner used for spend attribution (e.g. Vertex batch cost, which
+        # snapshots these from the request metadata at create time).
+        _metadata["user_api_key_user_id"] = user_api_key_dict.user_id
+        _metadata["user_api_key_team_id"] = user_api_key_dict.team_id
+        _metadata["user_api_key_team_alias"] = user_api_key_dict.team_alias
+        _metadata["user_api_key_alias"] = user_api_key_dict.key_alias
+        _metadata["user_api_key_user_email"] = user_api_key_dict.user_email
 
         kwargs = {
             "litellm_params": {
