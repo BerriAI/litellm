@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
 import pytest
 from requests import RequestException
 
+from e2e_config import WEEKLY_ANOMALY_OPT_IN_ENV
 from e2e_http import NoBody, Success
 from load_client import LoadClient, build_client
 from load_constants import LOAD_MODEL
@@ -16,6 +18,22 @@ LOAD_MODEL_PARAMS = LiteLLMParamsBody(
     model="openai/load-mock",
     mock_response="This is a mock response for the throughput load test.",
 )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    if os.environ.get(WEEKLY_ANOMALY_OPT_IN_ENV):
+        return
+    deselected = [
+        item for item in items if item.get_closest_marker("weekly") is not None
+    ]
+    if not deselected:
+        return
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = [
+        item for item in items if item.get_closest_marker("weekly") is None
+    ]
 
 
 @pytest.fixture(scope="session")
