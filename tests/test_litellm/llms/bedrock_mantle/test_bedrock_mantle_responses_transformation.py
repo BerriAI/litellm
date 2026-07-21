@@ -373,6 +373,127 @@ class TestBedrockMantleResponsesTools:
         assert "web_search" in str(mock_warning.call_args)
 
 
+def _codex_exec_tool():
+    return {
+        "type": "custom",
+        "name": "exec",
+        "description": "Run JavaScript code to orchestrate/compose tool calls",
+        "format": {
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "start: SOURCE\nSOURCE: /[\\s\\S]+/",
+        },
+    }
+
+
+def _codex_wait_tool():
+    return {
+        "type": "function",
+        "name": "wait",
+        "strict": False,
+        "parameters": {
+            "type": "object",
+            "properties": {"cell_id": {"type": "string"}},
+            "required": ["cell_id"],
+            "additionalProperties": False,
+        },
+    }
+
+
+class TestBedrockMantleServiceTier:
+    @pytest.mark.parametrize("tier", ["priority", "flex"])
+    def test_unsupported_service_tier_dropped_when_drop_params_true(self, tier):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"service_tier": tier},
+            model="openai.gpt-5.5",
+            drop_params=True,
+        )
+        assert "service_tier" not in params
+
+    @pytest.mark.parametrize("tier", ["priority", "flex"])
+    def test_unsupported_service_tier_raises_when_drop_params_false(self, tier):
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            cfg.map_openai_params(
+                response_api_optional_params={"service_tier": tier},
+                model="openai.gpt-5.5",
+                drop_params=False,
+            )
+        assert tier in str(excinfo.value)
+        assert "drop_params" in str(excinfo.value)
+
+    @pytest.mark.parametrize("drop_params", [True, False])
+    @pytest.mark.parametrize("tier", ["auto", "default"])
+    def test_supported_service_tier_kept(self, tier, drop_params):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"service_tier": tier},
+            model="openai.gpt-5.5",
+            drop_params=drop_params,
+        )
+        assert params["service_tier"] == tier
+
+    def test_absent_service_tier_untouched(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"stream": True},
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+        assert "service_tier" not in params
+        assert params["stream"] is True
+
+    def test_drop_logged_at_warning_level(self):
+        from unittest.mock import patch
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
+        ) as mock_warning:
+            cfg.map_openai_params(
+                response_api_optional_params={"service_tier": "priority"},
+                model="openai.gpt-5.5",
+                drop_params=True,
+            )
+        assert mock_warning.call_count == 1
+        assert "priority" in str(mock_warning.call_args)
+
+
+class TestBedrockMantleCodexRequestEndToEnd:
+    def test_codex_priority_tier_request_becomes_mantle_acceptable(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={
+                "service_tier": "priority",
+                "stream": True,
+                "store": False,
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+                "tools": [_codex_exec_tool(), _codex_wait_tool()],
+            },
+            model="openai.gpt-5.5",
+            drop_params=True,
+        )
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-5.5",
+            input=[
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}],
+                }
+            ],
+            response_api_optional_request_params=params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert "service_tier" not in body
+        assert [tool["name"] for tool in body["tools"]] == ["exec", "wait"]
+        assert body["stream"] is True
+        assert body["tool_choice"] == "auto"
+
+
 class TestBedrockMantleCodexAdditionalTools:
     """Codex CLI's "responses lite" wire mode ships tool definitions inside
     `input` as {"type": "additional_tools", "role": "developer", "tools": [...]}

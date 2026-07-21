@@ -65,6 +65,7 @@ class ResponsesAPIRequestUtils:
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: Optional[List[str]] = None,
+        drop_params: bool | None = None,
     ) -> Dict:
         """
         Get optional parameters for the responses API.
@@ -83,12 +84,14 @@ class ResponsesAPIRequestUtils:
         # Get supported parameters for the model
         supported_params = responses_api_provider_config.get_supported_openai_params(model)
 
+        should_drop_params = litellm.drop_params or drop_params is True
+
         non_default_params = cast(Dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
             supported_params=supported_params + (allowed_openai_params or []),
             non_default_params=non_default_params,
-            drop_params=litellm.drop_params,
+            drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
             model=model,
         )
@@ -97,7 +100,7 @@ class ResponsesAPIRequestUtils:
         mapped_params = responses_api_provider_config.map_openai_params(
             response_api_optional_params=response_api_optional_params,
             model=model,
-            drop_params=litellm.drop_params,
+            drop_params=should_drop_params,
         )
 
         # add any allowed_openai_params to the mapped_params
