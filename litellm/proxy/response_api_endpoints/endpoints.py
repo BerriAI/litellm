@@ -33,14 +33,21 @@ def _nest_flat_chat_tool(tool: object) -> object:
         convert_custom_tool_format_to_chat_shape,
     )
 
-    if not isinstance(tool, dict) or "name" not in tool:
+    if not isinstance(tool, dict):
         return tool
-    if tool.get("type") == "custom" and "custom" not in tool:
-        payload = {k: tool[k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool}
+    if tool.get("type") == "custom":
+        if isinstance(tool.get("custom"), dict):
+            envelope = tool
+            payload = tool["custom"]
+        elif "name" in tool:
+            envelope = {"type": "custom"}
+            payload = {k: tool[k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool}
+        else:
+            return tool
         if isinstance(payload.get("format"), dict):
             payload = {**payload, "format": convert_custom_tool_format_to_chat_shape(payload["format"])}
-        return {"type": "custom", "custom": payload}
-    if tool.get("type") == "function" and "function" not in tool:
+        return {**envelope, "custom": payload}
+    if tool.get("type") == "function" and "function" not in tool and "name" in tool:
         return {"type": "function", "function": {k: tool[k] for k in _FLAT_FUNCTION_TOOL_KEYS if k in tool}}
     return tool
 
@@ -364,9 +371,13 @@ async def cursor_chat_completions(
     custom tools) to the chat/completions path while expecting chat completions responses;
     those are routed through the Responses API pipeline and converted back. Genuine chat
     completions bodies (`messages` present) are routed through the standard chat completions
-    pipeline, after nesting any flat Responses-style tool defs Cursor mixes into the chat
-    `tools` array (e.g. `{"type": "custom", "name": "ApplyPatch", ...}`) into the chat
-    completions shape OpenAI requires (`{"type": "custom", "custom": {...}}`).
+    pipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat
+    completions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies
+    per level, independently: a flat tool def (`{"type": "custom", "name": "ApplyPatch", ...}`)
+    gets nested under `custom`, and a flat grammar format
+    (`{"type": "grammar", "definition", "syntax"}`) gets wrapped as
+    `{"type": "grammar", "grammar": {...}}` wherever it appears, including inside tool defs
+    Cursor already sent pre-nested.
 
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
