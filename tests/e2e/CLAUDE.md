@@ -117,10 +117,28 @@ MCPs - endpoint features with the protocol op as the variant
 
 ```
 mcp.<operation>.<auth_family>.<assertion>
-  operation   : list_tools | call_tool | list_resources | read_resource | list_prompts | get_prompt
+  operation   : protocol ops  list_tools | call_tool | list_resources | read_resource
+                              | list_resource_templates | list_prompts | get_prompt
+                server mgmt   server_add | server_list | server_get | server_update
+                              | server_delete | server_health
+                governance    server_submit | server_approve | server_reject | make_public
+                oauth (byok)  oauth_authorize | oauth_token | oauth_metadata
+                oauth (upstream) oauth_session | upstream_authorize
+                per-user      user_credential_set | user_credential_delete
+                              | oauth_user_credential_status | user_env_vars_set
+                discovery     tools_rest | tool_search | access_groups | discover | registry_json
+                toolsets      toolset_add | toolset_list | toolset_delete
   auth_family : none | api_key | bearer | oauth
-  assertion   : succeeds | denied_without_permission
+                (client-to-gateway auth, NOT the upstream's auth_type: a virtual key
+                 injecting an upstream bearer is still api_key; oauth is the BYOK/upstream
+                 authorize+token flow; none is public/anonymous surfaces)
+  assertion   : succeeds | denied_without_permission | admin_only | persists | reports_status
+                | creates_pending | issues_code | exchanges_code | rejects_bad_pkce
+                | rejects_reused_code | discoverable | scoped | public_filtered
+                | rejects_undeclared | redirects_upstream
   e.g.  mcp.call_tool.oauth.succeeds
+        mcp.oauth_token.oauth.rejects_bad_pkce
+        mcp.server_add.api_key.admin_only
 ```
 
 Reliability & Performance - behavior features (no route; endpoint is exercised_on)

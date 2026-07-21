@@ -111,3 +111,265 @@
   assertions: [succeeds]
   source: "server.py:1089"
   rationale: Smoke; rarely used; same auth model as tools
+- id: mcp.list_resource_templates.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: list_resource_templates
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "server.py:1196"
+  rationale: Resource-template listing; same auth stack as tools
+
+# Server management REST (/v1/mcp/server). Grounded in mcp_management_endpoints.py.
+- id: mcp.server_add.api_key.admin_only
+  module: mcp
+  tier: P0
+  operation: server_add
+  auth_family: api_key
+  assertions: [admin_only, persists]
+  source: "mcp_management_endpoints.py:1345"
+  rationale: PROXY_ADMIN-gated server registration; persists to DB and is picked up without restart; onboarding path
+- id: mcp.server_list.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: server_list
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "mcp_management_endpoints.py:895"
+  rationale: List registered servers; admin required only to query another team
+- id: mcp.server_get.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: server_get
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "mcp_management_endpoints.py:1245"
+  rationale: Fetch one server; non-admins filtered to their allowed servers
+- id: mcp.server_update.api_key.admin_only
+  module: mcp
+  tier: P1
+  operation: server_update
+  auth_family: api_key
+  assertions: [admin_only, persists]
+  source: "mcp_management_endpoints.py:2282"
+  rationale: PROXY_ADMIN-gated edit persists to DB
+- id: mcp.server_delete.api_key.admin_only
+  module: mcp
+  tier: P1
+  operation: server_delete
+  auth_family: api_key
+  assertions: [admin_only]
+  source: "mcp_management_endpoints.py:1758"
+  rationale: PROXY_ADMIN-gated delete removes the server row
+- id: mcp.server_health.api_key.reports_status
+  module: mcp
+  tier: P1
+  operation: server_health
+  auth_family: api_key
+  assertions: [reports_status]
+  source: "mcp_management_endpoints.py:999"
+  rationale: Health check distinguishes a reachable upstream from a broken one
+
+# Governance / submission workflow (non-admin submit -> admin review).
+- id: mcp.server_submit.api_key.creates_pending
+  module: mcp
+  tier: P1
+  operation: server_submit
+  auth_family: api_key
+  assertions: [creates_pending]
+  source: "mcp_management_endpoints.py:1050"
+  rationale: Non-admin submission creates a pending row for review; admins auto-approve
+- id: mcp.server_approve.api_key.admin_only
+  module: mcp
+  tier: P1
+  operation: server_approve
+  auth_family: api_key
+  assertions: [admin_only]
+  source: "mcp_management_endpoints.py:1154"
+  rationale: PROXY_ADMIN approves a pending submission into an active server
+- id: mcp.server_reject.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: server_reject
+  auth_family: api_key
+  assertions: [admin_only]
+  source: "mcp_management_endpoints.py:1198"
+  rationale: PROXY_ADMIN rejects a pending submission
+- id: mcp.make_public.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: make_public
+  auth_family: api_key
+  assertions: [admin_only]
+  source: "mcp_management_endpoints.py:2411"
+  rationale: PROXY_ADMIN marks servers public for the AI Hub
+
+# OAuth BYOK "Authorize & Fetch Token" flow (byok_oauth_endpoints.py, include_in_schema=False).
+- id: mcp.oauth_authorize.oauth.issues_code
+  module: mcp
+  tier: P1
+  operation: oauth_authorize
+  auth_family: oauth
+  assertions: [issues_code]
+  source: "byok_oauth_endpoints.py:699"
+  rationale: Authenticated authorize stores a one-time code bound to user_id + PKCE challenge and redirects with code+state
+- id: mcp.oauth_token.oauth.exchanges_code
+  module: mcp
+  tier: P1
+  operation: oauth_token
+  auth_family: oauth
+  assertions: [exchanges_code]
+  source: "byok_oauth_endpoints.py:762"
+  rationale: Valid code + PKCE verifier mints a byok_session JWT and persists the per-user upstream credential
+- id: mcp.oauth_token.oauth.rejects_bad_pkce
+  module: mcp
+  tier: P0
+  operation: oauth_token
+  auth_family: oauth
+  assertions: [rejects_bad_pkce]
+  source: "byok_oauth_endpoints.py:794"
+  rationale: S256 verifier mismatch returns invalid_grant; the PKCE trust boundary must not be bypassable
+- id: mcp.oauth_token.oauth.rejects_reused_code
+  module: mcp
+  tier: P1
+  operation: oauth_token
+  auth_family: oauth
+  assertions: [rejects_reused_code]
+  source: "byok_oauth_endpoints.py:832"
+  rationale: Authorization code is one-time-use; a replay is refused
+- id: mcp.oauth_metadata.none.discoverable
+  module: mcp
+  tier: P2
+  operation: oauth_metadata
+  auth_family: none
+  assertions: [discoverable]
+  source: "byok_oauth_endpoints.py:599"
+  rationale: Public .well-known AS + protected-resource metadata advertise S256 + authorization_code so MCP clients discover the flow
+
+# Per-user credentials + env vars (caller manages its own).
+- id: mcp.user_credential_set.api_key.persists
+  module: mcp
+  tier: P1
+  operation: user_credential_set
+  auth_family: api_key
+  assertions: [persists]
+  source: "mcp_management_endpoints.py:1824"
+  rationale: Caller stores its own BYOK key for a server; injected at egress on later tool calls
+- id: mcp.user_credential_delete.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: user_credential_delete
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "mcp_management_endpoints.py:1861"
+  rationale: Caller revokes its own stored BYOK key
+- id: mcp.oauth_user_credential_status.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: oauth_user_credential_status
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "mcp_management_endpoints.py:1979"
+  rationale: Caller checks whether it has a stored upstream OAuth2 credential
+- id: mcp.user_env_vars_set.api_key.rejects_undeclared
+  module: mcp
+  tier: P2
+  operation: user_env_vars_set
+  auth_family: api_key
+  assertions: [persists, rejects_undeclared]
+  source: "mcp_management_endpoints.py:2185"
+  rationale: Per-user env vars persist, but only admin-declared var names are accepted
+
+# Tool discovery / search.
+- id: mcp.tools_rest.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: tools_rest
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "mcp_management_endpoints.py:713"
+  rationale: Flat REST tool listing scoped to the calling key's allowed servers
+- id: mcp.tool_search.api_key.denied_without_permission
+  module: mcp
+  tier: P1
+  operation: tool_search
+  auth_family: api_key
+  assertions: [denied_without_permission]
+  source: "server.py:851-864"
+  rationale: Semantic tool-search virtual tool is gated by object_permission.mcp_tool_search_enabled
+- id: mcp.tool_search.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: tool_search
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "tool_search.py:116"
+  rationale: Semantic tool search returns ranked tools for a permitted key
+- id: mcp.access_groups.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: access_groups
+  auth_family: api_key
+  assertions: [succeeds]
+  source: "mcp_management_endpoints.py:737"
+  rationale: List MCP access groups the key can see
+- id: mcp.discover.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: discover
+  auth_family: api_key
+  assertions: [admin_only]
+  source: "mcp_management_endpoints.py:2505"
+  rationale: PROXY_ADMIN-only curated well-known server discovery for the UI
+- id: mcp.registry_json.none.public_filtered
+  module: mcp
+  tier: P2
+  operation: registry_json
+  auth_family: none
+  assertions: [public_filtered]
+  source: "mcp_management_endpoints.py:786"
+  rationale: Public registry is gated by a feature flag and IP-filtered to public servers for external callers
+
+# Toolsets (named bundles of tools).
+- id: mcp.toolset_add.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: toolset_add
+  auth_family: api_key
+  assertions: [admin_only]
+  source: "mcp_management_endpoints.py:2610"
+  rationale: PROXY_ADMIN creates a toolset
+- id: mcp.toolset_list.api_key.scoped
+  module: mcp
+  tier: P2
+  operation: toolset_list
+  auth_family: api_key
+  assertions: [scoped]
+  source: "mcp_management_endpoints.py:2650"
+  rationale: Toolset listing is filtered to the key's object_permission.mcp_toolsets
+- id: mcp.toolset_delete.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: toolset_delete
+  auth_family: api_key
+  assertions: [admin_only]
+  source: "mcp_management_endpoints.py:2749"
+  rationale: PROXY_ADMIN deletes a toolset
+
+# Gateway-managed upstream OAuth (delegate-auth / per-user token; see the LIT-4627 discussion).
+- id: mcp.oauth_session.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: oauth_session
+  auth_family: api_key
+  assertions: [admin_only]
+  source: "mcp_management_endpoints.py:1436"
+  rationale: PROXY_ADMIN caches a temp in-memory server for the OAuth setup flow (no DB write)
+- id: mcp.upstream_authorize.oauth.redirects_upstream
+  module: mcp
+  tier: P2
+  operation: upstream_authorize
+  auth_family: oauth
+  assertions: [redirects_upstream]
+  source: "mcp_management_endpoints.py:1644"
+  rationale: Gateway-managed authorization_code begins the upstream OAuth authorize for a server; the delegate-auth leg needs a real OAuth upstream to prove end to end
