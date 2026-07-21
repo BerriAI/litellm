@@ -19,6 +19,7 @@ pytestmark = pytest.mark.e2e
 
 
 class TestAudioSpeech:
+    @pytest.mark.covers("llm.audio_speech.openai.basic.nonstream.works", exercised_on=["audio_speech"])
     def test_audio_speech_returns_audio(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
