@@ -896,3 +896,82 @@ class SSOReadinessResponse(BaseModel):
     status: str
     sso_configured: bool
     provider: str | None = None
+
+
+# ---------- SCIM v2 provisioning ----------
+
+SCIM_USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
+SCIM_GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
+SCIM_PATCH_OP_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+
+
+# SCIM wire names are camelCase/PascalCase; the field names match the protocol
+# exactly so no aliasing is needed and the serialized body is spec-correct.
+
+
+class SCIMName(BaseModel):
+    givenName: str | None = None
+    familyName: str | None = None
+
+
+class SCIMEmail(BaseModel):
+    """A SCIM email. `value` is validated as a real email address by the server, so
+    it must use a routable domain (reserved TLDs like .test/.example are rejected)."""
+
+    value: str
+    primary: bool = True
+    type: str = "work"
+
+
+class SCIMUserBody(BaseModel):
+    """POST /scim/v2/Users body. `userName` maps to the litellm user_id; the first
+    email's `value` becomes the internal user's user_email."""
+
+    schemas: list[str] = [SCIM_USER_SCHEMA]
+    userName: str
+    name: SCIMName | None = None
+    displayName: str | None = None
+    emails: list[SCIMEmail] = []
+    active: bool = True
+
+
+class SCIMUserResponse(BaseModel):
+    """A SCIM User resource. `id` is the litellm user_id (what the IdP addresses the
+    user by); the server derives the response `userName` from the user_email, so tests
+    key off `id`, not the echoed userName. extra=ignore drops the fields not asserted."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    userName: str | None = None
+    active: bool = True
+
+
+class SCIMPatchOperation(BaseModel):
+    op: str
+    path: str | None = None
+    value: bool | str | dict[str, object] | list[object] | None = None
+
+
+class SCIMPatchOp(BaseModel):
+    schemas: list[str] = [SCIM_PATCH_OP_SCHEMA]
+    Operations: list[SCIMPatchOperation]
+
+
+class SCIMGroupMember(BaseModel):
+    value: str
+    display: str | None = None
+
+
+class SCIMGroupBody(BaseModel):
+    schemas: list[str] = [SCIM_GROUP_SCHEMA]
+    displayName: str
+    members: list[SCIMGroupMember] = []
+
+
+class SCIMGroupResponse(BaseModel):
+    """A SCIM Group resource. `id` is the litellm team_id; `displayName` mirrors the
+    team_alias."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    displayName: str | None = None

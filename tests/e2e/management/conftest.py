@@ -9,6 +9,7 @@ import pytest
 
 from management_client import ManagementClient, build_client
 from proxy_client import ProxyClient
+from scim_provisioning_client import SCIMProvisioningClient, build_scim_client
 from sso_management_client import SSOManagementClient, build_sso_client
 
 
@@ -27,3 +28,8 @@ def client(proxy: ProxyClient) -> ManagementClient:
 @pytest.fixture(scope="session")
 def sso_client(proxy: ProxyClient) -> SSOManagementClient:
     return build_sso_client(proxy)
+
+
+@pytest.fixture(scope="session")
+def scim_client(proxy: ProxyClient) -> SCIMProvisioningClient:
+    return build_scim_client(proxy)
