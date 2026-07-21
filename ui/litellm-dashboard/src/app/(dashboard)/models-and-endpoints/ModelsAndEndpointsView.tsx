@@ -9,7 +9,7 @@ import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/compon
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 import { Team } from "@/components/key_team_helpers/key_list";
-import CredentialsPanel from "@/components/model_add/credentials";
+import CredentialsPanel from "@/components/model_add/CredentialsPanel";
 import { getCallbacksCall } from "@/components/networking";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
@@ -26,7 +26,7 @@ import HealthCheckComponent from "../../../components/model_dashboard/HealthChec
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
 import ModelInfoView from "../../../components/model_info_view";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
-import PassThroughSettings from "../../../components/pass_through_settings";
+import PassThroughSettings from "../../../components/PassThroughSettings/PassThroughSettings";
 import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
 
@@ -296,7 +296,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   }
 
   return (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
           {/* Model Management Header */}
@@ -396,7 +396,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                           accessToken={accessToken}
                           userRole={userRole}
                           userID={userID}
-                          modelData={processedModelData}
                           premiumUser={premiumUser}
                         />
                       </TabPanel>

@@ -6,24 +6,20 @@ test.describe("Logout", () => {
 
   test("Clicking Logout clears the session and forces re-login on a protected page", async ({ page }) => {
     await page.goto("/ui");
-    await expect(page.getByText("Virtual Keys")).toBeVisible({ timeout: 10_000 });
+    // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
+    await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 10_000 });
 
-    // Open the navbar User dropdown. The trigger button exposes an aria-label
-    // of "Account menu — <role> — signed in as <email>", and the antd Dropdown
-    // is declared with trigger={["click"]}, so a plain click opens the popup.
+    // Open the sidebar account menu. The trigger button exposes an aria-label
+    // of "Account menu — <role> — signed in as <email>"; clicking it opens the
+    // Base UI popover panel.
     await page.getByRole("button", { name: /Account menu/i }).click();
 
-    const popup = page
-      .locator(".ant-dropdown:visible")
-      .filter({
-        has: page.locator(".bg-white.rounded-lg.shadow-lg"),
-      })
-      .first();
+    const popup = page.getByTestId("sidebar-account-menu-panel");
     await expect(popup).toBeVisible({ timeout: 5_000 });
 
     // Click Logout — the handler clears the auth cookie and navigates via
     // window.location.href = PROXY_LOGOUT_URL (empty string in the e2e env).
-    await popup.getByText("Logout", { exact: true }).click();
+    await popup.getByRole("button", { name: "Logout" }).click();
 
     // The cookie is now gone — visiting a protected page must redirect to /ui/login.
     await page.goto("/ui?page=llm-playground", { waitUntil: "domcontentloaded" });

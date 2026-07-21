@@ -32,6 +32,15 @@ class AuthHeaders(Headers):
     x_litellm_api_key: str | None = Field(default=None, alias="x-litellm-api-key")
 
 
+class AnthropicHeaders(AuthHeaders):
+    """Auth plus the ``anthropic-version`` header the Anthropic-native
+    /v1/messages and /v1/messages/count_tokens routes expect. It is harmless on
+    the other providers the proxy routes to, and matches what Claude Code sends
+    on its own internal calls."""
+
+    anthropic_version: str = Field(default="2023-06-01", alias="anthropic-version")
+
+
 class NoBody(BaseModel):
     """Empty body/query for routes that take none."""
 
@@ -107,16 +116,26 @@ class ProbeResult(BaseModel):
 
 class StreamingResponse(BaseModel):
     """Raw outcome for calls whose body is provider-native or streamed: status, the
-    x-litellm-call-id header (== SpendLogs.request_id), the content-type (which
-    tells streaming `text/event-stream` from non-streaming `application/json`), and
-    the body. Used by passthrough and streaming, where one validated JSON model
-    does not fit."""
+    x-litellm-call-id header, the x-litellm-response-cost header (StandardLogging
+    response_cost), the content-type (which tells streaming `text/event-stream` from
+    non-streaming `application/json`), the response headers (lowercased names, e.g.
+    the x-ratelimit-* pacing headers and retry-after on a 429), and the body.
+    SpendLogs.request_id is the completion body id, not call_id. Used by passthrough
+    and streaming, where one validated JSON model does not fit."""
 
     status_code: int
     call_id: str | None = None  # x-litellm-call-id header
+    response_cost: float | None = None  # x-litellm-response-cost header
     content_type: str | None = None
+    headers: dict[str, str] = {}
     body: str
     chunks: int = 0  # streamed events (0 for non-streaming)
+    stream_events: list[str] = []
+    # First in-stream error event, if any. A streamed call commits its HTTP 200
+    # before the upstream completes, so upstream failures (e.g. insufficient
+    # quota) arrive as SSE error events inside an otherwise-successful response;
+    # the consumed body is elided, so this is the only place they surface.
+    stream_error: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -231,10 +250,32 @@ def delete[R: BaseModel](
     headers: BaseModel,
     json: BaseModel,
     response_type: type[R],
+    params: BaseModel | None = None,
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
         resp = requests.delete(
+            str(url),
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            params=_params(params),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
+
+
+def patch[R: BaseModel](
+    url: URL,
+    *,
+    headers: BaseModel,
+    json: BaseModel,
+    response_type: type[R],
+    timeout: float = 30.0,
+) -> Result[R]:
+    try:
+        resp = requests.patch(
             str(url),
             headers=_headers(headers),
             json=json.model_dump(by_alias=True, exclude_none=True),
@@ -260,24 +301,60 @@ def probe(
     return ProbeResult(status_code=resp.status_code, body=resp.text)
 
 
+def _parse_response_cost(resp: requests.Response) -> float | None:
+    raw = _hdr(resp, "x-litellm-response-cost")
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingResponse:
     call_id = _hdr(resp, "x-litellm-call-id")
+    response_cost = _parse_response_cost(resp)
     content_type = _hdr(resp, "content-type")
+    headers = {name.lower(): value for name, value in resp.headers.items()}
     if not stream or not (200 <= resp.status_code < 300):
         return StreamingResponse(
             status_code=resp.status_code,
             call_id=call_id,
+            response_cost=response_cost,
             content_type=content_type,
+            headers=headers,
             body=resp.text,
         )
     lines = cast("Iterator[bytes]", resp.iter_lines())
-    chunks = sum(1 for line in lines if line)
+    chunks = 0
+    stream_error: str | None = None
+    stream_events: list[str] = []
+    for line in lines:
+        if not line:
+            continue
+        chunks += 1
+        decoded_line = line.decode(errors="replace")
+        if decoded_line.startswith("data: "):
+            payload = decoded_line.removeprefix("data: ")
+            if payload != "[DONE]":
+                stream_events.append(payload)
+        if stream_error is None and (
+            line.startswith(b"event: error")
+            or b'"type":"error"' in line
+            or b'"type": "error"' in line
+            or line.startswith(b'data: {"error"')
+        ):
+            stream_error = line.decode(errors="replace")[:300]
     return StreamingResponse(
         status_code=resp.status_code,
         call_id=call_id,
+        response_cost=response_cost,
         content_type=content_type,
+        headers=headers,
         body="<streamed>",
         chunks=chunks,
+        stream_events=stream_events,
+        stream_error=stream_error,
     )
 
 

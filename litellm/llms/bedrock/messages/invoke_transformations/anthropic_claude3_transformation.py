@@ -77,50 +77,15 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "bedrock"
+
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
-
-    @staticmethod
-    def _as_system_content_blocks(value: Any) -> list[Any]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return list(value)
-        if isinstance(value, str):
-            return [{"type": "text", "text": value}]
-        return [value]
-
-    def _normalize_system_role_messages_for_bedrock(self, anthropic_messages_request: dict) -> None:
-        """Bedrock Invoke rejects ``role: "system"`` entries inside ``messages`` on
-        some Claude aliases; Anthropic Messages carries that content in the
-        top-level ``system`` field. Move any such entries into ``system`` before
-        the Invoke request is built."""
-        messages = anthropic_messages_request.get("messages")
-        if not isinstance(messages, list):
-            return
-        system_role_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
-        if not system_role_messages:
-            return
-
-        anthropic_messages_request["messages"] = [
-            m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")
-        ]
-        system_content = [
-            block
-            for source in (
-                anthropic_messages_request.get("system"),
-                *(m.get("content") for m in system_role_messages),
-            )
-            for block in self._as_system_content_blocks(source)
-        ]
-        filtered_system = self._filter_billing_headers_from_system(system_content)
-        if filtered_system:
-            anthropic_messages_request["system"] = filtered_system
-        else:
-            anthropic_messages_request.pop("system", None)
 
     def validate_anthropic_messages_environment(
         self,
@@ -247,7 +212,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports extended thinking on Bedrock
         """
-        if AnthropicModelInfo._is_adaptive_thinking_model(model):
+        if AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
             return True
 
         model_lower = model.lower()
@@ -297,7 +262,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not self._supports_extended_thinking_on_bedrock(model):
             return False
 
-        is_adaptive_thinking_model = AnthropicModelInfo._is_adaptive_thinking_model(model)
+        is_adaptive_thinking_model = AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock")
 
         thinking = anthropic_messages_request.get("thinking")
         if isinstance(thinking, dict):
@@ -574,6 +539,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             mcp_server_used=anthropic_model_info.is_mcp_server_used(
                 anthropic_messages_optional_request_params.get("mcp_servers")
             ),
+            custom_llm_provider="bedrock",
         )
         beta_set.update(auto_betas)
 
@@ -640,7 +606,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         path degrades ``xhigh`` -> ``max`` rather than 400-ing. Non-adaptive models
         and models without a ceiling are left untouched.
         """
-        if not AnthropicModelInfo._is_adaptive_thinking_model(model):
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
             return
         effort = optional_params.get("reasoning_effort")
         if not isinstance(effort, str):
@@ -669,7 +635,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages_for_bedrock(anthropic_messages_request)
+        self._normalize_system_role_messages(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
@@ -728,7 +694,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 custom_llm_provider="bedrock",
                 key="supports_output_config",
             )
-            or AnthropicConfig._model_supports_effort_param(model)
+            or AnthropicConfig._model_supports_effort_param(model, "bedrock")
         ):
             if anthropic_messages_request.pop("output_config", None) is not None:
                 verbose_logger.warning(
@@ -765,7 +731,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if (
             litellm.drop_params is True
             and "output_config" in anthropic_messages_request
-            and not AnthropicConfig._model_supports_effort_param(model)
+            and not AnthropicConfig._model_supports_effort_param(model, "bedrock")
         ):
             verbose_logger.warning(
                 DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,

@@ -4900,6 +4900,158 @@ def test_oauth2_flow_defaults_to_none_when_omitted():
     assert LiteLLM_MCPServerTable(server_id="srv-1", transport="http").oauth2_flow is None
 
 
+def test_dcr_bridge_rejected_on_create_for_gateway_managed_auth_type():
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import NewMCPServerRequest
+
+    with pytest.raises(ValidationError) as exc:
+        NewMCPServerRequest(
+            server_name="bridge-server",
+            url="https://example.com/mcp",
+            transport="http",
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            dcr_bridge=True,
+        )
+    assert "dcr_bridge is only supported" in str(exc.value)
+
+
+def test_dcr_bridge_rejected_on_create_when_auth_type_omitted():
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import NewMCPServerRequest
+
+    with pytest.raises(ValidationError) as exc:
+        NewMCPServerRequest(
+            server_name="bridge-server",
+            url="https://example.com/mcp",
+            transport="http",
+            dcr_bridge=True,
+        )
+    assert "dcr_bridge is only supported" in str(exc.value)
+
+
+@pytest.mark.parametrize("auth_type", ["true_passthrough", "oauth_delegate"])
+def test_dcr_bridge_accepted_on_create_for_client_forwarded_modes(auth_type):
+    from litellm.proxy._experimental.mcp_server.db import _prepare_mcp_server_data
+    from litellm.proxy._types import NewMCPServerRequest
+
+    payload = NewMCPServerRequest(
+        server_name="bridge-server",
+        url="https://example.com/mcp",
+        transport="http",
+        auth_type=auth_type,
+        dcr_bridge=True,
+    )
+    data_dict = _prepare_mcp_server_data(payload)
+    assert data_dict["dcr_bridge"] is True
+
+
+def test_dcr_bridge_update_rejected_when_payload_auth_type_not_client_forwarded():
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import UpdateMCPServerRequest
+
+    with pytest.raises(ValidationError) as exc:
+        UpdateMCPServerRequest(server_id="srv-1", auth_type="oauth2", dcr_bridge=True)
+    assert "dcr_bridge is only supported" in str(exc.value)
+
+
+def test_dcr_bridge_update_without_auth_type_defers_to_endpoint():
+    from litellm.proxy._types import UpdateMCPServerRequest
+
+    assert UpdateMCPServerRequest(server_id="srv-1", dcr_bridge=True).dcr_bridge is True
+
+
+def test_dcr_bridge_round_trips_on_response_model():
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    row = LiteLLM_MCPServerTable(server_id="srv-1", transport="http", dcr_bridge=True)
+    assert row.dcr_bridge is True
+    assert LiteLLM_MCPServerTable(server_id="srv-1", transport="http").dcr_bridge is None
+
+
+def _edit_endpoint_patches(old_record, update_mock):
+    return (
+        patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            AsyncMock(side_effect=old_record) if isinstance(old_record, Exception) else AsyncMock(return_value=old_record),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+            update_mock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+            autospec=True,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_auth_type", ["oauth2", "api_key", "none"])
+async def test_edit_mcp_server_rejects_dcr_bridge_when_stored_auth_type_not_client_forwarded(stored_auth_type):
+    from litellm.proxy._types import UpdateMCPServerRequest
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import edit_mcp_server
+
+    old_record = MagicMock()
+    old_record.auth_type = stored_auth_type
+    update_mock = AsyncMock()
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(old_record, update_mock)
+    with p1, p2, p3, p4, p5:
+        payload = UpdateMCPServerRequest(server_id="srv-1", dcr_bridge=True)
+        user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with pytest.raises(HTTPException) as exc:
+            await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
+
+    assert exc.value.status_code == 400
+    assert "dcr_bridge is only supported" in str(exc.value.detail)
+    update_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_edit_mcp_server_rejects_dcr_bridge_when_stored_record_unreadable():
+    from litellm.proxy._types import UpdateMCPServerRequest
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import edit_mcp_server
+
+    update_mock = AsyncMock()
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(RuntimeError("db down"), update_mock)
+    with p1, p2, p3, p4, p5:
+        payload = UpdateMCPServerRequest(server_id="srv-1", dcr_bridge=True)
+        user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with pytest.raises(HTTPException) as exc:
+            await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
+
+    assert exc.value.status_code == 400
+    update_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_edit_mcp_server_dcr_bridge_on_unknown_server_returns_404_not_400():
+    """A dcr_bridge enablement targeting a server_id that does not exist must surface the accurate
+    404 from the update path, not a misleading 400 about the stored auth_type: get_mcp_server
+    returns None for a missing row without raising, which is distinct from a failed read."""
+    from litellm.proxy._types import UpdateMCPServerRequest
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import edit_mcp_server
+
+    update_mock = AsyncMock(return_value=None)
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(None, update_mock)
+    with p1, p2, p3, p4, p5:
+        payload = UpdateMCPServerRequest(server_id="does-not-exist", dcr_bridge=True)
+        user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with pytest.raises(HTTPException) as exc:
+            await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
+
+    assert exc.value.status_code == 404
+    update_mock.assert_called_once()
+
+
 class TestPerUserCredentialConfigServerResolution:
     """Per-user credential and env-var endpoints must resolve config-defined MCP
     servers, which live only in the in-memory registry and never get a DB row, so
@@ -5224,3 +5376,41 @@ async def test_edit_mcp_server_snapshot_failure_skips_purge_but_edit_succeeds():
 
     assert result.server_id == server_id
     mock_purge.assert_not_awaited()
+
+
+def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
+    """The OpenAPI quick-picker registry ships as a bundled JSON file; a malformed file or entry
+    silently degrades the picker to empty (the endpoint swallows load errors), so pin the file's
+    shape here: it must parse, and every entry needs the fields the create-form prefill reads.
+    OAuth-capable entries must carry both endpoint URLs; a catalog entry with a blank
+    authorization_url would recreate the exact 400 ("authorization url is not set") the catalog
+    exists to prevent for spec-only servers, which never run OAuth endpoint discovery."""
+    import json
+    import os
+
+    registry_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "..", "..", "litellm", "proxy", "openapi_registry.json",
+    )
+    with open(registry_path) as f:
+        registry = json.load(f)
+
+    apis = registry["apis"]
+    assert apis, "registry must not be empty"
+    names = [entry["name"] for entry in apis]
+    assert len(names) == len(set(names)), "duplicate registry entry names"
+    for google_entry in ("google_sheets", "google_drive", "google_calendar", "google_docs"):
+        assert google_entry in names, f"LIT-4629: {google_entry} must be in the catalog"
+
+    for entry in apis:
+        for required in ("name", "title", "description", "icon_url", "spec_url"):
+            assert entry.get(required), f"{entry.get('name')}: missing {required}"
+        assert entry["spec_url"].startswith("https://"), f"{entry['name']}: non-https spec_url"
+        oauth = entry.get("oauth")
+        if oauth is not None:
+            for required in ("authorization_url", "token_url"):
+                assert oauth.get(required, "").startswith("https://"), (
+                    f"{entry['name']}: oauth.{required} must be a non-empty https URL"
+                )
+        for tool in entry.get("key_tools", []):
+            assert tool.get("name") and tool.get("description"), f"{entry['name']}: malformed key_tool"

@@ -127,10 +127,10 @@ vi.mock("@/components/chat_ui/ChatUI", () => ({ default: stub("chat-ui") }));
 vi.mock("@/components/leftnav", () => ({ default: stub("sidebar") }));
 vi.mock("@/app/(dashboard)/old-usage/_components/usage", () => ({ default: stub("usage") }));
 vi.mock("@/components/cache_dashboard", () => ({ default: stub("cache-dashboard") }));
-vi.mock("@/components/guardrails", () => ({ default: stub("guardrails") }));
+vi.mock("@/app/(dashboard)/guardrails/_components", () => ({ default: stub("guardrails") }));
 vi.mock("@/components/prompts", () => ({ default: stub("prompts") }));
 vi.mock("@/components/transform_request", () => ({ default: stub("transform-request") }));
-vi.mock("@/components/mcp_tools", () => ({ MCPServers: stub("mcp-servers") }));
+vi.mock("@/app/(dashboard)/mcp-servers/_components", () => ({ MCPServers: stub("mcp-servers") }));
 vi.mock("@/app/(dashboard)/tag-management/_components", () => ({ default: stub("tag-management") }));
 vi.mock("@/app/(dashboard)/vector-stores/_components", () => ({ default: stub("vector-stores") }));
 vi.mock("@/components/ui_theme_settings", () => ({ default: stub("ui-theme-settings") }));
@@ -232,7 +232,7 @@ describe("CreateKeyPage auth behavior", () => {
     // Assert: we eventually redirect to SSO login with return URL (single replace, not assign/href)
     await waitFor(() => {
       expect(window.location.replace).toHaveBeenCalledWith(
-        expect.stringContaining("https://example.com/ui/login?redirect_to="),
+        expect.stringContaining("https://example.com/ui/login/?redirect_to="),
       );
     });
 

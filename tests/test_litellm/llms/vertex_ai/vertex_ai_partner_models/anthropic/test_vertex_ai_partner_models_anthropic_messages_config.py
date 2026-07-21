@@ -1,3 +1,6 @@
+import copy
+import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -509,3 +512,165 @@ def test_vertex_claude_completion_does_not_mutate_shared_extra_headers():
     assert (
         shared_extra_headers == {}
     ), "extra_headers must not be mutated by completion()"
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so capability flags match this branch."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
+
+
+def test_messages_thinking_shape_follows_exact_vertex_entry_flag(local_model_cost_map, monkeypatch):
+    """The Vertex messages config must probe capabilities under ``vertex_ai`` so an
+    operator setting ``supports_adaptive_thinking: false`` on the exact
+    ``vertex_ai/claude-opus-4-8`` entry beats the unmodified ``anthropic`` entry.
+    With the inherited ``"anthropic"`` provider default the flip was ignored and
+    the transform kept emitting ``thinking.type='adaptive'``."""
+    import litellm
+
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+
+    def transform():
+        return config.transform_anthropic_messages_request(
+            model="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 4096,
+                "reasoning_effort": "medium",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    result = transform()
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "medium"}
+
+    monkeypatch.setitem(
+        litellm.model_cost["vertex_ai/claude-opus-4-8"], "supports_adaptive_thinking", False
+    )
+    litellm.get_model_info.cache_clear()
+    assert litellm.model_cost["claude-opus-4-8"]["supports_adaptive_thinking"] is True
+
+    flipped = transform()
+    thinking = flipped.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert "output_config" not in flipped
+
+
+def _vertex_transform(model, messages, system=None):
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    params = {"max_tokens": 256}
+    if system is not None:
+        params["system"] = system
+    return config.transform_anthropic_messages_request(
+        model=model,
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params=params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+class TestVertexAnthropicMidConversationSystem:
+    """Vertex serves Claude on the first-party Anthropic /v1/messages contract: a
+    mid-conversation ``role: "system"`` reminder is accepted in place on Claude
+    4.8+/5 but 400s ("role 'system' is not supported on this model") on older
+    Claude, and a *leading* system entry 400s on every model ("messages.0: use
+    the top-level 'system' parameter"). These tests pin the model-aware hoist so
+    Claude Code sessions neither collapse the prompt cache on 4.8+ nor hard-fail
+    on 4.7 and older (RCA: Kraken Tech high-spend)."""
+
+    def test_supported_model_keeps_mid_conversation_system_in_place(self, local_model_cost_map):
+        messages = [
+            {"role": "user", "content": "read the file"},
+            {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+            {"role": "assistant", "content": "reading"},
+            {"role": "user", "content": "continue"},
+        ]
+        result = _vertex_transform("claude-opus-4-8", messages)
+        assert result["messages"] == messages
+
+    def test_supported_model_hoists_only_leading_system_run(self, local_model_cost_map):
+        messages = [
+            {"role": "system", "content": "You are terse."},
+            {"role": "system", "content": "Cite sources."},
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "mid-conversation reminder"},
+            {"role": "user", "content": "continue"},
+        ]
+        result = _vertex_transform("claude-opus-4-8", messages)
+        assert result["messages"] == [
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "mid-conversation reminder"},
+            {"role": "user", "content": "continue"},
+        ]
+        assert result["system"] == [
+            {"type": "text", "text": "You are terse."},
+            {"type": "text", "text": "Cite sources."},
+        ]
+
+    def test_unsupported_model_hoists_mid_conversation_system(self, local_model_cost_map):
+        messages = [
+            {"role": "user", "content": "read the file"},
+            {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+            {"role": "assistant", "content": "reading"},
+            {"role": "user", "content": "continue"},
+        ]
+        result = _vertex_transform(
+            "claude-sonnet-4-6", messages, system=[{"type": "text", "text": "Base."}]
+        )
+        assert result["messages"] == [
+            {"role": "user", "content": "read the file"},
+            {"role": "assistant", "content": "reading"},
+            {"role": "user", "content": "continue"},
+        ]
+        assert result["system"] == [
+            {"type": "text", "text": "Base."},
+            {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+        ]
+
+
+def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():
+    """Exact cost-map hits win over the ``claude-mid-conversation-system``
+    fallback rule, so a ``vertex_ai`` Claude 4.8+/5 entry missing the flag would
+    be treated as unsupported and hoist every reminder, collapsing the prompt
+    cache. Every mapped vertex_ai entry the rule matches must carry the flag."""
+    import re
+
+    import litellm
+
+    cost_map_path = os.path.join(
+        os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json"
+    )
+    with open(cost_map_path) as f:
+        cost_map = json.load(f)
+    rules = cost_map["fallback_generalizations"]["rules"]
+    rule_pattern = next(
+        (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
+        None,
+    )
+    assert rule_pattern is not None, "claude-mid-conversation-system rule not found in fallback_generalizations"
+    pattern = re.compile(rule_pattern, re.IGNORECASE)
+    missing = [
+        key
+        for key, info in cost_map.items()
+        if isinstance(info, dict)
+        and str(info.get("litellm_provider", "")).startswith("vertex_ai")
+        and "claude" in key
+        and pattern.search(key)
+        and info.get("supports_mid_conversation_system") is not True
+    ]
+    assert missing == []

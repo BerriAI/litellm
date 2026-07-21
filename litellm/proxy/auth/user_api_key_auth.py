@@ -162,6 +162,7 @@ def _get_model_from_request_context(
         request_headers=_safe_get_request_headers(request=request),
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
+        request=request,
     )
 
 
@@ -1191,13 +1192,15 @@ async def _user_api_key_auth_builder(
             return await handle_oauth2_proxy_request(request=request)
 
         if general_settings.get("enable_jwt_auth", False) is True:
-            from litellm.proxy.proxy_server import premium_user
-
-            if premium_user is not True:
-                raise ValueError(f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}")
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
+                from litellm.proxy.proxy_server import premium_user
+
+                if premium_user is not True:
+                    raise ValueError(
+                        f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+                    )
                 # Try JWT-to-Virtual-Key mapping first to avoid
                 # unnecessary DB queries in auth_builder
                 do_standard_jwt_auth = True
@@ -1670,10 +1673,9 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
-            # update key budget with temp budget increase
-            valid_token = _update_key_budget_with_temp_budget_increase(
-                valid_token
-            )  # updating it here, allows all downstream reporting / checks to use the updated budget
+
+        if valid_token is not None:
+            valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
@@ -1795,6 +1797,8 @@ async def _user_api_key_auth_builder(
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,
                                     max_budget=team_member_budget,
+                                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
+                                    entity_id=f"{valid_token.user_id}:{valid_token.team_id}",
                                 )
 
             # Check 3. If token is expired
@@ -1991,16 +1995,6 @@ async def _user_api_key_auth_builder(
             if valid_token.token is None:
                 raise HTTPException(401, detail="Invalid API key, no token associated")
             api_key = valid_token.token
-
-            # Add hashed token to cache
-            asyncio.create_task(
-                _cache_key_object(
-                    hashed_token=api_key,
-                    user_api_key_obj=valid_token,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-            )
 
             valid_token_dict = valid_token.model_dump(exclude_none=True)
             valid_token_dict.pop("token", None)
@@ -2442,6 +2436,7 @@ async def _reserve_budget_after_common_checks(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
+        skip_user_budget_on_team_key=general_settings.get("skip_user_budget_on_team_key") is True,
     )
 
 
@@ -2689,7 +2684,9 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
     valid_token_metadata = valid_token.metadata
     if "temp_budget_increase" in valid_token_metadata and "temp_budget_expiry" in valid_token_metadata:
         expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
-        if expiry > datetime.now():
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry > datetime.now(timezone.utc):
             return valid_token_metadata["temp_budget_increase"]
     return None
 

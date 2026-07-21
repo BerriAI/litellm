@@ -536,6 +536,7 @@ if MCP_AVAILABLE:
         sanitized.env = {}
         sanitized.command = None
         sanitized.args = []
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
@@ -581,6 +582,7 @@ if MCP_AVAILABLE:
         sanitized.teams = []
         sanitized.env_vars = None
 
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
@@ -686,6 +688,7 @@ if MCP_AVAILABLE:
             command=payload.command,
             args=payload.args,
             env=payload.env,
+            issuer=payload.issuer,
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
             registration_url=payload.registration_url,
@@ -720,12 +723,13 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-        tools = await _list_mcp_tools(
+        listing = await _list_mcp_tools(
             user_api_key_auth=user_api_key_dict,
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
         )
+        tools = listing.tools
         dumped_tools = [dict(tool) for tool in tools]
 
         return {"tools": dumped_tools}
@@ -1475,6 +1479,7 @@ if MCP_AVAILABLE:
             temporary_server = await global_mcp_server_manager.build_mcp_server_from_table(
                 temp_record,
                 credentials_are_encrypted=False,
+                persist_discovered_endpoints=False,
             )
             _cache_temporary_mcp_server(
                 temporary_server,
@@ -2325,6 +2330,7 @@ if MCP_AVAILABLE:
         # warning instead of failing the edit, whose primary job is the update itself.
         try:
             old_server_record = await get_mcp_server(prisma_client, payload.server_id)
+            old_server_record_read_failed = False
         except Exception as exc:  # noqa: BLE001 - advisory read; invalidation is best-effort end-to-end
             verbose_logger.warning(
                 "MCP server %s: could not snapshot the pre-update record; skipping the stale-token check: %s",
@@ -2332,6 +2338,27 @@ if MCP_AVAILABLE:
                 exc,
             )
             old_server_record = None
+            old_server_record_read_failed = True
+
+        if (
+            payload.dcr_bridge
+            and payload.auth_type is None
+            and (old_server_record is not None or old_server_record_read_failed)
+        ):
+            stored_auth_type = old_server_record.auth_type if old_server_record else None
+            stored_auth_type_name = getattr(stored_auth_type, "value", stored_auth_type)
+            if stored_auth_type not in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": (
+                            "dcr_bridge is only supported for auth_type true_passthrough or "
+                            f"oauth_delegate (stored auth_type: {stored_auth_type_name!r}). Include "
+                            "the server's auth_type in the update payload or configure one of the "
+                            "client-forwarded token modes first."
+                        )
+                    },
+                )
 
         # try to update the mcp server
         mcp_server_record_updated = await update_mcp_server(
