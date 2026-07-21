@@ -907,3 +907,126 @@ def test_cursor_models_route_delegates_to_model_list():
             assert mock_model_list.call_count == 2
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+class TestNestFlatChatTools:
+    def test_flat_custom_tool_is_nested(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tools
+
+        result = _nest_flat_chat_tools(
+            [{"type": "custom", "name": "ApplyPatch", "description": "V4A patch", "format": {"type": "text"}}]
+        )
+        assert result == [
+            {
+                "type": "custom",
+                "custom": {"name": "ApplyPatch", "description": "V4A patch", "format": {"type": "text"}},
+            }
+        ]
+
+    def test_flat_function_tool_is_nested(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tools
+
+        result = _nest_flat_chat_tools(
+            [{"type": "function", "name": "read_file", "description": "d", "parameters": {"type": "object"}}]
+        )
+        assert result == [
+            {
+                "type": "function",
+                "function": {"name": "read_file", "description": "d", "parameters": {"type": "object"}},
+            }
+        ]
+
+    def test_already_nested_and_unrecognized_tools_pass_through_unchanged(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tools
+
+        tools = [
+            {"type": "custom", "custom": {"name": "already_nested"}},
+            {"type": "function", "function": {"name": "f", "parameters": {}}},
+            {"type": "web_search"},
+            {"type": "custom"},
+            {"name": "typeless"},
+            {},
+            "junk",
+            None,
+            42,
+        ]
+        assert _nest_flat_chat_tools(tools) == tools
+
+
+class TestCursorMessagesArmToolNormalization:
+    @pytest.mark.asyncio
+    async def test_flat_custom_tool_nested_before_chat_completion_delegation(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        seen = {}
+
+        async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
+            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+            seen["body"] = await _read_request_body(request=request)
+            return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.chat_completion", new=fake_chat_completion):
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={
+                        "model": "gpt-5.6",
+                        "messages": [{"role": "user", "content": "use ApplyPatch"}],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": {"name": "read_file", "parameters": {"type": "object"}},
+                            },
+                            {"type": "custom", "name": "ApplyPatch", "description": "V4A patch"},
+                        ],
+                        "tool_choice": "required",
+                    },
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        assert seen["body"]["tools"] == [
+            {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}},
+            {"type": "custom", "custom": {"name": "ApplyPatch", "description": "V4A patch"}},
+        ]
+        assert seen["body"]["messages"] == [{"role": "user", "content": "use ApplyPatch"}]
+
+    @pytest.mark.asyncio
+    async def test_messages_body_without_flat_tools_leaves_parsed_body_cache_untouched(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        seen = {}
+
+        async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
+            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+            seen["body"] = await _read_request_body(request=request)
+            return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
+
+        body = {
+            "model": "gpt-5.6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}],
+        }
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.chat_completion", new=fake_chat_completion):
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json=body,
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        assert seen["body"]["tools"] == body["tools"]
+        assert seen["body"]["messages"] == body["messages"]

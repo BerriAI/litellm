@@ -19,6 +19,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
     Choices,
@@ -43,6 +44,7 @@ from litellm.types.utils import (
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
     Usage,
+    chat_completion_tool_call_from_dict,
 )
 
 from .get_headers import get_response_headers
@@ -369,7 +371,7 @@ from collections import defaultdict
 
 
 def _handle_invalid_parallel_tool_calls(
-    tool_calls: List[ChatCompletionMessageToolCall],
+    tool_calls: List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]],
 ):
     """
     Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
@@ -382,6 +384,8 @@ def _handle_invalid_parallel_tool_calls(
     try:
         replacements: Dict[int, List[ChatCompletionMessageToolCall]] = defaultdict(list)
         for i, tool_call in enumerate(tool_calls):
+            if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
+                continue
             current_function = tool_call.function.name
             function_args = json.loads(tool_call.function.arguments)
             if current_function == "multi_tool_use.parallel":
@@ -527,19 +531,20 @@ class LiteLLMResponseObjectHandler:
 
 
 def _should_convert_tool_call_to_json_mode(
-    tool_calls: Optional[Union[List[ChatCompletionMessageToolCall], List[DatabricksTool]]] = None,
+    tool_calls: Optional[
+        Union[
+            List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]],
+            List[DatabricksTool],
+        ]
+    ] = None,
     convert_tool_call_to_json_mode: Optional[bool] = None,
 ) -> bool:
     """
     Determine if tool calls should be converted to JSON mode
     """
-    if (
-        convert_tool_call_to_json_mode
-        and tool_calls is not None
-        and len(tool_calls) == 1
-        and tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
-    ):
-        return True
+    if convert_tool_call_to_json_mode and tool_calls is not None and len(tool_calls) == 1:
+        function = tool_calls[0].get("function")
+        return function is not None and function["name"] == RESPONSE_FORMAT_TOOL_NAME
     return False
 
 
@@ -647,7 +652,7 @@ def convert_to_model_response_object(
                 if tool_calls is not None:
                     _openai_tool_calls = []
                     for _tc in tool_calls:
-                        _openai_tc = ChatCompletionMessageToolCall(**_tc)
+                        _openai_tc = chat_completion_tool_call_from_dict(_tc)
                         _openai_tool_calls.append(_openai_tc)
                     fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
