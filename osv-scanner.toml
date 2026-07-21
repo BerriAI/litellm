@@ -2,3 +2,13 @@
 id = "GHSA-w8v5-vhqr-4h9v"
 ignoreUntil = 2026-09-09
 reason = "diskcache has no fixed release published; remove this entry once one exists"
+
+[[IgnoredVulns]]
+id = "GHSA-hg6j-4rv6-33pg"
+ignoreUntil = 2026-10-15
+reason = "aiohttp held below 3.14 because 3.14.x poisons pooled keep-alive connections (aio-libs/aiohttp#12953), causing sporadic sub-millisecond Connection timed out failures across all providers; this CVE only affects per-request cookies followed across a cross-origin redirect, which litellm does not do; drop once a 3.14.x release with the aio-libs/aiohttp#12954 fix ships"
+
+[[IgnoredVulns]]
+id = "GHSA-jg22-mg44-37j8"
+ignoreUntil = 2026-10-15
+reason = "aiohttp held below 3.14 because 3.14.x poisons pooled keep-alive connections (aio-libs/aiohttp#12953), causing sporadic sub-millisecond Connection timed out failures across all providers; this CVE only affects CookieJar.load() on attacker-controlled input, which litellm does not do; drop once a 3.14.x release with the aio-libs/aiohttp#12954 fix ships"
