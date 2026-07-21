@@ -63,7 +63,7 @@ def get_models_from_unified_file_id(unified_file_id: str) -> List[str]:
         return []
 
 
-def get_model_id_from_unified_batch_id(file_id: str) -> Optional[str]:
+def get_model_id_from_unified_batch_id(file_id: str) -> str | None:
     """
     Get the model_id from the file_id
 
@@ -149,7 +149,7 @@ def encode_batch_response_ids(response, model: str) -> None:
             )
 
 
-def decode_model_from_file_id(encoded_id: str) -> Optional[str]:
+def decode_model_from_file_id(encoded_id: str) -> str | None:
     """
     Extract model name from an encoded file/batch ID.
     Handles IDs that start with "file-" or "batch_" prefix.
@@ -803,7 +803,7 @@ def validate_managed_files_requirement(
         )
 
 
-def _extract_model_param(request: "Request", request_body: dict) -> Optional[str]:
+def _extract_model_param(request: "Request", request_body: dict) -> str | None:
     """
     Extract model parameter from request.
 
@@ -818,6 +818,58 @@ def _extract_model_param(request: "Request", request_body: dict) -> Optional[str
 # ============================================================================
 #                    BATCH DATABASE OPERATIONS
 # ============================================================================
+
+
+def _model_id_for_batch_response(
+    response,
+    unified_batch_id: Union[str, Literal[False], None],
+) -> str | None:
+    hidden_params = getattr(response, "_hidden_params", None) or {}
+    model_id = hidden_params.get("model_id")
+    if model_id:
+        return model_id
+
+    model_id_candidates: List[str] = []
+    if isinstance(unified_batch_id, str):
+        model_id_candidates.append(unified_batch_id)
+    response_id = getattr(response, "id", None)
+    if isinstance(response_id, str):
+        decoded_response_id = _is_base64_encoded_unified_file_id(response_id)
+        if decoded_response_id:
+            model_id_candidates.append(decoded_response_id)
+        elif response_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+            model_id_candidates.append(response_id)
+    for candidate in model_id_candidates:
+        model_id = get_model_id_from_unified_batch_id(candidate)
+        if model_id:
+            return model_id
+    return None
+
+
+def _model_name_for_batch_response(response) -> str | None:
+    hidden_params = getattr(response, "_hidden_params", None) or {}
+    model_name = hidden_params.get("model_name")
+    if model_name:
+        return model_name
+    unified_file_id = hidden_params.get("unified_file_id")
+    if isinstance(unified_file_id, str):
+        decoded_unified_file_id = _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
+        target_model_names = get_models_from_unified_file_id(decoded_unified_file_id)
+        if target_model_names:
+            return ",".join(target_model_names)
+    return None
+
+
+def _batch_owner_auth_from_db_object(db_batch_object):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    created_by = getattr(db_batch_object, "created_by", None)
+    if not isinstance(created_by, str) or not created_by:
+        return None
+    team_id = getattr(db_batch_object, "team_id", None)
+    if team_id is not None and not isinstance(team_id, str):
+        team_id = None
+    return UserAPIKeyAuth(user_id=created_by, team_id=team_id)
 
 
 async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
@@ -880,49 +932,16 @@ async def ensure_batch_response_managed_file_ids(
     if managed_files_obj is None:
         return
 
-    hidden_params = getattr(response, "_hidden_params", None) or {}
-    model_id = hidden_params.get("model_id")
-    if not model_id:
-        model_id_candidates = []
-        if isinstance(unified_batch_id, str):
-            model_id_candidates.append(unified_batch_id)
-        response_id = getattr(response, "id", None)
-        if isinstance(response_id, str):
-            decoded_response_id = _is_base64_encoded_unified_file_id(response_id)
-            if decoded_response_id:
-                model_id_candidates.append(decoded_response_id)
-            elif response_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
-                model_id_candidates.append(response_id)
-        for candidate in model_id_candidates:
-            model_id = get_model_id_from_unified_batch_id(candidate)
-            if model_id:
-                break
+    model_id = _model_id_for_batch_response(response, unified_batch_id)
     if not model_id:
         return
 
-    model_name = hidden_params.get("model_name")
-    unified_file_id = hidden_params.get("unified_file_id")
-    if not model_name and isinstance(unified_file_id, str):
-        decoded_unified_file_id = _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
-        target_model_names = get_models_from_unified_file_id(decoded_unified_file_id)
-        if target_model_names:
-            model_name = ",".join(target_model_names)
+    model_name = _model_name_for_batch_response(response)
 
-    if user_api_key_dict is None and db_batch_object is not None:
-        from litellm.proxy._types import UserAPIKeyAuth
-
-        user_api_key_dict = UserAPIKeyAuth(
-            user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
-            team_id=getattr(db_batch_object, "team_id", None),
-        )
-    elif db_batch_object is not None:
-        from litellm.proxy._types import UserAPIKeyAuth
-
-        # Managed batch output files belong to the durable batch owner, not the caller.
-        user_api_key_dict = UserAPIKeyAuth(
-            user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
-            team_id=getattr(db_batch_object, "team_id", None),
-        )
+    if db_batch_object is not None:
+        owner_auth = _batch_owner_auth_from_db_object(db_batch_object)
+        if owner_auth is not None:
+            user_api_key_dict = owner_auth
     if user_api_key_dict is None:
         return
 
