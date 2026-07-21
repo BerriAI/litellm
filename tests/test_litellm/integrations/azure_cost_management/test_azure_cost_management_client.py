@@ -155,6 +155,43 @@ def test_client_secret_not_in_repr():
     assert "client_secret" not in repr(cfg)
 
 
+def test_config_management_base_url_defaults_to_public_cloud():
+    cfg = AzureCostManagementConfig(subscription_id="s", tenant_id="t", client_id="c", client_secret="x")
+    assert cfg.management_base_url == "https://management.azure.com"
+
+
+def test_config_management_base_url_reads_env_override(monkeypatch):
+    """Sovereign clouds + testability: AZURE_MANAGEMENT_BASE_URL can point at a different host."""
+    monkeypatch.setenv("AZURE_TENANT_ID", "t")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "c")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "x")
+    monkeypatch.setenv("AZURE_MANAGEMENT_BASE_URL", "https://management.usgovcloudapi.net")
+
+    cfg = AzureCostManagementConfig.from_env(subscription_id="s")
+
+    assert cfg.management_base_url == "https://management.usgovcloudapi.net"
+
+
+@pytest.mark.asyncio
+async def test_get_daily_cost_hits_management_base_url_from_config():
+    """Client must use the base URL from config (sovereign cloud support)."""
+    payload = {"properties": {"columns": [{"name": "Cost"}], "rows": []}}
+    http = _http_ok(payload)
+    cfg = AzureCostManagementConfig(
+        subscription_id="sub-x",
+        tenant_id="t",
+        client_id="c",
+        client_secret="x",
+        management_base_url="http://localhost:18443",
+    )
+    client = AzureCostManagementClient(config=cfg, http_handler=http, token_provider=lambda: "tkn")
+
+    await client.get_daily_cost("/subs/x/deploy/y", date(2026, 7, 15))
+
+    kwargs = http.post.await_args.kwargs
+    assert kwargs["url"].startswith("http://localhost:18443/subscriptions/sub-x/")
+
+
 @pytest.mark.asyncio
 async def test_get_daily_cost_wraps_network_errors():
     """httpx.RequestError family (ConnectError, ReadTimeout, RemoteProtocolError) must surface as AzureCostManagementError."""

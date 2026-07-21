@@ -7464,6 +7464,24 @@ def giveup(e):
     return result
 
 
+class _DemoAzureCostFetcher:
+    """Env-gated stub used only when AZURE_PTU_DEMO_USD is set.
+
+    Returns the same USD amount for every reservation/day so the Usage page can show
+    a plausible azure_billing figure during customer demos without provisioning a real
+    PTU or waiting for Azure's 24-72h billing lag. Presence of the env var is
+    intentionally the only opt-in; it prints a loud warning so nobody ships to prod
+    with it accidentally set.
+    """
+
+    def __init__(self, amount_usd: float) -> None:
+        self._amount = amount_usd
+        self.last_currency = "USD"
+
+    async def get_daily_cost(self, resource_id: str, day: Any) -> float:  # noqa: ARG002  # demo signature must match AzureCostFetcher Protocol
+        return self._amount
+
+
 def _build_azure_cost_fetcher_if_enabled() -> Optional[Any]:
     """Return an AzureCostManagementClient when config + creds are present, else None.
 
@@ -7472,9 +7490,31 @@ def _build_azure_cost_fetcher_if_enabled() -> Optional[Any]:
     piece is missing, azure_billing reservations no-op with a warning inside the
     rollup and manual reservations continue to accrue via the formula.
 
+    When ``AZURE_PTU_DEMO_USD`` is set, a stub fetcher returning that amount is
+    used instead of the real client. Demo-only; a WARNING is logged every call so
+    the mode is impossible to miss in production logs.
+
     Evaluated at rollup call time so runtime config changes take effect without a
     proxy restart.
     """
+    demo_env = os.getenv("AZURE_PTU_DEMO_USD")
+    if demo_env:
+        try:
+            amount = float(demo_env)
+        except ValueError:
+            verbose_proxy_logger.warning(
+                "AZURE_PTU_DEMO_USD=%r is not a valid float; skipping demo fetcher.",
+                demo_env,
+            )
+        else:
+            verbose_proxy_logger.warning(
+                "AZURE_PTU_DEMO_USD=%.2f is set; azure_billing reservations will return "
+                "this stub USD amount instead of hitting Azure Cost Management. "
+                "Unset this env var before shipping to production.",
+                amount,
+            )
+            return _DemoAzureCostFetcher(amount)
+
     azure_ptu_billing = general_settings.get("azure_ptu_billing") or {}
     subscription_id = azure_ptu_billing.get("subscription_id")
     if not subscription_id:

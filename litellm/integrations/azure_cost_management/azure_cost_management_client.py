@@ -30,6 +30,7 @@ class AzureCostManagementConfig:
     client_id: str
     client_secret: str = field(repr=False)
     api_version: str = "2023-11-01"
+    management_base_url: str = "https://management.azure.com"
 
     @classmethod
     def from_env(cls, subscription_id: str) -> AzureCostManagementConfig:
@@ -52,6 +53,7 @@ class AzureCostManagementConfig:
             tenant_id=tenant_id or "",
             client_id=client_id or "",
             client_secret=client_secret or "",
+            management_base_url=os.getenv("AZURE_MANAGEMENT_BASE_URL", "https://management.azure.com"),
         )
 
 
@@ -105,7 +107,7 @@ class AzureCostManagementClient:
         valid response, typically due to reporting lag or zero utilization).
         """
         url = (
-            "https://management.azure.com/subscriptions/"
+            f"{self._config.management_base_url}/subscriptions/"
             f"{self._config.subscription_id}"
             "/providers/Microsoft.CostManagement/query"
         )
