@@ -1339,6 +1339,94 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
 
 
 @pytest.mark.parametrize(
+    "messages, expected_substring",
+    [
+        # Content-part dicts with no "type" key at all — what a client sends when it
+        # passes a messages array (or raw objects) where a prompt string belongs.
+        (
+            [{"role": "user", "content": [{"role": "user", "content": "hi"}]}],
+            "Invalid user message at index 0",
+        ),
+        # Anthropic-native block posted to the OpenAI chat path.
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "42"}],
+                }
+            ],
+            "Invalid user message at index 0",
+        ),
+        # Message missing "role" entirely -> the KeyError branch.
+        (
+            [{"content": [{"type": "text", "text": "hi"}]}],
+            "Invalid message at index 0",
+        ),
+    ],
+)
+def test_validate_chat_completion_user_messages_raises_bad_request(messages, expected_substring):
+    """A malformed client message is a 400, not a 500.
+
+    Regression test: these raised a bare Exception, which exception_type() could not
+    map, so it fell through to APIConnectionError. Clients saw an HTTP 500 blamed on
+    whichever provider the router was about to call -- a provider that was never
+    contacted -- and retried a permanently-invalid request.
+    """
+    from litellm.utils import validate_chat_completion_user_messages
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        validate_chat_completion_user_messages(messages=messages)
+
+    assert exc_info.value.status_code == 400
+    assert expected_substring in str(exc_info.value)
+
+
+def test_validate_chat_completion_tool_choice_raises_bad_request():
+    """Same contract for the tool_choice validator."""
+    from litellm.utils import validate_chat_completion_tool_choice
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        validate_chat_completion_tool_choice(tool_choice={"type": "tool", "name": "get_current_weather"})
+
+    assert exc_info.value.status_code == 400
+
+
+def test_validation_bad_request_is_not_remapped_to_api_connection_error():
+    """exception_type() must pass the 400 through instead of rewrapping it.
+
+    This is the half that actually reached users: a BadRequestError is in
+    LITELLM_EXCEPTION_TYPES, so exception_type() re-raises it "already mapped"
+    and never stamps a provider name onto it.
+    """
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.utils import validate_chat_completion_user_messages
+
+    try:
+        validate_chat_completion_user_messages(
+            messages=[{"role": "user", "content": [{"role": "user", "content": "hi"}]}]
+        )
+        pytest.fail("expected a BadRequestError")
+    except Exception as e:  # noqa: BLE001
+        original_exception = e
+
+    # exception_type() returns the mapped exception on this path (callers do
+    # `raise exception_type(...)`), but raises on others -- accept either.
+    try:
+        mapped = exception_type(
+            model="glm-5.2",
+            original_exception=original_exception,
+            custom_llm_provider="baseten",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    except Exception as e:  # noqa: BLE001
+        mapped = e
+
+    assert isinstance(mapped, litellm.BadRequestError)
+    assert mapped.status_code == 400
+    # The provider was never contacted; its name must not appear in the error.
+    assert "BasetenException" not in str(mapped)
+@pytest.mark.parametrize(
     "tool_choice, expected_bool",
     [
         ({"type": "function", "function": {"name": "get_current_weather"}}, True),
