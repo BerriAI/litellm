@@ -23,6 +23,6 @@ export const withServerRoot = (path: string, root: string): string => {
 export const resolveLogoSrc = (value: string | null | undefined, root: string = serverRootPath): string | undefined => {
   if (!value) return undefined;
   if (EXTERNAL_SRC.test(value)) return value;
-  if (value.includes("/_next/")) return value;
+  if (value.includes("/_next/static/")) return value;
   return withServerRoot(value, root);
 };
