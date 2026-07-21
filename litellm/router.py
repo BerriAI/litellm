@@ -110,6 +110,9 @@ from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
+from litellm.router_utils.auto_router_model_naming import (
+    classify_strategy_router_model,
+)
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
@@ -7623,15 +7626,7 @@ class Router:
         but NOT "auto_router/complexity_router" or "auto_router/adaptive_router"
         (which use the complexity-router and adaptive-router strategies).
         """
-        if litellm_params.model.startswith("auto_router/complexity_router"):
-            return False  # This is handled by complexity_router
-        if litellm_params.model.startswith("auto_router/adaptive_router"):
-            return False  # This is handled by adaptive_router
-        if litellm_params.model.startswith("auto_router/quality_router"):
-            return False  # This is handled by quality_router
-        if litellm_params.model.startswith("auto_router/"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "semantic"
 
     @staticmethod
     def _deployment_tags(deployment: Deployment) -> tuple[str, ...]:
@@ -7686,9 +7681,7 @@ class Router:
 
         Returns True if the litellm_params model starts with "auto_router/complexity_router"
         """
-        if litellm_params.model.startswith("auto_router/complexity_router"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "complexity"
 
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
@@ -7738,7 +7731,7 @@ class Router:
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
-        return litellm_params.model.startswith("auto_router/adaptive_router")
+        return classify_strategy_router_model(litellm_params.model) == "adaptive"
 
     def _deployment_participates_in_adaptive_routing(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment owns an `adaptive_routers` entry once finalized:
@@ -7964,9 +7957,7 @@ class Router:
 
         Returns True if the litellm_params model starts with "auto_router/quality_router".
         """
-        if litellm_params.model.startswith("auto_router/quality_router"):
-            return True
-        return False
+        return classify_strategy_router_model(litellm_params.model) == "quality"
 
     def init_quality_router_deployment(self, deployment: Deployment):
         """
