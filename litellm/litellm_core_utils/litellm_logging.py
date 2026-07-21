@@ -88,6 +88,7 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponseFailedEvent,
+    SpeechStreamingResponse,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
 )
@@ -1983,6 +1984,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, TranscriptionResponse)
             or isinstance(logging_result, TextCompletionResponse)
             or isinstance(logging_result, HttpxBinaryResponseContent)  # tts
+            or isinstance(logging_result, SpeechStreamingResponse)  # streaming tts (stream_format="sse")
             or isinstance(logging_result, RerankResponse)
             or isinstance(logging_result, FineTuningJob)
             or isinstance(logging_result, LiteLLMBatch)
