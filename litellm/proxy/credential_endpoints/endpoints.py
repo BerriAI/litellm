@@ -306,7 +306,8 @@ async def get_credentials(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-        if _is_proxy_admin(user_api_key_dict):
+        is_proxy_admin = _is_proxy_admin(user_api_key_dict)
+        if is_proxy_admin:
             visible = list(litellm.credential_list)
         else:
             scope = await _caller_admin_scope(user_api_key_dict, prisma_client)
@@ -331,7 +332,14 @@ async def get_credentials(
         masked_credentials = [
             {
                 "credential_name": credential.credential_name,
-                "credential_values": _get_masked_values(credential.credential_values),
+                "credential_values": (
+                    {
+                        **_get_masked_values(credential.credential_values),
+                        "otel_headers": "********",
+                    }
+                    if not is_proxy_admin and "otel_headers" in credential.credential_values
+                    else _get_masked_values(credential.credential_values)
+                ),
                 "credential_info": credential.credential_info,
             }
             for credential in visible
