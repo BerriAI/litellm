@@ -795,8 +795,7 @@ class RetrieveHarness:
     creds_resolver: MagicMock
     get_batch_from_db: AsyncMock
     update_batch_in_db: AsyncMock
-    resolve_input: AsyncMock
-    resolve_output: AsyncMock
+    ensure_managed_files: AsyncMock
 
     @property
     def router_aretrieve(self) -> AsyncMock:
@@ -835,8 +834,7 @@ def retrieve_harness():
     # Default: DB miss -> always fall through to provider routing.
     get_batch_from_db = AsyncMock(return_value=(None, None))
     update_batch_in_db = AsyncMock(return_value=None)
-    resolve_input = AsyncMock(return_value=None)
-    resolve_output = AsyncMock(return_value=None)
+    ensure_managed_files = AsyncMock(return_value=None)
 
     with ExitStack() as stack:
         stack.enter_context(
@@ -872,11 +870,8 @@ def retrieve_harness():
             patch.object(endpoints, "update_batch_in_database", update_batch_in_db)
         )
         stack.enter_context(
-            patch.object(endpoints, "resolve_input_file_id_to_unified", resolve_input)
-        )
-        stack.enter_context(
             patch.object(
-                endpoints, "resolve_output_file_ids_to_unified", resolve_output
+                endpoints, "ensure_batch_response_managed_file_ids", ensure_managed_files
             )
         )
         stack.enter_context(patch.object(litellm, "aretrieve_batch", litellm_aretrieve))
@@ -902,8 +897,7 @@ def retrieve_harness():
             creds_resolver=router.get_deployment_credentials_with_provider,
             get_batch_from_db=get_batch_from_db,
             update_batch_in_db=update_batch_in_db,
-            resolve_input=resolve_input,
-            resolve_output=resolve_output,
+            ensure_managed_files=ensure_managed_files,
         )
 
 
@@ -1036,9 +1030,8 @@ async def test_retrieve__unified_batch_id_routes_to_router(retrieve_harness):
     assert resp._hidden_params["unified_batch_id"] == UNIFIED_BATCH_ID
     assert resp._hidden_params["model_id"] == "gpt-4o-mini"
 
-    # raw provider file ids on the response are resolved back to unified ids.
-    retrieve_harness.resolve_input.assert_called_once()
-    retrieve_harness.resolve_output.assert_called_once()
+    # raw provider file ids on the response are normalized to managed unified ids.
+    retrieve_harness.ensure_managed_files.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -1054,9 +1047,8 @@ async def test_retrieve__loadbalancing_raw_id_routes_to_router(retrieve_harness)
     # not a unified id -> hidden param reflects that, no model_id stamped.
     assert resp._hidden_params["unified_batch_id"] is False
     assert "model_id" not in resp._hidden_params
-    # not a unified id -> no file-id resolution.
-    retrieve_harness.resolve_input.assert_not_called()
-    retrieve_harness.resolve_output.assert_not_called()
+    # not a unified id -> no managed-file normalization.
+    retrieve_harness.ensure_managed_files.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #
@@ -1149,16 +1141,20 @@ async def test_retrieve__db_terminal_state_short_circuits(retrieve_harness, stat
 @pytest.mark.asyncio
 async def test_retrieve__db_terminal_unified_resolves_file_ids(retrieve_harness):
     db_response = make_batch(id="batch-from-db", status="completed")
-    retrieve_harness.get_batch_from_db.return_value = (MagicMock(), db_response)
+    db_batch_object = MagicMock()
+    retrieve_harness.get_batch_from_db.return_value = (db_batch_object, db_response)
 
     with patch.object(
         endpoints, "_is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID
     ):
         await call_retrieve(retrieve_harness, "batch-unified-blob")
 
-    # Terminal short-circuit still resolves raw provider file ids to unified.
-    retrieve_harness.resolve_input.assert_called_once()
-    retrieve_harness.resolve_output.assert_called_once()
+    # Terminal short-circuit still registers/normalizes raw provider file ids.
+    retrieve_harness.ensure_managed_files.assert_called_once()
+    ensure_kwargs = retrieve_harness.ensure_managed_files.call_args.kwargs
+    assert ensure_kwargs["response"] is db_response
+    assert ensure_kwargs["db_batch_object"] is db_batch_object
+    assert ensure_kwargs["unified_batch_id"] == UNIFIED_BATCH_ID
     retrieve_harness.litellm_aretrieve.assert_not_called()
     retrieve_harness.router_aretrieve.assert_not_called()
 

@@ -871,6 +871,7 @@ async def ensure_batch_response_managed_file_ids(
     verbose_proxy_logger,
     user_api_key_dict=None,
     db_batch_object=None,
+    unified_batch_id: Union[str, Literal[False], None] = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""
     await resolve_input_file_id_to_unified(response, prisma_client)
@@ -881,6 +882,21 @@ async def ensure_batch_response_managed_file_ids(
 
     hidden_params = getattr(response, "_hidden_params", None) or {}
     model_id = hidden_params.get("model_id")
+    if not model_id:
+        model_id_candidates = []
+        if isinstance(unified_batch_id, str):
+            model_id_candidates.append(unified_batch_id)
+        response_id = getattr(response, "id", None)
+        if isinstance(response_id, str):
+            decoded_response_id = _is_base64_encoded_unified_file_id(response_id)
+            if decoded_response_id:
+                model_id_candidates.append(decoded_response_id)
+            elif response_id.startswith(SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value):
+                model_id_candidates.append(response_id)
+        for candidate in model_id_candidates:
+            model_id = get_model_id_from_unified_batch_id(candidate)
+            if model_id:
+                break
     if not model_id:
         return
 
@@ -895,6 +911,14 @@ async def ensure_batch_response_managed_file_ids(
     if user_api_key_dict is None and db_batch_object is not None:
         from litellm.proxy._types import UserAPIKeyAuth
 
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
+            team_id=getattr(db_batch_object, "team_id", None),
+        )
+    elif db_batch_object is not None:
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        # Managed batch output files belong to the durable batch owner, not the caller.
         user_api_key_dict = UserAPIKeyAuth(
             user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
             team_id=getattr(db_batch_object, "team_id", None),
@@ -976,8 +1000,16 @@ async def get_batch_from_database(
         response = LiteLLMBatch(**batch_data)
         response.id = batch_id
 
-        # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
-        await resolve_input_file_id_to_unified(response, prisma_client)
+        # The stored batch object may have raw provider file IDs. Register any missing
+        # managed-file rows and normalize output/error IDs before returning.
+        await ensure_batch_response_managed_file_ids(
+            response=response,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+            db_batch_object=db_batch_object,
+            unified_batch_id=unified_batch_id if isinstance(unified_batch_id, str) else None,
+        )
 
         verbose_proxy_logger.debug(f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}")
 

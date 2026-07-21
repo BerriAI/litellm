@@ -33,8 +33,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
-    resolve_input_file_id_to_unified,
-    resolve_output_file_ids_to_unified,
+    ensure_batch_response_managed_file_ids,
     update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
@@ -402,10 +401,16 @@ async def retrieve_batch(
             )
 
             # The DB may store raw provider file IDs (before hooks translate them).
-            # Resolve any raw input/output/error file IDs to unified IDs.
+            # Register any missing managed-file rows and return unified IDs.
             if unified_batch_id:
-                await resolve_input_file_id_to_unified(response, prisma_client)
-                await resolve_output_file_ids_to_unified(response, prisma_client)
+                await ensure_batch_response_managed_file_ids(
+                    response=response,
+                    managed_files_obj=managed_files_obj,
+                    prisma_client=prisma_client,
+                    verbose_proxy_logger=verbose_proxy_logger,
+                    db_batch_object=db_batch_object,
+                    unified_batch_id=unified_batch_id,
+                )
 
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
@@ -517,10 +522,16 @@ async def retrieve_batch(
         )
 
         # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
-        # Resolve raw provider file IDs (input, output, error) to unified IDs.
+        # Register any missing managed-file rows and return unified IDs.
         if unified_batch_id:
-            await resolve_input_file_id_to_unified(response, prisma_client)
-            await resolve_output_file_ids_to_unified(response, prisma_client)
+            await ensure_batch_response_managed_file_ids(
+                response=response,
+                managed_files_obj=managed_files_obj,
+                prisma_client=prisma_client,
+                verbose_proxy_logger=verbose_proxy_logger,
+                db_batch_object=db_batch_object,
+                unified_batch_id=unified_batch_id,
+            )
 
         ### ALERTING ###
         asyncio.create_task(
