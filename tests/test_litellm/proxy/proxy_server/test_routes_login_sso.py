@@ -55,6 +55,7 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
     monkeypatch.setattr(ps, "master_key", "sk-test-master")
     monkeypatch.setattr(ps, "general_settings", {})
     monkeypatch.setattr(ps, "premium_user", False)
+    monkeypatch.setattr(ps, "user_custom_ui_auth", None)
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +181,65 @@ def test_login_form_authenticate_raises_500(client, monkeypatch):
     assert response.headers.get("content-type") is not None
 
 
+def test_login_form_uses_custom_ui_auth_when_configured(client, monkeypatch):
+    """Pin: when user_custom_ui_auth is set, POST /login calls it (with the
+    request, username and password) instead of the built-in authenticate_user,
+    and still completes the normal redirect + cookie flow."""
+    from litellm.proxy import proxy_server as ps
+
+    _install_login_mocks(monkeypatch)
+
+    calls = []
+
+    async def _fake_custom_ui_auth(request, username, password):
+        calls.append((username, password))
+        fake = MagicMock()
+        fake.user_id = "custom-u-1"
+        fake.user_email = "custom@example.invalid"
+        fake.user_role = "proxy_admin"
+        fake.key = "sk-fake-custom-ui-key"
+        return fake
+
+    monkeypatch.setattr(ps, "user_custom_ui_auth", _fake_custom_ui_auth)
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("built-in authenticate_user must not be called")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user", _fail_if_called
+    )
+
+    response = client.post(
+        "/login",
+        data={"username": "custom-user", "password": "custom-password"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "token=" in response.headers.get("set-cookie", "")
+    assert calls == [("custom-user", "custom-password")]
+
+
+def test_login_form_custom_ui_auth_raises_500(client, monkeypatch):
+    """Error path: user_custom_ui_auth raising surfaces as a 500, same as the
+    built-in authenticate_user failure path."""
+    from litellm.proxy import proxy_server as ps
+
+    _install_login_mocks(monkeypatch)
+
+    async def _raising_custom_ui_auth(request, username, password):
+        raise Exception("boom-custom-auth-failure")
+
+    monkeypatch.setattr(ps, "user_custom_ui_auth", _raising_custom_ui_auth)
+
+    response = client.post(
+        "/login",
+        data={"username": "custom-user", "password": "wrong"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 500
+    assert len(response.content) > 0
+
+
 # ---------------------------------------------------------------------------
 # POST /v2/login
 # ---------------------------------------------------------------------------
@@ -225,6 +285,44 @@ def test_v2_login_authenticate_failure_500(client, monkeypatch):
     # Non-status assertion: response shape should carry an error
     assert "error" in body or "detail" in body
     assert isinstance(body, dict)
+
+
+def test_v2_login_uses_custom_ui_auth_when_configured(client, monkeypatch):
+    """Pin: when user_custom_ui_auth is set, POST /v2/login calls it instead
+    of the built-in authenticate_user and still returns {redirect_url, token}."""
+    from litellm.proxy import proxy_server as ps
+
+    _install_login_mocks(monkeypatch)
+
+    calls = []
+
+    async def _fake_custom_ui_auth(request, username, password):
+        calls.append((username, password))
+        fake = MagicMock()
+        fake.user_id = "custom-u-1"
+        fake.user_email = "custom@example.invalid"
+        fake.user_role = "proxy_admin"
+        fake.key = "sk-fake-custom-ui-key"
+        return fake
+
+    monkeypatch.setattr(ps, "user_custom_ui_auth", _fake_custom_ui_auth)
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("built-in authenticate_user must not be called")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user", _fail_if_called
+    )
+
+    response = client.post(
+        "/v2/login",
+        json={"username": "custom-user", "password": "custom-password"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert bool(body.get("token"))
+    assert "/ui/" in body.get("redirect_url", "")
+    assert calls == [("custom-user", "custom-password")]
 
 
 # ---------------------------------------------------------------------------
