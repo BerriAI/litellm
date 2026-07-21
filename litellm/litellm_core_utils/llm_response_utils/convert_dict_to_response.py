@@ -52,7 +52,7 @@ _CHOICES_FIELDS: frozenset = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: frozenset = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
 
 
-def _coerce_missing_choices_status(value: object) -> Optional[int]:
+def _coerce_missing_choices_status(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
