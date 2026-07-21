@@ -442,6 +442,7 @@ class CreateBatchRequest(TypedDict, total=False):
 
 class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
     model: str
+    tags: Optional[list[dict[str, str]]]
 
 
 class RetrieveBatchRequest(TypedDict, total=False):

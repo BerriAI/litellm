@@ -160,6 +160,7 @@ def create_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     output_expires_after: Optional[Dict[str, Any]] = None,
+    tags: Optional[list[dict[str, str]]] = None,
     **kwargs,
 ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
     """
@@ -186,6 +187,8 @@ def create_batch(
 
         _is_async = kwargs.pop("acreate_batch", False) is True
         litellm_params = dict(GenericLiteLLMParams(**kwargs))
+        if tags is not None:
+            litellm_params["aws_tags"] = tags
         litellm_logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None))
         ### TIMEOUT LOGIC ###
         timeout = _resolve_timeout(optional_params, kwargs, custom_llm_provider)

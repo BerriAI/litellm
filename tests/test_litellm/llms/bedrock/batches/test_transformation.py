@@ -239,6 +239,45 @@ def test_create_request_missing_model_raises(config):
         )
 
 
+def test_create_request_forwards_tags_to_bedrock(config):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="anthropic.claude-3-5-sonnet",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "aws_tags": [{"key": "application", "value": "genai-proxy"}, {"key": "env", "value": "prod"}],
+            },
+        )
+    bedrock_request = mock_sign.call_args.kwargs["data"]
+    assert bedrock_request["tags"] == [
+        {"key": "application", "value": "genai-proxy"},
+        {"key": "env", "value": "prod"},
+    ]
+
+
+def test_create_request_omits_tags_when_not_provided(config):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
+        )
+    assert "tags" not in mock_sign.call_args.kwargs["data"]
+
+
 def test_create_request_no_timeout_for_non_24h_window(config):
     with patch.object(
         config.common_utils,

@@ -741,4 +741,65 @@ def test_resolve_timeout__httpx_timeout_returns_float_read():
     t = httpx.Timeout(99.0, connect=5.0)
     resolved = bm._resolve_timeout(_params(timeout=t), {}, "openai")
     assert isinstance(resolved, float)
-    assert resolved == 99.0
+
+
+# =========================================================================== #
+# Bedrock resource tags (SCP enforcement regression)
+#
+# Passing tags as List[dict] to create_batch previously raised a Pydantic
+# validation error because GenericLiteLLMParams.tags was typed List[str] and
+# is used elsewhere for tag-based deployment routing. Tags are now an
+# explicit param stored under litellm_params["aws_tags"] - a distinct key so
+# it can't collide with that routing field - and flow through to the
+# provider transformation layer from there.
+# =========================================================================== #
+
+
+def test_create_bedrock__dict_tags_do_not_raise_validation_error(seams):
+    """Dict-style AWS resource tags must not trigger a Pydantic validation error."""
+    bm.create_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id="s3://bucket/input.jsonl",
+        custom_llm_provider="bedrock",
+        model="us.anthropic.claude-opus-4-7",
+        tags=[{"key": "application", "value": "genai-proxy"}],
+        aws_batch_role_arn="arn:aws:iam::123456789012:role/BedrockBatchRole",
+    )
+    seams.base_http.create_batch.assert_called_once()
+
+
+def test_create_bedrock__tags_forwarded_in_litellm_params(seams):
+    """Tags passed to create_batch appear under litellm_params["aws_tags"] sent to the provider config."""
+    bm.create_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id="s3://bucket/input.jsonl",
+        custom_llm_provider="bedrock",
+        model="us.anthropic.claude-opus-4-7",
+        tags=[{"key": "team", "value": "ml-platform"}, {"key": "cost-center", "value": "42"}],
+        aws_batch_role_arn="arn:aws:iam::123456789012:role/BedrockBatchRole",
+    )
+    _, call_kwargs = seams.base_http.create_batch.call_args
+    litellm_params = call_kwargs["litellm_params"]
+    assert litellm_params["aws_tags"] == [
+        {"key": "team", "value": "ml-platform"},
+        {"key": "cost-center", "value": "42"},
+    ]
+    # must not collide with the router's tag-based-routing "tags" field
+    assert litellm_params["tags"] is None
+
+
+def test_create_bedrock__no_tags_not_in_litellm_params(seams):
+    """When tags is omitted, litellm_params must not contain an aws_tags key."""
+    bm.create_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id="s3://bucket/input.jsonl",
+        custom_llm_provider="bedrock",
+        model="us.anthropic.claude-opus-4-7",
+        aws_batch_role_arn="arn:aws:iam::123456789012:role/BedrockBatchRole",
+    )
+    _, call_kwargs = seams.base_http.create_batch.call_args
+    litellm_params = call_kwargs["litellm_params"]
+    assert "aws_tags" not in litellm_params

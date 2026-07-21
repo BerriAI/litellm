@@ -19,6 +19,7 @@ from litellm.types.llms.bedrock import (
     BedrockOutputDataConfig,
     BedrockS3InputDataConfig,
     BedrockS3OutputDataConfig,
+    BedrockTag,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -200,6 +201,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "outputDataConfig": output_data_config,
             "roleArn": role_arn,
         }
+
+        raw_tags = litellm_params.get("aws_tags")
+        if raw_tags:
+            bedrock_request["tags"] = [BedrockTag(key=t["key"], value=t["value"]) for t in raw_tags]
 
         # Add optional parameters if provided
         completion_window = create_batch_data.get("completion_window")
