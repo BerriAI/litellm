@@ -1041,13 +1041,6 @@ async def update_ui_theme_settings(
     config = await proxy_config.get_config()
     before_theme = config.get("litellm_settings", {}).get("ui_theme_config")
 
-    # Update config with UI theme settings
-    if "general_settings" not in config:
-        config["general_settings"] = {}
-
-    if "environment_variables" not in config:
-        config["environment_variables"] = {}
-
     # Convert theme config to dict
     theme_data = theme_config.model_dump(exclude_none=True)
 
@@ -1056,55 +1049,29 @@ async def update_ui_theme_settings(
         config["litellm_settings"] = {}
     config["litellm_settings"]["ui_theme_config"] = theme_data
 
-    # Update UI_LOGO_PATH environment variable if logo_url is provided
-    # If logo_url is empty string, None, or null, remove the environment variable to use default
-    logo_url = theme_data.get("logo_url")
-    verbose_proxy_logger.debug(f"Updating logo_url: {logo_url}")
+    # UI_LOGO_PATH and LITELLM_FAVICON_URL are the only environment variables
+    # this endpoint owns. A non-empty value sets the var; an empty or missing
+    # one clears it back to the default. Apply to the live process immediately,
+    # then persist only these two keys so an unrelated env var (a YAML/OS value
+    # merged in by get_config) is never snapshotted into the DB.
+    def _clean(url: str | None) -> str | None:
+        return url if url is not None and url.strip() else None
 
-    if (
-        logo_url and isinstance(logo_url, str) and logo_url.strip()
-    ):  # Check if logo_url exists and is not empty/whitespace
-        config["environment_variables"]["UI_LOGO_PATH"] = logo_url
-        os.environ["UI_LOGO_PATH"] = logo_url
-        verbose_proxy_logger.debug(f"Set UI_LOGO_PATH to: {logo_url}")
-    else:
-        # Remove the environment variable to restore default logo
-        if "UI_LOGO_PATH" in config.get("environment_variables", {}):
-            del config["environment_variables"]["UI_LOGO_PATH"]
-            verbose_proxy_logger.debug("Removed UI_LOGO_PATH from config")
-        if "UI_LOGO_PATH" in os.environ:
-            del os.environ["UI_LOGO_PATH"]
-            verbose_proxy_logger.debug("Removed UI_LOGO_PATH from environment")
+    env_updates: dict[str, str | None] = {
+        "UI_LOGO_PATH": _clean(theme_config.logo_url),
+        "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
+    }
+    for env_key, env_value in env_updates.items():
+        if env_value is not None:
+            os.environ[env_key] = env_value
+        else:
+            os.environ.pop(env_key, None)
 
-    # Update LITELLM_FAVICON_URL environment variable if favicon_url is provided
-    favicon_url = theme_data.get("favicon_url")
-    verbose_proxy_logger.debug(f"Updating favicon_url: {favicon_url}")
-
-    if (
-        favicon_url and isinstance(favicon_url, str) and favicon_url.strip()
-    ):  # Check if favicon_url exists and is not empty/whitespace
-        config["environment_variables"]["LITELLM_FAVICON_URL"] = favicon_url
-        os.environ["LITELLM_FAVICON_URL"] = favicon_url
-        verbose_proxy_logger.debug(f"Set LITELLM_FAVICON_URL to: {favicon_url}")
-    else:
-        # Remove the environment variable to restore default favicon
-        if "LITELLM_FAVICON_URL" in config.get("environment_variables", {}):
-            del config["environment_variables"]["LITELLM_FAVICON_URL"]
-            verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from config")
-        if "LITELLM_FAVICON_URL" in os.environ:
-            del os.environ["LITELLM_FAVICON_URL"]
-            verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from environment")
-
-    # Handle environment variable encryption if needed
-    stored_config = config.copy()
-    if "environment_variables" in stored_config and len(stored_config["environment_variables"]) > 0:
-        # Only encrypt if there are environment variables to encrypt
-        stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
-            environment_variables=stored_config["environment_variables"]
-        )
-
-    # Save the updated config
-    await proxy_config.save_config(new_config=stored_config)
+    # Persist the theme config (litellm_settings). save_config defaults to
+    # include_env_vars=False, so it does not snapshot environment_variables.
+    await proxy_config.save_config(new_config=config)
+    # Persist only the two owned env vars, merged against the existing DB row.
+    await proxy_config.save_environment_variables(env_updates)
 
     asyncio.create_task(
         create_config_audit_log(

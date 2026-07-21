@@ -28,6 +28,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    TypedDict,
     Union,
     cast,
     get_args,
@@ -39,6 +40,7 @@ import anyio
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json, JsonValue
+from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -289,6 +291,7 @@ from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
+    _should_return_raw_model_name,
     create_response,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
@@ -316,7 +319,10 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_settings,
+    get_budget_reset_time,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
@@ -363,14 +369,14 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
-    get_persisted_coordination_redis_settings,
-    router as coordination_redis_settings_router,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     _user_has_admin_view,
     admin_can_invite_user,
+)
+from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
+    get_persisted_coordination_redis_settings,
+    router as coordination_redis_settings_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -438,10 +444,30 @@ from litellm.proxy.management_helpers.audit_logs import (
     create_object_audit_log,
 )
 from litellm.proxy.memory.memory_endpoints import router as memory_router
+from litellm.proxy.middleware.billable_request_metrics_middleware import (
+    BillableRequestMetricsMiddleware,
+    BillingRecorder,
+)
 from litellm.proxy.plugin_routes import (
-    router as plugin_router,
     register_plugins_from_config,
 )
+from litellm.proxy.plugin_routes import (
+    router as plugin_router,
+)
+
+try:
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        build_billing_metrics_recorder as _build_billing_metrics_recorder,
+    )
+    from litellm.proxy.enterprise_billing.billing_metrics import (
+        shutdown_billing_metrics_recorder as _shutdown_billing_metrics_recorder,
+    )
+
+    build_billing_metrics_recorder: Optional[Callable[..., Optional[BillingRecorder]]] = _build_billing_metrics_recorder
+    shutdown_billing_metrics_recorder: Optional[Callable[[], None]] = _shutdown_billing_metrics_recorder
+except ImportError:
+    build_billing_metrics_recorder = None
+    shutdown_billing_metrics_recorder = None
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -461,12 +487,10 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
+    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
-)
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-    vertex_ai_live_websocket_passthrough,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
@@ -552,21 +576,19 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     DeploymentTypedDict,
-)
-from litellm.types.router import ModelInfo as RouterModelInfo
-from litellm.types.router import (
     RouterGeneralSettings,
+    RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
 )
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.scheduler import DefaultPriorities
 from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
-from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
+from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
@@ -766,6 +788,11 @@ async def proxy_shutdown_event():
 
     if db_writer_client is not None:
         await db_writer_client.close()  # type: ignore[reportGeneralTypeIssues]
+
+    # final flush of billable-request counts: without it, up to one export
+    # interval of enterprise billing data is dropped on every restart
+    if shutdown_billing_metrics_recorder is not None:
+        shutdown_billing_metrics_recorder()
 
     # flush remaining langfuse logs
     if "langfuse" in litellm.success_callback:
@@ -972,11 +999,11 @@ async def proxy_startup_event(app: FastAPI):
         if is_otel_v2_enabled():
             from opentelemetry import trace as _otel_trace
 
-            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
             from litellm.integrations.otel.logger import (
                 OpenTelemetryV2,
                 publish_global_otel_v2_provider,
             )
+            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
 
             registered = open_telemetry_logger if isinstance(open_telemetry_logger, OpenTelemetryV2) else None
             publish_global_otel_v2_provider(
@@ -1055,9 +1082,10 @@ async def proxy_startup_event(app: FastAPI):
     # lazily by the flusher on first tick (see `_state_loaded` flag) so
     # hot-reloaded routers also get their persisted priors.
     if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
-        for _ar in llm_router.adaptive_routers.values():
-            await _ar.load_state_from_db(prisma_client)
-            _ar._state_loaded = True
+        for _tagged_routers in llm_router.adaptive_routers.values():
+            for _tagged in _tagged_routers:
+                await _tagged.strategy.load_state_from_db(prisma_client)
+                _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer
@@ -1371,19 +1399,25 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
     if open_telemetry_logger is None:
         return
     # Under OTel V2 the FastAPI instrumentor owns the server span (parent_otel_span
-    # is that same span), and it records the error + ends it itself. Ending it here
-    # would end it early — losing the http.* attributes the instrumentor stamps on
-    # completion — and double-end it. Leave it to the instrumentor.
+    # is that same span) and ends it itself with the http.* attributes stamped on
+    # completion. The instrumentor only records an error when the exception reaches
+    # it uncaught, but these handlers swallow it into a JSONResponse, so it never
+    # does; stamp the error.* attributes here (without ending or re-statusing the
+    # span, which the instrumentor still owns) so pre-call failures carry the error
+    # like v1 did. Otherwise close and annotate the dangling span ourselves.
     try:
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
-        if is_otel_v2_enabled():
-            return
+        v2_enabled = is_otel_v2_enabled()
     except Exception:
-        pass
+        v2_enabled = False
     try:
         from opentelemetry.trace import Status, StatusCode
 
+        if v2_enabled:
+            if status_code >= 400:
+                open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
+            return
         open_telemetry_logger.set_response_status_code_attribute(parent_otel_span, status_code)
         if status_code >= 400:
             open_telemetry_logger.record_error_attributes_on_span(parent_otel_span, exc, status_code)
@@ -1392,7 +1426,8 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
     except Exception as e:
         verbose_proxy_logger.debug("Error closing dangling OTEL SERVER span: %s", str(e))
     finally:
-        request.state.parent_otel_span = None
+        if not v2_enabled:
+            request.state.parent_otel_span = None
 
 
 @app.exception_handler(RequestValidationError)
@@ -1780,6 +1815,31 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+# Added before InFlightRequestsMiddleware so it nests *inside* it: Starlette
+# makes the last-added middleware outermost. The billable count is recorded
+# after the inner app returns, so if this sat outside the in-flight tracker a
+# request could be counted as drained while its record() had not yet run, and
+# proxy_shutdown_event could flush and stop the exporter underneath it.
+app.add_middleware(
+    BillableRequestMetricsMiddleware,
+    # Factory, not an instance: the recorder is resolved on the first request so
+    # it sees premium_user and the billing env vars AFTER proxy_startup_event has
+    # loaded the YAML config's environment_variables. Building it here at import
+    # time would permanently capture recorder=None for YAML-configured
+    # deployments. The lambda reads the module globals at call time.
+    recorder_factory=lambda: (
+        build_billing_metrics_recorder(
+            premium=premium_user,
+            # Read from the license check, not the premium_user_data module
+            # global: that global is bound once at import and goes stale when
+            # the license arrives via the YAML config's environment_variables.
+            license_data=_license_check.airgapped_license_data,
+            litellm_version=version,
+        )
+        if build_billing_metrics_recorder is not None
+        else None
+    ),
+)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -2768,21 +2828,6 @@ async def update_cache(
             )
             # set cooldown on alert
 
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_spend", None) is not None:
-            existing_team_spend = existing_spend_obj.team_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_spend = existing_team_spend + response_cost
-
-        if existing_spend_obj is not None and getattr(existing_spend_obj, "team_member_spend", None) is not None:
-            existing_team_member_spend = existing_spend_obj.team_member_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_member_spend = existing_team_member_spend + response_cost
-
-        # Existing spend_obj is mutated; UserApiKeyCache.async_set_cache_pipeline turns
-        # BaseModel values into dicts for Redis (same Codec path as async_set_cache).
-        existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
-
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
@@ -2986,13 +3031,27 @@ async def update_cache(
     if tags is not None:
         await _update_tag_cache()
 
-    asyncio.create_task(
-        user_api_key_cache.async_set_cache_pipeline(
-            cache_list=values_to_update_in_cache,
-            ttl=get_management_object_ttl(user_api_key_cache),
-            litellm_parent_otel_span=parent_otel_span,
+    global_proxy_spend_key = "{}:spend".format(litellm_proxy_admin_name)
+    local_object_updates = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
+    shared_scalar_updates = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
+
+    if local_object_updates:
+        asyncio.create_task(
+            user_api_key_cache.async_set_cache_pipeline(
+                cache_list=list(local_object_updates),
+                ttl=get_management_object_ttl(user_api_key_cache),
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
         )
-    )
+    if shared_scalar_updates:
+        asyncio.create_task(
+            user_api_key_cache.async_set_cache_pipeline(
+                cache_list=list(shared_scalar_updates),
+                ttl=get_management_object_ttl(user_api_key_cache),
+                litellm_parent_otel_span=parent_otel_span,
+            )
+        )
 
 
 def run_ollama_serve():
@@ -3203,16 +3262,18 @@ async def _adaptive_router_flusher_loop():
             adaptive_routers = getattr(llm_router, "adaptive_routers", None) or {}
             if not adaptive_routers or prisma_client is None:
                 continue
-            for ar in adaptive_routers.values():
-                # Lazy state load: covers adaptive routers registered via
-                # `/config/reload` after proxy boot.
-                if not getattr(ar, "_state_loaded", False):
-                    try:
-                        await ar.load_state_from_db(prisma_client)
-                    finally:
-                        ar._state_loaded = True
-                await ar.queue.flush_state_to_db(prisma_client)
-                await ar.queue.flush_session_to_db(prisma_client)
+            for tagged_routers in adaptive_routers.values():
+                for tagged in tagged_routers:
+                    ar = tagged.strategy
+                    # Lazy state load: covers adaptive routers registered via
+                    # `/config/reload` after proxy boot.
+                    if not getattr(ar, "_state_loaded", False):
+                        try:
+                            await ar.load_state_from_db(prisma_client)
+                        finally:
+                            ar._state_loaded = True
+                    await ar.queue.flush_state_to_db(prisma_client)
+                    await ar.queue.flush_session_to_db(prisma_client)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -3660,6 +3721,64 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     litellm_config_cache.redis_cache = redis_cache
 
 
+def resolve_routing_plugins(
+    plugin_paths: list,
+    config_file_path: str | None,
+    source_label: str,
+) -> list:
+    """
+    Resolves a list of routing-plugin entries to live `RoutingPlugin` instances.
+    Each string entry is resolved through `get_instance_fn` (the same dotted-path
+    convention `litellm_settings.callbacks` uses, which resolves both local module
+    files next to the config and modules installed as Python packages); non-string
+    entries are assumed to already be instances and passed through. Raises at
+    config-load time if any entry resolves to something that doesn't implement
+    `RoutingPlugin`, rather than deferring to a confusing `AttributeError` on the
+    first request that reaches the plugin pipeline. `source_label` names the config
+    key being resolved so the error points the operator at the right place.
+    """
+    resolved_plugins = [
+        get_instance_fn(value=plugin_path, config_file_path=config_file_path)
+        if isinstance(plugin_path, str)
+        else plugin_path
+        for plugin_path in plugin_paths
+    ]
+    for plugin_path, resolved_plugin in zip(plugin_paths, resolved_plugins):
+        # `@runtime_checkable` only checks that `run` exists as an attribute, not that
+        # it's a coroutine function -- a synchronous `def run(self, context)` would pass
+        # isinstance() here and only fail at request time with a confusing `TypeError:
+        # object RoutingContext can't be used in 'await' expression`.
+        if not isinstance(resolved_plugin, RoutingPlugin) or not inspect.iscoroutinefunction(
+            getattr(resolved_plugin, "run", None)
+        ):
+            raise ValueError(
+                f"{source_label} entry {plugin_path!r} resolved to {resolved_plugin!r}, which does "
+                "not implement the RoutingPlugin interface (an async `run(context)` method). Fix the "
+                "referenced module before starting the proxy."
+            )
+    return resolved_plugins
+
+
+def resolve_complexity_router_plugins(
+    model_name: str,
+    complexity_router_config: dict,
+    config_file_path: str | None,
+) -> None:
+    """
+    Resolves `complexity_router_config["plugins"]` dotted-path strings to live
+    instances in place, via `resolve_routing_plugins`.
+    """
+    plugin_paths = complexity_router_config.get("plugins")
+    if not isinstance(plugin_paths, list):
+        return
+
+    complexity_router_config["plugins"] = resolve_routing_plugins(
+        plugin_paths=plugin_paths,
+        config_file_path=config_file_path,
+        source_label=f"complexity_router_config.plugins on model {model_name!r}",
+    )
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -3763,7 +3882,7 @@ class ProxyConfig:
         del config["include"]
         return config
 
-    async def save_config(self, new_config: dict):
+    async def save_config(self, new_config: dict, include_env_vars: bool = False):
         global prisma_client, general_settings, user_config_file_path, store_model_in_db
         # Load existing config
         ## DB - writes valid config to db
@@ -3779,6 +3898,17 @@ class ProxyConfig:
 
             # Make a copy to avoid mutating the original config
             config_to_save = new_config.copy()
+
+            # environment_variables are persisted to the DB only when a caller
+            # explicitly opts in. Most callers reach save_config after
+            # get_config() merged YAML + OS env into new_config (with
+            # os.environ/ placeholders already resolved to plaintext), so
+            # persisting them here would snapshot file/container env vars into
+            # a config row that then shadows those sources on every restart.
+            # The dedicated /config/update path writes env vars directly, so
+            # no current caller needs include_env_vars=True.
+            if not include_env_vars:
+                config_to_save.pop("environment_variables", None)
 
             # SECURITY: Always encrypt environment_variables before DB write.
             # _encrypt_env_variables_for_db is idempotent — a caller that
@@ -3796,6 +3926,38 @@ class ProxyConfig:
             ## YAML
             with open(f"{user_config_file_path}", "w") as config_file:
                 yaml.dump(new_config, config_file, default_flow_style=False)
+
+    async def save_environment_variables(self, updates: dict[str, str | None]) -> None:
+        """Persist specific environment variables to the DB config row.
+
+        Each key in ``updates`` is written to the ``environment_variables``
+        config row; a ``None`` value deletes that key. Env vars the caller does
+        not name are preserved, so a caller that owns a couple of keys can
+        update just those without snapshotting unrelated (YAML/OS-sourced)
+        values the way a full ``save_config`` write would. No-op when config is
+        not DB-backed.
+        """
+        global prisma_client, general_settings, store_model_in_db
+        if prisma_client is None or not (general_settings.get("store_model_in_db", False) is True or store_model_in_db):
+            return
+
+        row = await ConfigRepository(prisma_client).table.find_first(where={"param_name": "environment_variables"})
+        existing: dict = dict(row.param_value) if row is not None and row.param_value is not None else {}
+
+        to_set = {k: v for k, v in updates.items() if v is not None}
+        encrypted = self._encrypt_env_variables_for_db(environment_variables=to_set) if to_set else {}
+        deleted_keys = {k for k, v in updates.items() if v is None}
+        merged = {**{k: v for k, v in existing.items() if k not in deleted_keys}, **encrypted}
+
+        serialized = json.dumps(merged)
+        await ConfigRepository(prisma_client).table.upsert(
+            where={"param_name": "environment_variables"},
+            data={
+                "create": {"param_name": "environment_variables", "param_value": serialized},
+                "update": {"param_value": serialized},
+            },
+        )
+        await invalidate_config_param("environment_variables")
 
     def _check_for_os_environ_vars(
         self, config: dict, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
@@ -4340,6 +4502,15 @@ class ProxyConfig:
                     litellm.default_max_internal_user_budget = float(value)
                     if litellm.max_internal_user_budget is None:
                         litellm.max_internal_user_budget = litellm.default_max_internal_user_budget
+                elif key == "default_internal_user_params" and isinstance(value, dict):
+                    litellm.default_internal_user_params = (
+                        {**value, "max_budget": float(value["max_budget"])}
+                        if value.get("max_budget") is not None
+                        else value
+                    )
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, litellm.default_internal_user_params, is_full_admin=False)}{reset_color_code}"
+                    )
                 elif key == "custom_provider_map":
                     from litellm.utils import custom_llm_setup
 
@@ -4472,6 +4643,13 @@ class ProxyConfig:
                     litellm.json_logs = True
                     litellm._turn_on_json()
                     verbose_proxy_logger.debug(f"{blue_color_code} Enabled JSON logging via config{reset_color_code}")
+                elif key == "budget_reset_time":
+                    from litellm.proxy.common_utils.timezone_utils import (
+                        parse_budget_reset_time,
+                    )
+
+                    parse_budget_reset_time(value)
+                    setattr(litellm, key, value)
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, value, is_full_admin=False)}{reset_color_code}"
@@ -4720,6 +4898,13 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
+                complexity_router_config = model["litellm_params"].get("complexity_router_config")
+                if isinstance(complexity_router_config, dict):
+                    resolve_complexity_router_plugins(
+                        model_name=model.get("model_name", ""),
+                        complexity_router_config=complexity_router_config,
+                        config_file_path=config_file_path,
+                    )
                 print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
@@ -4771,6 +4956,12 @@ class ProxyConfig:
 
             for k, v in router_settings.items():
                 if k in available_args:
+                    if k == "plugins" and isinstance(v, list):
+                        v = resolve_routing_plugins(
+                            plugin_paths=v,
+                            config_file_path=config_file_path,
+                            source_label="router_settings.plugins",
+                        )
                     router_params[k] = v
                 elif k in {"health_check_interval", "health_check_concurrency"}:
                     raise ValueError(
@@ -5692,6 +5883,13 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        if "disable_auto_add_proxy_admin_to_teams" in _general_settings:
+            value = _general_settings["disable_auto_add_proxy_admin_to_teams"]
+            if isinstance(value, str):
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value.lower() == "true"
+            else:
+                general_settings["disable_auto_add_proxy_admin_to_teams"] = value if value is None else bool(value)
 
         ## STORE MODEL IN DB ##
         if "store_model_in_db" in _general_settings:
@@ -6932,6 +7130,9 @@ def _restamp_streaming_chunk_model(
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
 ) -> tuple[Any, bool]:
+    if _should_return_raw_model_name(request_data):
+        return chunk, model_mismatch_logged
+
     target_model = fallback_model_from_metadata if fallback_was_attempted else requested_model_from_client
     # Always return the client-requested model name (not provider-prefixed internal identifiers)
     # on streaming chunks.
@@ -7266,12 +7467,13 @@ async def async_data_generator(
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
         # BaseException, so they bypass the success/failure logging callbacks
-        # that normally release the pre-call max_parallel_requests +1; release
-        # it here. This is the outermost generator Starlette closes on
+        # that normally release the pre-call max_parallel_requests +1. Flag the
+        # disconnect; the shielded cleanup in `finally` owns the slot release
+        # so it can coordinate with disconnect-time success billing and release
+        # exactly once. This is the outermost generator Starlette closes on
         # disconnect, so it fires reliably regardless of needs_iterator_wrap
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
-            proxy_logging_obj._release_max_parallel_requests_on_disconnect(user_api_key_dict)
             client_disconnected = True
         raise
     except Exception as e:
@@ -7317,6 +7519,8 @@ async def async_data_generator(
             response=response,
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
 
@@ -7717,6 +7921,7 @@ class ProxyStartupEvent:
             budget_reset_job = ResetBudgetJob(
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=prisma_client,
+                reset_settings=get_budget_reset_settings(),
             )
 
             scheduler.add_job(
@@ -14690,7 +14895,17 @@ async def get_config_general_settings(
             )
 
 
-_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
+GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
+
+
+class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
+    type: Literal["Float", "Boolean", "Select"]
+    description: str
+    options: NotRequired[tuple[str, ...]]
+    tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
+
+
+_GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec] = {
     "budget_exceeded_throttle_percentage": {
         "type": "Float",
         "description": (
@@ -14699,18 +14914,60 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, dict[str, str]] = {
             "over-budget keys."
         ),
     },
+    "enable_anthropic_prompt_caching": {
+        "type": "Boolean",
+        "tab": "prompt_caching",
+        "description": (
+            "Auto-adds cache_control to the system prompt and trailing turn for supported Anthropic "
+            "and Bedrock Claude models. The cache is shared across callers on the same upstream credentials."
+        ),
+    },
+    "anthropic_prompt_caching_ttl": {
+        "type": "Select",
+        "options": ("5m", "1h"),
+        "tab": "prompt_caching",
+        "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
+    },
 }
 
 
-def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> Optional[float]:
+def _general_settings_ui_litellm_default(
+    field_type: Literal["Float", "Boolean", "Select"],
+) -> GeneralSettingsUILiteLLMValue:
+    """The value a field falls back to when it is cleared or reset."""
+    return False if field_type == "Boolean" else None
+
+
+def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
+    spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
+    field_type = spec["type"]
     if value is None or value == "":
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
-        )
-    return float(value)
+        return _general_settings_ui_litellm_default(field_type)
+    match field_type:
+        case "Boolean":
+            if not isinstance(value, bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be true or false"},
+                )
+            return value
+        case "Select":
+            options = spec.get("options", ())
+            if value not in options:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be one of: {', '.join(options)}, or empty"},
+                )
+            return cast(str, value)  # cast-ok: membership in options proves it is one of the option strings
+        case "Float":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 < float(value) <= 1):
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
+                )
+            return float(value)
+        case _:
+            assert_never(field_type)
 
 
 async def _persist_general_settings_ui_litellm_field(
@@ -14731,11 +14988,12 @@ async def _persist_general_settings_ui_litellm_field(
 async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
     config = await proxy_config.get_config()
     before_value = config.get("litellm_settings", {}).get(field_name)
-    setattr(litellm, field_name, None)
+    default_value = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]["type"])
+    setattr(litellm, field_name, default_value)
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
     await proxy_config.save_config(new_config=config)
-    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, None, user_api_key_dict))
+    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict))
     return {"message": f"Field {field_name} reset", "status": "success"}
 
 
@@ -14806,6 +15064,7 @@ async def get_config_list(
         "mcp_required_fields": {"type": "List"},
         "cancel_on_disconnect": {"type": "Boolean"},
         "skip_user_budget_on_team_key": {"type": "Boolean"},
+        "disable_auto_add_proxy_admin_to_teams": {"type": "Boolean"},
     }
 
     return_val = []
@@ -14902,11 +15161,12 @@ async def get_config_list(
         else {}
     )
     for litellm_field_name, spec in _GENERAL_SETTINGS_UI_LITELLM_FIELDS.items():
-        current_value: Optional[float] = getattr(litellm, litellm_field_name, None)
+        current_value: GeneralSettingsUILiteLLMValue = getattr(litellm, litellm_field_name, None)
+        default_value = _general_settings_ui_litellm_default(spec["type"])
         stored_in_db_litellm: Optional[bool]
         if litellm_field_name in db_litellm_settings:
             stored_in_db_litellm = True
-        elif current_value is not None:
+        elif current_value != default_value:
             stored_in_db_litellm = False
         else:
             stored_in_db_litellm = None
@@ -14917,7 +15177,9 @@ async def get_config_list(
                 field_description=spec["description"],
                 field_value=current_value,
                 stored_in_db=stored_in_db_litellm,
-                field_default_value=None,
+                field_default_value=default_value,
+                field_options=list(spec.get("options", ())) or None,
+                field_tab=spec.get("tab"),
                 nested_fields=None,
             )
         )
@@ -15902,7 +16164,11 @@ async def get_adaptive_router_state(
             status_code=404,
             detail={"error": "No adaptive_router is configured on this proxy."},
         )
-    snapshots = [await ar.get_state_snapshot() for ar in llm_router.adaptive_routers.values()]
+    snapshots = [
+        await tagged.strategy.get_state_snapshot()
+        for tagged_routers in llm_router.adaptive_routers.values()
+        for tagged in tagged_routers
+    ]
     return {"routers": snapshots}
 
 
