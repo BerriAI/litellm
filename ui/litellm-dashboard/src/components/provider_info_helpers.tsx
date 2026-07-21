@@ -283,7 +283,7 @@ export const provider_map: Record<string, string> = {
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
 
-export const providerLogoMap: Record<string, string> = {
+export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
   [Providers.AI21_CHAT]: ai21Logo.src,
@@ -395,7 +395,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 
   // Get the display name from Providers enum and logo from map
   const displayName = Providers[enumKey as keyof typeof Providers];
-  const logo = resolveLogoSrc(providerLogoMap[displayName as keyof typeof providerLogoMap]) ?? "";
+  const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
 
   return { logo, displayName };
 };
