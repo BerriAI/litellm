@@ -607,24 +607,20 @@ describe("ModelInfoView", () => {
 
     const litellmParamsInput = screen
       .getAllByRole("textbox")
-      .find(
-        (input) =>
-          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"someKey"'),
-      );
+      .find((input) => input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"someKey"'));
     expect(litellmParamsInput).toBeDefined();
     if (!litellmParamsInput) {
       return;
     }
 
+    const editedLitellmParams = {
+      model: "gpt-4",
+      api_base: "https://api.openai.com/v1",
+      custom_llm_provider: "openai",
+      abc: 123,
+    };
     await user.clear(litellmParamsInput);
-    await user.paste(
-      JSON.stringify({
-        model: "gpt-4",
-        api_base: "https://api.openai.com/v1",
-        custom_llm_provider: "openai",
-        abc: 123,
-      }),
-    );
+    await user.paste(JSON.stringify(editedLitellmParams));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -635,6 +631,147 @@ describe("ModelInfoView", () => {
     const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
     expect(updatePayload.litellm_params.someKey).toBeNull();
     expect(updatePayload.litellm_params.abc).toBe(123);
+  });
+
+  it("sends null when Existing Credentials is cleared (#34005)", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Existing Credentials")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("selected-credential"));
+    await user.click(await screen.findByText("None"));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.litellm_credential_name).toBeNull();
+  });
+
+  it("sends null when a masked secret key is removed from LiteLLM Params JSON (#34005)", async () => {
+    const maskedSecret = "azur********************************************BBCC";
+    const maskedModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        model: "azure/gpt-4o",
+        api_base: "https://example-az.openai.azure.com",
+        custom_llm_provider: "azure",
+        azure_ad_token: maskedSecret,
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [maskedModelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [maskedModelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const litellmParamsInput = screen
+      .getAllByRole("textbox")
+      .find((input) => input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes("azure_ad_token"));
+    expect(litellmParamsInput).toBeDefined();
+    if (!litellmParamsInput) {
+      return;
+    }
+
+    const editedWithoutSecret = {
+      model: "azure/gpt-4o",
+      api_base: "https://example-az.openai.azure.com",
+      custom_llm_provider: "azure",
+    };
+    await user.clear(litellmParamsInput);
+    await user.paste(JSON.stringify(editedWithoutSecret));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.azure_ad_token).toBeNull();
+  });
+
+  it("keeps deleted model_info keys off the form after save so cancel cannot restore them (#34005)", async () => {
+    const modelWithExtraInfo = {
+      ...defaultModelData,
+      model_info: {
+        ...defaultModelData.model_info,
+        someKey: true,
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithExtraInfo] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [modelWithExtraInfo] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const modelInfoInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) =>
+          input.tagName === "TEXTAREA" &&
+          (input as HTMLTextAreaElement).value.includes('"someKey"') &&
+          (input as HTMLTextAreaElement).value.includes('"db_model"'),
+      );
+    expect(modelInfoInput).toBeDefined();
+    if (!modelInfoInput) {
+      return;
+    }
+
+    const editedInfo = {
+      id: "123",
+      created_by: "123",
+      created_at: "2024-01-01T00:00:00Z",
+      db_model: true,
+      input_cost_per_token: 0.00003,
+      output_cost_per_token: 0.00006,
+    };
+    await user.clear(modelInfoInput);
+    await user.paste(JSON.stringify(editedInfo));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const modelInfoAfterCancel = screen
+      .getAllByRole("textbox")
+      .find((input) => input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"db_model"'));
+    expect(modelInfoAfterCancel).toBeDefined();
+    expect((modelInfoAfterCancel as HTMLTextAreaElement).value).not.toContain('"someKey"');
   });
 
   it("sends null for keys removed from Model Info JSON so PATCH merge deletes them (#34005)", async () => {
