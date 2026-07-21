@@ -124,6 +124,7 @@ echo "UI build copied and restructured"
 # --- Python environment ---
 echo "=== Setting up Python environment ==="
 cd "$REPO_ROOT"
+export UV_PYTHON="${UV_PYTHON:-3.13}"
 uv sync --group dev --group proxy-dev --extra proxy --frozen --quiet
 uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
 
@@ -143,16 +144,18 @@ done
 # --- LiteLLM proxy ---
 echo "=== Starting LiteLLM proxy ==="
 cd "$REPO_ROOT"
+PROXY_LOG="${TMPDIR:-/tmp}/litellm-e2e-proxy-$$.log"
 uv run --no-sync python -m litellm.proxy.proxy_cli \
   --config "$SCRIPT_DIR/fixtures/config.yml" \
-  --port 4000 &
+  --port 4000 >"$PROXY_LOG" 2>&1 &
 PROXY_PID=$!
 
-echo "Waiting for proxy..."
+echo "Waiting for proxy (logs: $PROXY_LOG)..."
 PROXY_READY=0
 for i in $(seq 1 180); do
   if ! kill -0 "$PROXY_PID" 2>/dev/null; then
-    echo "Error: proxy process exited unexpectedly"
+    echo "Error: proxy process exited unexpectedly. Proxy output:"
+    tail -n 100 "$PROXY_LOG"
     exit 1
   fi
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health -H "Authorization: Bearer $LITELLM_MASTER_KEY" 2>/dev/null || true)
@@ -163,7 +166,8 @@ for i in $(seq 1 180); do
   sleep 1
 done
 if [ "$PROXY_READY" -ne 1 ]; then
-  echo "Error: proxy did not become healthy within 180 seconds"
+  echo "Error: proxy did not become healthy within 180 seconds. Proxy output:"
+  tail -n 100 "$PROXY_LOG"
   exit 1
 fi
 echo "Proxy is ready."
