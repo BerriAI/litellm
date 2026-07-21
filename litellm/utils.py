@@ -7426,6 +7426,41 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
     return new_tools
 
 
+def filter_tools_by_allowed_types(
+    tools: List[dict] | None, allowed_tool_types: List[str]
+) -> List[dict] | None:
+    """
+    Keep only tools whose ``type`` is in ``allowed_tool_types``; drop the rest.
+
+    Some OpenAI-compatible providers validate tool types strictly and reject
+    the whole request with a 400 when they see a tool type they do not know:
+    Moonshot ("unknown tool type: namespace, currently only function and plugin
+    are supported"), Zhipu ("tools[N].type:type is illegal") and DeepSeek all
+    reject the Codex-private ``namespace``/``custom``/``local_shell`` tool
+    types. Dropping the unsupported tool definitions keeps the request usable
+    instead of failing it outright.
+
+    Enabled per-deployment via the ``allowed_tool_types`` litellm_param::
+
+        litellm_params:
+          model: openai/kimi-k3
+          allowed_tool_types: ["function"]
+
+    A tool without a ``type`` key is treated as ``function`` (matching OpenAI
+    defaults). Returns None when no tools survive so an empty ``tools: []``
+    array is not sent upstream (some providers reject that too).
+    """
+    if not tools:
+        return tools
+    filtered = [
+        t
+        for t in tools
+        if not isinstance(t, dict)
+        or (t.get("type") or "function") in allowed_tool_types
+    ]
+    return filtered or None
+
+
 def validate_and_fix_thinking_param(
     thinking: Optional["AnthropicThinkingParam"],
 ) -> Optional["AnthropicThinkingParam"]:

@@ -4863,3 +4863,49 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
         is False
     )
+
+
+def test_filter_tools_by_allowed_types_drops_unknown_types() -> None:
+    """Providers like Moonshot/Zhipu/DeepSeek 400 on Codex-private tool types
+    (namespace/custom/local_shell); with allowed_tool_types=["function"] only
+    function tools survive. A tool without a type key counts as function."""
+    from litellm.utils import filter_tools_by_allowed_types
+
+    tools = [
+        {"type": "namespace", "name": "codex_ns", "description": "ns"},
+        {"type": "custom", "name": "freeform", "description": "ff"},
+        {"type": "local_shell"},
+        {"type": "function", "function": {"name": "get_weather"}},
+        {"name": "untyped_tool"},
+    ]
+    out = filter_tools_by_allowed_types(tools=tools, allowed_tool_types=["function"])
+    assert out == [
+        {"type": "function", "function": {"name": "get_weather"}},
+        {"name": "untyped_tool"},
+    ]
+
+
+def test_filter_tools_by_allowed_types_wider_allowlist_and_empty_result() -> None:
+    """A wider allowlist keeps the listed types (Bedrock's OpenAI-compatible
+    endpoint accepts namespace/custom but rejects local_shell). When nothing
+    survives, None is returned so no empty tools array reaches the provider."""
+    from litellm.utils import filter_tools_by_allowed_types
+
+    tools = [
+        {"type": "namespace", "name": "ns", "description": "d", "tools": []},
+        {"type": "local_shell"},
+    ]
+    out = filter_tools_by_allowed_types(
+        tools=tools, allowed_tool_types=["function", "custom", "namespace"]
+    )
+    assert out == [{"type": "namespace", "name": "ns", "description": "d", "tools": []}]
+
+    assert (
+        filter_tools_by_allowed_types(
+            tools=[{"type": "local_shell"}], allowed_tool_types=["function"]
+        )
+        is None
+    )
+
+    assert filter_tools_by_allowed_types(tools=None, allowed_tool_types=["function"]) is None
+    assert filter_tools_by_allowed_types(tools=[], allowed_tool_types=["function"]) == []

@@ -175,6 +175,7 @@ from litellm.utils import (
     token_counter,
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
+    filter_tools_by_allowed_types,
     validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
     validate_openai_optional_params,
@@ -4912,6 +4913,16 @@ def completion(  # type: ignore
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
+    # Per-deployment opt-in (litellm_param allowed_tool_types): drop tool types
+    # a strict OpenAI-compatible provider would reject with a 400 (e.g. the
+    # Codex-private namespace/custom/local_shell tools on Moonshot/Zhipu/
+    # DeepSeek). Runs here so it covers the direct /chat/completions path and
+    # the /responses -> chat bridge alike.
+    allowed_tool_types = kwargs.get("allowed_tool_types")
+    if allowed_tool_types is not None and tools is not None:
+        tools = filter_tools_by_allowed_types(
+            tools=tools, allowed_tool_types=allowed_tool_types
+        )
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
