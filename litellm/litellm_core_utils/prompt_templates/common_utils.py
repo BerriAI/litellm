@@ -1252,6 +1252,31 @@ def is_function_call(optional_params: dict) -> bool:
     return False
 
 
+def convert_custom_tool_format_to_chat_shape(format_obj: dict) -> dict:
+    """
+    Responses API grammar formats are flat ({"type": "grammar", "definition", "syntax"});
+    Chat Completions wraps the same fields in a "grammar" object. Text formats are
+    identical on both surfaces and pass through, as does anything unrecognized.
+    """
+    if format_obj.get("type") == "grammar" and "grammar" not in format_obj:
+        return {
+            "type": "grammar",
+            "grammar": {k: format_obj[k] for k in ("definition", "syntax") if k in format_obj},
+        }
+    return format_obj
+
+
+def convert_custom_tool_format_to_responses_shape(format_obj: dict) -> dict:
+    """
+    Inverse of convert_custom_tool_format_to_chat_shape: unwrap the Chat Completions
+    "grammar" object into the flat Responses API grammar shape.
+    """
+    grammar = format_obj.get("grammar")
+    if format_obj.get("type") == "grammar" and isinstance(grammar, dict):
+        return {"type": "grammar", **{k: grammar[k] for k in ("definition", "syntax") if k in grammar}}
+    return format_obj
+
+
 def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
     """
     Gets file ids from messages

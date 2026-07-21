@@ -981,9 +981,18 @@ class TestCursorMessagesArmToolNormalization:
                                 "type": "function",
                                 "function": {"name": "read_file", "parameters": {"type": "object"}},
                             },
-                            {"type": "custom", "name": "ApplyPatch", "description": "V4A patch"},
+                            {
+                                "type": "custom",
+                                "name": "ApplyPatch",
+                                "description": "V4A patch",
+                                "format": {
+                                    "type": "grammar",
+                                    "definition": "start: patch",
+                                    "syntax": "lark",
+                                },
+                            },
                         ],
-                        "tool_choice": "required",
+                        "tool_choice": {"type": "custom", "name": "ApplyPatch"},
                     },
                     headers={"Authorization": "Bearer sk-1234"},
                 )
@@ -993,8 +1002,19 @@ class TestCursorMessagesArmToolNormalization:
         assert response.status_code == 200
         assert seen["body"]["tools"] == [
             {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}},
-            {"type": "custom", "custom": {"name": "ApplyPatch", "description": "V4A patch"}},
+            {
+                "type": "custom",
+                "custom": {
+                    "name": "ApplyPatch",
+                    "description": "V4A patch",
+                    "format": {
+                        "type": "grammar",
+                        "grammar": {"definition": "start: patch", "syntax": "lark"},
+                    },
+                },
+            },
         ]
+        assert seen["body"]["tool_choice"] == {"type": "custom", "custom": {"name": "ApplyPatch"}}
         assert seen["body"]["messages"] == [{"role": "user", "content": "use ApplyPatch"}]
 
     @pytest.mark.asyncio
@@ -1030,3 +1050,73 @@ class TestCursorMessagesArmToolNormalization:
         assert response.status_code == 200
         assert seen["body"]["tools"] == body["tools"]
         assert seen["body"]["messages"] == body["messages"]
+
+
+class TestNestFlatChatToolGrammarFormat:
+    def test_flat_grammar_format_is_wrapped_for_chat(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tools
+
+        result = _nest_flat_chat_tools(
+            [
+                {
+                    "type": "custom",
+                    "name": "ApplyPatch",
+                    "description": "V4A patch",
+                    "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"},
+                }
+            ]
+        )
+        assert result == [
+            {
+                "type": "custom",
+                "custom": {
+                    "name": "ApplyPatch",
+                    "description": "V4A patch",
+                    "format": {
+                        "type": "grammar",
+                        "grammar": {"definition": "start: patch", "syntax": "lark"},
+                    },
+                },
+            }
+        ]
+
+    def test_flat_text_format_is_copied_unchanged(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tools
+
+        result = _nest_flat_chat_tools(
+            [{"type": "custom", "name": "A", "format": {"type": "text"}}]
+        )
+        assert result == [{"type": "custom", "custom": {"name": "A", "format": {"type": "text"}}}]
+
+
+class TestNestFlatChatToolChoice:
+    def test_flat_custom_tool_choice_is_nested(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool_choice
+
+        assert _nest_flat_chat_tool_choice({"type": "custom", "name": "ApplyPatch"}) == {
+            "type": "custom",
+            "custom": {"name": "ApplyPatch"},
+        }
+
+    def test_flat_function_tool_choice_is_nested(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool_choice
+
+        assert _nest_flat_chat_tool_choice({"type": "function", "name": "f"}) == {
+            "type": "function",
+            "function": {"name": "f"},
+        }
+
+    def test_non_flat_tool_choice_values_pass_through(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool_choice
+
+        for unchanged in (
+            "auto",
+            "required",
+            None,
+            {"type": "custom", "custom": {"name": "x"}},
+            {"type": "function", "function": {"name": "f"}},
+            {"type": "auto"},
+            {"name": "typeless"},
+            42,
+        ):
+            assert _nest_flat_chat_tool_choice(unchanged) == unchanged

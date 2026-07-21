@@ -29,10 +29,17 @@ _FLAT_FUNCTION_TOOL_KEYS = ("name", "description", "parameters", "strict")
 
 
 def _nest_flat_chat_tool(tool: object) -> object:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_custom_tool_format_to_chat_shape,
+    )
+
     if not isinstance(tool, dict) or "name" not in tool:
         return tool
     if tool.get("type") == "custom" and "custom" not in tool:
-        return {"type": "custom", "custom": {k: tool[k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool}}
+        payload = {k: tool[k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool}
+        if isinstance(payload.get("format"), dict):
+            payload = {**payload, "format": convert_custom_tool_format_to_chat_shape(payload["format"])}
+        return {"type": "custom", "custom": payload}
     if tool.get("type") == "function" and "function" not in tool:
         return {"type": "function", "function": {k: tool[k] for k in _FLAT_FUNCTION_TOOL_KEYS if k in tool}}
     return tool
@@ -40,6 +47,16 @@ def _nest_flat_chat_tool(tool: object) -> object:
 
 def _nest_flat_chat_tools(tools: list) -> list:
     return [_nest_flat_chat_tool(tool) for tool in tools]
+
+
+def _nest_flat_chat_tool_choice(tool_choice: object) -> object:
+    if not isinstance(tool_choice, dict) or "name" not in tool_choice:
+        return tool_choice
+    if tool_choice.get("type") == "custom" and "custom" not in tool_choice:
+        return {"type": "custom", "custom": {"name": tool_choice["name"]}}
+    if tool_choice.get("type") == "function" and "function" not in tool_choice:
+        return {"type": "function", "function": {"name": tool_choice["name"]}}
+    return tool_choice
 
 
 @router.post(
@@ -391,10 +408,17 @@ async def cursor_chat_completions(
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
         # already fixed); delegate so behavior matches /chat/completions exactly
         tools = data.get("tools")
+        tool_choice = data.get("tool_choice")
+        normalized: dict = {}
         if isinstance(tools, list):
             nested_tools = _nest_flat_chat_tools(tools)
             if nested_tools != tools:
-                _safe_set_request_parsed_body(request=request, parsed_body={**data, "tools": nested_tools})
+                normalized["tools"] = nested_tools
+        nested_tool_choice = _nest_flat_chat_tool_choice(tool_choice)
+        if nested_tool_choice != tool_choice:
+            normalized["tool_choice"] = nested_tool_choice
+        if normalized:
+            _safe_set_request_parsed_body(request=request, parsed_body={**data, **normalized})
         return await chat_completion(
             request=request,
             fastapi_response=fastapi_response,
