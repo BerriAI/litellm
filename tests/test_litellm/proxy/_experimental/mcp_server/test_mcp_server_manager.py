@@ -9028,3 +9028,166 @@ class TestUrllessIssuerDiscovery:
         anchored.assert_awaited_once_with("https://idp.example.com", None)
         resource_rooted.assert_not_awaited()
         assert built.token_url == "https://idp.example.com/token"
+class TestIdJagEndpointDiscovery:
+    """EMA discovery + capability gate: an oauth2_id_jag server with no pinned leg-2 endpoint
+    autofills it from RFC 9728 -> RFC 8414 discovery, released only when the authorization
+    server advertises the id-jag grant profile; a pinned endpoint skips discovery entirely."""
+
+    def _id_jag_row(self, credentials=None):
+        base_credentials = {
+            "client_id": "cid",
+            "client_secret": "csec",
+            "token_exchange_endpoint": "https://idp.example.com/org/token",
+        }
+        return LiteLLM_MCPServerTable(
+            server_id="idjag-db-1",
+            alias="idjag_db",
+            description="ema from db",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            credentials={**base_credentials, **(credentials or {})},
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+    def _ema_metadata(self, grant_profiles):
+        return MCPOAuthMetadata(
+            token_url="https://ras.example.com/token",
+            discovered_issuer="https://ras.example.com",
+            grant_profiles=grant_profiles,
+        )
+
+    def test_needs_discovery_only_for_unpinned_id_jag(self):
+        needs = MCPServerManager._id_jag_needs_endpoint_discovery
+        assert needs(MCPAuth.oauth2_id_jag, None) is True
+        assert needs(MCPAuth.oauth2_id_jag, "") is True
+        assert needs(MCPAuth.oauth2_id_jag, "https://ras.example.com/token") is False
+        assert needs(MCPAuth.oauth2_token_exchange, None) is False
+        assert needs(MCPAuth.oauth2, None) is False
+        assert needs(None, None) is False
+
+    def test_gate_releases_only_advertised_id_jag_capable_endpoints(self):
+        gate = MCPServerManager._gated_id_jag_endpoint
+        profile = "urn:ietf:params:oauth:grant-profile:id-jag"
+        assert gate(self._ema_metadata([profile]), "s1") == "https://ras.example.com/token"
+        assert gate(self._ema_metadata([profile, "other"]), "s1") == "https://ras.example.com/token"
+        assert gate(None, "s1") is None
+        assert gate(self._ema_metadata(None), "s1") is None
+        assert gate(self._ema_metadata([]), "s1") is None
+        assert gate(self._ema_metadata(["urn:other:profile"]), "s1") is None
+        no_token_url = MCPOAuthMetadata(grant_profiles=[profile])
+        assert gate(no_token_url, "s1") is None
+        guessed = MCPOAuthMetadata(
+            token_url="https://ras.example.com/token", grant_profiles=[profile], from_origin_fallback=True
+        )
+        assert gate(guessed, "s1") is None
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_autofills_and_persists_gated_id_jag_endpoint(self):
+        manager = MCPServerManager()
+        row = self._id_jag_row()
+        metadata = self._ema_metadata(["urn:ietf:params:oauth:grant-profile:id-jag"])
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)) as mock_discovery,
+            patch.object(manager, "_persist_discovered_id_jag_endpoint", new=AsyncMock()) as mock_persist,
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        mock_discovery.assert_awaited_once()
+        assert built.id_jag_resource_token_endpoint == "https://ras.example.com/token"
+        mock_persist.assert_awaited_once()
+        persist_kwargs = mock_persist.await_args.kwargs
+        assert persist_kwargs["discovered_endpoint"] == "https://ras.example.com/token"
+        assert persist_kwargs["existing_endpoint"] is None
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_refuses_autofill_without_the_grant_profile(self):
+        manager = MCPServerManager()
+        row = self._id_jag_row()
+        metadata = self._ema_metadata(["urn:other:profile"])
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)),
+            patch.object(manager, "_persist_discovered_id_jag_endpoint", new=AsyncMock()) as mock_persist,
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert built.id_jag_resource_token_endpoint is None
+        persist_kwargs = mock_persist.await_args.kwargs
+        assert persist_kwargs["discovered_endpoint"] is None
+
+    @pytest.mark.asyncio
+    async def test_build_from_table_pinned_endpoint_skips_discovery_and_gate(self):
+        manager = MCPServerManager()
+        row = self._id_jag_row(credentials={"id_jag_resource_token_endpoint": "https://pinned.example.com/token"})
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)) as mock_discovery,
+            patch.object(manager, "_persist_discovered_id_jag_endpoint", new=AsyncMock()) as mock_persist,
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        mock_discovery.assert_not_awaited()
+        assert built.id_jag_resource_token_endpoint == "https://pinned.example.com/token"
+        persist_kwargs = mock_persist.await_args.kwargs
+        assert persist_kwargs["existing_endpoint"] == "https://pinned.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_autofills_gated_id_jag_endpoint(self):
+        manager = MCPServerManager()
+        config = {
+            "idjag_cfg": {
+                "url": "https://up.example.com/mcp",
+                "transport": "http",
+                "auth_type": "oauth2_id_jag",
+                "token_exchange_endpoint": "https://idp.example.com/org/token",
+                "client_id": "cid",
+                "client_secret": "csec",
+            }
+        }
+        metadata = self._ema_metadata(["urn:ietf:params:oauth:grant-profile:id-jag"])
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)):
+            await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.id_jag_resource_token_endpoint == "https://ras.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_pinned_id_jag_endpoint_skips_discovery(self):
+        manager = MCPServerManager()
+        config = {
+            "idjag_cfg": {
+                "url": "https://up.example.com/mcp",
+                "transport": "http",
+                "auth_type": "oauth2_id_jag",
+                "token_exchange_endpoint": "https://idp.example.com/org/token",
+                "id_jag_resource_token_endpoint": "https://pinned.example.com/token",
+                "client_id": "cid",
+                "client_secret": "csec",
+            }
+        }
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)) as mock_discovery:
+            await manager.load_servers_from_config(config)
+
+        mock_discovery.assert_not_awaited()
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.id_jag_resource_token_endpoint == "https://pinned.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_as_metadata_parse_carries_grant_profiles(self):
+        manager = MCPServerManager()
+        as_doc = {
+            "issuer": "https://ras.example.com",
+            "token_endpoint": "https://ras.example.com/token",
+            "authorization_grant_profiles_supported": ["urn:ietf:params:oauth:grant-profile:id-jag"],
+        }
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json.return_value = as_doc
+        with patch.object(manager, "_fetch_oauth_discovery_url", new=AsyncMock(return_value=response)):
+            metadata = await manager._fetch_single_authorization_server_metadata(
+                "https://ras.example.com", "https://up.example.com/mcp"
+            )
+
+        assert metadata is not None
+        assert metadata.grant_profiles == ["urn:ietf:params:oauth:grant-profile:id-jag"]
+        assert metadata.token_url == "https://ras.example.com/token"

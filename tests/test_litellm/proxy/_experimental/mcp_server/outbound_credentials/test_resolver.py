@@ -56,14 +56,16 @@ def _id_jag_config() -> IdJagConfig:
 
 
 class _FakeTokenEndpoint:
-    """Records each fetch and returns the next canned Result, leg by leg."""
+    """Records each fetch (and its rejection classifier) and returns the next canned Result."""
 
     def __init__(self, results: list[Result[ExchangedToken, CredError]]) -> None:
         self._results = list(results)
         self.calls: list[tuple[str, str, dict[str, str]]] = []
+        self.classifiers: list[object] = []
 
-    async def fetch(self, endpoint, client_id, grant_params, client_auth):
+    async def fetch(self, endpoint, client_id, grant_params, client_auth, classify_rejection=None):
         self.calls.append((endpoint, client_id, dict(grant_params)))
+        self.classifiers.append(classify_rejection)
         return self._results.pop(0)
 
 
@@ -615,3 +617,50 @@ async def test_invalidate_credentials_for_id_jag_is_a_noop_without_a_caller_toke
     assert isinstance(first, Ok) and isinstance(second, Ok)
     assert _emitted(second.ok)["Authorization"] == "Bearer cached-bearer"
     assert len(endpoint.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_id_jag_leg2_carries_a_resource_as_rejection_classifier_and_leg1_does_not():
+    """A section 5.2 rejection means different things per leg: at the resource AS redeeming a
+    freshly minted ID-JAG it is a client-registration misconfiguration; at the IdP it keeps the
+    default mapping. The classifier therefore rides only the leg-2 fetch."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
+        TokenEndpointRejection,
+    )
+
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
+
+    assert isinstance(result, Ok)
+    leg1_classifier, leg2_classifier = endpoint.classifiers
+    assert leg1_classifier is None
+    assert leg2_classifier is not None
+    classified = leg2_classifier(
+        TokenEndpointRejection(status_code=400, error="invalid_grant", error_description="client mismatch")
+    )
+    assert classified is not None
+    assert classified.tag == "misconfigured"
+    assert "litellm" in classified.summary
+    assert "client mismatch" in classified.summary
+    assert (
+        leg2_classifier(TokenEndpointRejection(status_code=502, error="server_error", error_description=None)) is None
+    )
+
+
+@pytest.mark.parametrize("code", ["invalid_grant", "invalid_client", "unauthorized_client", "invalid_target"])
+def test_resource_as_misconfig_codes_classify_as_misconfigured(code):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import (
+        _classify_resource_as_rejection,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
+        TokenEndpointRejection,
+    )
+
+    classified = _classify_resource_as_rejection(
+        "gw-client", TokenEndpointRejection(status_code=400, error=code, error_description=None)
+    )
+    assert classified is not None
+    assert classified.tag == "misconfigured"
+    assert "gw-client" in classified.summary

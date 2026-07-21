@@ -35,6 +35,11 @@ class MCPOAuthMetadata(BaseModel):
     """True when the metadata came from guessing the resource origin as its authorization
     server rather than from an RFC 9728/8414-advertised document. Guessed endpoints are
     usable in memory but must never be persisted as configuration."""
+    grant_profiles: Optional[List[str]] = None
+    """The authorization server's ``authorization_grant_profiles_supported`` (draft OAuth
+    identity-assertion-authz-grant); the enterprise-managed-authorization gate requires the
+    id-jag profile in it before an autofilled ID-JAG endpoint is trusted. ``None`` means the
+    document did not carry the field, distinct from an empty advertisement."""
 
 
 class MCPServer(BaseModel):

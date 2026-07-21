@@ -406,3 +406,81 @@ async def test_cache_does_not_store_a_failed_compute():
     assert isinstance(first, Error)
     assert isinstance(second, Ok) and second.ok == "recovered"
     assert calls == 2
+
+
+def _oauth_error_resp(status_code=400, body=None):
+    error_resp = MagicMock()
+    error_resp.status_code = status_code
+    error_resp.json.return_value = body if body is not None else {"error": "invalid_grant"}
+    error_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Bad Request", request=MagicMock(), response=error_resp
+    )
+    return error_resp
+
+
+@pytest.mark.asyncio
+async def test_fetch_rejection_classifier_overrides_the_default_mapping():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
+        TokenEndpointRejection,
+    )
+
+    seen = []
+
+    def classify(rejection: TokenEndpointRejection):
+        seen.append(rejection)
+        return CredError.of_misconfigured("client registration mismatch")
+
+    with patch(_PATCH_TARGET, return_value=_client(_oauth_error_resp(body={"error": "invalid_grant", "error_description": "aud mismatch"}))):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+            classify_rejection=classify,
+        )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+    assert seen[0].error == "invalid_grant"
+    assert seen[0].error_description == "aud mismatch"
+    assert seen[0].status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fetch_classifier_returning_none_keeps_upstream_unavailable():
+    with patch(_PATCH_TARGET, return_value=_client(_oauth_error_resp(body={"error": "server_error"}))):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+            classify_rejection=lambda rejection: None,
+        )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [None, "not-a-dict", {}, {"error": ""}, {"error": 42}])
+async def test_fetch_unparseable_rejection_body_keeps_upstream_unavailable(body):
+    resp = MagicMock()
+    resp.status_code = 400
+    if body is None:
+        import json as _json
+
+        resp.json.side_effect = _json.JSONDecodeError("x", "y", 0)
+    else:
+        resp.json.return_value = body
+    resp.raise_for_status.side_effect = httpx.HTTPStatusError("Bad Request", request=MagicMock(), response=resp)
+    with patch(_PATCH_TARGET, return_value=_client(resp)):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            ClientSecretAuth(client_secret=SecretStr("s")),
+            classify_rejection=lambda rejection: CredError.of_misconfigured("should not fire"),
+        )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"

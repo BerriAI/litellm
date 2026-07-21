@@ -45,6 +45,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint 
     ExchangedToken,
     ExchangedTokenCache,
     TokenEndpointClient,
+    TokenEndpointRejection,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
     TokenExchanger,
@@ -209,6 +210,7 @@ class UpstreamCredentialProvider:
                         config.client_id,
                         leg2_params,
                         config.client_auth,
+                        classify_rejection=partial(_classify_resource_as_rejection, config.client_id),
                     )
 
         match await self._exchanged_tokens.get_or_compute(cache_key, _exchange):
@@ -295,6 +297,28 @@ class UpstreamCredentialProvider:
             return await self._oauth_token_store.fetch(subject.subject_id, server.server_id)
         except TokenStoreUnavailable:
             return None
+
+
+# RFC 6749 §5.2 codes that, from a RESOURCE authorization server redeeming a freshly minted
+# ID-JAG (RFC 7523 jwt-bearer leg), indicate a registration problem the operator must fix, not
+# an outage: the gateway client is unknown there, unauthorized for the grant, the ID-JAG's
+# client_id claim does not match the authenticating client, or the target is wrong.
+_RESOURCE_AS_MISCONFIG_CODES = frozenset({"invalid_grant", "invalid_client", "unauthorized_client", "invalid_target"})
+
+
+def _classify_resource_as_rejection(client_id: str, rejection: TokenEndpointRejection) -> CredError | None:
+    """The resource AS rejecting the jwt-bearer leg with a §5.2 code is an actionable
+    misconfiguration (the assertion was just minted, so expiry is not in play); anything else
+    keeps the default upstream_unavailable mapping."""
+    if rejection.error not in _RESOURCE_AS_MISCONFIG_CODES:
+        return None
+    described = f" ({rejection.error_description})" if rejection.error_description else ""
+    return CredError.of_misconfigured(
+        f"the resource authorization server rejected the ID-JAG with {rejection.error}{described}; "
+        f"the gateway client {client_id!r} must be registered at the resource authorization server "
+        "and match the ID-JAG's client_id claim (the IdP and the resource server must share the "
+        "gateway's client registration)"
+    )
 
 
 def _id_jag_cache_key(subject_token: str, server_id: str, config: IdJagConfig) -> str:

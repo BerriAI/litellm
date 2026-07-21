@@ -66,6 +66,38 @@ class _TokenEndpointResponse(BaseModel):
     expires_in: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TokenEndpointRejection:
+    """The RFC 6749 §5.2 error body of a token-endpoint 4xx, parsed so a caller that knows
+    which leg it posted can classify the rejection (an ``invalid_grant`` from a resource
+    authorization server means something different from one at the IdP)."""
+
+    status_code: int
+    error: str
+    error_description: str | None
+
+
+RejectionClassifier = Callable[[TokenEndpointRejection], CredError | None]
+
+
+def _parse_token_endpoint_rejection(response: httpx.Response) -> TokenEndpointRejection | None:
+    try:
+        body = response.json()
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if not isinstance(error, str) or not error:
+        return None
+    description = body.get("error_description")
+    return TokenEndpointRejection(
+        status_code=response.status_code,
+        error=error,
+        error_description=description if isinstance(description, str) and description else None,
+    )
+
+
 class TokenEndpointClient:
     """One authenticated POST to an OAuth token endpoint, returning the minted token as a value."""
 
@@ -75,6 +107,7 @@ class TokenEndpointClient:
         client_id: str,
         grant_params: Mapping[str, str],
         client_auth: ClientAuth,
+        classify_rejection: RejectionClassifier | None = None,
     ) -> Result[ExchangedToken, CredError]:
         try:
             data = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
@@ -92,6 +125,10 @@ class TokenEndpointClient:
             verbose_proxy_logger.warning(
                 "MCP token endpoint %s failed with status %s", endpoint, exc.response.status_code
             )
+            rejection = _parse_token_endpoint_rejection(exc.response) if classify_rejection else None
+            classified = classify_rejection(rejection) if classify_rejection and rejection else None
+            if classified is not None:
+                return Error(classified)
             return Error(
                 CredError.of_upstream_unavailable(f"token exchange failed with status {exc.response.status_code}")
             )
