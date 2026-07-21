@@ -14,6 +14,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     UserProvisionerHelpers,
+    _apply_group_patch_updates,
     _extract_group_member_ids,
     _handle_team_membership_changes,
     _process_group_patch_operations,
@@ -2988,3 +2989,31 @@ async def test_get_groups_reports_members_from_members_with_roles(mocker):
     response = await get_groups(startIndex=1, count=10, filter=None)
 
     assert [m.value for m in response.Resources[0].members] == ["member-1"]
+
+
+@pytest.mark.asyncio
+async def test_apply_group_patch_updates_does_not_write_legacy_members(mocker):
+    """The group PATCH apply must not write the legacy ``members`` column.
+
+    Membership is reconciled onto the source of truth (members_with_roles and
+    each member's user.teams) separately; writing the legacy column here too
+    would create a second, unread copy of membership that can drift from the
+    source of truth, which is the inconsistency this PR removes.
+    """
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    updated = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+
+    result = await _apply_group_patch_updates(
+        group_id="team-1",
+        update_data={"team_alias": "Renamed"},
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is updated
+    mock_prisma_client.db.litellm_teamtable.update.assert_awaited_once()
+    written = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
+    assert "members" not in written
+    assert written["team_alias"] == "Renamed"

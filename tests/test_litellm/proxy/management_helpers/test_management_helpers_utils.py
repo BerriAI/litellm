@@ -202,8 +202,8 @@ async def test_add_new_member_clones_default_team_budget_id():
         "teams": [test_team_id],
         "user_role": "internal_user",
     }
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
 
@@ -261,7 +261,7 @@ async def test_add_new_member_clones_default_team_budget_id():
     assert result_team_membership.budget_id == test_cloned_budget_id
     assert result_team_membership.budget_id != test_default_budget_id
 
-    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
+    mock_prisma_client.db.litellm_usertable.upsert.assert_called_once()
     mock_prisma_client.db.litellm_teammembership.create.assert_called_once()
 
     # The clone must have happened: find_unique on the default, create for the clone.
@@ -306,8 +306,8 @@ async def test_add_new_member_budget_duration_only_clones_default_max_budget():
         "teams": ["team-dc"],
         "user_role": "internal_user",
     }
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
     mock_default_budget_row = MagicMock()
@@ -390,8 +390,8 @@ async def test_add_new_member_no_budget_when_no_default_and_no_max_budget():
         "teams": [test_team_id],
         "user_role": "internal_user",
     }
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
 
@@ -458,8 +458,8 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
         "teams": [test_team_id],
         "user_role": "internal_user",
     }
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
 
@@ -535,8 +535,8 @@ async def test_add_new_member_persists_budget_duration():
         "teams": ["team-dur"],
         "user_role": "internal_user",
     }
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
     mock_budget_response = MagicMock()
@@ -599,8 +599,8 @@ async def test_add_new_member_persists_budget_duration_without_max_budget():
         "teams": ["team-dur2"],
         "user_role": "internal_user",
     }
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock(
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=mock_user_response
     )
     mock_budget_response = MagicMock()
@@ -1034,12 +1034,8 @@ async def test_add_new_member_appends_team_only_if_absent_for_existing_user():
         "teams": ["team-1"],
         "user_role": "internal_user",
     }
-    # first find_unique: existence check (user exists); second: refetch after update_many
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-        side_effect=[MagicMock(), mock_user_after]
-    )
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_after)
     mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
-    mock_prisma_client.db.litellm_usertable.create = AsyncMock()
     # no team default budget and no explicit budget -> no team membership row
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
 
@@ -1055,13 +1051,68 @@ async def test_add_new_member_appends_team_only_if_absent_for_existing_user():
     assert result_user is not None
     assert result_user.user_id == "existing-user"
 
-    # existing user must not be recreated
-    mock_prisma_client.db.litellm_usertable.create.assert_not_called()
-
-    # the append must be a filtered, idempotent update keyed off the team id
+    # the append must be a filtered, idempotent update keyed off the team id, so
+    # a repeated or concurrent add of a team the user already has is a no-op
     mock_prisma_client.db.litellm_usertable.update_many.assert_called_once()
     where = mock_prisma_client.db.litellm_usertable.update_many.call_args.kwargs["where"]
     assert where["user_id"] == "existing-user"
     assert where["NOT"] == {"teams": {"has": "team-1"}}
     data = mock_prisma_client.db.litellm_usertable.update_many.call_args.kwargs["data"]
     assert data == {"teams": {"push": ["team-1"]}}
+
+    # upsert (not an unconditional teams push) is what ensures the row exists, so
+    # its update branch must not carry a teams push that would duplicate
+    mock_prisma_client.db.litellm_usertable.upsert.assert_called_once()
+    upsert_update = mock_prisma_client.db.litellm_usertable.upsert.call_args.kwargs["data"]["update"]
+    assert "teams" not in upsert_update
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_creates_missing_user_atomically_via_upsert():
+    """A brand-new user added to a team must be created via an atomic upsert, not
+    a separate existence check followed by create.
+
+    Concurrent provisioning of the same new user (which SCIM group reconciles do)
+    would race a check-then-create into a duplicate-key failure. The upsert seeds
+    teams on create, and the filtered append is a no-op because the team is
+    already present on the freshly created row.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="brand-new-user", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    mock_created = MagicMock()
+    mock_created.model_dump.return_value = {
+        "user_id": "brand-new-user",
+        "user_email": None,
+        "teams": ["team-1"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_created)
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.create = AsyncMock()
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+
+    result_user, _ = await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id="team-1",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="admin",
+    )
+
+    assert result_user is not None
+    assert result_user.user_id == "brand-new-user"
+
+    # existence is established by an atomic upsert (create-or-update), never a
+    # non-atomic standalone create that could race under concurrent provisioning
+    mock_prisma_client.db.litellm_usertable.upsert.assert_called_once()
+    mock_prisma_client.db.litellm_usertable.create.assert_not_called()
+    create_data = mock_prisma_client.db.litellm_usertable.upsert.call_args.kwargs["data"]["create"]
+    assert create_data["teams"] == ["team-1"]

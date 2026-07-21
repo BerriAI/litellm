@@ -4105,8 +4105,9 @@ async def test_new_team_max_budget_within_user_limit():
             "teams": ["team-within-budget-789"],
         }
         mock_prisma.db.litellm_usertable = MagicMock()
-        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-        mock_prisma.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
         # Mock team membership table
@@ -4247,8 +4248,9 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
             "teams": ["team-org-scoped-789"],
         }
         mock_prisma.db.litellm_usertable = MagicMock()
-        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-        mock_prisma.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
         # Mock team membership table
@@ -4394,8 +4396,9 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
             "teams": ["team-org-scoped-models-789"],
         }
         mock_prisma.db.litellm_usertable = MagicMock()
-        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-        mock_prisma.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
         # Mock team membership table
@@ -7247,8 +7250,9 @@ async def test_new_team_soft_budget_validation(
             "teams": ["test-team-123"],
         }
         mock_prisma.db.litellm_usertable = MagicMock()
-        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-        mock_prisma.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
         # Mock team membership table
