@@ -530,6 +530,7 @@ class ProxyExtrasDBManager:
         original_dir = os.getcwd()
         os.chdir(migrations_dir)
         timeout_attempts = 0
+        baseline_attempts = 0
         baseline_created = False
         recovered_migrations: frozenset[str] = frozenset()
         try:
@@ -566,8 +567,22 @@ class ProxyExtrasDBManager:
                                 "migration ledger after baseline creation."
                             ) from e
                         logger.info("Schema exists but no migrations ledger — creating baseline")
-                        ProxyExtrasDBManager._create_baseline_migration(schema_path)
-                        baseline_created = True
+                        baseline_attempts += 1
+                        try:
+                            baseline_created = ProxyExtrasDBManager._create_baseline_migration(schema_path)
+                        except (
+                            subprocess.CalledProcessError,
+                            subprocess.TimeoutExpired,
+                        ) as baseline_error:
+                            raise RuntimeError(
+                                "Failed to create the database migration baseline. "
+                                "Check database connectivity and permissions."
+                            ) from baseline_error
+                        if not baseline_created and baseline_attempts >= 4:
+                            raise RuntimeError(
+                                "Database migration baseline creation failed after 4 attempts. "
+                                "Check database connectivity and load."
+                            )
                         continue
 
                     if "P3009" in stderr:

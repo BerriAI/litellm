@@ -255,3 +255,79 @@ def test_v2_recovers_multiple_idempotent_migrations_in_one_invocation(monkeypatc
     assert run.call_count == 6
     assert roll_back.call_args_list == [call(name) for name in migration_names]
     assert resolve.call_args_list == [call(name) for name in migration_names]
+
+
+def test_v2_retries_baseline_after_timeout(monkeypatch, tmp_path):
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    p3005 = subprocess.CalledProcessError(
+        returncode=1,
+        cmd="prisma migrate deploy",
+        stderr="Error: P3005\ndatabase schema is not empty",
+        output="",
+    )
+
+    class FakeResult:
+        stdout = "Applied migration.\n"
+        stderr = ""
+
+    run = MagicMock(side_effect=(p3005, p3005, FakeResult()))
+    create_baseline = MagicMock(side_effect=(False, True))
+    monkeypatch.setattr("subprocess.run", run)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_create_baseline_migration", create_baseline)
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert ok is True
+    assert run.call_count == 3
+    assert create_baseline.call_count == 2
+
+
+def test_v2_baseline_timeouts_are_bounded(monkeypatch, tmp_path):
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    p3005 = subprocess.CalledProcessError(
+        returncode=1,
+        cmd="prisma migrate deploy",
+        stderr="Error: P3005\ndatabase schema is not empty",
+        output="",
+    )
+    run = MagicMock(side_effect=(p3005, p3005, p3005, p3005))
+    create_baseline = MagicMock(return_value=False)
+    monkeypatch.setattr("subprocess.run", run)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_create_baseline_migration", create_baseline)
+
+    with pytest.raises(RuntimeError, match="baseline creation failed after 4 attempts"):
+        ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    assert run.call_count == 4
+    assert create_baseline.call_count == 4
+
+
+def test_v2_baseline_subprocess_failure_raises_runtime_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    p3005 = subprocess.CalledProcessError(
+        returncode=1,
+        cmd="prisma migrate deploy",
+        stderr="Error: P3005\ndatabase schema is not empty",
+        output="",
+    )
+    baseline_error = subprocess.CalledProcessError(
+        returncode=1,
+        cmd="prisma migrate resolve --applied 0_init",
+        stderr="permission denied",
+        output="",
+    )
+    monkeypatch.setattr("subprocess.run", MagicMock(side_effect=p3005))
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_create_baseline_migration",
+        MagicMock(side_effect=baseline_error),
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to create the database migration baseline"):
+        ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)

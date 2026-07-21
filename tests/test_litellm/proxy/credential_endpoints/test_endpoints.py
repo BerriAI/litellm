@@ -14,6 +14,7 @@ import sys
 
 import pytest
 from fastapi import HTTPException
+from prisma.errors import ClientNotConnectedError
 from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, os.path.abspath("../../../.."))
@@ -427,6 +428,28 @@ async def test_team_admin_cannot_replay_stale_global_scope(_connected_db, _patch
         )
 
     assert exc.value.status_code == 403
+    _connected_db.find_by_name.assert_awaited_once_with("dest")
+    _connected_db.update_by_name.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_credential_handles_database_lookup_failure(_connected_db):
+    db_error = ClientNotConnectedError()
+    _connected_db.find_by_name = AsyncMock(side_effect=db_error)
+    _connected_db.update_by_name = AsyncMock()
+
+    result = await endpoints.update_credential(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        credential=UpdateCredentialItem(
+            credential_info={"access": {"global": True}},
+        ),
+        credential_name="dest",
+        user_api_key_dict=_admin(),
+    )
+
+    assert result.code == "500"
+    assert result.message == str(db_error)
     _connected_db.find_by_name.assert_awaited_once_with("dest")
     _connected_db.update_by_name.assert_not_awaited()
 

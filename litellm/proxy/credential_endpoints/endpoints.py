@@ -6,7 +6,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from prisma.errors import PrismaError
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -319,7 +321,7 @@ async def get_credentials(
         return {"success": True, "credentials": masked_credentials}
     except HTTPException:
         raise
-    except Exception as e:
+    except (PrismaError, httpx.HTTPError) as e:
         return handle_exception_on_proxy(e)
 
 
@@ -595,7 +597,10 @@ async def update_credential(
             )
         )
     credentials_repository = CredentialsRepository(prisma_client)
-    existing = await credentials_repository.find_by_name(credential_name)
+    try:
+        existing = await credentials_repository.find_by_name(credential_name)
+    except Exception as e:
+        return handle_exception_on_proxy(e)
     await _authorize_credential_patch(
         credential_name=credential_name,
         patch=credential,
