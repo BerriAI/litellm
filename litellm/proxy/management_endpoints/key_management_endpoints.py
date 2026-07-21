@@ -1671,6 +1671,23 @@ async def generate_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+def _ensure_service_account_id_in_metadata(
+    metadata: dict | None, key_alias: str | None
+) -> dict | None:
+    """Merge the LiteLLM-internal ``service_account_id`` into caller metadata.
+
+    Keys created via ``/key/service-account/generate`` are identified by
+    ``metadata["service_account_id"]``. Deriving it here (from an explicit value
+    or the key alias) and merging keeps it transparent to callers and preserves
+    any user-supplied keys, so ``custom_key_generate`` validates the combined
+    result instead of losing the caller's metadata.
+    """
+    service_account_id = (metadata or {}).get("service_account_id") or key_alias
+    if service_account_id is None:
+        return metadata
+    return {**(metadata or {}), "service_account_id": service_account_id}
+
+
 @router.post(
     "/key/service-account/generate",
     tags=["key management"],
@@ -1772,6 +1789,10 @@ async def generate_service_account_key_fn(
     _check_passthrough_routes_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
+    )
+
+    data.metadata = _ensure_service_account_id_in_metadata(
+        metadata=data.metadata, key_alias=data.key_alias
     )
 
     await validate_team_id_used_in_service_account_request(
