@@ -480,7 +480,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             flattened.append(
                 {
                     "role": message.get("role"),
-                    "content": convert_content_list_to_str(message),  # pyright: ignore[reportArgumentType]
+                    "content": convert_content_list_to_str(message),  # pyright: ignore[reportArgumentType]  # dict[str,Any] is AllMessageValues at runtime
                 }
             )
         return flattened
@@ -648,8 +648,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # Deep-copy so mutations don't affect other callbacks sharing this object
         standard_logging_payload: StandardLoggingPayload = safe_deep_copy(kwargs["standard_logging_object"])
 
-        self._apply_correlation_id(standard_logging_payload, kwargs)  # pyright: ignore[reportArgumentType]
-        self._prepend_system_prompt(standard_logging_payload, kwargs)  # pyright: ignore[reportArgumentType]
+        self._apply_correlation_id(standard_logging_payload, kwargs)  # pyright: ignore[reportArgumentType]  # StandardLoggingPayload is dict[str,Any] at runtime
+        self._prepend_system_prompt(standard_logging_payload, kwargs)  # pyright: ignore[reportArgumentType]  # StandardLoggingPayload is dict[str,Any] at runtime
 
         return standard_logging_payload
 
