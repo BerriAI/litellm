@@ -154,17 +154,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         pass
 
     def _normalize_tool_choice_for_responses_api(self, tool_choice: Any) -> Any:
-        """Chat tool_choice uses function.name; Responses API expects top-level name."""
-        if not isinstance(tool_choice, dict) or tool_choice.get("type") != "function":
+        """Chat tool_choice nests the name under function/custom; Responses API expects top-level name."""
+        if not isinstance(tool_choice, dict):
+            return tool_choice
+        choice_type = tool_choice.get("type")
+        if choice_type not in ("function", "custom"):
             return tool_choice
         if isinstance(tool_choice.get("name"), str) and tool_choice.get("name"):
-            # Return only Responses shape so stray chat ``function`` key is not sent upstream.
-            return {"type": "function", "name": tool_choice["name"]}
-        fn = tool_choice.get("function")
-        if isinstance(fn, dict):
-            fn_name = fn.get("name")
-            if isinstance(fn_name, str) and fn_name:
-                return {"type": "function", "name": fn_name}
+            # Return only Responses shape so stray chat ``function``/``custom`` keys are not sent upstream.
+            return {"type": choice_type, "name": tool_choice["name"]}
+        nested = tool_choice.get(choice_type)
+        if isinstance(nested, dict):
+            nested_name = nested.get("name")
+            if isinstance(nested_name, str) and nested_name:
+                return {"type": choice_type, "name": nested_name}
         return tool_choice
 
     def _handle_raw_dict_response_item(self, item: Dict[str, Any], index: int) -> Tuple[Optional[Any], int]:
@@ -893,6 +896,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
                 )
             elif tool.get("type") == "custom" and isinstance(tool.get("custom"), dict):
+                from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                    convert_custom_tool_format_to_responses_shape,
+                )
+
                 custom_payload = tool["custom"]
                 flat_custom: CustomToolParam = {
                     "type": "custom",
@@ -900,8 +907,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 }
                 if custom_payload.get("description") is not None:
                     flat_custom["description"] = custom_payload["description"]
-                if custom_payload.get("format") is not None:
-                    flat_custom["format"] = custom_payload["format"]
+                if isinstance(custom_payload.get("format"), dict):
+                    flat_custom["format"] = convert_custom_tool_format_to_responses_shape(custom_payload["format"])
                 responses_tools.append(flat_custom)
             else:
                 responses_tools.append(tool)  # type: ignore

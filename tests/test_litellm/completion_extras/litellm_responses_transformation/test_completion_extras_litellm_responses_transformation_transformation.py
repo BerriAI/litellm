@@ -2475,6 +2475,15 @@ def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
             {"type": "function", "name": "foo"},
         ),
         ({"type": "required"}, {"type": "required"}),
+        (
+            {"type": "custom", "custom": {"name": "ApplyPatch"}},
+            {"type": "custom", "name": "ApplyPatch"},
+        ),
+        (
+            {"type": "custom", "name": "ApplyPatch"},
+            {"type": "custom", "name": "ApplyPatch"},
+        ),
+        ({"type": "custom"}, {"type": "custom"}),
     ],
 )
 def test_normalize_tool_choice_for_responses_api(tool_choice, expected):
@@ -3140,3 +3149,42 @@ def test_convert_tools_to_responses_format_flattens_custom_tool_without_optional
     handler = LiteLLMResponsesTransformationHandler()
     converted = handler._convert_tools_to_responses_format([{"type": "custom", "custom": {"name": "Minimal"}}])
     assert converted[0] == {"type": "custom", "name": "Minimal"}
+
+
+def test_convert_tools_to_responses_format_unwraps_nested_grammar_format():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    converted = handler._convert_tools_to_responses_format(
+        [
+            {
+                "type": "custom",
+                "custom": {
+                    "name": "ApplyPatch",
+                    "format": {
+                        "type": "grammar",
+                        "grammar": {"definition": "start: patch", "syntax": "lark"},
+                    },
+                },
+            }
+        ]
+    )
+    assert converted[0] == {
+        "type": "custom",
+        "name": "ApplyPatch",
+        "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"},
+    }
+
+
+def test_convert_tools_to_responses_format_text_format_passes_through():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    converted = handler._convert_tools_to_responses_format(
+        [{"type": "custom", "custom": {"name": "A", "format": {"type": "text"}}}]
+    )
+    assert converted[0] == {"type": "custom", "name": "A", "format": {"type": "text"}}

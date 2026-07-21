@@ -162,6 +162,12 @@ class LiteLLMCompletionResponsesConfig:
                 if function_name:
                     return {"type": "function", "function": {"name": function_name}}
                 return "required"
+            elif tool_choice_type == "custom":
+                custom = tool_choice.get("custom")
+                custom_name = tool_choice.get("name") or (custom.get("name") if isinstance(custom, dict) else None)
+                if custom_name:
+                    return {"type": "function", "function": {"name": custom_name}}
+                return "required"
 
         # Return as-is for unknown formats
         return tool_choice
