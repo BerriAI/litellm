@@ -20,15 +20,19 @@ class TokenBreakdown:
     cached_tokens: int
     completion_tokens: int
     reasoning_tokens: int
+    image_tokens: int
 
 
 def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     """Extract token counts from usage, handling cached and reasoning tokens."""
     cached_tokens = 0
+    image_tokens = 0
     if usage.prompt_tokens_details and hasattr(usage.prompt_tokens_details, "cached_tokens"):
         cached_tokens = usage.prompt_tokens_details.cached_tokens or 0
+    if usage.prompt_tokens_details and hasattr(usage.prompt_tokens_details, "image_tokens"):
+        image_tokens = usage.prompt_tokens_details.image_tokens or 0
 
-    text_tokens = usage.prompt_tokens - cached_tokens
+    text_tokens = max(0, usage.prompt_tokens - cached_tokens - image_tokens)
 
     reasoning_tokens = 0
     if (
@@ -40,7 +44,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
 
     completion_tokens = (usage.completion_tokens or 0) - reasoning_tokens
 
-    return TokenBreakdown(text_tokens, cached_tokens, completion_tokens, reasoning_tokens)
+    return TokenBreakdown(text_tokens, cached_tokens, completion_tokens, reasoning_tokens, image_tokens)
 
 
 def _calculate_prompt_cost(
@@ -107,6 +111,19 @@ def _calculate_completion_cost(
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
 
+def _calculate_prompt_cost_embedding(
+    breakdown: TokenBreakdown, model_info: ModelInfo
+) -> float:
+    text_unit_price = float(model_info.get("input_cost_per_token") or 0.0)
+    image_token_price = model_info.get("input_cost_per_image_token")
+    if image_token_price is not None and breakdown.image_tokens:
+        image_unit_price = float(image_token_price)
+    else:
+        image_unit_price = text_unit_price
+
+    return breakdown.text_tokens * text_unit_price + breakdown.image_tokens * image_unit_price
+
+
 def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
@@ -120,8 +137,22 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
-    model_info = get_model_info(model=model, custom_llm_provider="dashscope")
+    try:
+        model_info = get_model_info(model=model, custom_llm_provider="dashscope")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "No pricing entry found for dashscope model=%s; returning 0 cost", model
+        )
+        return 0.0, 0.0
+
     breakdown = _extract_token_breakdown(usage)
+    mode = model_info.get("mode")
+
+    if mode == "embedding":
+        prompt_cost = _calculate_prompt_cost_embedding(breakdown, model_info)
+        return prompt_cost, 0.0
+
     tiered_pricing = model_info.get("tiered_pricing") if isinstance(model_info.get("tiered_pricing"), list) else None
 
     prompt_cost = _calculate_prompt_cost(breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing)

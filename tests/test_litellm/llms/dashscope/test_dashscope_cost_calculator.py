@@ -222,3 +222,72 @@ class TestDashscopeCostCalculator:
         )
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+
+    def test_multimodal_text_only(self):
+        usage = Usage(
+            prompt_tokens=100, completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(image_tokens=0)
+        )
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="multimodal-embedding-v1", usage=usage
+        )
+        model_info = litellm.get_model_info("dashscope/multimodal-embedding-v1")
+        expected = 100 * model_info["input_cost_per_token"]
+        assert math.isclose(prompt_cost, expected, rel_tol=1e-10)
+
+    def test_multimodal_image_tokens(self):
+        usage = Usage(
+            prompt_tokens=996, completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(image_tokens=896)
+        )
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="multimodal-embedding-v1", usage=usage
+        )
+        model_info = litellm.get_model_info("dashscope/multimodal-embedding-v1")
+        text_cost = 100 * model_info["input_cost_per_token"]
+        image_cost = 896 * model_info["input_cost_per_image_token"]
+        expected = text_cost + image_cost
+        assert math.isclose(prompt_cost, expected, rel_tol=1e-10)
+
+    def test_tongyi_image_tokens_same_price(self):
+        usage = Usage(
+            prompt_tokens=100, completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(image_tokens=50)
+        )
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="tongyi-embedding-vision-plus", usage=usage
+        )
+        model_info = litellm.get_model_info("dashscope/tongyi-embedding-vision-plus")
+        expected = 100 * model_info["input_cost_per_token"]
+        assert math.isclose(prompt_cost, expected, rel_tol=1e-10)
+
+    def test_top_level_image_tokens(self):
+        usage = Usage(
+            prompt_tokens=903, completion_tokens=0,
+            prompt_tokens_details=PromptTokensDetailsWrapper(image_tokens=896)
+        )
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="qwen3-vl-embedding", usage=usage
+        )
+        model_info = litellm.get_model_info("dashscope/qwen3-vl-embedding")
+        text_cost = 7 * model_info["input_cost_per_token"]
+        image_cost = 896 * model_info["input_cost_per_image_token"]
+        expected = text_cost + image_cost
+        assert math.isclose(prompt_cost, expected, rel_tol=1e-10)
+
+    def test_missing_pricing_entry(self):
+        usage = Usage(prompt_tokens=100, completion_tokens=0)
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="unknown-model", usage=usage
+        )
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.0
+
+    def test_no_prompt_tokens_details(self):
+        usage = Usage(prompt_tokens=100, completion_tokens=0)
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="multimodal-embedding-v1", usage=usage
+        )
+        model_info = litellm.get_model_info("dashscope/multimodal-embedding-v1")
+        expected = 100 * model_info["input_cost_per_token"]
+        assert math.isclose(prompt_cost, expected, rel_tol=1e-10)
