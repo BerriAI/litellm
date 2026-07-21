@@ -67,8 +67,9 @@ class PresidioParamsBody(GuardrailParamsBase):
     presidio_analyzer_api_base: str | None = None
     presidio_anonymizer_api_base: str | None = None
     # apply_to_output masks PII the model itself emitted, which also makes the
-    # guardrail run post_call.
+    # guardrail run post_call. logging_only masks what the proxy logs.
     apply_to_output: bool | None = None
+    logging_only: bool | None = None
 
 
 class BlockCodeExecutionParamsBody(GuardrailParamsBase):
