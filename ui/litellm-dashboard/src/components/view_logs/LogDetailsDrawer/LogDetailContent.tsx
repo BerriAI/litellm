@@ -285,12 +285,28 @@ const PROMPT_CACHE_READ_TOOLTIP =
   "Input tokens read from the LLM provider's prompt cache (e.g. Anthropic / OpenAI), billed at a discounted rate. Reported by the provider.";
 const PROMPT_CACHE_CREATION_TOOLTIP =
   "Input tokens written to the LLM provider's prompt cache for reuse by later requests.";
+const RESPONSE_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/proxy/caching";
+const PROMPT_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/completion/prompt_caching";
 
-function MetricLabel({ label, tooltip }: { label: string; tooltip: string }) {
+function MetricLabel({ label, tooltip, docsUrl }: { label: string; tooltip: string; docsUrl: string }) {
   return (
     <Space size={4}>
       {label}
-      <Tooltip title={tooltip}>
+      <Tooltip
+        title={
+          <>
+            {tooltip}{" "}
+            <a
+              href={docsUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "#91caff", textDecoration: "underline" }}
+            >
+              Docs
+            </a>
+          </>
+        }
+      >
         <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
       </Tooltip>
     </Space>
@@ -343,20 +359,40 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
           )}
 
           {showResponseCache && (
-            <Descriptions.Item label={<MetricLabel label="Response Cache" tooltip={RESPONSE_CACHE_TOOLTIP} />}>
+            <Descriptions.Item
+              label={
+                <MetricLabel
+                  label="Response Cache"
+                  tooltip={RESPONSE_CACHE_TOOLTIP}
+                  docsUrl={RESPONSE_CACHE_DOCS_URL}
+                />
+              }
+            >
               <Tag color={isResponseCacheHit ? "green" : "default"}>{isResponseCacheHit ? "Hit" : "Miss"}</Tag>
             </Descriptions.Item>
           )}
           {promptCacheReadTokens > 0 && (
             <Descriptions.Item
-              label={<MetricLabel label="Prompt Cache Read Tokens" tooltip={PROMPT_CACHE_READ_TOOLTIP} />}
+              label={
+                <MetricLabel
+                  label="Prompt Cache Read Tokens"
+                  tooltip={PROMPT_CACHE_READ_TOOLTIP}
+                  docsUrl={PROMPT_CACHE_DOCS_URL}
+                />
+              }
             >
               {formatNumberWithCommas(promptCacheReadTokens)}
             </Descriptions.Item>
           )}
           {promptCacheCreationTokens > 0 && (
             <Descriptions.Item
-              label={<MetricLabel label="Prompt Cache Creation Tokens" tooltip={PROMPT_CACHE_CREATION_TOOLTIP} />}
+              label={
+                <MetricLabel
+                  label="Prompt Cache Creation Tokens"
+                  tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+                  docsUrl={PROMPT_CACHE_DOCS_URL}
+                />
+              }
             >
               {formatNumberWithCommas(promptCacheCreationTokens)}
             </Descriptions.Item>

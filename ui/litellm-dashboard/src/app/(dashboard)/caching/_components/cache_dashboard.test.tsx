@@ -79,7 +79,15 @@ describe("CacheDashboard cache analytics charts", () => {
   it("scopes the analytics tab to the response cache, not provider prompt caching", async () => {
     renderDashboard();
 
-    expect(await screen.findByText(/Provider-side prompt caching/)).toBeInTheDocument();
+    expect(await screen.findByText(/is not shown here/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "response cache" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/caching",
+    );
+    expect(screen.getByRole("link", { name: "prompt caching" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/completion/prompt_caching",
+    );
     expect(screen.queryByText("Cached Tokens")).not.toBeInTheDocument();
     expect(screen.getAllByText("Cached Completion Tokens").length).toBeGreaterThan(0);
   });

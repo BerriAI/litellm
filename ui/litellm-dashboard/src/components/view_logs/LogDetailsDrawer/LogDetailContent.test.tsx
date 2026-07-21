@@ -306,6 +306,42 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("83")).toBeInTheDocument();
   });
 
+  it("should link the Response Cache tooltip to the response caching docs", async () => {
+    const user = userEvent.setup();
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True" })} />);
+
+    const label = screen.getByText("Response Cache").closest(".ant-space") as HTMLElement;
+    await user.hover(within(label).getByRole("img", { name: "info-circle" }));
+
+    expect(await screen.findByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/caching",
+    );
+  });
+
+  it("should link the prompt cache tooltips to the prompt caching docs", async () => {
+    const user = userEvent.setup();
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          cache_hit: "None",
+          metadata: {
+            status: "success",
+            additional_usage_values: { cache_read_input_tokens: 100 },
+          },
+        })}
+      />,
+    );
+
+    const label = screen.getByText("Prompt Cache Read Tokens").closest(".ant-space") as HTMLElement;
+    await user.hover(within(label).getByRole("img", { name: "info-circle" }));
+
+    expect(await screen.findByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/completion/prompt_caching",
+    );
+  });
+
   it("should hide the Response Cache row when cache_hit is not a true/false value", () => {
     render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "None" })} />);
 
