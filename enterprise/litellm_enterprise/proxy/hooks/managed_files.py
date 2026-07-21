@@ -315,18 +315,20 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         where_clause: Dict[str, Any] = {"file_purpose": "batch", **owner_filter}
 
-        if after:
-            where_clause["id"] = {"gt": after}
-
         fetch_limit = limit or 20
         if target_model_names:
             # Oversample so post-fetch model-name filtering still has enough rows.
             fetch_limit = max(fetch_limit * 3, 100)
 
+        cursor_args: Dict[str, Any] = (
+            {"cursor": {"unified_object_id": after}, "skip": 1} if after else {}
+        )
+
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where=where_clause,
             take=fetch_limit,
             order={"created_at": "desc"},
+            **cursor_args,
         )
 
         batch_objects: List[LiteLLMBatch] = []

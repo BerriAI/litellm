@@ -1939,6 +1939,129 @@ async def test_list_batches_from_managed_objects_table_filters_by_created_by():
 
 
 @pytest.mark.asyncio
+async def test_list_batches_pagination_uses_unified_object_id_cursor():
+    """Regression for LIT-4678.
+
+    The ``after`` cursor a client sends back is a batch's ``unified_object_id``
+    (that is what is returned as ``.id`` / ``last_id``). Paginating must use a
+    Prisma cursor on the unique ``unified_object_id`` column, not a
+    ``where id > after`` filter against the random-uuid primary key.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_many.return_value = []
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="test-user"),
+        limit=5,
+        after="unified-batch-id-7",
+    )
+
+    prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
+        where={"file_purpose": "batch", "created_by": "test-user"},
+        take=5,
+        order={"created_at": "desc"},
+        cursor={"unified_object_id": "unified-batch-id-7"},
+        skip=1,
+    )
+
+    _, call_kwargs = prisma_client.db.litellm_managedobjecttable.find_many.call_args
+    assert "id" not in call_kwargs["where"]
+
+
+@pytest.mark.asyncio
+async def test_list_batches_pagination_walks_all_pages_without_loops_or_gaps():
+    """Regression for LIT-4678.
+
+    Simulates the managed-objects table (random-uuid ``id`` primary key,
+    base64 ``unified_object_id``, reverse-chronological ``created_at``) and
+    walks every page the way a client would, feeding ``last_id`` back as
+    ``after``. With the old ``where id > after`` cursor this loops and drops
+    batches; the fixed cursor returns each batch exactly once, newest first.
+    """
+    import uuid as _uuid
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    def _unified_id(i: int) -> str:
+        raw = f"litellm_proxy;model_id:gpt-4o-batch;llm_batch_id:batch_{i:03d}"
+        return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+    total = 10
+    rows = []
+    for i in range(total):
+        row = MagicMock()
+        row.id = str(_uuid.uuid4())
+        row.unified_object_id = _unified_id(i)
+        row.created_at = 1_000_000 + i
+        row.file_object = json.dumps(
+            {
+                "id": f"batch_provider_{i:03d}",
+                "object": "batch",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "status": "completed",
+                "created_at": 1_000_000 + i,
+                "input_file_id": f"file-input-{i:03d}",
+                "request_counts": {"total": 1, "completed": 1, "failed": 0},
+            }
+        )
+        rows.append(row)
+
+    async def fake_find_many(where, take, order, cursor=None, skip=0):
+        result = list(rows)
+        id_filter = where.get("id")
+        if isinstance(id_filter, dict) and "gt" in id_filter:
+            result = [r for r in result if r.id > id_filter["gt"]]
+        (order_field, direction), = order.items()
+        result.sort(
+            key=lambda r: getattr(r, order_field), reverse=(direction == "desc")
+        )
+        if cursor is not None:
+            (cur_field, cur_val), = cursor.items()
+            idx = next(
+                (i for i, r in enumerate(result) if getattr(r, cur_field) == cur_val),
+                None,
+            )
+            if idx is None:
+                return []
+            result = result[idx + skip:]
+        return result[:take]
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+        side_effect=fake_find_many
+    )
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+    user = UserAPIKeyAuth(user_id="test-user")
+
+    seen: list = []
+    after = None
+    for _ in range(total + 5):
+        resp = await proxy_managed_files.list_user_batches(
+            user_api_key_dict=user, limit=3, after=after
+        )
+        page_ids = [b.id for b in resp["data"]]
+        if not page_ids:
+            break
+        seen.extend(page_ids)
+        assert resp["last_id"] != after, "cursor did not advance (pagination loop)"
+        after = resp["last_id"]
+
+    expected = [_unified_id(i) for i in reversed(range(total))]
+    assert seen == expected
+    assert len(seen) == len(set(seen))
+
+
+@pytest.mark.asyncio
 async def test_return_unified_file_id_includes_expires_at():
     from litellm.types.llms.openai import OpenAIFileObject
 
