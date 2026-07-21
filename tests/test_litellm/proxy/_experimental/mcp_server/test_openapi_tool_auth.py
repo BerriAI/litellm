@@ -218,3 +218,86 @@ async def test_openapi_local_tool_denied_when_server_not_resolvable():
     assert exc.value.status_code == 503
     pre_call.assert_not_awaited()
     handle_local.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_openapi_local_tool_injects_resolved_oauth_token():
+    """LIT-4629: the local-registry (OpenAPI) dispatch is the primary egress for spec_path
+    tools, and before the fix it dropped the gateway-resolved OAuth credential entirely, so a
+    user's completed OAuth flow stored a token that never reached the upstream API. The resolved
+    credential must land in the `_request_resolved_auth_headers` ContextVar the tool closure
+    reads. Kills the mutant that deletes the resolve_openapi_upstream_auth call in server.py."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        _request_resolved_auth_headers,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+        StaticHeaderAuth,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    user = UserAPIKeyAuth(
+        api_key="sk-user",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    oauth_server = MCPServer(
+        server_id="srv-sheets",
+        name="google_sheets",
+        server_name="google_sheets",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/sheets-openapi.yaml",
+    )
+
+    fake_tool = MagicMock()
+    fake_tool.name = "get_values"
+    captured: dict = {}
+
+    async def handle_local(_name, _arguments):
+        captured["resolved"] = _request_resolved_auth_headers.get()
+        return []
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=oauth_server,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "pre_call_tool_check",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=fake_tool,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager._cred_provider,
+            "resolve_credentials",
+            new=AsyncMock(return_value=Ok(StaticHeaderAuth("Bearer stored-user-token"))),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            new=handle_local,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="get_values",
+            arguments={},
+            allowed_mcp_servers=[oauth_server],
+            start_time=datetime.now(timezone.utc),
+            user_api_key_auth=user,
+        )
+
+    assert captured["resolved"] == {"Authorization": "Bearer stored-user-token"}
+    assert _request_resolved_auth_headers.get() is None

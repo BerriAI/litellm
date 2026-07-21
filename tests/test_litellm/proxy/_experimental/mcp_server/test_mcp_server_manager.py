@@ -8891,3 +8891,48 @@ async def test_resolve_toolset_tool_permissions_single_db_fetch_across_checks():
     assert first == {"server-a": ["lookup_status"]}
     assert second == first
     list_toolsets_mock.assert_awaited_once()
+
+
+class TestMaterializeAuthHeaders:
+    """_materialize_auth_headers drives one step of a resolved httpx.Auth's own flow to turn it
+    into a header dict for the OpenAPI egress arm, which sends plain headers and cannot carry an
+    httpx.Auth. Generic across auth shapes via the resolver-arm header_name convention."""
+
+    @pytest.mark.asyncio
+    async def test_static_header_auth_materializes_its_header(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _materialize_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+
+        headers = await _materialize_auth_headers(StaticHeaderAuth("Bearer stored-token"))
+        assert headers == {"Authorization": "Bearer stored-token"}
+
+    @pytest.mark.asyncio
+    async def test_client_credentials_bearer_auth_materializes_bearer(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _materialize_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+
+        async def _refetch(_stale: str):
+            return None
+
+        headers = await _materialize_auth_headers(ClientCredentialsBearerAuth("m2m-token", _refetch))
+        assert headers == {"Authorization": "Bearer m2m-token"}
+
+    @pytest.mark.asyncio
+    async def test_noop_and_none_materialize_to_none(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _materialize_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            NoOpAuth,
+        )
+
+        assert await _materialize_auth_headers(None) is None
+        assert await _materialize_auth_headers(NoOpAuth()) is None
