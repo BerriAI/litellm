@@ -90,6 +90,8 @@ export default function ChatConversationPage() {
     if (staleId) router.replace(getChatRoutes().chats);
   }, [staleId, router]);
 
+  useEffect(() => () => abortControllerRef.current?.abort(), []);
+
   // Load models
   useEffect(() => {
     if (!accessToken) return;

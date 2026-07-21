@@ -11,8 +11,14 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
   const [inputMessage, setInputMessage] = useState("");
   const [variables, setVariables] = useState<Record<string, string>>({});
   const [variablesFilled, setVariablesFilled] = useState(false);
-  const [abortController, setAbortController] = useState<AbortController | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const extractedVariables = extractVariables(prompt);
 
@@ -59,7 +65,7 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
     setInputMessage("");
 
     const controller = new AbortController();
-    setAbortController(controller);
+    abortControllerRef.current = controller;
     setIsLoading(true);
 
     const startTime = Date.now();
@@ -189,14 +195,14 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
       }
     } finally {
       setIsLoading(false);
-      setAbortController(null);
+      abortControllerRef.current = null;
     }
   };
 
   const handleCancelRequest = () => {
-    if (abortController) {
-      abortController.abort();
-      setAbortController(null);
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
       setIsLoading(false);
       NotificationsManager.info("Request cancelled");
     }

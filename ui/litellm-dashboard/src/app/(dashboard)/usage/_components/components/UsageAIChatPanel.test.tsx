@@ -1,6 +1,7 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
+import { usageAiChatStream } from "@/components/networking";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 
 beforeAll(() => {
@@ -76,5 +77,26 @@ describe("UsageAIChatPanel", () => {
 
     expect(screen.getByTestId("usage-ai-chat-panel")).not.toHaveClass("translate-x-full");
     expect(screen.getByTestId("usage-ai-chat-panel")).toHaveClass("translate-x-0");
+  });
+
+  it("should abort the in-flight stream when the panel unmounts", () => {
+    let capturedSignal: AbortSignal | undefined;
+    vi.mocked(usageAiChatStream).mockImplementation((...args: Parameters<typeof usageAiChatStream>) => {
+      capturedSignal = args[8];
+      return new Promise(() => {});
+    });
+
+    const { unmount } = renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Ask about your usage..."), { target: { value: "hello" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    expect(usageAiChatStream).toHaveBeenCalledTimes(1);
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    unmount();
+
+    expect(capturedSignal?.aborted).toBe(true);
   });
 });
