@@ -2035,18 +2035,43 @@ class LiteLLMCompletionResponsesConfig:
         # BaseLiteLLMOpenAIResponseObject has extra="allow", so setattr ensures
         # they survive serialization and can be extracted by the inference proxy
         # before the lossy api.Usage unmarshal.
-        if hasattr(usage, "cache_creation_input_tokens") and usage.cache_creation_input_tokens:
-            setattr(response_usage, "cache_creation_input_tokens", usage.cache_creation_input_tokens)
+        if (
+            hasattr(usage, "cache_creation_input_tokens")
+            and usage.cache_creation_input_tokens
+        ):
+            setattr(
+                response_usage,
+                "cache_creation_input_tokens",
+                usage.cache_creation_input_tokens,
+            )
         if hasattr(usage, "cache_read_input_tokens") and usage.cache_read_input_tokens:
-            setattr(response_usage, "cache_read_input_tokens", usage.cache_read_input_tokens)
-        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details is not None:
+            setattr(
+                response_usage, "cache_read_input_tokens", usage.cache_read_input_tokens
+            )
+        if (
+            hasattr(usage, "prompt_tokens_details")
+            and usage.prompt_tokens_details is not None
+        ):
             ptd = usage.prompt_tokens_details
-            if hasattr(ptd, "cache_creation_token_details") and ptd.cache_creation_token_details is not None:
+            if (
+                hasattr(ptd, "cache_creation_token_details")
+                and ptd.cache_creation_token_details is not None
+            ):
                 cache_creation_dict: Dict[str, int] = {}
-                if ptd.cache_creation_token_details.ephemeral_5m_input_tokens is not None:
-                    cache_creation_dict["ephemeral_5m_input_tokens"] = ptd.cache_creation_token_details.ephemeral_5m_input_tokens
-                if ptd.cache_creation_token_details.ephemeral_1h_input_tokens is not None:
-                    cache_creation_dict["ephemeral_1h_input_tokens"] = ptd.cache_creation_token_details.ephemeral_1h_input_tokens
+                if (
+                    ptd.cache_creation_token_details.ephemeral_5m_input_tokens
+                    is not None
+                ):
+                    cache_creation_dict["ephemeral_5m_input_tokens"] = (
+                        ptd.cache_creation_token_details.ephemeral_5m_input_tokens
+                    )
+                if (
+                    ptd.cache_creation_token_details.ephemeral_1h_input_tokens
+                    is not None
+                ):
+                    cache_creation_dict["ephemeral_1h_input_tokens"] = (
+                        ptd.cache_creation_token_details.ephemeral_1h_input_tokens
+                    )
                 if cache_creation_dict:
                     setattr(response_usage, "cache_creation", cache_creation_dict)
 
