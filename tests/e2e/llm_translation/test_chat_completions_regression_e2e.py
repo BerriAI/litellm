@@ -82,6 +82,13 @@ def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
 CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
 OPENAI_VISION_BACKEND = "openai/gpt-4o"
 
+# OpenAI caches a shared prompt prefix once it exceeds ~1024 tokens; this is well
+# past that, so a repeat call reports cached prompt tokens.
+CACHE_PREFIX = (
+    "You are a meticulous assistant. Follow these standing instructions exactly. "
+    * 300
+)
+
 
 def _vision_messages() -> list[ChatMessage]:
     return [
@@ -564,6 +571,37 @@ class TestOpenAIChatCompletions:
 
         response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
         _assert_describes_cat(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.prompt_cache_5m.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_openai_chat_prompt_cache_hits_on_repeat(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        require_env("OPENAI_API_KEY")
+        model = f"e2e-openai-cache-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        body = ChatBody(
+            model=model,
+            messages=[
+                ChatMessage(role="system", content=CACHE_PREFIX),
+                ChatMessage(role="user", content="Reply with the single word pong."),
+            ],
+            max_tokens=16,
+        )
+        unwrap(client.proxy.chat(key, body))
+        second = unwrap(client.proxy.chat(key, body))
+
+        details = second.usage.prompt_tokens_details if second.usage else None
+        assert details and details.cached_tokens and details.cached_tokens > 0, (
+            f"a repeated large-prefix prompt must report cached prompt tokens, got usage={second.usage}"
+        )
 
     @pytest.mark.covers(
         "llm.chat_completions.openai.tool_use.stream.works",
