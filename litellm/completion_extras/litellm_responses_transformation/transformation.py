@@ -20,6 +20,7 @@ from typing import (
     cast,
 )
 
+from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel
 
@@ -891,6 +892,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         description=function_tool.get("description"),
                     )
                 )
+            elif tool.get("type") == "custom" and isinstance(tool.get("custom"), dict):
+                custom_payload = tool["custom"]
+                flat_custom: CustomToolParam = {
+                    "type": "custom",
+                    "name": custom_payload.get("name", ""),
+                }
+                if custom_payload.get("description") is not None:
+                    flat_custom["description"] = custom_payload["description"]
+                if custom_payload.get("format") is not None:
+                    flat_custom["format"] = custom_payload["format"]
+                responses_tools.append(flat_custom)
             else:
                 responses_tools.append(tool)  # type: ignore
 

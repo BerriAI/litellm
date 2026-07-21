@@ -50,12 +50,14 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Function,
     Message,
     ModelResponse,
     ModelResponseStream,
+    chat_completion_tool_call_from_dict,
 )
 from litellm.utils import convert_to_model_response_object
 
@@ -531,12 +533,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
             tool_calls = choice["message"].get("tool_calls", None)
-            new_tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+            new_tool_calls: Optional[
+                List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]
+            ] = None
             message_content = choice["message"].get("content", None)
             if tool_calls is not None:
                 _openai_tool_calls = []
                 for _tc in tool_calls:
-                    _openai_tc = ChatCompletionMessageToolCall(**_tc)  # type: ignore
+                    _openai_tc = chat_completion_tool_call_from_dict(dict(_tc))
                     _openai_tool_calls.append(_openai_tc)
                 fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
 

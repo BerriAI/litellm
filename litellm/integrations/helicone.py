@@ -59,12 +59,15 @@ class HeliconeLogger:
         content = []
         if "tool_calls" in message and message["tool_calls"]:
             for tool_call in message["tool_calls"]:
+                function = tool_call.get("function")
+                if not function:
+                    continue
                 content.append(
                     {
                         "type": "tool_use",
                         "id": tool_call["id"],
-                        "name": tool_call["function"]["name"],
-                        "input": tool_call["function"]["arguments"],
+                        "name": function["name"],
+                        "input": function["arguments"],
                     }
                 )
         elif "content" in message and message["content"]:

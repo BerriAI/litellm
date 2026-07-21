@@ -24,6 +24,23 @@ router = APIRouter()
 
 _user_api_key_auth_dep = Depends(user_api_key_auth)
 
+_FLAT_CUSTOM_TOOL_KEYS = ("name", "description", "format")
+_FLAT_FUNCTION_TOOL_KEYS = ("name", "description", "parameters", "strict")
+
+
+def _nest_flat_chat_tool(tool: object) -> object:
+    if not isinstance(tool, dict) or "name" not in tool:
+        return tool
+    if tool.get("type") == "custom" and "custom" not in tool:
+        return {"type": "custom", "custom": {k: tool[k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool}}
+    if tool.get("type") == "function" and "function" not in tool:
+        return {"type": "function", "function": {k: tool[k] for k in _FLAT_FUNCTION_TOOL_KEYS if k in tool}}
+    return tool
+
+
+def _nest_flat_chat_tools(tools: list) -> list:
+    return [_nest_flat_chat_tool(tool) for tool in tools]
+
 
 @router.post(
     "/v1/responses",
@@ -330,7 +347,9 @@ async def cursor_chat_completions(
     custom tools) to the chat/completions path while expecting chat completions responses;
     those are routed through the Responses API pipeline and converted back. Genuine chat
     completions bodies (`messages` present) are routed through the standard chat completions
-    pipeline untouched.
+    pipeline, after nesting any flat Responses-style tool defs Cursor mixes into the chat
+    `tools` array (e.g. `{"type": "custom", "name": "ApplyPatch", ...}`) into the chat
+    completions shape OpenAI requires (`{"type": "custom", "custom": {...}}`).
 
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
@@ -347,6 +366,7 @@ async def cursor_chat_completions(
         responses_api_bridge,
     )
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.proxy.common_utils.http_parsing_utils import _safe_set_request_parsed_body
     from litellm.proxy.proxy_server import (
         _read_request_body,
         async_data_generator,
@@ -370,6 +390,11 @@ async def cursor_chat_completions(
     if "messages" in data:
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
         # already fixed); delegate so behavior matches /chat/completions exactly
+        tools = data.get("tools")
+        if isinstance(tools, list):
+            nested_tools = _nest_flat_chat_tools(tools)
+            if nested_tools != tools:
+                _safe_set_request_parsed_body(request=request, parsed_body={**data, "tools": nested_tools})
         return await chat_completion(
             request=request,
             fastapi_response=fastapi_response,

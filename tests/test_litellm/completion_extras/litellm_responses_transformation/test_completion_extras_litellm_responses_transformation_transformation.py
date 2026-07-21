@@ -3106,3 +3106,37 @@ def test_convert_response_output_generic_pydantic_message_item():
     assert len(choices) == 1
     assert choices[0].message.content == "42"
     assert choices[0].finish_reason == "stop"
+
+
+def test_convert_tools_to_responses_format_flattens_nested_custom_tool():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    tools = [
+        {
+            "type": "custom",
+            "custom": {"name": "ApplyPatch", "description": "V4A patch", "format": {"type": "text"}},
+        },
+        {"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}},
+    ]
+    converted = handler._convert_tools_to_responses_format(tools)
+    assert converted[0] == {
+        "type": "custom",
+        "name": "ApplyPatch",
+        "description": "V4A patch",
+        "format": {"type": "text"},
+    }
+    assert converted[1]["type"] == "function"
+    assert converted[1]["name"] == "f"
+
+
+def test_convert_tools_to_responses_format_flattens_custom_tool_without_optional_keys():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    converted = handler._convert_tools_to_responses_format([{"type": "custom", "custom": {"name": "Minimal"}}])
+    assert converted[0] == {"type": "custom", "name": "Minimal"}

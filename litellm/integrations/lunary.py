@@ -31,7 +31,7 @@ def parse_tool_calls(tool_calls):
 
         return serialized
 
-    return [clean_tool_call(tool_call) for tool_call in tool_calls]
+    return [clean_tool_call(tool_call) for tool_call in tool_calls if getattr(tool_call, "function", None) is not None]
 
 
 def parse_messages(input):

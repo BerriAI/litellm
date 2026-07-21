@@ -2628,7 +2628,9 @@ export interface paths {
          *     custom tools) to the chat/completions path while expecting chat completions responses;
          *     those are routed through the Responses API pipeline and converted back. Genuine chat
          *     completions bodies (`messages` present) are routed through the standard chat completions
-         *     pipeline untouched.
+         *     pipeline, after nesting any flat Responses-style tool defs Cursor mixes into the chat
+         *     `tools` array (e.g. `{"type": "custom", "name": "ApplyPatch", ...}`) into the chat
+         *     completions shape OpenAI requires (`{"type": "custom", "custom": {...}}`).
          *
          *     ```bash
          *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
@@ -21937,6 +21939,15 @@ export interface components {
              */
             type: "ephemeral";
         };
+        /** ChatCompletionCustomToolCallPayload */
+        ChatCompletionCustomToolCallPayload: {
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** ChatCompletionDeveloperMessage */
         ChatCompletionDeveloperMessage: {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
@@ -22022,6 +22033,20 @@ export interface components {
             format?: string;
             /** Url */
             url: string;
+        };
+        /** ChatCompletionMessageCustomToolCall */
+        ChatCompletionMessageCustomToolCall: {
+            custom: components["schemas"]["ChatCompletionCustomToolCallPayload"];
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default custom
+             * @constant
+             */
+            type: "custom";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionMessageToolCall */
         ChatCompletionMessageToolCall: {
@@ -27593,7 +27618,7 @@ export interface components {
             /** Thinking Blocks */
             thinking_blocks?: (components["schemas"]["ChatCompletionThinkingBlock"] | components["schemas"]["ChatCompletionRedactedThinkingBlock"])[] | null;
             /** Tool Calls */
-            tool_calls: components["schemas"]["ChatCompletionMessageToolCall"][] | null;
+            tool_calls: (components["schemas"]["ChatCompletionMessageToolCall"] | components["schemas"]["ChatCompletionMessageCustomToolCall"])[] | null;
         } & {
             [key: string]: unknown;
         };

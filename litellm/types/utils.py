@@ -1075,6 +1075,71 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+class ChatCompletionCustomToolCallPayload(OpenAIObject):
+    name: str
+    input: str
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+
+class ChatCompletionDeltaCustomToolCallPayload(OpenAIObject):
+    name: str | None = None
+    input: str | None = None
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+
+class ChatCompletionMessageCustomToolCall(OpenAIObject):
+    id: str
+    type: Literal["custom"] = "custom"
+    custom: ChatCompletionCustomToolCallPayload
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
+class ChatCompletionDeltaCustomToolCall(OpenAIObject):
+    id: str | None = None
+    type: str | None = None
+    custom: ChatCompletionDeltaCustomToolCallPayload
+    index: int
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
 class ChatCompletionMessageToolCall(OpenAIObject):
     def __init__(
         self,
@@ -1114,6 +1179,16 @@ class ChatCompletionMessageToolCall(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+def chat_completion_tool_call_from_dict(
+    tool_call: dict,
+) -> "ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall":
+    if tool_call.get("type") == "custom":
+        return ChatCompletionMessageCustomToolCall(
+            **{k: v for k, v in tool_call.items() if not (k == "function" and v is None)}
+        )
+    return ChatCompletionMessageToolCall(**tool_call)
 
 
 from openai.types.chat.chat_completion_audio import ChatCompletionAudio
@@ -1168,7 +1243,7 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: Op
 class Message(SafeAttributeModel, OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
+    tool_calls: Optional[List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
     images: Optional[List[ImageURLListItem]] = None
@@ -1199,7 +1274,7 @@ class Message(SafeAttributeModel, OpenAIObject):
             "function_call": (FunctionCall(**function_call) if function_call is not None else None),
             "tool_calls": (
                 [
-                    (ChatCompletionMessageToolCall(**tool_call) if isinstance(tool_call, dict) else tool_call)
+                    (chat_completion_tool_call_from_dict(tool_call) if isinstance(tool_call, dict) else tool_call)
                     for tool_call in tool_calls
                 ]
                 if tool_calls is not None and len(tool_calls) > 0
@@ -1292,7 +1367,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: Optional[str]
         role: Optional[str]
         function_call: Optional[FunctionCall]
-        tool_calls: Optional[List[ChatCompletionDeltaToolCall]]
+        tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall]]]
         audio: Optional[ChatCompletionAudioResponse]
         images: Optional[List[ImageURLListItem]]
         annotations: Optional[List[ChatCompletionAnnotation]]
@@ -1330,17 +1405,24 @@ class Delta(SafeAttributeModel, OpenAIObject):
             function_call = FunctionCall(**function_call)
 
         if tool_calls is not None and isinstance(tool_calls, list):
-            coerced_tool_calls: List[ChatCompletionDeltaToolCall] = []
+            coerced_tool_calls: List[Union[ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall]] = []
             current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
-                    if tool_call.get("type", None) is None:
-                        tool_call["type"] = "function"
-                    coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
-                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    if tool_call.get("type") == "custom" or "custom" in tool_call:
+                        coerced_tool_calls.append(
+                            ChatCompletionDeltaCustomToolCall(
+                                **{k: v for k, v in tool_call.items() if not (k == "function" and v is None)}
+                            )
+                        )
+                    else:
+                        if tool_call.get("type", None) is None:
+                            tool_call["type"] = "function"
+                        coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                elif isinstance(tool_call, (ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall)):
                     coerced_tool_calls.append(tool_call)
             tool_calls = coerced_tool_calls
 
