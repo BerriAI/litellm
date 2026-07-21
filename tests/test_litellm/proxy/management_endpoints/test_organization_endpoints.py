@@ -675,6 +675,8 @@ async def _run_update_organization_v2(
     body: dict,
     existing_budget_id,
     existing_metadata,
+    existing_object_permission_id=None,
+    existing_object_permission_row=None,
 ):
     from litellm.proxy._types import (
         LitellmUserRoles,
@@ -692,17 +694,28 @@ async def _run_update_organization_v2(
 
     existing_org = MagicMock()
     existing_org.budget_id = existing_budget_id
-    existing_org.object_permission_id = None
+    existing_org.object_permission_id = existing_object_permission_id
     existing_org.metadata = existing_metadata
 
     mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=existing_org)
     mock_prisma_client.db.litellm_organizationtable.update = AsyncMock(return_value=MagicMock())
     mock_prisma_client.db.litellm_budgettable.update = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=existing_object_permission_row
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock()
 
     tx = MagicMock()
     tx.litellm_organizationtable = mock_prisma_client.db.litellm_organizationtable
     tx.litellm_budgettable = mock_prisma_client.db.litellm_budgettable
+    tx.litellm_objectpermissiontable.upsert = AsyncMock()
     mock_prisma_client.db.tx = MagicMock(return_value=_FakeTxContext(tx))
+    mock_prisma_client.tx = tx
+
+    call_order = MagicMock()
+    call_order.attach_mock(tx.litellm_objectpermissiontable.upsert, "permission_upsert")
+    call_order.attach_mock(mock_prisma_client.db.litellm_organizationtable.update, "org_update")
+    mock_prisma_client.call_order = call_order
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr(organization_endpoints, "_verify_org_access", AsyncMock())
@@ -832,15 +845,34 @@ async def test_v2_rejects_caller_without_org_access(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_v2_wires_object_permission_onto_org_write(monkeypatch):
-    """A sent object_permission is passed to the upsert helper and its id linked onto the org write."""
-    from litellm.proxy.management_endpoints import organization_endpoints
+    """A sent object_permission merges over the existing permission row and its id is linked onto the org write."""
+    existing_row = MagicMock()
+    existing_row.model_dump.return_value = {
+        "object_permission_id": "op-123",
+        "mcp_servers": ["server-1"],
+    }
 
-    async def fake_handle(data_json, existing_organization_row):
-        data_json["object_permission_id"] = "op-123"
-        return data_json
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"object_permission": {"vector_stores": ["vs-1"]}},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+        existing_object_permission_id="op-123",
+        existing_object_permission_row=existing_row,
+    )
 
-    monkeypatch.setattr(organization_endpoints, "handle_update_object_permission", AsyncMock(side_effect=fake_handle))
+    upsert = prisma.tx.litellm_objectpermissiontable.upsert.await_args.kwargs
+    assert upsert["where"] == {"object_permission_id": "op-123"}
+    assert upsert["data"]["update"]["mcp_servers"] == ["server-1"]
+    assert upsert["data"]["update"]["vector_stores"] == ["vs-1"]
+    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert write_data["object_permission_id"] == "op-123"
 
+
+@pytest.mark.asyncio
+async def test_v2_object_permission_upsert_runs_inside_transaction(monkeypatch):
+    """The permission upsert runs on the tx client, before the org write that links it, so a rollback cannot
+    leave merged grants live on a row the org still points at."""
     prisma = await _run_update_organization_v2(
         monkeypatch,
         body={"object_permission": {"vector_stores": ["vs-1"]}},
@@ -848,21 +880,21 @@ async def test_v2_wires_object_permission_onto_org_write(monkeypatch):
         existing_metadata={},
     )
 
-    organization_endpoints.handle_update_object_permission.assert_awaited_once()
-    passed = organization_endpoints.handle_update_object_permission.await_args.kwargs["data_json"]
-    assert "object_permission" in passed
-    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
-    assert write_data["object_permission_id"] == "op-123"
+    prisma.tx.litellm_objectpermissiontable.upsert.assert_awaited_once()
+    prisma.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
+
+    upsert = prisma.tx.litellm_objectpermissiontable.upsert.await_args.kwargs
+    linked_id = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]["object_permission_id"]
+    assert upsert["where"] == {"object_permission_id": linked_id}
+    assert upsert["data"]["create"]["object_permission_id"] == linked_id
+
+    ordered = [name for name, _, _ in prisma.call_order.mock_calls if name in ("permission_upsert", "org_update")]
+    assert ordered == ["permission_upsert", "org_update"]
 
 
 @pytest.mark.asyncio
 async def test_v2_clears_object_permission_when_sent_null(monkeypatch):
     """object_permission: null detaches the org's permission row (object_permission_id -> None), no merge."""
-    from litellm.proxy.management_endpoints import organization_endpoints
-
-    handle_mock = AsyncMock()
-    monkeypatch.setattr(organization_endpoints, "handle_update_object_permission", handle_mock)
-
     prisma = await _run_update_organization_v2(
         monkeypatch,
         body={"object_permission": None},
@@ -870,7 +902,8 @@ async def test_v2_clears_object_permission_when_sent_null(monkeypatch):
         existing_metadata={},
     )
 
-    handle_mock.assert_not_awaited()
+    prisma.tx.litellm_objectpermissiontable.upsert.assert_not_awaited()
+    prisma.db.litellm_objectpermissiontable.find_unique.assert_not_awaited()
     write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
     assert write_data["object_permission_id"] is None
 

@@ -18807,7 +18807,8 @@ export interface paths {
          *     ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
          *     ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
          *     so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
-         *     Validation failures return 422; the budget-row and org-row writes are one transaction.
+         *     Validation failures return 422; the object-permission upsert, budget-row write, and
+         *     org-row write are one transaction.
          */
         patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
         trace?: never;

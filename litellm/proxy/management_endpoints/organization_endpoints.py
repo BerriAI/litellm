@@ -36,6 +36,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
+    prepare_object_permission_upsert,
 )
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
@@ -596,7 +597,8 @@ async def update_organization_v2(
     ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
     ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
     so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
-    Validation failures return 422; the budget-row and org-row writes are one transaction.
+    Validation failures return 422; the object-permission upsert, budget-row write, and
+    org-row write are one transaction.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -676,9 +678,18 @@ async def update_organization_v2(
     }
 
     object_permission_cleared = "object_permission" in present_fields and data.object_permission is None
-    object_permission_write: Mapping[str, object] = (
-        {"object_permission": data.object_permission.model_dump(exclude_none=True)}
+    object_permission_upsert = (
+        await prepare_object_permission_upsert(
+            new_object_permission=data.object_permission.model_dump(exclude_none=True),
+            existing_object_permission_id=existing_organization_row.object_permission_id,
+            prisma_client=prisma_client,
+        )
         if data.object_permission is not None
+        else None
+    )
+    object_permission_write: Mapping[str, object] = (
+        {"object_permission_id": object_permission_upsert.object_permission_id}
+        if object_permission_upsert is not None
         else ({"object_permission_id": None} if object_permission_cleared else {})
     )
 
@@ -689,13 +700,16 @@ async def update_organization_v2(
             "updated_by": user_api_key_dict.user_id,
         }
     )
-    if data.object_permission is not None:
-        organization_write_data = await handle_update_object_permission(
-            data_json=organization_write_data,
-            existing_organization_row=existing_organization_row,
-        )
 
     async with prisma_client.db.tx() as tx:
+        if object_permission_upsert is not None:
+            await tx.litellm_objectpermissiontable.upsert(
+                where={"object_permission_id": object_permission_upsert.object_permission_id},
+                data={
+                    "create": object_permission_upsert.record,
+                    "update": object_permission_upsert.record,
+                },
+            )
         if budget_updates:
             await tx.litellm_budgettable.update(
                 where={"budget_id": existing_organization_row.budget_id},
