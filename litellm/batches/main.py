@@ -944,7 +944,7 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Union[Literal["openai", "azure", "vertex_ai"], str] = "openai",
+    custom_llm_provider: Union[Literal["openai", "azure", "vertex_ai", "bedrock"], str] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,

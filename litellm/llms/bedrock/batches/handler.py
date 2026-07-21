@@ -113,8 +113,13 @@ class BedrockBatchesHandler:
         try:
             client.stop_model_invocation_job(jobIdentifier=batch_id)
         except ClientError as e:
-            # Idempotency: if job is already Stopping/Stopped/Completed, swallow ValidationException
-            if e.response.get("Error", {}).get("Code") != "ValidationException":
+            error_code = e.response.get("Error", {}).get("Code")
+            error_msg = e.response.get("Error", {}).get("Message", "").lower()
+            if error_code == "ValidationException" and any(
+                term in error_msg for term in ["stop", "terminal", "completed", "already"]
+            ):
+                pass
+            else:
                 raise e
 
         return BedrockBatchesHandler._handle_model_invocation_job_status(
