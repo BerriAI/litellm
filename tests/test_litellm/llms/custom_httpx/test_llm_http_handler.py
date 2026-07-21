@@ -23,6 +23,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _google_genai_streaming_hidden_params,
 )
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TranscriptionResponse
@@ -250,6 +251,7 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
         )
     )
     logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = None
 
     await handler.async_response_api_handler(
         model="gpt-5.3-codex",
@@ -264,6 +266,140 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+
+
+def _responses_logging_obj():
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = None
+    return logging_obj
+
+
+def _chatgpt_style_config(aggregated):
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.transform_responses_api_request.return_value = {
+        "model": "gpt-5.3-codex",
+        "input": "hi",
+        "stream": True,
+    }
+    config.sign_request.return_value = ({}, None)
+    config.transform_response_api_response.return_value = aggregated
+    return config
+
+
+@pytest.mark.parametrize("caller_params", [{}, {"stream": False}])
+def test_response_api_handler_aggregates_when_only_the_provider_requires_stream(caller_params):
+    handler = BaseLLMHTTPHandler()
+    aggregated = Mock(spec=ResponsesAPIResponse)
+    config = _chatgpt_style_config(aggregated)
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    result = handler.response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params=caller_params,
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=_responses_logging_obj(),
+        client=client,
+    )
+
+    assert client.post.call_args.kwargs["json"]["stream"] is True
+    assert not isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert result is aggregated
+    config.transform_response_api_response.assert_called_once()
+
+
+def test_response_api_handler_returns_iterator_when_the_caller_requests_stream():
+    handler = BaseLLMHTTPHandler()
+    config = _chatgpt_style_config(Mock(spec=ResponsesAPIResponse))
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    result = handler.response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={"stream": True},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=_responses_logging_obj(),
+        client=client,
+    )
+
+    assert isinstance(result, BaseResponsesAPIStreamingIterator)
+    config.transform_response_api_response.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_params", [{}, {"stream": False}])
+async def test_async_response_api_handler_aggregates_when_only_the_provider_requires_stream(caller_params):
+    handler = BaseLLMHTTPHandler()
+    aggregated = Mock(spec=ResponsesAPIResponse)
+    config = _chatgpt_style_config(aggregated)
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    result = await handler.async_response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params=caller_params,
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=_responses_logging_obj(),
+        client=client,
+    )
+
+    assert client.post.call_args.kwargs["json"]["stream"] is True
+    assert not isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert result is aggregated
+    config.transform_response_api_response.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_returns_iterator_when_the_caller_requests_stream():
+    handler = BaseLLMHTTPHandler()
+    config = _chatgpt_style_config(Mock(spec=ResponsesAPIResponse))
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    result = await handler.async_response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={"stream": True},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=_responses_logging_obj(),
+        client=client,
+    )
+
+    assert isinstance(result, BaseResponsesAPIStreamingIterator)
+    config.transform_response_api_response.assert_not_called()
 
 
 def test_get_agentic_loop_settings_defaults_and_overrides():
