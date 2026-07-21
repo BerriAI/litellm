@@ -33,7 +33,9 @@ pub(super) fn prepare_messages_call(
     let mut headers = string_headers(request.extra_headers)?;
 
     let auth_strategy = config.auth_strategy();
-    if !has_header(&headers, auth_strategy.header_name()) {
+    let already_authorized = has_header(&headers, auth_strategy.header_name())
+        || (config.accepts_bearer_auth() && has_header(&headers, "authorization"));
+    if !already_authorized {
         let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
         let auth_header = match auth_strategy {
             MessagesAuthStrategy::Bearer => {
