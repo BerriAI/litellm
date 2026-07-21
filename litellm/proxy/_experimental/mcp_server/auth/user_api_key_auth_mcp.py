@@ -703,12 +703,12 @@ class MCPRequestHandler:
             case "key_hash":
                 return await MCPRequestHandler._reload_admitted_key(identity.subject)
             case "user_id":
-                return await MCPRequestHandler._reload_admitted_user(identity.subject)
+                return await MCPRequestHandler.reload_admitted_user(identity.subject)
             case _:
                 assert_never(identity.subject_type)
 
     @staticmethod
-    async def _reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
+    async def reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
         """Reload the live user an interactively-minted envelope references and admit them as
         themselves.
 
@@ -770,6 +770,32 @@ class MCPRequestHandler:
             object_permission=object_permission,
             object_permission_id=user_object.object_permission_id,
         )
+
+    @staticmethod
+    async def resolve_delegated_user_contexts(user_id: str) -> list[UserAPIKeyAuth]:
+        """The auth contexts spanning a delegated user's TOTAL MCP reach: their own object-permission
+        context, plus one per team they belong to (a key on that team inherits the team's grants).
+
+        ``get_allowed_mcp_servers`` / ``get_allowed_tools_for_server`` computed over the UNION of these
+        contexts give the user's full cross-team reach, which a single ``UserAPIKeyAuth`` (one team)
+        cannot express; this is what lets a delegated user whose MCP access is granted through team or
+        group membership be counted rather than under-counted. The own context reuses the fail-closed
+        ``reload_admitted_user`` resolver; a listed team with no MCP grants simply contributes nothing
+        to the union, and an unresolvable user still fails closed there.
+        """
+        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        own_context = await MCPRequestHandler.reload_admitted_user(user_id)
+        user_object = await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+        team_ids = list(user_object.teams) if user_object is not None and user_object.teams else []
+        team_contexts = [UserAPIKeyAuth(user_id=user_id, team_id=team_id) for team_id in team_ids]
+        return [own_context, *team_contexts]
 
     @staticmethod
     async def _reload_admitted_key(key_hash: str) -> UserAPIKeyAuth:
