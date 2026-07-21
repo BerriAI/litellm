@@ -146,6 +146,31 @@ class StreamingResponse(BaseModel):
         return "text/event-stream" in (self.content_type or "")
 
 
+class BinaryStream(BaseModel):
+    """Outcome of consuming a binary chunked response (e.g. TTS audio) as a stream.
+
+    Unlike StreamingResponse, which line-splits an SSE text body, this iterates the
+    raw bytes with iter_content and reports how many non-empty chunks arrived and
+    the total byte count, so a caller can assert customer-observable streaming
+    (multiple chunks, real bytes) without decoding the payload."""
+
+    status_code: int
+    content_type: str | None = None
+    call_id: str | None = None
+    transfer_encoding: str | None = None
+    content_length: str | None = None
+    chunk_count: int = 0
+    total_bytes: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    @property
+    def chunked(self) -> bool:
+        return "chunked" in (self.transfer_encoding or "")
+
+
 def _hdr(resp: requests.Response, name: str) -> str | None:
     value = resp.headers.get(name)
     return value if isinstance(value, str) else None
@@ -397,16 +422,18 @@ def upload[R: BaseModel](
     url: URL,
     *,
     headers: BaseModel,
-    form: FileUploadForm,
+    form: BaseModel,
     filename: str,
     content: bytes,
+    file_content_type: str = "application/jsonl",
     params: BaseModel | None = None,
     response_type: type[R],
     timeout: float = 60.0,
 ) -> Result[R]:
-    """Multipart POST for file uploads (/v1/files). Form fields come from `form`,
-    the file bytes are sent as the `file` part, and `params` carries any query
-    routing (e.g. ?model=). requests sets the multipart Content-Type itself."""
+    """Multipart POST for file-bearing routes (/v1/files, /v1/audio/transcriptions).
+    Form fields come from `form`, the file bytes are sent as the `file` part with
+    `file_content_type`, and `params` carries any query routing (e.g. ?model=).
+    requests sets the multipart Content-Type itself."""
     dumped: dict[str, object] = form.model_dump(by_alias=True, exclude_none=True)
     data = {key: str(value) for key, value in dumped.items()}
     try:
@@ -415,12 +442,58 @@ def upload[R: BaseModel](
             headers=_headers(headers),
             params=_params(params),
             data=data,
-            files={"file": (filename, content, "application/jsonl")},
+            files={"file": (filename, content, file_content_type)},
             timeout=timeout,
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
     return _classify(resp, response_type)
+
+
+def stream_binary(
+    url: URL,
+    *,
+    headers: BaseModel,
+    json: BaseModel,
+    chunk_size: int = 8192,
+    timeout: float = 60.0,
+) -> BinaryStream:
+    """POST that consumes a binary chunked response (e.g. TTS audio) as a stream,
+    counting non-empty chunks and total bytes with iter_content. A non-2xx status
+    short-circuits with the counts left at zero so the caller can fail loudly."""
+    try:
+        resp = requests.post(
+            str(url),
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            stream=True,
+            timeout=timeout,
+        )
+    except requests.RequestException:
+        return BinaryStream(status_code=-1)
+    content_type = _hdr(resp, "content-type")
+    call_id = _hdr(resp, "x-litellm-call-id")
+    transfer_encoding = _hdr(resp, "transfer-encoding")
+    content_length = _hdr(resp, "content-length")
+    if not (200 <= resp.status_code < 300):
+        return BinaryStream(
+            status_code=resp.status_code,
+            content_type=content_type,
+            call_id=call_id,
+            transfer_encoding=transfer_encoding,
+            content_length=content_length,
+        )
+    raw_chunks = cast("Iterator[bytes]", resp.iter_content(chunk_size=chunk_size))
+    chunks = tuple(chunk for chunk in raw_chunks if chunk)
+    return BinaryStream(
+        status_code=resp.status_code,
+        content_type=content_type,
+        call_id=call_id,
+        transfer_encoding=transfer_encoding,
+        content_length=content_length,
+        chunk_count=len(chunks),
+        total_bytes=sum(len(chunk) for chunk in chunks),
+    )
 
 
 def download(
