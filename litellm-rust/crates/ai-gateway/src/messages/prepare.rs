@@ -3,7 +3,7 @@ use litellm_core::CoreResult;
 use litellm_core::messages::transformation::MessagesAuthStrategy;
 use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
-use super::common_utils::{has_header, messages_provider_config, string_headers};
+use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
 use super::types::{MessagesRequest, ProviderMessagesRequest};
 
 pub(super) fn prepare_messages_call(
@@ -34,7 +34,7 @@ pub(super) fn prepare_messages_call(
 
     let auth_strategy = config.auth_strategy();
     let already_authorized = has_header(&headers, auth_strategy.header_name())
-        || (config.accepts_bearer_auth() && has_header(&headers, "authorization"));
+        || (config.accepts_bearer_auth() && has_bearer_auth(&headers));
     if !already_authorized {
         let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
         let auth_header = match auth_strategy {
