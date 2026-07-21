@@ -2788,7 +2788,10 @@ if MCP_AVAILABLE:
 
             resolved_auth_headers: dict[str, str] | None = None
             if mcp_server:
-                resolved_auth_headers, forwarded_headers = await global_mcp_server_manager.resolve_openapi_upstream_auth(
+                (
+                    resolved_auth_headers,
+                    forwarded_headers,
+                ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
                     mcp_server=mcp_server,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
