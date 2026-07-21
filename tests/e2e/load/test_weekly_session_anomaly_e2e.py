@@ -11,6 +11,7 @@ from e2e_config import (
     ANOMALY_MIN_WARM_CACHE_READ_SHARE,
     ANOMALY_SESSIONS,
     ANOMALY_SPEND_SETTLE_SECONDS,
+    ANOMALY_TURN_ATTEMPTS,
     ANOMALY_TURNS_PER_SESSION,
     unique_marker,
 )
@@ -77,6 +78,7 @@ class TestWeeklySessionAnomaly:
             model_name,
             ANOMALY_SESSIONS,
             ANOMALY_TURNS_PER_SESSION,
+            ANOMALY_TURN_ATTEMPTS,
         )
         report = summarize(turns, ANOMALY_SESSIONS * ANOMALY_TURNS_PER_SESSION)
         failures = tuple(turn.failure for turn in turns if turn.failure)

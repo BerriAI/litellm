@@ -110,6 +110,22 @@ def _without_cache_control(message: RichMessage) -> RichMessage:
     )
 
 
+RETRY_BACKOFF_SECONDS = 2.0
+
+
+def retried(
+    call: Callable[[], Result[SessionMessagesResponse]],
+    attempts: int,
+    backoff_seconds: float = RETRY_BACKOFF_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Result[SessionMessagesResponse]:
+    result = call()
+    if isinstance(result, Success) or attempts <= 1:
+        return result
+    sleep(backoff_seconds)
+    return retried(call, attempts - 1, backoff_seconds, sleep)
+
+
 def _metric(
     result: Result[SessionMessagesResponse], turn_index: int, latency_seconds: float
 ) -> TurnMetric:
@@ -144,6 +160,7 @@ def _drive_turns(
     history: tuple[RichMessage, ...],
     turn_index: int,
     remaining_turns: int,
+    attempts_per_turn: int,
 ) -> tuple[TurnMetric, ...]:
     if remaining_turns == 0:
         return ()
@@ -156,15 +173,18 @@ def _drive_turns(
         ],
     )
     started = time.monotonic()
-    result = transport.post(
-        "/v1/messages",
-        headers=transport.bearer(key),
-        json=SessionMessagesRequest(
-            model=model,
-            system=[system_block],
-            messages=[*history, user_turn],
+    result = retried(
+        lambda: transport.post(
+            "/v1/messages",
+            headers=transport.bearer(key),
+            json=SessionMessagesRequest(
+                model=model,
+                system=[system_block],
+                messages=[*history, user_turn],
+            ),
+            response_type=SessionMessagesResponse,
         ),
-        response_type=SessionMessagesResponse,
+        attempts_per_turn,
     )
     turn = _metric(result, turn_index, time.monotonic() - started)
     if not isinstance(result, Success):
@@ -188,12 +208,13 @@ def _drive_turns(
             ),
             turn_index + 1,
             remaining_turns - 1,
+            attempts_per_turn,
         ),
     )
 
 
 def run_session(
-    transport: Transport, key: str, model: str, turns: int
+    transport: Transport, key: str, model: str, turns: int, attempts_per_turn: int
 ) -> tuple[TurnMetric, ...]:
     marker = unique_marker()
     return _drive_turns(
@@ -205,15 +226,23 @@ def run_session(
         (),
         1,
         turns,
+        attempts_per_turn,
     )
 
 
 def run_concurrent_sessions(
-    transport: Transport, key: str, model: str, sessions: int, turns_per_session: int
+    transport: Transport,
+    key: str,
+    model: str,
+    sessions: int,
+    turns_per_session: int,
+    attempts_per_turn: int,
 ) -> tuple[TurnMetric, ...]:
     with ThreadPoolExecutor(max_workers=sessions) as pool:
         futures = [
-            pool.submit(run_session, transport, key, model, turns_per_session)
+            pool.submit(
+                run_session, transport, key, model, turns_per_session, attempts_per_turn
+            )
             for _ in range(sessions)
         ]
         return tuple(turn for future in futures for turn in future.result())
