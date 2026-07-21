@@ -8,7 +8,16 @@ import { MIGRATED_E2E_PAGES } from "../../fixtures/migratedPages";
 import type { Page as PlaywrightPage } from "@playwright/test";
 
 const sidebarButtons = {
-  [Role.ProxyAdmin]: ["Virtual Keys", "Playground", "Models", "Usage", "Teams", "Internal Users", "AI Hub"],
+  [Role.ProxyAdmin]: [
+    "Virtual Keys",
+    "Playground",
+    "Models",
+    "Usage",
+    "Teams",
+    "Internal Users",
+    "AI Hub",
+    "Response Cache",
+  ],
 };
 
 /** Migrated pages live at a path route; legacy pages keep the ?page= query param. */
