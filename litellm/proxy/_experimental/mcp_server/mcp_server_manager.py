@@ -204,6 +204,33 @@ def _blank_to_none(value: str | None) -> str | None:
     return value.strip() or None
 
 
+def _delegated_reach_denial(
+    server_id: str,
+    tool_name: str,
+    per_context_servers: list[list[str]],
+    per_context_tools: list[list[str] | None],
+) -> Literal["server", "tool"] | None:
+    """Why a delegated call is denied by the user's ceiling, or ``None`` if the user permits it.
+
+    ``per_context_servers`` / ``per_context_tools`` are the allowed servers and per-server allowed
+    tools resolved for each of the delegated user's auth contexts (own + one per team). Reach is the
+    UNION across contexts (the user's total cross-team access): the server must be reachable in some
+    context. Only a context that actually reaches the server contributes its tool grant, since a
+    context that cannot reach the server returns "no restriction" (``None``) for it and would
+    otherwise be misread as allow-all; among the reaching contexts, ``None`` means allow-all and
+    otherwise the tool must appear in the union of their restricted lists.
+    """
+    reaching_context_tools = [
+        tools for servers, tools in zip(per_context_servers, per_context_tools) if server_id in servers
+    ]
+    if not reaching_context_tools:
+        return "server"
+    if any(tools is None for tools in reaching_context_tools):
+        return None
+    allowed_tools = frozenset(tool for tools in reaching_context_tools if tools for tool in tools)
+    return None if tool_name in allowed_tools else "tool"
+
+
 def _uses_issuer_anchor(manual_issuer: str | None, is_discovery_auth_type: bool) -> bool:
     """Whether the endpoints are authoritatively anchored to an admin-pinned issuer (RFC 8414 §3.3).
 
@@ -4001,6 +4028,55 @@ class MCPServerManager:
                 },
             )
 
+    async def check_tool_permission_for_delegated_user(
+        self,
+        tool_name: str,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> None:
+        """For an agent-delegated (on-behalf-of) call, enforce the DELEGATED USER's ceiling as well.
+
+        The preceding key/team check already enforced the agent key's ceiling, so requiring the
+        delegated user to ALSO permit the server and tool makes the effective permission the
+        intersection of the two principals: a delegated run can reach only what both the agent and the
+        triggering user may reach. A non-delegated call early-returns, so its behavior is unchanged.
+
+        The delegated user's reach is resolved across ALL of their auth contexts (own object-permission
+        plus one per team they belong to; ``resolve_delegated_user_contexts``) and UNIONED, so a user
+        whose MCP access is granted directly, through toolsets/access groups, or through team/group
+        membership is counted rather than under-counted. The same ``get_allowed_mcp_servers`` /
+        ``get_allowed_tools_for_server`` primitives the key path uses run per context, so no permission
+        logic is duplicated. Fail-closed: an unresolvable user raises; server-reachability is checked
+        explicitly because the tool predicate allow-alls a server the user has no restriction on.
+        """
+        if user_api_key_auth is None or user_api_key_auth.delegated_user_id is None:
+            return
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        contexts = await MCPRequestHandler.resolve_delegated_user_contexts(user_api_key_auth.delegated_user_id)
+        per_context_servers = [await MCPRequestHandler.get_allowed_mcp_servers(context) for context in contexts]
+        per_context_tools = [
+            await MCPRequestHandler.get_allowed_tools_for_server(server_id=server.server_id, user_api_key_auth=context)
+            for context in contexts
+        ]
+        denial = _delegated_reach_denial(server.server_id, tool_name, per_context_servers, per_context_tools)
+        if denial == "server":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Delegated user is not allowed to reach server '{server.name}'. A delegated run is limited to the intersection of the agent's and the user's access."
+                },
+            )
+        if denial == "tool":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Delegated user is not allowed to call tool '{tool_name}' on server '{server.name}'. A delegated run is limited to the intersection of the agent's and the user's access."
+                },
+            )
+
     async def _call_openapi_tool_handler(
         self,
         server: MCPServer,
@@ -4085,8 +4161,16 @@ class MCPServerManager:
                 },
             )
 
-        ## check tool-level permissions from object_permission
+        ## check tool-level permissions from object_permission (the agent key/team ceiling)
         await self.check_tool_permission_for_key_team(
+            tool_name=name,
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+        )
+
+        ## for a delegated (on-behalf-of) call, also enforce the delegated user's ceiling, so the
+        ## effective permission is the intersection of the agent and the user
+        await self.check_tool_permission_for_delegated_user(
             tool_name=name,
             server=server,
             user_api_key_auth=user_api_key_auth,

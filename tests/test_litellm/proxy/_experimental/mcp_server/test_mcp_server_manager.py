@@ -4659,6 +4659,129 @@ class TestMCPServerManager:
             user_api_key_auth=user_auth,
         )
 
+    # ── delegated-user (agent-OBO) intersection enforcement ──────────────────────
+
+    @pytest.mark.asyncio
+    async def test_delegated_check_is_a_noop_for_a_non_delegated_call(self, monkeypatch):
+        """A call with no delegated_user_id must not resolve any user or change behavior."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        async def _must_not_run(user_id):
+            raise AssertionError("non-delegated calls must not resolve a delegated user")
+
+        monkeypatch.setattr(MCPRequestHandler, "resolve_delegated_user_contexts", _must_not_run)
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv-1", name="S", transport=MCPTransport.http)
+        # No raise, and _must_not_run is never called.
+        await manager.check_tool_permission_for_delegated_user(
+            tool_name="anything",
+            server=server,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-agent", user_id="agent", delegated_user_id=None),
+        )
+
+    def _stub_delegated_user(self, monkeypatch, *, mcp_servers, mcp_tool_permissions):
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        own_context = UserAPIKeyAuth(
+            user_id="alice",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-alice",
+                mcp_servers=mcp_servers,
+                mcp_tool_permissions=mcp_tool_permissions,
+            ),
+        )
+
+        async def _contexts(user_id):
+            assert user_id == "alice"
+            return [own_context]
+
+        monkeypatch.setattr(MCPRequestHandler, "resolve_delegated_user_contexts", _contexts)
+
+    @pytest.mark.asyncio
+    async def test_delegated_user_within_ceiling_passes(self, monkeypatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        self._stub_delegated_user(monkeypatch, mcp_servers=["srv-1"], mcp_tool_permissions={"srv-1": ["read"]})
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv-1", name="S", transport=MCPTransport.http)
+        agent = UserAPIKeyAuth(api_key="sk-agent", user_id="agent", delegated_user_id="alice")
+        # The delegated user may reach srv-1 and call read -> no raise.
+        await manager.check_tool_permission_for_delegated_user(tool_name="read", server=server, user_api_key_auth=agent)
+
+    @pytest.mark.asyncio
+    async def test_delegated_user_denied_tool_raises_403(self, monkeypatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        self._stub_delegated_user(monkeypatch, mcp_servers=["srv-1"], mcp_tool_permissions={"srv-1": ["read"]})
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv-1", name="S", transport=MCPTransport.http)
+        agent = UserAPIKeyAuth(api_key="sk-agent", user_id="agent", delegated_user_id="alice")
+        # The agent may permit write, but the delegated user does not -> intersection denies it.
+        with pytest.raises(HTTPException) as exc:
+            await manager.check_tool_permission_for_delegated_user(tool_name="write", server=server, user_api_key_auth=agent)
+        assert exc.value.status_code == 403
+        assert "write" in exc.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_delegated_user_cannot_reach_server_raises_403(self, monkeypatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        self._stub_delegated_user(monkeypatch, mcp_servers=["other-srv"], mcp_tool_permissions={"other-srv": ["read"]})
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv-1", name="S", transport=MCPTransport.http)
+        agent = UserAPIKeyAuth(api_key="sk-agent", user_id="agent", delegated_user_id="alice")
+        # The agent may reach srv-1, but the delegated user cannot -> intersection denies the server.
+        with pytest.raises(HTTPException) as exc:
+            await manager.check_tool_permission_for_delegated_user(tool_name="read", server=server, user_api_key_auth=agent)
+        assert exc.value.status_code == 403
+        assert "srv-1" in exc.value.detail["error"] or "S" in exc.value.detail["error"]
+
+    def test_delegated_reach_denial_unions_across_contexts(self):
+        """The pure union math: a delegated user's reach is the union across their contexts (own +
+        each team), so a grant from ANY team counts."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import _delegated_reach_denial
+
+        # team-A reaches srv-1/read; team-B reaches srv-2/write. The union reaches both.
+        servers = [["srv-1"], ["srv-2"]]
+        tools = [["read"], ["write"]]
+        assert _delegated_reach_denial("srv-1", "read", servers, tools) is None  # via team-A
+        assert _delegated_reach_denial("srv-2", "write", servers, tools) is None  # via team-B (union)
+        assert _delegated_reach_denial("srv-3", "read", servers, tools) == "server"  # no context reaches srv-3
+        # server reachable (union) but the tool is in no context's list.
+        assert _delegated_reach_denial("srv-1", "delete", [["srv-1"], ["srv-1"]], [["read"], ["write"]]) == "tool"
+        # a context with no tool restriction (None) means allow-all for that server.
+        assert _delegated_reach_denial("srv-1", "anything", [["srv-1"]], [None]) is None
+        # a context that CANNOT reach the server must not contribute its (unrestricted) tools as
+        # allow-all: here only the srv-1 context (tools ["read"]) counts, so write is denied even
+        # though the srv-2 context returned None for srv-1.
+        assert _delegated_reach_denial("srv-1", "write", [["srv-1"], ["srv-2"]], [["read"], None]) == "tool"
+
+    @pytest.mark.asyncio
+    async def test_resolve_delegated_user_contexts_includes_each_team(self, monkeypatch):
+        """resolve_delegated_user_contexts returns the own context plus one per team the user is in, so
+        the union covers team/group-granted access."""
+        from types import SimpleNamespace
+
+        import litellm.proxy.auth.auth_checks as auth_checks
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        async def _own(user_id):
+            return UserAPIKeyAuth(user_id=user_id, team_id=None)
+
+        async def _get_user_object(**kwargs):
+            return SimpleNamespace(user_id="alice", teams=["team-a", "team-b"])
+
+        monkeypatch.setattr(MCPRequestHandler, "reload_admitted_user", _own)
+        monkeypatch.setattr(auth_checks, "get_user_object", _get_user_object)
+
+        contexts = await MCPRequestHandler.resolve_delegated_user_contexts("alice")
+        assert len(contexts) == 3
+        assert contexts[0].team_id is None  # own context
+        assert sorted(c.team_id for c in contexts[1:]) == ["team-a", "team-b"]
+
     @pytest.mark.asyncio
     async def test_allowed_tools_with_mixed_prefixed_and_unprefixed_names(self):
         """
