@@ -57,7 +57,7 @@ class TestInitialization:
             )
             assert handler.logging_endpoint == "http://localhost:8080/v1/litellm/batch"
             assert handler.key == "test-api-key"
-            assert isinstance(handler.moderation_client, httpx.AsyncClient)
+            assert handler.moderation_client is not None
 
     def test_init_with_constructor_params(self):
         with patch("asyncio.create_task", Mock()):
@@ -1084,12 +1084,12 @@ class TestAclose:
         handler._periodic_flush_task = mock_task
 
         handler.moderation_client = AsyncMock()
-        handler.moderation_client.aclose = AsyncMock()
+        handler.moderation_client.close = AsyncMock()
 
         await handler.aclose()
 
         mock_task.cancel.assert_called_once()
-        handler.moderation_client.aclose.assert_awaited_once()
+        handler.moderation_client.close.assert_awaited_once()
 
     async def test_aclose_with_none_task_only_closes_client(self, mock_env):
         """aclose() must still close the client even when the periodic task is None."""
@@ -1098,11 +1098,11 @@ class TestAclose:
 
         handler._periodic_flush_task = None
         handler.moderation_client = AsyncMock()
-        handler.moderation_client.aclose = AsyncMock()
+        handler.moderation_client.close = AsyncMock()
 
         await handler.aclose()
 
-        handler.moderation_client.aclose.assert_awaited_once()
+        handler.moderation_client.close.assert_awaited_once()
 
 
 # -- apply_guardrail edge cases -----------------------------------------------
