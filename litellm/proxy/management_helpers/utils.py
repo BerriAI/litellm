@@ -252,6 +252,25 @@ async def _resolve_member_budget_id(
     return response.budget_id
 
 
+async def _append_team_id_to_user(prisma_client: PrismaClient, user_id: str, team_id: str) -> LiteLLM_UserTable | None:
+    """Append team_id to an existing user's teams array, only if not already present.
+
+    The filtered update makes the append a no-op once the team is present, so
+    repeated or concurrent adds of the same team cannot accumulate duplicate
+    team ids in user.teams (which would also break auth logic that keys off the
+    number of teams a user belongs to). Teams added concurrently for a different
+    team id are unaffected, since each update filters on its own team id.
+    """
+    await UserRepository(prisma_client).table.update_many(
+        where={"user_id": user_id, "NOT": {"teams": {"has": team_id}}},
+        data={"teams": {"push": [team_id]}},
+    )
+    updated_user = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
+    if updated_user is None:
+        return None
+    return LiteLLM_UserTable(**updated_user.model_dump())
+
+
 async def add_new_member(
     new_member: Member,
     max_budget_in_team: Optional[float],
@@ -275,16 +294,18 @@ async def add_new_member(
     returned_team_membership: Optional[LiteLLM_TeamMembership] = None
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
-        new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
-        _returned_user = await UserRepository(prisma_client).table.upsert(
-            where={"user_id": new_member.user_id},
-            data={
-                "update": {"teams": {"push": [team_id]}},
-                "create": {"teams": [team_id], **new_user_defaults},  # type: ignore
-            },
-        )
-        if _returned_user is not None:
-            returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
+        existing_user = await UserRepository(prisma_client).table.find_unique(where={"user_id": new_member.user_id})
+        if existing_user is None:
+            new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
+            _created_user = await UserRepository(prisma_client).table.create(
+                data={"teams": [team_id], **new_user_defaults},
+            )
+            if _created_user is not None:
+                returned_user = LiteLLM_UserTable(**_created_user.model_dump())
+        else:
+            returned_user = await _append_team_id_to_user(
+                prisma_client=prisma_client, user_id=new_member.user_id, team_id=team_id
+            )
     elif new_member.user_email is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=str(uuid.uuid4()), user_email=new_member.user_email)
         ## user email is not unique acc. to prisma schema -> future improvement
@@ -302,12 +323,9 @@ async def add_new_member(
                 returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) == 1:
             user_info = existing_user_row[0]
-            _returned_user = await UserRepository(prisma_client).table.update(
-                where={"user_id": user_info.user_id},  # type: ignore
-                data={"teams": {"push": [team_id]}},
+            returned_user = await _append_team_id_to_user(
+                prisma_client=prisma_client, user_id=user_info.user_id, team_id=team_id
             )
-            if _returned_user is not None:
-                returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) > 1:
             raise HTTPException(
                 status_code=400,

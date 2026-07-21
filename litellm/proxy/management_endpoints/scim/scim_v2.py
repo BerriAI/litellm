@@ -1654,8 +1654,11 @@ async def get_groups(
         # Convert to SCIM format
         scim_groups = []
         for team in teams:
-            # Get team members with display names
-            members = await _get_team_members_display(team.members or [])
+            # Get team members with display names. members_with_roles is the
+            # source of truth; the legacy `members` column is not populated by
+            # team creation, so reading it here would report an empty member
+            # list to the IdP and trigger repeated re-provisioning.
+            members = await _get_team_members_display(await _get_team_member_user_ids_from_team(team))
             verbose_proxy_logger.debug(f"SCIM GET GROUPS members: {members}")
             team_alias = getattr(team, "team_alias", team.team_id)
             team_created_at = team.created_at.isoformat() if team.created_at else None
@@ -1885,8 +1888,12 @@ async def _process_group_patch_operations(
     existing_metadata = existing_team.metadata or {}
     metadata = dict(existing_metadata) if existing_metadata else {}
 
-    # Track member changes
-    current_members = set(existing_team.members or [])
+    # Track member changes. members_with_roles is the source of truth for team
+    # membership; the legacy `members` column is not populated by team creation
+    # or the real team endpoints, so seeding from it would make an `add`/`remove`
+    # operation recompute the member set from an empty base and silently drop
+    # everyone already in the team.
+    current_members = set(await _get_team_member_user_ids_from_team(existing_team))
     final_members = current_members.copy()
 
     # Process each patch operation
