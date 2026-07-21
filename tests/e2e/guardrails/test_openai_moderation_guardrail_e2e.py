@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from e2e_config import require_env, unique_marker
-from e2e_http import UnknownApiError, unwrap
+from e2e_http import RateLimitedError, UnknownApiError, unwrap
 from guardrails_client import GuardrailsClient, OpenAIModerationParamsBody
 from lifecycle import ResourceManager
 
@@ -48,13 +48,22 @@ class TestOpenAIModerationGuardrail:
 
         blocked = client.chat(scoped_key, model, FLAGGED_PROMPT, guardrails=[name])
         match blocked:
-            case UnknownApiError(status_code=status, body=body):
-                assert status == 400, (
-                    f"a flagged prompt must be blocked with 400, got {status}: {body[:400]}"
-                )
+            case UnknownApiError(status_code=400, body=body):
                 assert "moderation" in body.lower(), (
                     f"the block body must name the moderation policy, got: {body[:400]}"
                 )
+            case RateLimitedError(body=body):
+                # OpenAI's moderation endpoint itself is rate limited / out of quota, so
+                # the guardrail path cannot be exercised. That is an account-capability
+                # gap, not a guardrail regression; surface it as such rather than as a
+                # "did not block" failure. Runs green with a moderation-capable key.
+                pytest.fail(
+                    "OpenAI moderation endpoint returned 429 (rate limit / no moderation quota); "
+                    "this test needs an OPENAI_API_KEY with moderation access and is not asserting "
+                    f"a litellm guardrail defect: {body[:300]}"
+                )
+            case UnknownApiError(status_code=status, body=body):
+                pytest.fail(f"expected a 400 moderation block, got {status}: {body[:400]}")
             case _:
                 pytest.fail(
                     f"openai moderation did not block a flagged prompt; got {blocked}"

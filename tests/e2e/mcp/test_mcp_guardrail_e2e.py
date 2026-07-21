@@ -15,6 +15,9 @@ This is the enforced half (the block) plus the pass-through half in one spec.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 import pytest
 
 from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
@@ -24,6 +27,22 @@ from lifecycle import ResourceManager
 from mcp_client import McpCallToolResponse, McpClient, McpToolArguments
 
 pytestmark = pytest.mark.e2e
+
+
+def _poll_until_blocked(
+    search: Callable[[str], Result[McpCallToolResponse]], banned_keyword: str, client: McpClient
+) -> Result[McpCallToolResponse]:
+    """Retry a banned tool call until the guardrail blocks it (400) or the deadline
+    passes, returning the last result. Absorbs the control-plane -> data-plane
+    guardrail-sync delay so the check waits for enforcement instead of racing it."""
+    deadline = time.monotonic() + client.proxy.poll_timeout
+    last: Result[McpCallToolResponse] = search(f"tell me about {banned_keyword}")
+    while time.monotonic() < deadline:
+        if isinstance(last, UnknownApiError) and last.status_code == 400:
+            return last
+        time.sleep(client.proxy.poll_interval)
+        last = search(f"tell me about {banned_keyword}")
+    return last
 
 
 class TestMcpToolCallGuardrail:
@@ -64,13 +83,15 @@ class TestMcpToolCallGuardrail:
             }
             return client.call_tool(key, server_id=server_id, name=tool_name, arguments=arguments)
 
-        blocked = search(f"tell me about {banned_keyword}")
+        # Registering the guardrail is a control-plane write; the data-plane worker
+        # that serves tools/call picks it up on its next guardrail sync, so an
+        # immediate call can race the propagation and slip through. Poll the banned
+        # call to the deadline and require a block, so the check proves enforcement
+        # rather than catching a pre-sync pass-through. The keyword is unique per
+        # run, so this only ever intercepts this test's own call.
+        blocked = _poll_until_blocked(search, banned_keyword, client)
         match blocked:
-            case UnknownApiError(status_code=status, body=body):
-                assert status == 400, (
-                    f"a banned keyword in the tool arguments must block the MCP tool call with "
-                    f"400, got {status}: {body[:300]}"
-                )
+            case UnknownApiError(status_code=400, body=body):
                 assert banned_keyword in body or "content blocked" in body.lower(), (
                     f"the block must name the content-filter reason, got: {body[:300]}"
                 )
@@ -79,8 +100,18 @@ class TestMcpToolCallGuardrail:
                 )
             case _:
                 pytest.fail(
-                    f"content_filter did not block a banned keyword in an MCP tool call; got {blocked}"
+                    "content_filter never blocked the banned keyword on the MCP tool call within "
+                    f"{client.proxy.poll_timeout}s (guardrail sync to the data plane never landed); "
+                    f"last result: {blocked}"
                 )
+
+        # After enforcement has propagated, a banned call must stay blocked (guards
+        # against a partial-propagation state where only some workers loaded it).
+        reblocked = search(f"still about {banned_keyword}")
+        assert isinstance(reblocked, UnknownApiError) and reblocked.status_code == 400, (
+            "once the guardrail is enforced a banned tool call must remain blocked on a repeat "
+            f"call, but got: {reblocked}"
+        )
 
         allowed = search(f"e2e-clean-{marker}")
         match allowed:
