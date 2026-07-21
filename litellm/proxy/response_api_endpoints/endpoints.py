@@ -66,6 +66,47 @@ def _nest_flat_chat_tool_choice(tool_choice: object) -> object:
     return tool_choice
 
 
+def _flatten_chat_tool_for_responses(tool: object) -> object:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_custom_tool_format_to_responses_shape,
+    )
+
+    if not isinstance(tool, dict):
+        return tool
+    if tool.get("type") == "custom":
+        if isinstance(tool.get("custom"), dict):
+            payload = {k: tool["custom"][k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool["custom"]}
+        elif "name" in tool:
+            payload = {k: tool[k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool}
+        else:
+            return tool
+        if isinstance(payload.get("format"), dict):
+            payload = {**payload, "format": convert_custom_tool_format_to_responses_shape(payload["format"])}
+        return {"type": "custom", **payload}
+    if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+        return {
+            "type": "function",
+            **{k: tool["function"][k] for k in _FLAT_FUNCTION_TOOL_KEYS if k in tool["function"]},
+        }
+    return tool
+
+
+def _flatten_chat_tools_for_responses(tools: list) -> list:
+    return [_flatten_chat_tool_for_responses(tool) for tool in tools]
+
+
+def _flatten_chat_tool_choice_for_responses(tool_choice: object) -> object:
+    if not isinstance(tool_choice, dict):
+        return tool_choice
+    choice_type = tool_choice.get("type")
+    if choice_type not in ("custom", "function"):
+        return tool_choice
+    nested = tool_choice.get(choice_type)
+    if isinstance(nested, dict) and isinstance(nested.get("name"), str):
+        return {"type": choice_type, "name": nested["name"]}
+    return tool_choice
+
+
 @router.post(
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
@@ -443,6 +484,14 @@ async def cursor_chat_completions(
     # cached parsed-body dict itself, and removing keys from it corrupts the
     # cache's key snapshot so later readers get an empty body
     data = {key: value for key, value in data.items() if key != "stream_options"}
+
+    tools = data.get("tools")
+    if isinstance(tools, list):
+        data = {**data, "tools": _flatten_chat_tools_for_responses(tools)}
+    tool_choice = data.get("tool_choice")
+    flattened_tool_choice = _flatten_chat_tool_choice_for_responses(tool_choice)
+    if flattened_tool_choice != tool_choice:
+        data = {**data, "tool_choice": flattened_tool_choice}
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
