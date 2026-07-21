@@ -226,17 +226,20 @@ async def test_mcp_http_transport_list_tools_mock():
 
         # Verify tool mapping was updated
         expected_prefix = "test_http_server"
+        test_http_server = test_manager.get_mcp_server_by_name("test_http_server")
+        assert test_http_server is not None
+        expected_owner = frozenset({test_http_server.server_id})
         assert (
             test_manager.tool_name_to_mcp_server_ids_mapping[
                 f"{expected_prefix}-gmail_send_email"
             ]
-            == frozenset(allowed_server_ids)
+            == expected_owner
         )
         assert (
             test_manager.tool_name_to_mcp_server_ids_mapping[
                 f"{expected_prefix}-calendar_create_event"
             ]
-            == frozenset(allowed_server_ids)
+            == expected_owner
         )
 
 
@@ -281,8 +284,10 @@ async def test_mcp_http_transport_call_tool_mock():
         )
 
         # Manually set up tool mapping (normally done by list_tools)
+        test_http_server = test_manager.get_mcp_server_by_name("test_http_server")
+        assert test_http_server is not None
         test_manager.tool_name_to_mcp_server_ids_mapping["gmail_send_email"] = frozenset(
-            test_manager.get_registry().keys()
+            {test_http_server.server_id}
         )
 
         # Call the tool
@@ -347,8 +352,10 @@ async def test_mcp_http_transport_call_tool_error_mock():
         )
 
         # Manually set up tool mapping
+        test_http_server = test_manager.get_mcp_server_by_name("test_http_server")
+        assert test_http_server is not None
         test_manager.tool_name_to_mcp_server_ids_mapping["gmail_send_email"] = frozenset(
-            test_manager.get_registry().keys()
+            {test_http_server.server_id}
         )
 
         # Call the tool with invalid data
@@ -389,8 +396,10 @@ async def test_mcp_http_transport_tool_not_found():
     )
 
     # Mapping populated for this server but not for the requested tool
+    test_http_server = test_manager.get_mcp_server_by_name("test_http_server")
+    assert test_http_server is not None
     test_manager.tool_name_to_mcp_server_ids_mapping["gmail_send_email"] = frozenset(
-        test_manager.get_registry().keys()
+        {test_http_server.server_id}
     )
 
     # Try to call a tool that doesn't exist in mapping
