@@ -236,6 +236,7 @@ from litellm.constants import (
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
+    PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -1998,6 +1999,7 @@ proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
 proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
 proxy_batch_polling_interval = PROXY_BATCH_POLLING_INTERVAL
 proxy_batch_write_at = PROXY_BATCH_WRITE_AT
+proxy_config_reload_interval_seconds = PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 litellm_master_key_hash = None
 disable_spend_logs = False
 jwt_handler = JWTHandler()
@@ -4291,6 +4293,7 @@ class ProxyConfig:
             open_telemetry_logger, \
             health_check_details, \
             proxy_batch_polling_interval, \
+            proxy_config_reload_interval_seconds, \
             config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
@@ -4773,6 +4776,10 @@ class ProxyConfig:
             )
             ## BATCH WRITER ##
             proxy_batch_write_at = general_settings.get("proxy_batch_write_at", proxy_batch_write_at)
+            ## DB CONFIG RELOAD INTERVAL ##
+            proxy_config_reload_interval_seconds = general_settings.get(
+                "proxy_config_reload_interval_seconds", proxy_config_reload_interval_seconds
+            )
             ## DISABLE SPEND LOGS ## - gives a perf improvement
             disable_spend_logs = general_settings.get("disable_spend_logs", disable_spend_logs)
             ### BACKGROUND HEALTH CHECKS ###
@@ -7944,12 +7951,20 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(e))
 
         if store_model_in_db is True:
+            config_reload_interval_seconds = proxy_config_reload_interval_seconds
+            if not isinstance(config_reload_interval_seconds, int) or config_reload_interval_seconds <= 0:
+                verbose_proxy_logger.warning(
+                    "proxy_config_reload_interval_seconds=%s must be a positive integer; falling back to 30s",
+                    config_reload_interval_seconds,
+                )
+                config_reload_interval_seconds = 30
+
             # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
             # Frequent polling was causing excessive memory allocations
             scheduler.add_job(
                 proxy_config.add_deployment,
                 "interval",
-                seconds=30,  # increased from 10s to reduce memory pressure
+                seconds=config_reload_interval_seconds,
                 # REMOVED jitter parameter - major cause of memory leak
                 args=[prisma_client, proxy_logging_obj],
                 id="add_deployment_job",
@@ -7964,7 +7979,7 @@ class ProxyStartupEvent:
             scheduler.add_job(
                 proxy_config.get_credentials,
                 "interval",
-                seconds=30,  # increased from 10s to reduce memory pressure
+                seconds=config_reload_interval_seconds,
                 # REMOVED jitter parameter - major cause of memory leak
                 args=[prisma_client],
                 id="get_credentials_job",
@@ -14998,6 +15013,7 @@ async def get_config_list(
         "global_max_parallel_requests": {"type": "Integer"},
         "max_request_size_mb": {"type": "Integer"},
         "max_response_size_mb": {"type": "Integer"},
+        "proxy_config_reload_interval_seconds": {"type": "Integer"},
         "pass_through_endpoints": {"type": "PydanticModel"},
         "store_model_in_db": {"type": "Boolean"},
         "store_prompts_in_spend_logs": {"type": "Boolean"},
