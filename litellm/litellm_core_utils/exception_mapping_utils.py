@@ -408,7 +408,9 @@ def _map_openai_exception(
             request=_request,
             litellm_debug_info=extra_information,
         )
-    elif ExceptionCheckers.is_error_str_connection_error(error_str):
+    elif ExceptionCheckers.is_error_str_connection_error(error_str) and getattr(
+        original_exception, "status_code", None
+    ) in (None, 500):
         raise APIConnectionError(
             message=f"APIConnectionError: {exception_provider} - {message}",
             llm_provider=custom_llm_provider,
@@ -768,7 +770,9 @@ def _map_openai_like_exception(
             llm_provider=custom_llm_provider,
             model=model,
         )
-    elif ExceptionCheckers.is_error_str_connection_error(error_str):
+    elif ExceptionCheckers.is_error_str_connection_error(error_str) and getattr(
+        original_exception, "status_code", None
+    ) in (None, 500):
         raise APIConnectionError(
             message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
             llm_provider=custom_llm_provider,
@@ -1998,7 +2002,9 @@ def _map_azure_exception(
             litellm_debug_info=extra_information,
             response=getattr(original_exception, "response", None),
         )
-    elif ExceptionCheckers.is_error_str_connection_error(error_str):
+    elif ExceptionCheckers.is_error_str_connection_error(error_str) and getattr(
+        original_exception, "status_code", None
+    ) in (None, 500):
         raise APIConnectionError(
             message=f"{exception_provider} APIConnectionError - {message}",
             llm_provider=custom_llm_provider,
