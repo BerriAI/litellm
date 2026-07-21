@@ -10,11 +10,11 @@ interface LogoProps {
 }
 
 export const Logo: React.FC<LogoProps> = ({ provider, src, label, className = "w-4 h-4" }) => {
-  const [hasError, setHasError] = useState(false);
+  const [erroredSrc, setErroredSrc] = useState<string | null>(null);
   const resolvedSrc = provider !== undefined ? getProviderLogoAndName(provider).logo : resolveLogoSrc(src) ?? "";
   const name = label ?? provider ?? "";
 
-  if (hasError || !resolvedSrc) {
+  if (erroredSrc === resolvedSrc || !resolvedSrc) {
     return (
       <div className={`${className} rounded-full bg-gray-200 flex items-center justify-center text-xs`}>
         {name.charAt(0) || "-"}
@@ -29,7 +29,7 @@ export const Logo: React.FC<LogoProps> = ({ provider, src, label, className = "w
       className={className}
       onError={() => {
         console.warn(`Logo failed to load: ${resolvedSrc}`);
-        setHasError(true);
+        setErroredSrc(resolvedSrc);
       }}
     />
   );

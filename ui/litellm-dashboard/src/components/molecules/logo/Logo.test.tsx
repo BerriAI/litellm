@@ -51,4 +51,23 @@ describe("Logo", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("/litellm/ui/assets/logos/github.svg"));
     warnSpy.mockRestore();
   });
+
+  it("retries with a new src after a previous src errored", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { rerender } = render(<Logo src="/ui/assets/logos/broken.svg" label="Agent" />);
+
+    act(() => {
+      fireEvent.error(screen.getByRole("img", { name: "Agent logo" }));
+    });
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+
+    rerender(<Logo src="/ui/assets/logos/github.svg" label="Agent" />);
+    const img = screen.getByRole("img", { name: "Agent logo" });
+    expect(img.getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+
+    rerender(<Logo src="/ui/assets/logos/broken.svg" label="Agent" />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
+    warnSpy.mockRestore();
+  });
 });
