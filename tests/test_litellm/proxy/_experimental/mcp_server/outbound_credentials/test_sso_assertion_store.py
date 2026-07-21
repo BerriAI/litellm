@@ -43,10 +43,15 @@ def _make_id_token(exp_offset: int = 3600, iss: str = ISSUER) -> str:
     )
 
 
-def _make_prisma(stored: dict):
+def _make_prisma(stored: dict, db_has_id_jag_server: bool = False):
     """A fake prisma client whose sso-assertion table reads and writes ``stored``
-    (user_id -> assertion_b64), covering upsert, find_unique, find_many, and update."""
+    (user_id -> assertion_b64), covering upsert, find_unique, find_many, and update.
+    ``db_has_id_jag_server`` drives the retention gate's authoritative DB fallback;
+    it is wired explicitly so the gate never reads a truthy bare MagicMock."""
     prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_first = AsyncMock(
+        return_value=MagicMock() if db_has_id_jag_server else None
+    )
 
     async def _upsert(where, data):
         stored[where["user_id"]] = data["update"]["assertion_b64"]
@@ -125,18 +130,54 @@ def test_assertion_without_exp_or_iss_still_retained():
     assert assertion.issuer is None
 
 
-def test_retention_gate_requires_an_id_jag_server():
-    with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager:
+@pytest.mark.asyncio
+async def test_retention_gate_requires_an_id_jag_server():
+    with (
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
+        patch("litellm.proxy.proxy_server.prisma_client", _make_prisma({}, db_has_id_jag_server=False)),
+    ):
         manager.get_registry.return_value = {
             "s1": _server_with_auth(MCPAuth.oauth2),
             "s2": _server_with_auth(None),
         }
-        assert ema_assertion_retention_enabled() is False
+        assert await ema_assertion_retention_enabled() is False
         manager.get_registry.return_value = {
             "s1": _server_with_auth(MCPAuth.oauth2),
             "s2": _server_with_auth(MCPAuth.oauth2_id_jag),
         }
-        assert ema_assertion_retention_enabled() is True
+        assert await ema_assertion_retention_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_retention_gate_falls_back_to_db_when_registry_is_cold():
+    """A server added on another pod (or before this pod's DB load) is invisible to the local
+    registry; the gate must still enable retention off the authoritative DB row, and read
+    False only when neither the registry nor the DB knows an id_jag server."""
+    with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager:
+        manager.get_registry.return_value = {"s1": _server_with_auth(MCPAuth.oauth2)}
+        db_backed = _make_prisma({}, db_has_id_jag_server=True)
+        with patch("litellm.proxy.proxy_server.prisma_client", db_backed):
+            assert await ema_assertion_retention_enabled() is True
+        db_backed.db.litellm_mcpservertable.find_first.assert_awaited_once_with(
+            where={"auth_type": MCPAuth.oauth2_id_jag.value}
+        )
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            assert await ema_assertion_retention_enabled() is False
+
+
+@pytest.mark.asyncio
+async def test_retain_persists_when_only_the_db_knows_the_id_jag_server():
+    stored = {}
+    prisma = _make_prisma(stored, db_has_id_jag_server=True)
+    with (
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as manager,
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+    ):
+        manager.get_registry.return_value = {}
+        await retain_sso_identity_assertion_for_ema(
+            user_id="user-a", assertion=assertion_from_sso_login(_make_id_token(), None)
+        )
+    assert "user-a" in stored
 
 
 @pytest.mark.asyncio
@@ -274,11 +315,13 @@ async def test_rotation_reencrypts_under_new_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rotation_skips_unreadable_rows():
+async def test_rotation_skips_unreadable_rows_but_rotates_readable_ones():
     stored = {"good": None, "bad": "garbage-blob"}
     prisma = _make_prisma(stored)
     token = _make_id_token()
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         await persist_sso_identity_assertion("good", assertion_from_sso_login(token, None))
+    good_blob_before = stored["good"]
     await rotate_sso_identity_assertions_master_key(prisma_client=prisma, new_master_key="another-new-salt-key-0000")
     assert stored["bad"] == "garbage-blob"
+    assert stored["good"] != good_blob_before

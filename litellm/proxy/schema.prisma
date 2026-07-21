@@ -404,7 +404,7 @@ model LiteLLM_MCPServerOAuthClient {
 }
 
 // The enterprise IdP identity assertion captured at SSO login, one row per user.
-// assertion_b64 is an encrypted JSON payload: {id_token, refresh_token?, issuer?, expires_at?, connected_at}.
+// assertion_b64 is an encrypted JSON payload: {id_token, refresh_token?, issuer?, expires_at?}.
 model LiteLLM_SSOIdentityAssertion {
   user_id       String   @id
   assertion_b64 String
