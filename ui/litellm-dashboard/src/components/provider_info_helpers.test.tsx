@@ -114,13 +114,35 @@ describe("provider_info_helpers", () => {
   });
 
   describe("provider logo bundled assets", () => {
-    it("should expose every provider logo as a truthy bundled URL, never a raw /ui/assets path", () => {
-      const logos = Object.values(providerLogoMap);
-      expect(logos.length).toBeGreaterThan(0);
-      logos.forEach((logo) => {
-        expect(typeof logo).toBe("string");
-        expect(logo.length).toBeGreaterThan(0);
-        expect(logo.startsWith("/ui/assets/")).toBe(false);
+    it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
+      const knownLogolessProviders = [
+        Providers.AUTO_ROUTER,
+        Providers.BYTEZ,
+        Providers.CLARIFAI,
+        Providers.COMPACTIFAI,
+        Providers.DATAROBOT,
+        Providers.DOCKER_MODEL_RUNNER,
+        Providers.DOTPROMPT,
+        Providers.EMPOWER,
+        Providers.GALADRIEL,
+        Providers.GradientAI,
+        Providers.HEROKU,
+        Providers.LEMONADE,
+        Providers.LLAMAFILE,
+        Providers.MARITALK,
+        Providers.NLP_CLOUD,
+        Providers.NSCALE,
+        Providers.OVHCLOUD,
+        Providers.PETALS,
+        Providers.PG_VECTOR,
+        Providers.PREDIBASE,
+        Providers.WANDB,
+        Providers.ZAI,
+      ];
+      const logolessProviders = Object.values(Providers).filter((provider) => !providerLogoMap[provider]);
+      expect([...logolessProviders].sort()).toEqual([...knownLogolessProviders].sort());
+      Object.values(providerLogoMap).forEach((logo) => {
+        expect(logo?.startsWith("/ui/assets/")).toBe(false);
       });
     });
 
