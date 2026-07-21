@@ -136,7 +136,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if self.key:
             self._headers["Authorization"] = f"Bearer {self.key}"
 
-        self._periodic_flush_task: Optional[asyncio.Task[Any]] = self._start_periodic_flush_task()
+        self._periodic_flush_task: asyncio.Task[Any] | None = self._start_periodic_flush_task()
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -184,7 +184,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             params={"timeout": httpx.Timeout(5.0, connect=2.0)},
         )
 
-    def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
+    def _start_periodic_flush_task(self) -> asyncio.Task[Any] | None:
         """Start the periodic flush task only when an event loop is already running."""
         try:
             loop = asyncio.get_running_loop()
@@ -703,7 +703,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: Any,
-        traceback_str: Optional[str] = None,
+        traceback_str: str | None = None,
     ) -> None:
         """Log blocked requests signalled via ``ModifyResponseException``
         (prompt blocks, response/tool blocks, streaming blocks).
@@ -730,14 +730,14 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             )
             return
 
-        call_id: Optional[str] = None
+        call_id: str | None = None
         await self._build_and_enqueue_block_event(logging_obj, original_exception, call_id)
 
     async def _build_and_enqueue_block_event(
         self,
         logging_obj: "LiteLLMLoggingObj",
         exception: "ModifyResponseException",
-        call_id: Optional[str],
+        call_id: str | None,
     ) -> None:
         try:
             call_details = logging_obj.model_call_details
@@ -1027,7 +1027,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # miss the block. Counter preserves multiplicity.
         returned_id_counts: Counter[str] = Counter(tc["id"] for tc in returned_tool_calls if tc.get("id"))
         required_id_counts: Counter[str] = Counter(tc.id for tc in all_tool_calls if tc.id)
-        tools_blocked = not all(
+        # Cardinality check catches ID-less tool calls (not counted in
+        # required_id_counts because tc.id is falsy); Counter check catches
+        # duplicate-ID attacks where one occurrence is silently removed.
+        tools_blocked = len(returned_tool_calls) < len(all_tool_calls) or not all(
             returned_id_counts.get(tc_id, 0) >= count for tc_id, count in required_id_counts.items()
         )
 
