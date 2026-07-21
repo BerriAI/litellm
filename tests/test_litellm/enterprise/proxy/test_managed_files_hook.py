@@ -9,6 +9,15 @@ import pytest
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import sys
+import types
+
+# The hook imports litellm.proxy.proxy_server at call time; unit tests only need llm_router.
+if "litellm.proxy.proxy_server" not in sys.modules:
+    _proxy_server_stub = types.ModuleType("litellm.proxy.proxy_server")
+    _proxy_server_stub.llm_router = None
+    sys.modules["litellm.proxy.proxy_server"] = _proxy_server_stub
+
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
@@ -225,7 +234,71 @@ async def test_should_not_double_wrap_already_unified_output_file_id():
 
 
 @pytest.mark.asyncio
+async def test_should_unwrap_nested_unified_output_file_id():
+    """Nested managed output IDs must unwrap to the raw provider file id.
+
+    Regression for #33988: repeated retrieve can store a managed unified id
+    inside another managed unified id. model_mappings must still point at the
+    raw provider id (file-* / gs://), and afile_retrieve must receive that raw id.
+    """
+    managed_files = _make_managed_files_instance()
+
+    provider_file_id = "file-WXWt9R4LzmU5WpeKzjCfLR"
+    model_id = "openai/openai/gpt-5.5-batch"
+    model_name = "openai/openai/gpt-5.5-batch"
+    inner_unified = managed_files.get_unified_output_file_id(
+        output_file_id=provider_file_id,
+        model_id=model_id,
+        model_name=model_name,
+    )
+    # Simulate a buggy prior retrieve that wrapped the unified id again.
+    nested_unified = managed_files.get_unified_output_file_id(
+        output_file_id=inner_unified,
+        model_id=model_id,
+        model_name=model_name,
+    )
+
+    batch_response = _make_batch_response(
+        model_id=model_id,
+        model_name=model_name,
+        output_file_id=nested_unified,
+    )
+    user_api_key_dict = _make_user_api_key_dict()
+
+    mock_credentials = {
+        "api_key": "test-key",
+        "api_base": "https://api.openai.com/v1",
+        "custom_llm_provider": "openai",
+    }
+    mock_router = MagicMock()
+    mock_router.get_deployment_credentials_with_provider = MagicMock(
+        return_value=mock_credentials
+    )
+    mock_afile_retrieve = AsyncMock(return_value=_make_file_object(provider_file_id))
+
+    with (
+        patch("litellm.afile_retrieve", mock_afile_retrieve),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    ):
+        await managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=user_api_key_dict,
+            response=batch_response,
+        )
+
+    # Keep the outermost id; do not wrap a third time.
+    assert batch_response.output_file_id == nested_unified
+    mock_afile_retrieve.assert_called_once()
+    assert mock_afile_retrieve.call_args.kwargs["file_id"] == provider_file_id
+    managed_files.store_unified_file_id.assert_awaited_once()
+    assert managed_files.store_unified_file_id.await_args.kwargs["model_mappings"] == {
+        model_id: provider_file_id
+    }
+
+
+@pytest.mark.asyncio
 async def test_should_skip_non_file_unified_id_on_output_file_id():
+
     """Batch-style unified ids lack llm_output_file_id; must not IndexError or re-wrap."""
     import base64
 

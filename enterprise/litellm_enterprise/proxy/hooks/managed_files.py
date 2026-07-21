@@ -4,7 +4,7 @@
 import base64
 import json
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import HTTPException
 
@@ -1075,6 +1075,51 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         return file_id.split(marker, 1)[1].split(";")[0]
 
+    def _unwrap_managed_output_file_id(
+        self, file_id_value: str
+    ) -> Optional[Tuple[Optional[str], str]]:
+        """Peel nested managed output IDs down to a raw provider file id.
+
+        Returns ``(outer_unified_id, raw_provider_file_id)`` when ``file_id_value``
+        is one or more nested managed output unified IDs.
+
+        Returns ``(None, file_id_value)`` when ``file_id_value`` is already a raw
+        provider id (not base64-managed).
+
+        Returns ``None`` when the value is a base64 unified id that is *not* a
+        managed file output id (e.g. a batch unified id) — caller should skip.
+        """
+        decoded = _is_base64_encoded_unified_file_id(file_id_value)
+        if not decoded:
+            return (None, file_id_value)
+        if "llm_output_file_id," not in decoded:
+            return None
+
+        outer_unified_id = file_id_value
+        current = file_id_value
+        seen: set[str] = set()
+        raw_provider_file_id = file_id_value
+
+        # Walk nested wraps: each layer's llm_output_file_id may itself be a
+        # managed unified id from a prior non-idempotent retrieve.
+        while True:
+            if current in seen:
+                break
+            seen.add(current)
+            decoded_current = _is_base64_encoded_unified_file_id(current)
+            if not decoded_current:
+                raw_provider_file_id = current
+                break
+            if "llm_output_file_id," not in decoded_current:
+                # Non-file unified id mid-chain — treat current as unusable.
+                return None
+            raw_provider_file_id = self.get_output_file_id_from_unified_file_id(
+                decoded_current
+            )
+            current = raw_provider_file_id
+
+        return (outer_unified_id, raw_provider_file_id)
+
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
@@ -1114,27 +1159,23 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 for file_attr in ["output_file_id", "error_file_id"]:
                     file_id_value = getattr(response, file_attr, None)
                     if file_id_value and model_id:
-                        decoded_output_file_id = _is_base64_encoded_unified_file_id(
-                            file_id_value
-                        )
-                        if (
-                            decoded_output_file_id
-                            and "llm_output_file_id," in decoded_output_file_id
-                        ):
-                            provider_file_id = (
-                                self.get_output_file_id_from_unified_file_id(
-                                    decoded_output_file_id
-                                )
-                            )
-                            unified_file_id = file_id_value
-                        elif decoded_output_file_id:
+                        unwrapped = self._unwrap_managed_output_file_id(file_id_value)
+                        if unwrapped is None:
                             verbose_logger.warning(
                                 f"Skipping {file_attr}={file_id_value!r}: "
                                 "unified id is not a managed file output id"
                             )
                             continue
+
+                        outer_unified_id, provider_file_id = unwrapped
+                        if outer_unified_id is not None:
+                            # Already a managed output id (possibly nested). Keep the
+                            # outermost id on the response; always persist the raw
+                            # provider id in model_mappings so re-retrieve is
+                            # idempotent (issue #33988).
+                            unified_file_id = outer_unified_id
+                            setattr(response, file_attr, unified_file_id)
                         else:
-                            provider_file_id = file_id_value
                             unified_file_id = self.get_unified_output_file_id(
                                 output_file_id=provider_file_id,
                                 model_id=model_id,
