@@ -203,9 +203,19 @@ class ReliabilityChatBody(ChatBody):
     router_settings_override: RouterSettingsOverride | None = None
 
 
+class ToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ToolCall(BaseModel):
+    function: ToolCallFunction = ToolCallFunction()
+
+
 class OutMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 class ChatChoice(BaseModel):

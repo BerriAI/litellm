@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from e2e_config import require_env, unique_marker
 from e2e_http import StreamingResponse, unwrap
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, LiteLLMParamsBody
+from models import ChatBody, ChatMessage, ChatResponse, ChatTool, ChatToolFunction, LiteLLMParamsBody
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
@@ -73,6 +73,38 @@ def _bedrock_params() -> LiteLLMParamsBody:
         aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
         aws_region_name="os.environ/AWS_REGION",
     )
+
+
+class _WeatherArgs(BaseModel):
+    location: str
+
+
+_WEATHER_TOOL = ChatTool(
+    function=ChatToolFunction(
+        name="get_weather",
+        description="Get the current weather for a location",
+        parameters={
+            "type": "object",
+            "properties": {"location": {"type": "string"}},
+            "required": ["location"],
+        },
+    )
+)
+
+
+def _assert_weather_tool_call(response: ChatResponse) -> None:
+    """The model, forced to call the tool, must return a get_weather call whose
+    arguments parse as JSON and carry a location. A regression that drops tool_calls
+    or emits malformed argument JSON fails here rather than passing on a 200."""
+    assert response.choices, f"chat returned no choices: {response}"
+    message = response.choices[0].message
+    calls = message.tool_calls if message else None
+    assert calls, f"model returned no tool call for a tool-forced prompt: {response}"
+    weather = next((call for call in calls if call.function.name == "get_weather"), None)
+    assert weather is not None, f"expected a get_weather call, got {[c.function.name for c in calls]}"
+    assert weather.function.arguments, f"get_weather call carried no arguments: {weather}"
+    args = _WeatherArgs.model_validate_json(weather.function.arguments)
+    assert args.location.strip(), f"get_weather arguments missing location: {weather.function.arguments}"
 
 CHAT_MODELS: tuple[tuple[str, str], ...] = (
     ("gpt-5.5", "openai"),
@@ -334,6 +366,37 @@ class TestOpenAIChatCompletions:
         assert priced, f"openai chat was not costed on key ...{key[-6:]}: {rows}"
         assert priced[0].status == "success", f"openai chat spend status={priced[0].status!r}"
 
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.tool_use.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_openai_chat_returns_tool_call(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        require_env("OPENAI_API_KEY")
+        model = f"e2e-openai-tool-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(role="user", content="What is the weather in San Francisco? Use the get_weather tool.")
+                    ],
+                    tools=[_WEATHER_TOOL],
+                    tool_choice="required",
+                    max_tokens=128,
+                ),
+            )
+        )
+        _assert_weather_tool_call(response)
+
 
 class TestBedrockConverseChatCompletions:
     """Bedrock Converse via /chat/completions, the customer's AWS stack. A non-OpenAI
@@ -393,3 +456,29 @@ class TestBedrockConverseChatCompletions:
             ),
         )
         _assert_streamed_completion(result)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.bedrock_converse.tool_use.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_bedrock_converse_chat_returns_tool_call(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-bedrock-tool")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(role="user", content="What is the weather in San Francisco? Use the get_weather tool.")
+                    ],
+                    tools=[_WEATHER_TOOL],
+                    tool_choice="required",
+                    max_tokens=128,
+                ),
+            )
+        )
+        _assert_weather_tool_call(response)
