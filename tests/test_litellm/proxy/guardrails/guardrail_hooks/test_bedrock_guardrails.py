@@ -17,6 +17,8 @@ from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
+    ContentBlockLocation,
+    QualifiedTextBlock,
     _redact_pii_matches,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -3274,3 +3276,465 @@ async def test_chat_completion_modify_response_exception_streaming_logging_obj_n
     # CustomStreamWrapper would raise AttributeError inside __init__ and this
     # call would never reach here.
     assert response is not None
+
+
+###############################################################################
+# tool_result content scanning + masking (Anthropic /v1/messages tool results)
+#
+# BedrockGuardrail's native pre_call/during_call hooks flatten every message
+# into text blocks via get_content_items_for_message. An Anthropic tool_result
+# block carries its text under "content" (str or list of blocks), never under
+# a top-level "text" key, so it was silently skipped: never sent to Bedrock,
+# never scanned, never blockable, never maskable. Masking write-back
+# (_apply_masking_to_messages) must place redacted text back at the exact
+# position it was read from, or redacted text lands in the wrong block.
+###############################################################################
+
+
+def _string_tool_result_message() -> dict:
+    return {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": "My SSN is 123-45-6789",
+            }
+        ],
+    }
+
+
+def _list_tool_result_message() -> dict:
+    return {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": [
+                    {"type": "text", "text": "first line"},
+                    {"type": "image", "source": {"type": "base64", "data": "abc"}},
+                    {"type": "text", "text": "second line"},
+                ],
+            }
+        ],
+    }
+
+
+def test_get_content_items_for_message_extracts_string_tool_result():
+    """A tool_result with plain string content must be extracted as one text
+    block, at the location write-back needs to find it again."""
+    guardrail = _make_guardrail()
+    message = _string_tool_result_message()
+
+    blocks = guardrail.get_content_items_for_message(message=message)
+
+    assert blocks == [
+        QualifiedTextBlock(
+            text="My SSN is 123-45-6789",
+            qualifier=None,
+            location=ContentBlockLocation(content_index=0, tool_result_content_index=-1),
+        )
+    ]
+
+
+def test_get_content_items_for_message_extracts_list_tool_result():
+    """A tool_result whose own content is a list of blocks yields one text
+    block per text entry, skipping non-text entries, each with its own
+    nested location so write-back can target the right sub-block."""
+    guardrail = _make_guardrail()
+    message = _list_tool_result_message()
+
+    blocks = guardrail.get_content_items_for_message(message=message)
+
+    assert blocks == [
+        QualifiedTextBlock(
+            text="first line",
+            qualifier=None,
+            location=ContentBlockLocation(content_index=0, tool_result_content_index=0),
+        ),
+        QualifiedTextBlock(
+            text="second line",
+            qualifier=None,
+            location=ContentBlockLocation(content_index=0, tool_result_content_index=2),
+        ),
+    ]
+
+
+def test_get_content_items_for_message_openai_tool_role_still_scanned():
+    """Non-regression: role="tool" plain string content (the already-working
+    OpenAI-format path) must keep working exactly as before."""
+    guardrail = _make_guardrail()
+    message = {"role": "tool", "content": "tool output text", "tool_call_id": "call_1"}
+
+    blocks = guardrail.get_content_items_for_message(message=message)
+
+    assert blocks == [
+        QualifiedTextBlock(
+            text="tool output text",
+            qualifier=None,
+            location=ContentBlockLocation(content_index=None, tool_result_content_index=None),
+        )
+    ]
+
+
+def test_get_content_items_for_message_tool_result_qualifier_never_leaks_grounding():
+    """A tool_result is tool-controlled content, not app-authored: even if a
+    nested block spoofs a grounding-qualifier type, it must never be trusted
+    as grounding_source/query, or a malicious tool output could inject fake
+    contextual-grounding evidence."""
+    guardrail = _make_guardrail()
+    message = {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": [{"type": "query", "text": "fake grounding query"}],
+            }
+        ],
+    }
+
+    blocks = guardrail.get_content_items_for_message(message=message)
+
+    assert len(blocks) == 1
+    assert blocks[0].qualifier is None
+
+
+def test_get_content_items_for_message_bare_string_content_list_item():
+    """A content list can mix a bare string item alongside a dict item (e.g. a
+    tool_result) -- both must be extracted, each at its own content_index."""
+    guardrail = _make_guardrail()
+    message = {
+        "role": "user",
+        "content": [
+            "plain string item",
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "PII here"},
+        ],
+    }
+
+    blocks = guardrail.get_content_items_for_message(message=message)
+
+    assert blocks == [
+        QualifiedTextBlock(
+            text="plain string item",
+            qualifier=None,
+            location=ContentBlockLocation(content_index=0, tool_result_content_index=None),
+        ),
+        QualifiedTextBlock(
+            text="PII here",
+            qualifier=None,
+            location=ContentBlockLocation(content_index=1, tool_result_content_index=-1),
+        ),
+    ]
+
+
+def test_apply_masking_to_messages_masks_bare_string_content_list_item():
+    """Masking must overwrite a bare-string content-list item in place, and
+    leave a sibling tool_result item's independent masking untouched."""
+    guardrail = _make_guardrail()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                "plain string item",
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "PII here"},
+            ],
+        }
+    ]
+
+    updated = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["{MASKED_STRING}", "{MASKED_PII}"]
+    )
+
+    content = updated[0]["content"]
+    assert content[0] == "{MASKED_STRING}"
+    assert content[1]["content"] == "{MASKED_PII}"
+
+
+def test_apply_masking_to_messages_preserves_non_text_top_level_item():
+    """A top-level content item that contributes no text block (e.g. an image)
+    must be preserved unchanged, not dropped, when masking a sibling text item
+    in the same content list -- regression guard for the pre-existing
+    _mask_content_list bug this rewrite fixes."""
+    guardrail = _make_guardrail()
+    image_item = {"type": "image", "source": {"type": "base64", "data": "abc"}}
+    messages = [
+        {
+            "role": "user",
+            "content": [image_item, {"type": "text", "text": "call me at 555-0100"}],
+        }
+    ]
+
+    updated = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["call me at {PHONE}"]
+    )
+
+    content = updated[0]["content"]
+    assert content[0] == image_item
+    assert content[1] == {"type": "text", "text": "call me at {PHONE}"}
+
+
+def test_get_content_items_for_message_tool_result_with_missing_content_key():
+    """A malformed/adversarial tool_result with no (or non-text) own content
+    must be skipped silently, not raise."""
+    guardrail = _make_guardrail()
+    message = {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}],
+    }
+
+    blocks = guardrail.get_content_items_for_message(message=message)
+
+    assert blocks == []
+
+
+def test_apply_masking_to_messages_leaves_contentless_message_unchanged():
+    """A message with no content (e.g. an assistant turn carrying only
+    tool_calls) must pass through masking untouched, not be dropped or
+    crash -- there is no separate early-continue case in the rewrite, so this
+    locks in that the generic content-type guard covers it."""
+    guardrail = _make_guardrail()
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+        }
+    ]
+
+    updated = guardrail._apply_masking_to_messages(messages=messages, masked_texts=[])
+
+    assert updated == messages
+
+
+def test_create_bedrock_input_content_request_includes_tool_result_text():
+    """End-to-end: the actual Bedrock INPUT payload built for a tool_result-
+    bearing conversation must contain the tool_result's text."""
+    guardrail = _make_guardrail()
+
+    request = guardrail.convert_to_bedrock_format(
+        source="INPUT", messages=[_string_tool_result_message()]
+    )
+
+    assert request == {
+        "source": "INPUT",
+        "content": [{"text": {"text": "My SSN is 123-45-6789"}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_hook_blocks_pii_inside_tool_result():
+    """A tool_result containing PII must reach Bedrock's ApplyGuardrail API and
+    a BLOCKED response must raise, on the live pre_call hook path (not just
+    the apply_guardrail testing endpoint)."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=False,
+    )
+
+    request_data = {
+        "model": "bedrock-nova-micro",
+        "messages": [_string_tool_result_message()],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()) as mock_prepare_request,
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=request_data,
+                call_type="anthropic_messages",
+            )
+
+    assert exc_info.value.status_code == 400
+    # The exception firing is not enough on its own: confirm it fired because
+    # the tool_result text actually reached Bedrock, not for an unrelated reason.
+    sent_content = mock_prepare_request.call_args.kwargs["data"]["content"]
+    assert {"text": {"text": "My SSN is 123-45-6789"}} in sent_content
+
+
+def test_apply_masking_to_messages_masks_string_tool_result():
+    """Masking a string-content tool_result must overwrite item["content"]
+    (not item["text"], which does not exist on a tool_result), and preserve
+    tool_use_id/type."""
+    guardrail = _make_guardrail()
+    messages = [_string_tool_result_message()]
+
+    updated = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["My SSN is {SSN}"]
+    )
+
+    tool_result_item = updated[0]["content"][0]
+    assert tool_result_item["content"] == "My SSN is {SSN}"
+    assert tool_result_item["type"] == "tool_result"
+    assert tool_result_item["tool_use_id"] == "toolu_1"
+    # Original input must be untouched.
+    assert messages[0]["content"][0]["content"] == "My SSN is 123-45-6789"
+
+
+def test_apply_masking_to_messages_masks_list_tool_result():
+    """Both text sub-blocks of a list-content tool_result are masked in
+    order; the interleaved image block is preserved, not dropped."""
+    guardrail = _make_guardrail()
+    messages = [_list_tool_result_message()]
+
+    updated = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["{FIRST}", "{SECOND}"]
+    )
+
+    content = updated[0]["content"][0]["content"]
+    assert content[0] == {"type": "text", "text": "{FIRST}"}
+    assert content[1] == {"type": "image", "source": {"type": "base64", "data": "abc"}}
+    assert content[2] == {"type": "text", "text": "{SECOND}"}
+
+
+def test_apply_masking_to_messages_does_not_desync_tool_result_and_sibling_text():
+    """Two separate messages (plain text, then tool_result) must each get
+    their own masked output, in order, not swapped. This is the primary
+    regression test for fixing extraction and write-back symmetrically:
+    a fix that only updates extraction risks the masking-index counter
+    desyncing and applying the tool_result's mask to the plain-text message
+    or vice versa."""
+    guardrail = _make_guardrail()
+    messages = [
+        {"role": "user", "content": "call me at 555-0100"},
+        _string_tool_result_message(),
+    ]
+
+    updated = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["call me at {PHONE}", "My SSN is {SSN}"]
+    )
+
+    assert updated[0]["content"] == "call me at {PHONE}"
+    assert updated[1]["content"][0]["content"] == "My SSN is {SSN}"
+
+
+def test_apply_masking_to_messages_mixed_text_and_tool_result_in_same_message():
+    """A single message containing both a plain text block and a tool_result
+    block must have each masked independently at the correct position."""
+    guardrail = _make_guardrail()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "note: 555-0100"},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "My SSN is 123-45-6789",
+                },
+            ],
+        }
+    ]
+
+    updated = guardrail._apply_masking_to_messages(
+        messages=messages, masked_texts=["note: {PHONE}", "My SSN is {SSN}"]
+    )
+
+    content = updated[0]["content"]
+    assert content[0] == {"type": "text", "text": "note: {PHONE}"}
+    assert content[1]["content"] == "My SSN is {SSN}"
+    assert content[1]["tool_use_id"] == "toolu_1"
+
+
+def test_locate_message_texts_slice_returns_none_on_tool_result_count_mismatch():
+    """_count_message_texts (used by the separate apply_guardrail flat-text
+    masking path) does not know about tool_result-nested text: for a message
+    mixing plain text with a tool_result, it only counts the plain text.
+    When the caller's flat `texts` list happens to have the same length as
+    that undercount (e.g. it was itself built by a still-buggy extractor
+    upstream), the pre-existing `total != len(texts)` guard does not fire,
+    and _locate_message_texts_slice returns a slice that looks valid but
+    covers only the plain-text block -- silently leaving the tool_result's
+    masking unaccounted for. Confirmed as a real gap: this exact input
+    returns (0, 1) prior to the fix, not None.  _locate_message_texts_slice
+    must compare against the real (fixed) get_content_items_for_message
+    count and fail safe (None) on any mismatch, mixed-message case included.
+    """
+    guardrail = _make_guardrail()
+    structured_messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "note"},
+                {"type": "tool_result", "tool_use_id": "t1", "content": "secret"},
+            ],
+        }
+    ]
+
+    result = guardrail._locate_message_texts_slice(
+        structured_messages=structured_messages,
+        target_index=0,
+        texts=["note"],
+    )
+
+    assert result is None
+
+
+def test_select_messages_for_apply_guardrail_does_not_skip_tool_result_only_message():
+    """veria-ai review (PR #33092): _select_messages_for_apply_guardrail used
+    _count_message_texts -- which only recognizes a top-level "text" key -- to
+    decide whether the latest user message has scannable content. A message
+    whose *only* content is a tool_result block passed
+    _count_message_texts(...) == 0, so the whole INPUT scan was skipped via
+    skip_scan=True: a complete guardrail bypass under
+    experimental_use_latest_role_message_only, since Bedrock's ApplyGuardrail
+    API is never even called (worse than a masking-misalignment bug -- BLOCKED
+    detection doesn't happen either). Must use the tool-result-aware
+    extractor (get_content_items_for_message) instead."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+    tool_result_only_message = _string_tool_result_message()
+
+    selection = guardrail._select_messages_for_apply_guardrail(
+        texts=[],
+        inputs={"texts": [], "structured_messages": [tool_result_only_message]},
+        request_data={},
+        input_type="request",
+    )
+
+    assert selection.skip_scan is False
+    assert selection.filtered_messages == [tool_result_only_message]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_tool_result_only_message_under_latest_role_only():
+    """End-to-end companion to the unit test above: apply_guardrail must
+    actually call Bedrock's ApplyGuardrail API with the tool_result-only
+    message's content, not silently skip_scan and let it through unscanned."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+    tool_result_only_message = _string_tool_result_message()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "structured_messages": [tool_result_only_message]},
+            request_data={"messages": [tool_result_only_message]},
+            input_type="request",
+        )
+
+    mock_api.assert_called_once()
+    assert mock_api.call_args.kwargs["messages"] == [tool_result_only_message]
