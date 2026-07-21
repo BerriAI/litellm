@@ -16,6 +16,8 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    let ignore = false;
+
     const fetchAvailableTeams = async () => {
       if (!accessToken || !userID) {
         setIsLoading(false);
@@ -24,15 +26,23 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({ accessToken, userI
 
       try {
         const response = await availableTeamListCall(accessToken);
-        setAvailableTeams(response);
+        if (!ignore) {
+          setAvailableTeams(response);
+        }
       } catch (error) {
         console.error("Error fetching available teams:", error);
       } finally {
-        setIsLoading(false);
+        if (!ignore) {
+          setIsLoading(false);
+        }
       }
     };
 
     fetchAvailableTeams();
+
+    return () => {
+      ignore = true;
+    };
   }, [accessToken, userID]);
 
   const handleJoinTeam = async (teamId: string) => {
