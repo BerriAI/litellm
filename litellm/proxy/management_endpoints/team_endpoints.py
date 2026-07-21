@@ -47,6 +47,7 @@ from litellm.proxy._types import (
     Member,
     NewTeamRequest,
     OrgMember,
+    PatchTeamRequest,
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
@@ -1948,11 +1949,31 @@ async def update_team(
         raise handle_exception_on_proxy(e)
 
 
+def _patch_team_request_schema() -> dict:
+    """OpenAPI schema for the PATCH /team/{team_id} body.
+
+    The handler reads the raw body rather than declaring it as a typed parameter, so
+    that absent-vs-null stays distinguishable for the RFC 7386 metadata merge and the
+    400 contract for a non-object body is preserved. FastAPI therefore cannot infer
+    the request body, and it is declared here instead. Nested models are pointed at
+    the components the other team routes already emit, so only the top-level schema
+    is inlined.
+    """
+    schema = PatchTeamRequest.model_json_schema(ref_template="#/components/schemas/{model}")
+    return {key: value for key, value in schema.items() if key != "$defs"}
+
+
 @router.patch(
     "/team/{team_id}",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_TeamTable,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": _patch_team_request_schema()}},
+        }
+    },
 )
 async def patch_team(
     team_id: str,
@@ -2016,7 +2037,11 @@ async def patch_team(
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
             body["metadata"] = apply_json_merge_patch(existing_metadata, body["metadata"])
 
-        update_request = UpdateTeamRequest(team_id=team_id, **body)
+        patch_request = PatchTeamRequest.model_validate(body)
+        update_request = UpdateTeamRequest(
+            team_id=team_id,
+            **patch_request.model_dump(exclude_unset=True, exclude={"team_id"}),
+        )
 
         result = await update_team(
             data=update_request,

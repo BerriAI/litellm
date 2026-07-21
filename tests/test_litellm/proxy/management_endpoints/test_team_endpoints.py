@@ -10036,3 +10036,118 @@ async def test_patch_returns_full_team_object_not_wrapper():
     )
     assert isinstance(result, LiteLLM_TeamTable)
     assert result.team_id == _PATCH_TEAM_ID
+
+
+# ---------------------------------------------------------------------------
+# PATCH body is validated through PatchTeamRequest before it is handed to
+# update_team. The write below must stay byte-identical to what the untyped
+# **body construction produced, or a partial update starts writing columns the
+# caller never mentioned.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_patch_writes_only_the_keys_the_caller_sent():
+    """An omitted field must not reach the DB write at all. If validation ever
+    materialises defaults, every unmentioned column gets overwritten with null."""
+    _, update_mock = await _drive_team_write("patch", raw_body={"tpm_limit": 5})
+    written = update_mock.call_args.kwargs["data"]
+
+    assert written["tpm_limit"] == 5
+    for untouched in ("rpm_limit", "max_budget", "models", "blocked", "budget_duration"):
+        assert untouched not in written, f"{untouched} was written despite not being sent"
+
+
+@pytest.mark.asyncio
+async def test_patch_preserves_explicit_null_as_a_clear():
+    """null is a clear, not an omission: it has to survive validation and reach the write."""
+    _, update_mock = await _drive_team_write("patch", raw_body={"max_budget": None})
+    written = update_mock.call_args.kwargs["data"]
+
+    assert "max_budget" in written
+    assert written["max_budget"] is None
+
+
+def _patch_body_to_update_request(body: dict):
+    """The exact reshaping patch_team performs between the raw body and update_team."""
+    from litellm.proxy._types import PatchTeamRequest, UpdateTeamRequest
+
+    parsed = PatchTeamRequest.model_validate(body)
+    return UpdateTeamRequest(
+        team_id=_PATCH_TEAM_ID,
+        **parsed.model_dump(exclude_unset=True, exclude={"team_id"}),
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"tpm_limit": 5},
+        {"max_budget": None},
+        {"object_permission": {"vector_stores": []}},
+        {"metadata": {"a": 1, "b": None}},
+        {"models": ["gpt-4"], "blocked": False},
+    ],
+    ids=["scalar", "explicit-null", "partial-nested", "metadata-with-null", "list-and-false"],
+)
+def test_patch_body_reshaping_adds_no_keys_the_caller_did_not_send(body):
+    """Validating through PatchTeamRequest must be shape-preserving. If it ever
+    materialises defaults, a partial update silently overwrites untouched columns,
+    and for the merge-only object_permission it would wipe sibling sub-keys."""
+    reshaped = _patch_body_to_update_request(body)
+    dumped = reshaped.model_dump(exclude_unset=True, exclude={"team_id"})
+
+    assert dumped == body
+    assert reshaped.model_fields_set == set(body) | {"team_id"}
+
+
+@pytest.mark.asyncio
+async def test_patch_ignores_unknown_body_keys():
+    """Unknown keys were silently dropped by the previous construction; keep that."""
+    _, update_mock = await _drive_team_write(
+        "patch", raw_body={"tpm_limit": 5, "not_a_team_field": "x"}
+    )
+    written = update_mock.call_args.kwargs["data"]
+
+    assert written["tpm_limit"] == 5
+    assert "not_a_team_field" not in written
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_a_wrongly_typed_field():
+    """Validation still happens; a bad scalar is an error rather than a silent write."""
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException):
+        await _drive_team_write("patch", raw_body={"tpm_limit": "not-an-int"})
+
+
+def test_patch_team_request_makes_team_id_optional():
+    """PATCH takes team_id from the path, so the body model must not require it,
+    while still inheriting every UpdateTeamRequest field."""
+    from litellm.proxy._types import PatchTeamRequest, UpdateTeamRequest
+
+    parsed = PatchTeamRequest.model_validate({"tpm_limit": 5})
+
+    assert parsed.team_id is None
+    assert parsed.model_fields_set == {"tpm_limit"}
+    assert set(UpdateTeamRequest.model_fields).issubset(set(PatchTeamRequest.model_fields))
+
+
+def test_patch_team_route_publishes_its_request_body_schema():
+    """The dashboard's generated client types this call off the OpenAPI spec. The
+    handler reads the raw body, so FastAPI cannot infer it and the schema is declared
+    on the route; if that declaration is dropped the body silently becomes untyped."""
+    from litellm.proxy.proxy_server import app
+
+    operation = app.openapi()["paths"]["/team/{team_id}"]["patch"]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+
+    assert "team_id" not in schema.get("required", [])
+    assert "tpm_limit" in schema["properties"]
+    assert "metadata" in schema["properties"]
+    # nested models point at components rather than being inlined as dangling $defs
+    assert "$defs" not in schema
+    assert schema["properties"]["object_permission"]["anyOf"][0]["$ref"].startswith(
+        "#/components/schemas/"
+    )
