@@ -1,7 +1,7 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, Union
+from typing import IO, Any, Final, Literal, NamedTuple, Optional, Union
 
 import httpx
 from openai import Omit
@@ -104,6 +104,22 @@ EmbeddingInput = str | list[str]
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict = {}
+
+
+class SpeechStreamingResponse(NamedTuple):
+    """Result of a streaming text-to-speech call (OpenAI ``stream_format="sse"``).
+
+    Holds an iterator over the raw frames as they arrive from the provider, so callers
+    can forward them incrementally instead of buffering the full clip. ``stream_iterator``
+    is async for ``aspeech`` and sync for ``speech``. ``headers`` carries the provider's
+    response headers; callers should label the forwarded stream with its ``content-type``
+    (``text/event-stream`` for ``speech.audio.delta`` frames, or ``audio/*`` when the
+    provider ignored ``stream_format`` and streamed the clip verbatim) rather than assuming
+    SSE, so nothing is mislabeled.
+    """
+
+    stream_iterator: Iterator[bytes] | AsyncIterator[bytes]
+    headers: Mapping[str, str]
 
 
 class NotGiven:
