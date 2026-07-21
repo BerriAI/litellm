@@ -1025,13 +1025,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # emits two calls with the same ID (one allowed, one prohibited) and
         # the service returns only the allowed one, a set-based check would
         # miss the block. Counter preserves multiplicity.
-        returned_id_counts: Counter[str] = Counter(
-            tc["id"] for tc in returned_tool_calls if tc.get("id")
-        )
+        returned_id_counts: Counter[str] = Counter(tc["id"] for tc in returned_tool_calls if tc.get("id"))
         required_id_counts: Counter[str] = Counter(tc.id for tc in all_tool_calls if tc.id)
         tools_blocked = not all(
-            returned_id_counts.get(tc_id, 0) >= count
-            for tc_id, count in required_id_counts.items()
+            returned_id_counts.get(tc_id, 0) >= count for tc_id, count in required_id_counts.items()
         )
 
         # The webhook either replaces content wholesale (text block) or appends
