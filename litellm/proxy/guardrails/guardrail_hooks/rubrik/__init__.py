@@ -9,9 +9,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
-) -> RubrikLogger:
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> RubrikLogger:
     """Create and register a RubrikLogger instance.
 
     The ``mode`` field in the guardrail config controls which surfaces are
