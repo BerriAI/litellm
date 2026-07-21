@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -53,6 +54,7 @@ class TurnMetric:
 
 @dataclass(frozen=True, slots=True)
 class AnomalyReport:
+    planned_turns: int
     attempted_turns: int
     failed_turns: int
     warm_turns: int
@@ -63,7 +65,7 @@ class AnomalyReport:
 
     @property
     def error_ratio(self) -> float:
-        return self.failed_turns / self.attempted_turns if self.attempted_turns else 1.0
+        return self.failed_turns / self.planned_turns if self.planned_turns else 1.0
 
     @property
     def warm_cache_read_share(self) -> float:
@@ -217,6 +219,34 @@ def run_concurrent_sessions(
         return tuple(turn for future in futures for turn in future.result())
 
 
+def settled_spend(
+    read_spend: Callable[[], float],
+    poll_interval: float,
+    settle_seconds: float,
+    timeout_seconds: float,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> float:
+    deadline = now() + timeout_seconds + settle_seconds
+
+    def settle(previous: float, stable_since: float) -> float:
+        current = read_spend()
+        observed = now()
+        since = stable_since if current == previous else observed
+        if current > 0 and observed - since >= settle_seconds:
+            return current
+        if observed >= deadline:
+            raise AssertionError(
+                f"key spend never held a stable non-zero value for {settle_seconds}s "
+                f"within {timeout_seconds + settle_seconds}s (last read {current}); "
+                f"spend stopped being recorded, which is itself a spend anomaly"
+            )
+        sleep(poll_interval)
+        return settle(current, since)
+
+    return settle(-1.0, now())
+
+
 def _p95(latencies: tuple[float, ...]) -> float:
     if not latencies:
         return 0.0
@@ -224,11 +254,12 @@ def _p95(latencies: tuple[float, ...]) -> float:
     return ranked[max(0, -(-len(ranked) * 95 // 100) - 1)]
 
 
-def summarize(turns: tuple[TurnMetric, ...]) -> AnomalyReport:
+def summarize(turns: tuple[TurnMetric, ...], planned_turns: int) -> AnomalyReport:
     warm = tuple(turn for turn in turns if turn.ok and turn.turn_index >= 2)
     return AnomalyReport(
+        planned_turns=planned_turns,
         attempted_turns=len(turns),
-        failed_turns=sum(1 for turn in turns if not turn.ok),
+        failed_turns=planned_turns - sum(1 for turn in turns if turn.ok),
         warm_turns=len(warm),
         warm_uncached_input_tokens=sum(turn.uncached_input_tokens for turn in warm),
         warm_cache_read_tokens=sum(turn.cache_read_tokens for turn in warm),

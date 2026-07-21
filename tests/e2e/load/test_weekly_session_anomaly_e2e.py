@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 
 import pytest
@@ -11,6 +10,7 @@ from e2e_config import (
     ANOMALY_MAX_P95_TURN_SECONDS,
     ANOMALY_MIN_WARM_CACHE_READ_SHARE,
     ANOMALY_SESSIONS,
+    ANOMALY_SPEND_SETTLE_SECONDS,
     ANOMALY_TURNS_PER_SESSION,
     unique_marker,
 )
@@ -18,7 +18,7 @@ from lifecycle import ResourceManager
 from load_client import LoadClient
 from models import KeyGenerateBody, LiteLLMParamsBody
 from proxy_client import ProxyClient
-from session_anomaly import run_concurrent_sessions, summarize
+from session_anomaly import run_concurrent_sessions, settled_spend, summarize
 
 pytestmark = [pytest.mark.e2e, pytest.mark.load, pytest.mark.weekly]
 
@@ -49,22 +49,12 @@ def _route_id(route: AnomalyRoute) -> str:
 
 
 def _settled_key_spend(proxy: ProxyClient, key: str) -> float:
-    deadline = time.monotonic() + proxy.poll_timeout
-
-    def settle(previous: float) -> float:
-        current = proxy.key_info(key).spend or 0.0
-        if current > 0 and current == previous:
-            return current
-        if time.monotonic() >= deadline:
-            raise AssertionError(
-                f"key spend never settled to a stable non-zero value within "
-                f"{proxy.poll_timeout}s (last read {current}); spend stopped being "
-                f"recorded, which is itself a spend anomaly"
-            )
-        time.sleep(proxy.poll_interval)
-        return settle(current)
-
-    return settle(-1.0)
+    return settled_spend(
+        lambda: proxy.key_info(key).spend or 0.0,
+        proxy.poll_interval,
+        ANOMALY_SPEND_SETTLE_SECONDS,
+        proxy.poll_timeout,
+    )
 
 
 class TestWeeklySessionAnomaly:
@@ -88,13 +78,14 @@ class TestWeeklySessionAnomaly:
             ANOMALY_SESSIONS,
             ANOMALY_TURNS_PER_SESSION,
         )
-        report = summarize(turns)
+        report = summarize(turns, ANOMALY_SESSIONS * ANOMALY_TURNS_PER_SESSION)
         failures = tuple(turn.failure for turn in turns if turn.failure)
         print(f"{route.route_id} anomaly report: {report}")
 
         assert report.error_ratio <= ANOMALY_MAX_ERROR_RATIO, (
-            f"{route.route_id}: {report.failed_turns}/{report.attempted_turns} turns "
-            f"failed ({report.error_ratio:.1%} > {ANOMALY_MAX_ERROR_RATIO:.1%} allowed); "
+            f"{route.route_id}: {report.failed_turns}/{report.planned_turns} planned "
+            f"turns failed or never ran because their session aborted "
+            f"({report.error_ratio:.1%} > {ANOMALY_MAX_ERROR_RATIO:.1%} allowed); "
             f"error rate is anomalously high. Failures: {failures}"
         )
         assert report.warm_turns > 0, (
