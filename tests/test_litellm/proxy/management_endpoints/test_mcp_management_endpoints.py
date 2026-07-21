@@ -5399,7 +5399,8 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
     assert apis, "registry must not be empty"
     names = [entry["name"] for entry in apis]
     assert len(names) == len(set(names)), "duplicate registry entry names"
-    assert "google_sheets" in names, "LIT-4629: Google Sheets must be in the catalog"
+    for google_entry in ("google_sheets", "google_drive", "google_calendar", "google_docs"):
+        assert google_entry in names, f"LIT-4629: {google_entry} must be in the catalog"
 
     for entry in apis:
         for required in ("name", "title", "description", "icon_url", "spec_url"):
