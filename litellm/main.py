@@ -5111,7 +5111,7 @@ def completion(  # type: ignore
     try:
         if base_url is not None:
             api_base = base_url
-        is_router_call = "model_group" in (kwargs.get("metadata") or kwargs.get("litellm_metadata") or {})
+        is_router_call = any("model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata"))
         if is_router_call:
             max_retries = 0
         elif num_retries is not None:

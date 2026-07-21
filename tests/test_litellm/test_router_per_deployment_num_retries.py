@@ -5,6 +5,7 @@ GitHub Issue: #18968 - Per-deployment max_retries/num_retries in litellm_params 
 
 import httpx
 import pytest
+import pytest_asyncio
 from unittest.mock import patch
 
 import litellm
@@ -355,12 +356,15 @@ class TestNoProviderRetryAmplification:
         litellm.aclient_session = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         return counter
 
-    @pytest.fixture(autouse=True)
-    def _isolate_clients(self):
+    @pytest_asyncio.fixture(autouse=True)
+    async def _isolate_clients(self):
         litellm.in_memory_llm_clients_cache.flush_cache()
         yield
+        session = litellm.aclient_session
         litellm.aclient_session = None
         litellm.in_memory_llm_clients_cache.flush_cache()
+        if session is not None:
+            await session.aclose()
 
     @staticmethod
     def _router(api_base: str, litellm_params: dict, **router_kwargs) -> Router:
