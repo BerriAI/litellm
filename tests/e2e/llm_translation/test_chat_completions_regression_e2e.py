@@ -124,7 +124,7 @@ def _assert_streamed_completion(result: StreamingResponse) -> None:
     stream (the #28991 class on the streaming path)."""
     assert result.ok and result.is_streaming, f"stream was not established: {result}"
     assert result.stream_error is None, f"stream carried an error event: {result.stream_error}"
-    assert result.chunks > 1, f"stream did not deliver multiple chunks: {result}"
+    assert len(result.stream_events) > 1, f"stream did not deliver multiple data events: {result}"
     assert _streamed_text(result.stream_events).strip(), (
         f"stream completed with no content deltas: {result.stream_events[:3]}"
     )
