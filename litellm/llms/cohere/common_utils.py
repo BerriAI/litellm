@@ -1,6 +1,7 @@
 import json
-from typing import List, Optional, Literal, Tuple
+from typing import Any, List, Optional, Literal, Tuple
 
+import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -15,6 +16,45 @@ from litellm.types.utils import (
 class CohereError(BaseLLMException):
     def __init__(self, status_code, message):
         super().__init__(status_code=status_code, message=message)
+
+
+DROP_UNSUPPORTED_NUM_GENERATIONS_WARNING = (
+    "Dropping unsupported `n`=%s for Cohere chat (drop_params=True). "
+    "Cohere's Chat API does not support requesting multiple generations per call."
+)
+
+
+def maybe_drop_unsupported_num_generations(value: Any, drop_params: bool) -> None:
+    """Handle OpenAI's ``n`` param, which Cohere's Chat API (v1 and v2) has no equivalent for.
+
+    ``n=1`` (or unset) is a no-op: Cohere's chat endpoints always return exactly
+    one generation, so requesting one is trivially satisfied without sending
+    anything provider-specific. ``n>1`` genuinely cannot be honoured -- Cohere's
+    Chat API has no `num_generations`-style field at all (confirmed via their API
+    reference; sending one raises "unknown field: parameter 'num_generations' is
+    not a valid field") -- so it follows the same drop_params convention used
+    elsewhere in litellm: raise unless the caller has opted in to silently
+    dropping unsupported params.
+
+    Shared between CohereChatConfig (v1) and CohereV2ChatConfig (v2) since both
+    map OpenAI params onto the same Cohere Chat API surface and hit this
+    identically.
+    """
+    if value is None or value == 1:
+        return
+    if not (litellm.drop_params or drop_params):
+        raise litellm.utils.UnsupportedParamsError(
+            message=(
+                f"Cohere's Chat API does not support n={value!r} "
+                "(no multi-generation parameter exists for this endpoint). "
+                "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+    litellm.verbose_logger.warning(
+        DROP_UNSUPPORTED_NUM_GENERATIONS_WARNING,
+        value,
+    )
 
 
 class CohereModelInfo(BaseLLMModelInfo):

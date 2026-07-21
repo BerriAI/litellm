@@ -17,6 +17,9 @@ from litellm.types.utils import ModelResponse, Usage
 
 from ..common_utils import CohereError
 from ..common_utils import CohereV2ModelResponseIterator
+from ..common_utils import (
+    maybe_drop_unsupported_num_generations as _maybe_drop_unsupported_num_generations,
+)
 from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:
@@ -149,7 +152,9 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "n":
-                optional_params["num_generations"] = value
+                _maybe_drop_unsupported_num_generations(
+                    value=value, drop_params=drop_params
+                )
             if param == "top_p":
                 optional_params["p"] = value
             if param == "frequency_penalty":
