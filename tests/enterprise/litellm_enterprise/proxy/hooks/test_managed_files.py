@@ -1772,7 +1772,7 @@ async def test_list_batches_from_managed_objects_table():
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
         where={"file_purpose": "batch", "created_by": "test-user"},
         take=10,
-        order={"created_at": "desc"},
+        order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
 
 
@@ -1802,7 +1802,7 @@ async def test_list_batches_from_managed_objects_table_empty_list():
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
         where={"file_purpose": "batch", "created_by": "test-user"},
         take=20,
-        order={"created_at": "desc"},
+        order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
 
 
@@ -1919,7 +1919,7 @@ async def test_list_batches_from_managed_objects_table_filters_by_created_by():
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_with(
         where={"file_purpose": "batch", "created_by": "user1"},
         take=10,
-        order={"created_at": "desc"},
+        order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
 
     # Query with user2's API key - should only return user2's batch
@@ -1934,7 +1934,7 @@ async def test_list_batches_from_managed_objects_table_filters_by_created_by():
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_with(
         where={"file_purpose": "batch", "created_by": "user2"},
         take=10,
-        order={"created_at": "desc"},
+        order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
 
 
@@ -1965,7 +1965,7 @@ async def test_list_batches_pagination_uses_unified_object_id_cursor():
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
         where={"file_purpose": "batch", "created_by": "test-user"},
         take=5,
-        order={"created_at": "desc"},
+        order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
         cursor={"unified_object_id": "unified-batch-id-7"},
         skip=1,
     )
@@ -2018,10 +2018,12 @@ async def test_list_batches_pagination_walks_all_pages_without_loops_or_gaps():
         id_filter = where.get("id")
         if isinstance(id_filter, dict) and "gt" in id_filter:
             result = [r for r in result if r.id > id_filter["gt"]]
-        (order_field, direction), = order.items()
-        result.sort(
-            key=lambda r: getattr(r, order_field), reverse=(direction == "desc")
-        )
+        order_keys = order if isinstance(order, list) else [order]
+        for clause in reversed(order_keys):
+            (order_field, direction), = clause.items()
+            result.sort(
+                key=lambda r: getattr(r, order_field), reverse=(direction == "desc")
+            )
         if cursor is not None:
             (cur_field, cur_val), = cursor.items()
             idx = next(
@@ -2059,6 +2061,116 @@ async def test_list_batches_pagination_walks_all_pages_without_loops_or_gaps():
     expected = [_unified_id(i) for i in reversed(range(total))]
     assert seen == expected
     assert len(seen) == len(set(seen))
+
+
+@pytest.mark.asyncio
+async def test_list_batches_pagination_stable_when_created_at_ties():
+    """Regression for LIT-4678.
+
+    Cursor pagination is only well-defined when the ``order`` fully determines
+    row order. If listing ordered by non-unique ``created_at`` alone, batches
+    sharing a timestamp come back in an arbitrary order that can shift between
+    page requests, so a cursor row's neighbours change and batches get skipped
+    or duplicated. Listing must add the unique ``unified_object_id`` as a
+    tie-breaker so the order is total and pagination is stable.
+    """
+    import itertools
+    import uuid as _uuid
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    def _unified_id(i: int) -> str:
+        raw = f"litellm_proxy;model_id:gpt-4o-batch;llm_batch_id:batch_{i:03d}"
+        return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+    total = 6
+    shared_created_at = 1_000_000
+    rows = []
+    for i in range(total):
+        row = MagicMock()
+        row.id = str(_uuid.uuid4())
+        row.unified_object_id = _unified_id(i)
+        row.created_at = shared_created_at
+        row.file_object = json.dumps(
+            {
+                "id": f"batch_provider_{i:03d}",
+                "object": "batch",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "status": "completed",
+                "created_at": shared_created_at,
+                "input_file_id": f"file-input-{i:03d}",
+                "request_counts": {"total": 1, "completed": 1, "failed": 0},
+            }
+        )
+        rows.append(row)
+
+    call_counter = itertools.count()
+
+    async def fake_find_many(where, take, order, cursor=None, skip=0):
+        call = next(call_counter)
+        order_keys = order if isinstance(order, list) else [order]
+        fields = [next(iter(clause)) for clause in order_keys]
+        result = list(rows)
+        for clause in reversed(order_keys):
+            field, direction = next(iter(clause.items()))
+            result.sort(
+                key=lambda r: getattr(r, field), reverse=(direction == "desc")
+            )
+
+        def order_key(r):
+            return tuple(getattr(r, f) for f in fields)
+
+        stabilized = []
+        i = 0
+        while i < len(result):
+            j = i
+            while j < len(result) and order_key(result[j]) == order_key(result[i]):
+                j += 1
+            group = result[i:j]
+            if len(group) > 1:
+                rot = call % len(group)
+                group = group[rot:] + group[:rot]
+            stabilized.extend(group)
+            i = j
+        result = stabilized
+
+        if cursor is not None:
+            cur_field, cur_val = next(iter(cursor.items()))
+            idx = next(
+                (k for k, r in enumerate(result) if getattr(r, cur_field) == cur_val),
+                None,
+            )
+            if idx is None:
+                return []
+            result = result[idx + skip:]
+        return result[:take]
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+        side_effect=fake_find_many
+    )
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+    user = UserAPIKeyAuth(user_id="test-user")
+
+    seen: list = []
+    after = None
+    for _ in range(total + 5):
+        resp = await proxy_managed_files.list_user_batches(
+            user_api_key_dict=user, limit=2, after=after
+        )
+        page_ids = [b.id for b in resp["data"]]
+        if not page_ids:
+            break
+        seen.extend(page_ids)
+        assert resp["last_id"] != after, "cursor did not advance (pagination loop)"
+        after = resp["last_id"]
+
+    assert sorted(seen) == sorted(_unified_id(i) for i in range(total))
+    assert len(seen) == len(set(seen)), "a tied batch was returned more than once"
 
 
 @pytest.mark.asyncio
@@ -2436,7 +2548,7 @@ async def test_list_batches_only_returns_user_own_batches():
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
         where={"file_purpose": "batch", "created_by": "user_a_id"},
         take=10,
-        order={"created_at": "desc"},
+        order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
 
 

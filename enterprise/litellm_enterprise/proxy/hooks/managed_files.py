@@ -327,7 +327,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where=where_clause,
             take=fetch_limit,
-            order={"created_at": "desc"},
+            order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
             **cursor_args,
         )
 
