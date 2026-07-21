@@ -8,22 +8,35 @@ and uses LiteLLM auth.
 """
 
 from copy import deepcopy
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Literal, Mapping
+
+SupportedA2AVersion = Literal["0.3", "1.0"]
 
 # Protocol versions LiteLLM can serve to A2A clients. The admin pins one per agent;
 # responses are normalized to it regardless of the upstream agent's own version.
-SUPPORTED_A2A_PROTOCOL_VERSIONS = ("0.3", "1.0")
+SUPPORTED_A2A_PROTOCOL_VERSIONS: tuple[SupportedA2AVersion, ...] = ("0.3", "1.0")
 
 # Default served version when the agent card does not pin one.
 LITELLM_A2A_PROTOCOL_VERSION = "1.0"
 
 
+def normalize_protocol_version(version: object) -> SupportedA2AVersion | None:
+    """Map a raw ``protocolVersion`` value to the supported canonical major.minor version.
+
+    Semver strings the A2A spec and Google a2a-sdk emit (e.g. ``"0.3.0"``, ``"1.0.1"``)
+    canonicalize to their major.minor (``"0.3"``, ``"1.0"``). Anything outside the
+    supported set, including non-strings, yields ``None``.
+    """
+    if not isinstance(version, str):
+        return None
+    major_minor = ".".join(version.split(".")[:2])
+    return next((supported for supported in SUPPORTED_A2A_PROTOCOL_VERSIONS if supported == major_minor), None)
+
+
 def resolve_served_protocol_version(card: Mapping[str, Any] | None) -> str:
     """Return the validated protocol version an agent card pins, else the default."""
-    version = card.get("protocolVersion") if card else None
-    if version in SUPPORTED_A2A_PROTOCOL_VERSIONS:
-        return version
-    return LITELLM_A2A_PROTOCOL_VERSION
+    normalized = normalize_protocol_version(card.get("protocolVersion") if card else None)
+    return normalized if normalized is not None else LITELLM_A2A_PROTOCOL_VERSION
 
 
 # Security scheme exposed by the LiteLLM-fronted agent card. Always replaces
