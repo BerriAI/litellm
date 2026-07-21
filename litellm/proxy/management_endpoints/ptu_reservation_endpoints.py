@@ -90,10 +90,10 @@ async def new_ptu_reservation(
     _require_proxy_admin(user_api_key_dict)
     prisma_client = _require_db()
 
-    if body.cost_source == "azure_billing":
+    if body.cost_source == "azure_billing" and not body.azure_resource_id:
         raise HTTPException(
             status_code=400,
-            detail={"error": "cost_source='azure_billing' is not supported in this release"},
+            detail={"error": "azure_resource_id is required when cost_source='azure_billing'"},
         )
 
     try:

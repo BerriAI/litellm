@@ -9,11 +9,20 @@ existing unique constraint.
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any
+from typing import Any, Optional, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_ROLLUP_JOB_ID, PTU_SENTINEL_API_KEY
 from litellm.repositories.ptu_reservation_repository import PTUReservationRepository
+
+
+class AzureCostFetcher(Protocol):
+    """Dependency injected into the rollup for azure_billing reservations.
+
+    Implemented by ``AzureCostManagementClient`` in production, mocked in tests.
+    """
+
+    async def get_daily_cost(self, resource_id: str, day: date) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,14 +37,67 @@ def _days_in_month(day: date) -> int:
     return monthrange(day.year, day.month)[1]
 
 
-def _compute_daily_flat_cost(reservation: Any, day: date) -> float:
-    """Return the flat cost attributable to ``day`` for a single reservation."""
-    if reservation.cost_source != "manual":
-        return 0.0
-    if reservation.ptu_count is None or reservation.cost_per_ptu is None:
-        return 0.0
-    monthly_total = float(reservation.ptu_count) * float(reservation.cost_per_ptu)
-    return monthly_total / float(_days_in_month(day))
+async def _compute_daily_flat_cost(
+    reservation: Any,
+    day: date,
+    *,
+    azure_fetcher: Optional[AzureCostFetcher] = None,
+) -> float:
+    """Return the flat cost attributable to ``day`` for a single reservation.
+
+    manual: prorated (ptu_count * cost_per_ptu) / days_in_month.
+    azure_billing: live fetch via ``azure_fetcher`` when provided; 0.0 when
+    the pull is not configured (rollup logs a skip).
+    """
+    if reservation.cost_source == "manual":
+        if reservation.ptu_count is None or reservation.cost_per_ptu is None:
+            return 0.0
+        monthly_total = float(reservation.ptu_count) * float(reservation.cost_per_ptu)
+        return monthly_total / float(_days_in_month(day))
+    if reservation.cost_source == "azure_billing":
+        if azure_fetcher is None or reservation.azure_resource_id is None:
+            verbose_proxy_logger.warning(
+                "PTU rollup: reservation=%s cost_source=azure_billing skipped "
+                "(azure_ptu_billing.subscription_id / Entra ID env vars not configured, "
+                "or azure_resource_id missing on the reservation)",
+                getattr(reservation, "id", "?"),
+            )
+            return 0.0
+        try:
+            fetched = await azure_fetcher.get_daily_cost(reservation.azure_resource_id, day)
+        except Exception as exc:  # noqa: BLE001  # log and continue; one bad reservation must not stop the batch
+            verbose_proxy_logger.error(
+                "PTU rollup: azure fetch failed for reservation=%s day=%s: %s",
+                getattr(reservation, "id", "?"),
+                day.isoformat(),
+                exc,
+            )
+            return 0.0
+        currency = getattr(azure_fetcher, "last_currency", None)
+        if currency is not None and currency.upper() != "USD":
+            verbose_proxy_logger.warning(
+                "PTU rollup: azure_billing reservation=%s day=%s returned currency=%s; "
+                "skipping write to avoid storing non-USD amount as USD (LiteLLM_DailyTeamSpend "
+                "assumes USD). File a follow-up for currency conversion.",
+                getattr(reservation, "id", "?"),
+                day.isoformat(),
+                currency,
+            )
+            return 0.0
+        verbose_proxy_logger.info(
+            "PTU rollup: azure_billing reservation=%s day=%s resource=%s returned $%.4f",
+            getattr(reservation, "id", "?"),
+            day.isoformat(),
+            reservation.azure_resource_id,
+            fetched,
+        )
+        return fetched
+    verbose_proxy_logger.warning(
+        "PTU rollup: unknown cost_source=%s on reservation=%s; skipping",
+        reservation.cost_source,
+        getattr(reservation, "id", "?"),
+    )
+    return 0.0
 
 
 async def _upsert_ptu_daily_row(
@@ -88,12 +150,18 @@ async def run_ptu_reservation_rollup(
     target_date: date | None = None,
     *,
     force: bool = False,
+    azure_fetcher: Optional[AzureCostFetcher] = None,
 ) -> RollupResult:
     """Rollup one UTC day of flat PTU cost across all active reservations.
 
     Defaults to yesterday UTC. ``force=True`` bypasses the feature-flag check
-    so the CLI backfill can run when the scheduler is off. Idempotent under
-    the LiteLLM_DailyTeamSpend unique constraint on every invocation path.
+    so the CLI backfill can run when the scheduler is off. ``azure_fetcher``
+    is injected by the proxy startup wiring when
+    ``general_settings.azure_ptu_billing.subscription_id`` and the Entra ID env
+    vars are configured; azure_billing reservations no-op with a warning when
+    it is None.
+    Idempotent under the LiteLLM_DailyTeamSpend unique constraint on every
+    invocation path.
     """
     if not force:
         from litellm.proxy.proxy_server import general_settings
@@ -124,7 +192,7 @@ async def run_ptu_reservation_rollup(
 
     rows_written = 0
     for reservation in reservations:
-        flat_cost = _compute_daily_flat_cost(reservation, day)
+        flat_cost = await _compute_daily_flat_cost(reservation, day, azure_fetcher=azure_fetcher)
         if flat_cost <= 0:
             continue
         try:
@@ -159,6 +227,7 @@ async def run_ptu_reservation_rollup(
 
 
 __all__ = [
+    "AzureCostFetcher",
     "PTU_ROLLUP_JOB_ID",
     "PTU_SENTINEL_API_KEY",
     "RollupResult",

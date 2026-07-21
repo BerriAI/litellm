@@ -184,7 +184,7 @@ class UISettings(BaseModel):
 
     enable_ptu_cost_attribution: bool = Field(
         default=False,
-        description="If true, enables admin-registered PTU reservations and daily flat-cost attribution on team daily spend. Governs the /ptu_reservation CRUD endpoints, the daily rollup job, the PTU Reservations UI page, and the Flat Cost column on the Usage page.",
+        description="If true, enables admin-registered PTU reservations and daily flat-cost attribution on team daily spend. Governs the /ptu_reservation CRUD endpoints, the daily rollup job, the PTU Reservations UI page, and the Flat Cost column on the Usage page. When general_settings.azure_ptu_billing.subscription_id and the Entra ID env vars (AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET) are also set, reservations with cost_source='azure_billing' auto-fetch daily flat cost from the Azure Cost Management API; otherwise only manual reservations accrue.",
     )
 
 

@@ -24,6 +24,7 @@ class _Reservation:
     cost_per_ptu: float | None
     effective_from: datetime
     effective_to: datetime | None
+    azure_resource_id: str | None = None
 
 
 def _r(
@@ -36,6 +37,7 @@ def _r(
     cost_per_ptu: float | None = 200.0,
     effective_from: datetime | None = None,
     effective_to: datetime | None = None,
+    azure_resource_id: str | None = None,
 ) -> _Reservation:
     return _Reservation(
         id=id,
@@ -46,6 +48,7 @@ def _r(
         cost_per_ptu=cost_per_ptu,
         effective_from=effective_from or datetime(2026, 7, 1, tzinfo=timezone.utc),
         effective_to=effective_to,
+        azure_resource_id=azure_resource_id,
     )
 
 
@@ -74,35 +77,123 @@ def test_days_in_month_covers_calendar_variants():
     assert _days_in_month(date(2026, 7, 31)) == 31
 
 
-def test_compute_flat_cost_calendar_month_31():
+@pytest.mark.asyncio
+async def test_compute_flat_cost_calendar_month_31():
     r = _r(ptu_count=1, cost_per_ptu=200.0)
-    assert _compute_daily_flat_cost(r, date(2026, 7, 15)) == pytest.approx(200.0 / 31)
+    assert await _compute_daily_flat_cost(r, date(2026, 7, 15)) == pytest.approx(200.0 / 31)
 
 
-def test_compute_flat_cost_calendar_month_28():
+@pytest.mark.asyncio
+async def test_compute_flat_cost_calendar_month_28():
     r = _r(ptu_count=1, cost_per_ptu=200.0)
-    assert _compute_daily_flat_cost(r, date(2026, 2, 10)) == pytest.approx(200.0 / 28)
+    assert await _compute_daily_flat_cost(r, date(2026, 2, 10)) == pytest.approx(200.0 / 28)
 
 
-def test_compute_flat_cost_leap_february():
+@pytest.mark.asyncio
+async def test_compute_flat_cost_leap_february():
     r = _r(ptu_count=1, cost_per_ptu=200.0)
-    assert _compute_daily_flat_cost(r, date(2024, 2, 10)) == pytest.approx(200.0 / 29)
+    assert await _compute_daily_flat_cost(r, date(2024, 2, 10)) == pytest.approx(200.0 / 29)
 
 
-def test_compute_flat_cost_scales_with_ptu_count():
-    small = _compute_daily_flat_cost(_r(ptu_count=1, cost_per_ptu=200.0), date(2026, 7, 1))
-    big = _compute_daily_flat_cost(_r(ptu_count=100, cost_per_ptu=200.0), date(2026, 7, 1))
+@pytest.mark.asyncio
+async def test_compute_flat_cost_scales_with_ptu_count():
+    small = await _compute_daily_flat_cost(_r(ptu_count=1, cost_per_ptu=200.0), date(2026, 7, 1))
+    big = await _compute_daily_flat_cost(_r(ptu_count=100, cost_per_ptu=200.0), date(2026, 7, 1))
     assert big == pytest.approx(small * 100)
 
 
-def test_compute_flat_cost_zero_for_non_manual_source():
-    r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None)
-    assert _compute_daily_flat_cost(r, date(2026, 7, 1)) == 0.0
+@pytest.mark.asyncio
+async def test_compute_flat_cost_zero_when_azure_billing_and_no_fetcher():
+    r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/x")
+    assert await _compute_daily_flat_cost(r, date(2026, 7, 1)) == 0.0
 
 
-def test_compute_flat_cost_zero_when_manual_fields_missing():
+@pytest.mark.asyncio
+async def test_compute_flat_cost_zero_when_manual_fields_missing():
     r = _r(ptu_count=None, cost_per_ptu=None)
-    assert _compute_daily_flat_cost(r, date(2026, 7, 1)) == 0.0
+    assert await _compute_daily_flat_cost(r, date(2026, 7, 1)) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_compute_flat_cost_azure_billing_uses_fetcher_result():
+    r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/subs/x/deploy/y")
+    fetcher = MagicMock()
+    fetcher.get_daily_cost = AsyncMock(return_value=42.5)
+    fetcher.last_currency = "USD"
+
+    result = await _compute_daily_flat_cost(r, date(2026, 7, 15), azure_fetcher=fetcher)
+
+    assert result == 42.5
+    fetcher.get_daily_cost.assert_awaited_once_with("/subs/x/deploy/y", date(2026, 7, 15))
+
+
+@pytest.mark.asyncio
+async def test_compute_flat_cost_azure_billing_returns_zero_on_non_usd_currency():
+    """Non-USD Azure response must not be persisted as USD (silent data corruption)."""
+    r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/subs/x/deploy/y")
+    fetcher = MagicMock()
+    fetcher.get_daily_cost = AsyncMock(return_value=99.9)
+    fetcher.last_currency = "EUR"
+
+    result = await _compute_daily_flat_cost(r, date(2026, 7, 15), azure_fetcher=fetcher)
+
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
+async def test_compute_flat_cost_azure_billing_accepts_missing_currency():
+    """Empty Azure response (no rows) sets last_currency=None; treat as USD path (0.0 is written by the outer skip)."""
+    r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/subs/x/deploy/y")
+    fetcher = MagicMock()
+    fetcher.get_daily_cost = AsyncMock(return_value=0.0)
+    fetcher.last_currency = None
+
+    result = await _compute_daily_flat_cost(r, date(2026, 7, 15), azure_fetcher=fetcher)
+
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
+async def test_compute_flat_cost_azure_billing_fetcher_error_returns_zero():
+    r = _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/subs/x/deploy/y")
+    fetcher = MagicMock()
+    fetcher.get_daily_cost = AsyncMock(side_effect=RuntimeError("azure boom"))
+
+    result = await _compute_daily_flat_cost(r, date(2026, 7, 15), azure_fetcher=fetcher)
+
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
+async def test_compute_flat_cost_unknown_source_returns_zero():
+    r = _r(cost_source="mystery")
+    assert await _compute_daily_flat_cost(r, date(2026, 7, 1)) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_rollup_azure_billing_reservation_writes_fetched_amount(mock_prisma):
+    prisma, mock_daily, mock_reservation = mock_prisma
+    reservation = _r(
+        id="res_azure",
+        team_id="team_x",
+        model="gpt-4",
+        cost_source="azure_billing",
+        ptu_count=None,
+        cost_per_ptu=None,
+        azure_resource_id="/subs/x/deploy/y",
+    )
+    mock_reservation.find_many = AsyncMock(return_value=[reservation])
+    fetcher = MagicMock()
+    fetcher.get_daily_cost = AsyncMock(return_value=150.0)
+    fetcher.last_currency = "USD"
+
+    result = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12), azure_fetcher=fetcher)
+
+    assert result.rows_written == 1
+    fetcher.get_daily_cost.assert_awaited_once_with("/subs/x/deploy/y", date(2026, 7, 12))
+    create = mock_daily.upsert.await_args.kwargs["data"]["create"]
+    assert create["ptu_flat_cost"] == 150.0
+    assert create["ptu_reservation_id"] == "res_azure"
 
 
 @pytest.mark.asyncio
@@ -170,11 +261,12 @@ async def test_rollup_writes_expected_row(mock_prisma):
 
 
 @pytest.mark.asyncio
-async def test_rollup_skips_azure_billing_reservations(mock_prisma):
+async def test_rollup_skips_azure_billing_reservations_when_pull_disabled(mock_prisma):
+    """Regression: azure_billing rows must not corrupt sentinel table when pull flag off."""
     prisma, mock_daily, mock_reservation = mock_prisma
     mock_reservation.find_many = AsyncMock(
         return_value=[
-            _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None),
+            _r(cost_source="azure_billing", ptu_count=None, cost_per_ptu=None, azure_resource_id="/x"),
         ]
     )
 
@@ -231,9 +323,7 @@ async def test_rollup_queries_active_reservations_at_day_start(mock_prisma):
 @pytest.mark.asyncio
 async def test_rollup_idempotent_second_run_upserts_same_row(mock_prisma):
     prisma, mock_daily, mock_reservation = mock_prisma
-    mock_reservation.find_many = AsyncMock(
-        return_value=[_r(id="res_1", ptu_count=1, cost_per_ptu=200.0)]
-    )
+    mock_reservation.find_many = AsyncMock(return_value=[_r(id="res_1", ptu_count=1, cost_per_ptu=200.0)])
 
     r1 = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12))
     r2 = await run_ptu_reservation_rollup(prisma, target_date=date(2026, 7, 12))

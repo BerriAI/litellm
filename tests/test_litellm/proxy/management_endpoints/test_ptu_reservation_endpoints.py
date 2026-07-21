@@ -171,7 +171,8 @@ async def test_new_reservation_rejects_effective_to_equal_from(client_and_mocks)
 
 
 @pytest.mark.asyncio
-async def test_new_reservation_rejects_azure_billing_mode(client_and_mocks):
+async def test_new_reservation_rejects_azure_billing_without_resource_id(client_and_mocks):
+    """Stage 6 relaxed the blanket azure_billing reject; azure_resource_id is now the required field."""
     client, _, mock_table = client_and_mocks
     resp = client.post(
         "/ptu_reservation/new",
@@ -179,11 +180,11 @@ async def test_new_reservation_rejects_azure_billing_mode(client_and_mocks):
             "team_id": "team_x",
             "model": "gpt-4",
             "cost_source": "azure_billing",
-            "azure_resource_id": "/subscriptions/x/deployments/gpt-4-ptu",
             "effective_from": _iso(),
         },
     )
     assert resp.status_code == 400, resp.text
+    assert "azure_resource_id" in resp.text
     mock_table.create.assert_not_awaited()
 
 

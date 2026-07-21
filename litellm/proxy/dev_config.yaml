@@ -203,6 +203,8 @@ general_settings:
   # gs:// (Vertex) or s3:// (Bedrock) input_file_id. Requires a matching deployment
   # configured for the batched model. Defaults to false.
   # track_unmanaged_batch_cost: true
+  azure_ptu_billing:
+    subscription_id: os.environ/AZURE_SUBSCRIPTION_ID
 
 sandbox_tools:
   - sandbox_tool_name: e2b_sandbox

@@ -21,6 +21,29 @@ def _parse_date(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
+def _build_backfill_azure_fetcher():
+    """Return an Azure Cost Management client when subscription_id + Entra creds are set.
+
+    The proxy runtime builds this from general_settings; the CLI runs outside the
+    proxy process so it reads AZURE_SUBSCRIPTION_ID from the environment directly.
+    """
+    subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
+    if not subscription_id:
+        return None
+    try:
+        from litellm.integrations.azure_cost_management import AzureCostManagementClient
+        from litellm.integrations.azure_cost_management.azure_cost_management_client import (
+            AzureCostManagementConfig,
+        )
+
+        config = AzureCostManagementConfig.from_env(subscription_id=subscription_id)
+        print(f"backfill: azure fetcher enabled for subscription {subscription_id}", file=sys.stderr)
+        return AzureCostManagementClient(config=config)
+    except Exception as exc:
+        print(f"backfill: azure fetcher unavailable: {exc}", file=sys.stderr)
+        return None
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
@@ -60,10 +83,15 @@ async def _run(dates: list[date]) -> int:
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
     await prisma_client.connect()
+
+    azure_fetcher = _build_backfill_azure_fetcher()
+
     try:
         total_rows = 0
         for target in dates:
-            result = await run_ptu_reservation_rollup(prisma_client, target_date=target, force=True)
+            result = await run_ptu_reservation_rollup(
+                prisma_client, target_date=target, force=True, azure_fetcher=azure_fetcher
+            )
             print(
                 f"[{result.day.isoformat()}] "
                 f"reservations={result.reservations_processed} rows_written={result.rows_written}"
@@ -83,6 +111,9 @@ def main() -> int:
     dates = _dates_from_args(args)
     if "PYTHONPATH" not in os.environ:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     return asyncio.run(_run(dates))
 
 
