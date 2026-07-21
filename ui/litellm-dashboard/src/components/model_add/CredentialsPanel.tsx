@@ -56,22 +56,30 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     if (!accessToken) {
       return;
     }
-    const newCredential = buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values)));
-    await credentialUpdateCall(accessToken, values.credential_name as string, newCredential);
-    NotificationsManager.success("Credential updated successfully");
-    setIsUpdateModalOpen(false);
-    await refetchCredentials();
+    try {
+      const newCredential = buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values)));
+      await credentialUpdateCall(accessToken, values.credential_name as string, newCredential);
+      NotificationsManager.success("Credential updated successfully");
+      setIsUpdateModalOpen(false);
+      await refetchCredentials();
+    } catch (error) {
+      NotificationsManager.error("Failed to update credential");
+    }
   };
 
   const handleAddCredential = async (values: Record<string, unknown>) => {
     if (!accessToken) {
       return;
     }
-    const newCredential = buildCredential(values, withoutRestrictedFields(values));
-    await credentialCreateCall(accessToken, newCredential);
-    NotificationsManager.success("Credential added successfully");
-    setIsAddModalOpen(false);
-    await refetchCredentials();
+    try {
+      const newCredential = buildCredential(values, withoutRestrictedFields(values));
+      await credentialCreateCall(accessToken, newCredential);
+      NotificationsManager.success("Credential added successfully");
+      setIsAddModalOpen(false);
+      await refetchCredentials();
+    } catch (error) {
+      NotificationsManager.error("Failed to add credential");
+    }
   };
 
   const handleDeleteCredential = async () => {
