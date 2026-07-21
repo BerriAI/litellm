@@ -597,7 +597,14 @@ async def authorize_with_server(
 ):
     _raise_if_not_oauth2(mcp_server)
     if mcp_server.authorization_url is None:
-        raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server authorization url is not configured. Servers with no url (OpenAPI "
+                "spec or stdio) run no resource discovery, so set Authorization URL and Token URL "
+                "manually, or set Issuer to discover them from the identity provider (RFC 8414)."
+            ),
+        )
 
     if mcp_server.is_dcr_bridge:
         # Enforce S256 PKCE on both bridge arms. The relay arm forwards the validated,
@@ -702,7 +709,14 @@ async def exchange_token_with_server(
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
     if mcp_server.token_url is None:
-        raise HTTPException(status_code=400, detail="MCP server token url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server token url is not configured. Servers with no url (OpenAPI spec or "
+                "stdio) run no resource discovery, so set Token URL manually, or set Issuer to "
+                "discover it from the identity provider (RFC 8414)."
+            ),
+        )
 
     # The id and secret must come from the same source. When the server-side client_id wins,
     # falling back to the caller's secret pairs the persisted client with a foreign secret; the
@@ -1262,7 +1276,14 @@ async def register_client_with_server(
         return dummy_return
 
     if mcp_server.authorization_url is None:
-        raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server authorization url is not configured. Servers with no url (OpenAPI "
+                "spec or stdio) run no resource discovery, so set Authorization URL and Token URL "
+                "manually, or set Issuer to discover them from the identity provider (RFC 8414)."
+            ),
+        )
 
     if mcp_server.registration_url is None:
         return dummy_return
