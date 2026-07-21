@@ -1673,10 +1673,9 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
-            # update key budget with temp budget increase
-            valid_token = _update_key_budget_with_temp_budget_increase(
-                valid_token
-            )  # updating it here, allows all downstream reporting / checks to use the updated budget
+
+        if valid_token is not None:
+            valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
