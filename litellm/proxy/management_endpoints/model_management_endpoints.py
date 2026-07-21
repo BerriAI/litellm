@@ -55,10 +55,15 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     UpdateUsefulLinksRequest,
 )
+from litellm.router_utils.auto_router_model_naming import (
+    STRATEGY_ROUTER_PARAM_FIELDS,
+    validate_strategy_router_model_write,
+)
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     DeploymentTypedDict,
+    GenericLiteLLMParams,
     LiteLLMParamsTypedDict,
     updateDeployment,
 )
@@ -94,6 +99,45 @@ async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Optional[D
 
     deployment_pydantic_obj = Deployment(**db_model.model_dump(exclude_none=True))
     return deployment_pydantic_obj
+
+
+def _strategy_router_write_violation(
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> str | None:
+    """Reject writes that would corrupt a strategy router's pseudo-model.
+
+    An auto-router deployment's ``litellm_params.model`` (``auto_router/...``) is
+    the discriminator the router loads it by; a write that mangles it makes the
+    router drop the deployment silently under ``ignore_invalid_deployments``.
+    Only writes that supply ``litellm_params.model`` are judged, against the
+    merged (stored + incoming) params, so partial patches and restores of an
+    already-corrupted row stay legal. Returns the violation, or None.
+    """
+    if incoming_params is None or incoming_params.model is None:
+        return None
+    present_fields = frozenset(
+        field
+        for field in STRATEGY_ROUTER_PARAM_FIELDS
+        for source in (incoming_params, existing_params)
+        if source is not None and getattr(source, field, None) is not None
+    )
+    return validate_strategy_router_model_write(model=incoming_params.model, present_fields=present_fields)
+
+
+def _raise_on_strategy_router_write_violation(
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> None:
+    violation = _strategy_router_write_violation(incoming_params=incoming_params, existing_params=existing_params)
+    if violation is None:
+        return
+    raise ProxyException(
+        message=violation,
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="litellm_params.model",
+    )
 
 
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
@@ -252,6 +296,11 @@ async def patch_model(
                 code=status.HTTP_403_FORBIDDEN,
                 param="blocked",
             )
+
+        _raise_on_strategy_router_write_violation(
+            incoming_params=patch_data.litellm_params,
+            existing_params=db_model.litellm_params,
+        )
 
         # Handle team model updates with proper alias management
         update_data = await _update_team_model_in_db(
@@ -1295,6 +1344,11 @@ async def add_new_model(
             premium_user=premium_user,
         )
 
+        _raise_on_strategy_router_write_violation(
+            incoming_params=model_params.litellm_params,
+            existing_params=None,
+        )
+
         model_response: Optional[LiteLLM_ProxyModelTable] = None
         # update DB
         if store_model_in_db is True:
@@ -1440,6 +1494,11 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+        )
+
+        _raise_on_strategy_router_write_violation(
+            incoming_params=model_params.litellm_params,
+            existing_params=deployment.litellm_params,
         )
 
         # update DB

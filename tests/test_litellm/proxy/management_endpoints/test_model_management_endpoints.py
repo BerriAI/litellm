@@ -3047,3 +3047,216 @@ class TestPatchModelBlockedAuthGate:
             )
             assert result is updated_row
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+
+
+class TestStrategyRouterWriteValidation:
+    """Management write paths must reject litellm_params.model values that would
+    corrupt a strategy router's pseudo-model (LIT-4663). The router loads these
+    deployments by the auto_router/ discriminator, so a mangled string makes it
+    drop the deployment silently under ignore_invalid_deployments; the mistake
+    has to fail loudly at the API boundary instead."""
+
+    def _stored_complexity_params(self) -> LiteLLM_Params:
+        return LiteLLM_Params(
+            model="auto_router/complexity_router",
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+        )
+
+    def _db_complexity_router(self, model_id: str) -> Deployment:
+        return Deployment(
+            model_name="my-auto-router",
+            litellm_params=self._stored_complexity_params(),
+            model_info={"id": model_id},
+        )
+
+    def test_double_prefix_rejected_against_stored_params(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        violation = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(model="auto_router/auto_router/complexity_router"),
+            existing_params=self._stored_complexity_params(),
+        )
+        assert violation is not None
+        assert "repeats" in violation
+
+    def test_prefix_strip_rejected_against_stored_params(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        violation = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(model="complexity_router"),
+            existing_params=self._stored_complexity_params(),
+        )
+        assert violation is not None
+        assert "does not start with" in violation
+
+    def test_patch_without_model_is_not_judged(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(rpm=10),
+                existing_params=self._stored_complexity_params(),
+            )
+            is None
+        )
+        assert _strategy_router_write_violation(incoming_params=None, existing_params=None) is None
+
+    def test_restore_of_corrupted_row_is_allowed(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        corrupted = LiteLLM_Params(
+            model="auto_router/auto_router/complexity_router",
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+        )
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(model="auto_router/complexity_router"),
+                existing_params=corrupted,
+            )
+            is None
+        )
+
+    def test_create_semantic_router_missing_embedding_rejected(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+
+        violation = _strategy_router_write_violation(
+            incoming_params=LiteLLM_Params(
+                model="auto_router/my-router",
+                auto_router_config="{}",
+                auto_router_default_model="gpt-4o-mini",
+            ),
+            existing_params=None,
+        )
+        assert violation is not None
+        assert "auto_router_embedding_model" in violation
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rejects_double_prefix(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        model_id = "strategy-router-patch-test"
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
+                new=AsyncMock(return_value=self._db_complexity_router(model_id)),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._update_team_model_in_db",
+                new=AsyncMock(),
+            ) as mock_update,
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id=model_id,
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(model="auto_router/auto_router/complexity_router")
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert "repeats" in str(exc_info.value.message)
+            mock_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_rejects_prefixed_model_without_config(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        mock_prisma = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="my-auto-router",
+                        litellm_params=LiteLLM_Params(model="auto_router/complexity_router"),
+                        model_info={"id": "strategy-router-create-test"},
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert "requires" in str(exc_info.value.message)
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_model_rejects_prefix_strip(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        model_id = "strategy-router-update-test"
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        existing_row = MagicMock()
+        existing_row.model_dump.return_value = {
+            "model_name": "my-auto-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
+            },
+            "model_info": {"id": model_id},
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await update_model(
+                    model_params=updateDeployment(
+                        litellm_params=updateLiteLLMParams(model="complexity_router"),
+                        model_info=ModelInfo(id=model_id),
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert "does not start with" in str(exc_info.value.message)
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
