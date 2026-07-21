@@ -110,6 +110,7 @@ class UserProvisionerHelpers:
             user_id=new_user_request.user_id,
             existing_teams=existing_user.teams or [],
             new_teams=new_teams,
+            raise_on_error=True,
         )
 
         updated_user = await UserRepository(prisma_client).table.update(
@@ -452,7 +453,12 @@ async def _get_team_members_display(member_ids: List[str]) -> List[SCIMMember]:
     return members
 
 
-async def _handle_team_membership_changes(user_id: str, existing_teams: List[str], new_teams: List[str]) -> None:
+async def _handle_team_membership_changes(
+    user_id: str,
+    existing_teams: List[str],
+    new_teams: List[str],
+    raise_on_error: bool = False,
+) -> None:
     """Handle adding/removing user from teams based on changes."""
     existing_teams_set = set(existing_teams)
     new_teams_set = set(new_teams)
@@ -465,6 +471,7 @@ async def _handle_team_membership_changes(user_id: str, existing_teams: List[str
             user_id=user_id,
             teams_ids_to_add_user_to=list(teams_to_add),
             teams_ids_to_remove_user_from=list(teams_to_remove),
+            raise_on_error=raise_on_error,
         )
 
 
@@ -1513,12 +1520,17 @@ async def patch_team_membership(
     user_id: str,
     teams_ids_to_add_user_to: List[str],
     teams_ids_to_remove_user_from: List[str],
+    raise_on_error: bool = False,
 ) -> bool:
     """
     Add or remove user from teams
 
     Handles duplicate membership gracefully (idempotent operation).
     If a user is already in a team, that's fine - we don't treat it as an error.
+
+    When ``raise_on_error`` is True a genuine add failure (anything other than
+    the user already being in the team) propagates instead of being swallowed,
+    so a caller can avoid persisting a teams array the roster never received.
     """
     for _team_id in teams_ids_to_add_user_to:
         try:
@@ -1533,9 +1545,13 @@ async def patch_team_membership(
             # Handle duplicate membership gracefully - this is idempotent
             if e.type == ProxyErrorTypes.team_member_already_in_team:
                 verbose_proxy_logger.debug(f"User {user_id} is already in team {_team_id}, skipping add")
+            elif raise_on_error:
+                raise
             else:
                 verbose_proxy_logger.exception(f"Error adding user to team {_team_id}: {e}")
         except Exception as e:
+            if raise_on_error:
+                raise
             verbose_proxy_logger.exception(f"Error adding user to team {_team_id}: {e}")
 
     for _team_id in teams_ids_to_remove_user_from:

@@ -8,6 +8,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     NewUserRequest,
     NewUserResponse,
+    ProxyErrorTypes,
     ProxyException,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
@@ -612,6 +613,7 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
         user_id="new-user-id",
         existing_teams=["old-team"],
         new_teams=["new-team"],
+        raise_on_error=True,
     )
 
     mock_transform.assert_called_once_with(updated_user)
@@ -666,12 +668,110 @@ async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(mocke
         user_id="same-id",
         existing_teams=[],
         new_teams=["team-a", "team-b"],
+        raise_on_error=True,
     )
 
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
     assert update_calls[0].kwargs["where"] == {"user_id": "same-id"}
     assert update_calls[0].kwargs["data"]["teams"] == ["team-a", "team-b"]
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_roster_add_failure_blocks_teams_write(mocker):
+    """A genuine roster add failure must propagate and must not persist the teams array.
+
+    Regression: the roster sync went through patch_team_membership which swallowed
+    real team_member_add failures, so the endpoint reported success and wrote a
+    teams array listing a team the roster never received. The strict path now
+    surfaces the failure so user.teams and members_with_roles cannot diverge.
+    """
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "uid"
+    existing_user.user_email = "member@example.com"
+    existing_user.user_alias = "Member"
+    existing_user.teams = []
+    existing_user.metadata = {}
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+
+    mock_team_member_add = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "Team not found"})),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="uid",
+        user_email="member@example.com",
+        user_alias="Member",
+        teams=["missing-team"],
+        metadata={},
+        auto_create_key=False,
+    )
+
+    with pytest.raises(HTTPException):
+        await UserProvisionerHelpers.handle_existing_user_by_email(
+            prisma_client=mock_prisma_client, new_user_request=new_user_request
+        )
+
+    mock_team_member_add.assert_awaited_once()
+    assert mock_prisma_client.db.litellm_usertable.update.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(mocker):
+    """Being already in the team is benign even under the strict path: the upsert
+    succeeds and the deduped teams array is still persisted."""
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "uid"
+    existing_user.user_email = "member@example.com"
+    existing_user.user_alias = "Member"
+    existing_user.teams = []
+    existing_user.metadata = {}
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+
+    mock_team_member_add = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(
+            side_effect=ProxyException(
+                message="already in team",
+                type=ProxyErrorTypes.team_member_already_in_team.value,
+                param=None,
+                code=400,
+            )
+        ),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=None),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="uid",
+        user_email="member@example.com",
+        user_alias="Member",
+        teams=["team-x"],
+        metadata={},
+        auto_create_key=False,
+    )
+
+    await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client, new_user_request=new_user_request
+    )
+
+    mock_team_member_add.assert_awaited_once()
+    update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
+    assert len(update_calls) == 1
+    assert update_calls[0].kwargs["data"]["teams"] == ["team-x"]
 
 
 @pytest.mark.asyncio
@@ -2436,6 +2536,10 @@ async def test_handle_existing_user_by_email_applies_role_when_admin_group_set(m
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=mocker.MagicMock()),
     )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
 
     new_user_request = NewUserRequest(
         user_id="new-user-id",
@@ -2471,6 +2575,10 @@ async def test_handle_existing_user_by_email_leaves_role_when_admin_group_unset(
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=mocker.MagicMock()),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
     )
 
     new_user_request = NewUserRequest(
@@ -2532,6 +2640,10 @@ async def test_create_user_existing_email_upsert_demotes_when_admin_group_set(mo
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=scim_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
     )
 
     await create_user(user=scim_user)
