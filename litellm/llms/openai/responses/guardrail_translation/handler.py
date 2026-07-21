@@ -198,16 +198,27 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: dict) -> List[str]:
         """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp)."""
-        names: List[str] = []
-        for tool in data.get("tools") or []:
-            if not isinstance(tool, dict):
-                continue
-            if tool.get("type") in ("function", "custom") and tool.get("name"):
-                names.append(str(tool["name"]))
-            elif tool.get("type") == "mcp" and tool.get("server_label"):
-                names.append(str(tool["server_label"]))
-        return names
+        and custom, tools[].server_label for mcp), including tools nested in
+        additional_tools input items (Codex CLI ships its tool definitions there)."""
+        input_items = data.get("input")
+        additional_tools = (
+            tool
+            for item in (input_items if isinstance(input_items, list) else ())
+            if isinstance(item, dict) and item.get("type") == "additional_tools"
+            for tool in (item.get("tools") or ())
+        )
+        names = (self._responses_tool_name(tool) for tool in (*(data.get("tools") or ()), *additional_tools))
+        return [name for name in names if name]
+
+    @staticmethod
+    def _responses_tool_name(tool: object) -> str | None:
+        if not isinstance(tool, dict):
+            return None
+        if tool.get("type") in ("function", "custom") and tool.get("name"):
+            return str(tool["name"])
+        if tool.get("type") == "mcp" and tool.get("server_label"):
+            return str(tool["server_label"])
+        return None
 
     def _extract_and_transform_tools(
         self,
