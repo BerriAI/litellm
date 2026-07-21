@@ -114,11 +114,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/caching/_components/cache_settings/RedisTypeSelector.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/caching/_components/cache_settings/index.tsx": {
     "no-restricted-imports": {
       "count": 1

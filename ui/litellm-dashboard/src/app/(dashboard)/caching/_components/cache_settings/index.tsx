@@ -4,10 +4,19 @@ import { Form } from "antd";
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import RedisTypeSelector from "./RedisTypeSelector";
+import CacheOptionSelector from "./CacheOptionSelector";
 import CacheFieldSection from "./CacheFieldSection";
 import { EmbeddingModelOption } from "./CacheFormField";
-import { REDIS_TYPES, REDIS_TYPE_DESCRIPTIONS, RedisType } from "./cacheSettingsFields";
+import {
+  CACHE_TYPES,
+  CACHE_TYPE_DESCRIPTIONS,
+  CACHE_TYPE_LABELS,
+  CacheType,
+  REDIS_TYPES,
+  REDIS_TYPE_DESCRIPTIONS,
+  REDIS_TYPE_LABELS,
+  RedisType,
+} from "./cacheSettingsFields";
 import { buildCachePayload, buildInitialValues, CacheFormValues } from "./cacheSettingsUtils";
 
 interface CacheSettingsProps {
@@ -19,8 +28,14 @@ interface CacheSettingsProps {
 const toRedisType = (value: unknown): RedisType =>
   REDIS_TYPES.includes(value as RedisType) ? (value as RedisType) : "node";
 
+const toCacheType = (value: unknown): CacheType => (value === "redis-semantic" ? "semantic" : "standard");
+
+const CACHE_TYPE_OPTIONS = CACHE_TYPES.map((value) => ({ value, label: CACHE_TYPE_LABELS[value] }));
+const REDIS_TYPE_OPTIONS = REDIS_TYPES.map((value) => ({ value, label: REDIS_TYPE_LABELS[value] }));
+
 const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
   const [form] = Form.useForm<CacheFormValues>();
+  const [cacheType, setCacheType] = useState<CacheType>("standard");
   const [redisType, setRedisType] = useState<RedisType>("node");
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModelOption[]>([]);
   const [isTesting, setIsTesting] = useState<boolean>(false);
@@ -34,6 +49,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
       const data = (await getCacheSettingsCall(accessToken)) as { current_values?: Record<string, unknown> };
       const currentValues = data.current_values ?? {};
       form.setFieldsValue(buildInitialValues(currentValues));
+      setCacheType(toCacheType(currentValues.type));
       setRedisType(toRedisType(currentValues.redis_type));
     } catch (error) {
       console.error("Failed to load cache settings:", error);
@@ -81,7 +97,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
     try {
       const result = await testCacheConnectionCall(
         accessToken,
-        buildCachePayload(redisType, values, { forTesting: true }),
+        buildCachePayload(cacheType, redisType, values, { forTesting: true }),
       );
       if (result.status === "success") {
         NotificationsManager.success("Cache connection test successful!");
@@ -109,7 +125,10 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
 
     setIsSaving(true);
     try {
-      await updateCacheSettingsCall(accessToken, buildCachePayload(redisType, values, { forTesting: false }));
+      await updateCacheSettingsCall(
+        accessToken,
+        buildCachePayload(cacheType, redisType, values, { forTesting: false }),
+      );
       NotificationsManager.success("Cache settings updated successfully");
       await loadCacheSettings();
     } catch (error) {
@@ -132,26 +151,42 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
           <p className="text-xs text-gray-500 mt-1">Configure Redis cache for LiteLLM</p>
         </div>
 
-        <RedisTypeSelector
-          redisType={redisType}
-          redisTypeDescriptions={REDIS_TYPE_DESCRIPTIONS}
-          onTypeChange={(type) => setRedisType(toRedisType(type))}
+        <CacheOptionSelector
+          label="Cache Type"
+          value={cacheType}
+          options={CACHE_TYPE_OPTIONS}
+          descriptions={CACHE_TYPE_DESCRIPTIONS}
+          fallbackDescription="Select how cache lookups are performed"
+          onChange={(type) => setCacheType(type === "semantic" ? "semantic" : "standard")}
         />
+
+        {cacheType === "standard" && (
+          <CacheOptionSelector
+            label="Redis Type"
+            value={redisType}
+            options={REDIS_TYPE_OPTIONS}
+            descriptions={REDIS_TYPE_DESCRIPTIONS}
+            fallbackDescription="Select the type of Redis deployment you're using"
+            onChange={(type) => setRedisType(toRedisType(type))}
+          />
+        )}
 
         <div className="pt-4 border-t border-gray-200">
           <CacheFieldSection
             title="Connection Settings"
             section="connection"
+            cacheType={cacheType}
             redisType={redisType}
             embeddingModels={embeddingModels}
           />
         </div>
 
-        {redisType === "cluster" && (
+        {cacheType === "standard" && redisType === "cluster" && (
           <div className="pt-4 border-t border-gray-200">
             <CacheFieldSection
               title="Cluster Configuration"
               section="cluster"
+              cacheType={cacheType}
               redisType={redisType}
               embeddingModels={embeddingModels}
               gridCols="grid-cols-1 gap-6"
@@ -159,22 +194,24 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
           </div>
         )}
 
-        {redisType === "sentinel" && (
+        {cacheType === "standard" && redisType === "sentinel" && (
           <div className="pt-4 border-t border-gray-200">
             <CacheFieldSection
               title="Sentinel Configuration"
               section="sentinel"
+              cacheType={cacheType}
               redisType={redisType}
               embeddingModels={embeddingModels}
             />
           </div>
         )}
 
-        {redisType === "semantic" && (
+        {cacheType === "semantic" && (
           <div className="pt-4 border-t border-gray-200">
             <CacheFieldSection
               title="Semantic Configuration"
               section="semantic"
+              cacheType={cacheType}
               redisType={redisType}
               embeddingModels={embeddingModels}
             />
@@ -190,6 +227,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
               <CacheFieldSection
                 title="SSL Settings"
                 section="ssl"
+                cacheType={cacheType}
                 redisType={redisType}
                 embeddingModels={embeddingModels}
                 headingLevel="h5"
@@ -197,6 +235,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
               <CacheFieldSection
                 title="Cache Management"
                 section="cacheManagement"
+                cacheType={cacheType}
                 redisType={redisType}
                 embeddingModels={embeddingModels}
                 headingLevel="h5"
@@ -204,6 +243,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
               <CacheFieldSection
                 title="GCP Authentication"
                 section="gcp"
+                cacheType={cacheType}
                 redisType={redisType}
                 embeddingModels={embeddingModels}
                 headingLevel="h5"

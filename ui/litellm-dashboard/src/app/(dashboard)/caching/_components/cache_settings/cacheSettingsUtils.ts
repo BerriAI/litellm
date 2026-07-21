@@ -1,15 +1,18 @@
-import { CACHE_FIELDS, CacheField, CacheSection, RedisType } from "./cacheSettingsFields";
+import { CACHE_FIELDS, CacheField, CacheSection, CacheType, RedisType } from "./cacheSettingsFields";
 
 export type CacheFormValue = string | number | boolean | undefined;
 export type CacheFormValues = Record<string, CacheFormValue>;
 export type CacheSavePayloadValue = string | number | boolean | unknown[];
 export type CacheSavePayload = Record<string, CacheSavePayloadValue>;
 
-export const isFieldVisible = (field: CacheField, redisType: RedisType): boolean =>
-  field.redisType === null || field.redisType === redisType;
+export const isFieldVisible = (field: CacheField, cacheType: CacheType, redisType: RedisType): boolean => {
+  const matchesCacheType = field.cacheType === undefined || field.cacheType === cacheType;
+  const matchesRedisType = field.redisType === null || field.redisType === redisType;
+  return matchesCacheType && matchesRedisType;
+};
 
-export const fieldsForSection = (section: CacheSection, redisType: RedisType): CacheField[] =>
-  CACHE_FIELDS.filter((field) => field.section === section && isFieldVisible(field, redisType));
+export const fieldsForSection = (section: CacheSection, cacheType: CacheType, redisType: RedisType): CacheField[] =>
+  CACHE_FIELDS.filter((field) => field.section === section && isFieldVisible(field, cacheType, redisType));
 
 const initialValueForField = (field: CacheField, raw: unknown): CacheFormValue => {
   const source = raw ?? field.defaultValue;
@@ -66,13 +69,14 @@ const saveValueForField = (field: CacheField, raw: CacheFormValue): CacheSavePay
 };
 
 export const buildCachePayload = (
+  cacheType: CacheType,
   redisType: RedisType,
   values: CacheFormValues,
   { forTesting }: { forTesting: boolean },
 ): CacheSavePayload => {
-  const type = !forTesting && redisType === "semantic" ? "redis-semantic" : "redis";
+  const type = !forTesting && cacheType === "semantic" ? "redis-semantic" : "redis";
 
-  const entries = CACHE_FIELDS.filter((field) => isFieldVisible(field, redisType)).flatMap((field) => {
+  const entries = CACHE_FIELDS.filter((field) => isFieldVisible(field, cacheType, redisType)).flatMap((field) => {
     const value = saveValueForField(field, values[field.name]);
     return value === undefined ? [] : [[field.name, value] as const];
   });
