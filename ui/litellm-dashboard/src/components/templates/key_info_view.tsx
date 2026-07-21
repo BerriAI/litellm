@@ -19,6 +19,7 @@ import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
+import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useQueryClient } from "@tanstack/react-query";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -79,7 +80,9 @@ export default function KeyInfoView({
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
   const [isResetSpendModalOpen, setIsResetSpendModalOpen] = useState(false);
+  const [isBlockModalOpen, setIsBlockModalOpen] = useState(false);
   const { mutate: resetKeySpend, isPending: resetSpendLoading } = useResetKeySpend();
+  const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
@@ -390,13 +393,18 @@ export default function KeyInfoView({
       )) ||
     (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
 
-  const canResetSpend =
+  const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      ));
+    Boolean(
+      teamsData &&
+        isUserTeamAdminForSingleTeam(
+          teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
+          userID || "",
+        ),
+    );
+
+  const canResetSpend = isKeyAdmin;
+  const canBlockKey = isKeyAdmin;
 
   const handleResetSpend = () => {
     resetKeySpend(currentKeyData.token || currentKeyData.token_id, {
@@ -413,6 +421,29 @@ export default function KeyInfoView({
         console.error("Error resetting key spend:", error);
       },
     });
+  };
+
+  const isBlocked = currentKeyData.blocked === true;
+
+  const handleToggleBlocked = () => {
+    setKeyBlockedState(
+      { keyToken: currentKeyData.token || currentKeyData.token_id, blocked: !isBlocked },
+      {
+        onSuccess: (response) => {
+          const blocked = response.blocked === true;
+          setCurrentKeyData((prevData) => (prevData ? { ...prevData, blocked } : undefined));
+          if (onKeyDataUpdate) {
+            onKeyDataUpdate({ blocked });
+          }
+          NotificationManager.success(blocked ? "Key blocked" : "Key unblocked");
+          setIsBlockModalOpen(false);
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(parseErrorMessage(error));
+          console.error("Error updating key blocked state:", error);
+        },
+      },
+    );
   };
 
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
@@ -447,6 +478,8 @@ export default function KeyInfoView({
         onRegenerate={() => setIsRegenerateModalOpen(true)}
         onDelete={() => setIsDeleteModalOpen(true)}
         onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
+        onToggleBlocked={canBlockKey ? () => setIsBlockModalOpen(true) : undefined}
+        isBlocked={isBlocked}
         canModifyKey={canModifyKey}
         backButtonText={backButtonText}
         regenerateDisabled={!premiumUser}
@@ -516,6 +549,26 @@ export default function KeyInfoView({
         <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
           Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is preserved
           in logs. This resets the current period spend counter, the same as an automatic budget reset.
+        </p>
+      </Modal>
+
+      <Modal
+        title={isBlocked ? "Unblock Key" : "Block Key"}
+        open={isBlockModalOpen}
+        onOk={handleToggleBlocked}
+        onCancel={() => setIsBlockModalOpen(false)}
+        okText={isBlocked ? "Unblock" : "Block"}
+        okButtonProps={isBlocked ? undefined : { danger: true }}
+        confirmLoading={blockLoading}
+      >
+        <p>
+          {isBlocked ? "Unblock" : "Block"}{" "}
+          <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong>?
+        </p>
+        <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
+          {isBlocked
+            ? "Requests using this key will be accepted again."
+            : "Requests using this key will be rejected with a 401 error until it is unblocked. The key is not deleted and can be unblocked at any time."}
         </p>
       </Modal>
 
