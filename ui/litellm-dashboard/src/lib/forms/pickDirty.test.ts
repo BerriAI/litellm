@@ -197,3 +197,67 @@ describe("pickDirty against a real react-hook-form instance", () => {
     expect(patchOf(result)).toEqual({});
   });
 });
+
+describe("pickDirty picks up a pure reorder", () => {
+  // RHF compares each element to its default positionally by value, not by
+  // identity, so any reorder that changes the value at some index marks that
+  // index dirty and the whole array is sent. A reorder that leaves every index
+  // equal to its default is a value-level no-op whose payload is unchanged, so
+  // omitting it is correct.
+  const renderRows = (rows: Array<{ v: string }>) =>
+    renderHook(() => {
+      const form = useForm({ defaultValues: { rows } });
+      const fieldArray = useFieldArray({ control: form.control, name: "rows" });
+      void form.formState.dirtyFields;
+      return { form, fieldArray };
+    });
+
+  const patchOf = (result: { current: { form: ReturnType<typeof useForm<{ rows: Array<{ v: string }> }>> } }) =>
+    pickDirty(result.current.form.getValues(), result.current.form.formState.dirtyFields);
+
+  it("sends the whole array after useFieldArray.move()", () => {
+    const { result } = renderRows([{ v: "a" }, { v: "b" }, { v: "c" }]);
+
+    act(() => {
+      result.current.fieldArray.move(0, 2);
+    });
+
+    expect(patchOf(result)).toEqual({ rows: [{ v: "b" }, { v: "c" }, { v: "a" }] });
+  });
+
+  it("sends the whole array after useFieldArray.swap()", () => {
+    const { result } = renderRows([{ v: "a" }, { v: "b" }, { v: "c" }]);
+
+    act(() => {
+      result.current.fieldArray.swap(0, 2);
+    });
+
+    expect(patchOf(result)).toEqual({ rows: [{ v: "c" }, { v: "b" }, { v: "a" }] });
+  });
+
+  it("sends a reordered scalar array set through setValue", () => {
+    const { result } = renderHook(() => {
+      const form = useForm({ defaultValues: { models: ["a", "b", "c"] } });
+      void form.formState.dirtyFields;
+      return form;
+    });
+
+    act(() => {
+      result.current.setValue("models", ["c", "b", "a"], { shouldDirty: true });
+    });
+
+    expect(pickDirty(result.current.getValues(), result.current.formState.dirtyFields)).toEqual({
+      models: ["c", "b", "a"],
+    });
+  });
+
+  it("omits a swap of two equal elements, which is a value-level no-op", () => {
+    const { result } = renderRows([{ v: "a" }, { v: "b" }, { v: "a" }]);
+
+    act(() => {
+      result.current.fieldArray.swap(0, 2);
+    });
+
+    expect(patchOf(result)).toEqual({});
+  });
+});
