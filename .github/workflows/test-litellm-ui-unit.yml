@@ -9,6 +9,9 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
+  push:
+    branches:
+      - litellm_internal_staging
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -16,13 +19,8 @@ concurrency:
 
 jobs:
   ui-unit-tests:
-    name: Vitest (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ui/litellm-dashboard
@@ -31,6 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node.js
@@ -46,9 +45,13 @@ jobs:
       - name: Run UI unit tests (Vitest)
         env:
           CI: "true"
-          SHARD_INDEX: ${{ matrix.shard }}
-          SHARD_TOTAL: ${{ strategy.job-total }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          npm run test -- --run \
-            --shard="$SHARD_INDEX/$SHARD_TOTAL" \
-            --pool forks --poolOptions.forks.maxForks=4
+          if [ -n "$BASE_SHA" ]; then
+            echo "Pull request: running only tests related to changes since $BASE_SHA"
+            npm run test -- --run --changed "$BASE_SHA" --passWithNoTests \
+              --pool forks --poolOptions.forks.maxForks=4
+          else
+            echo "Push to $GITHUB_REF_NAME: running the full suite"
+            npm run test -- --run --pool forks --poolOptions.forks.maxForks=4
+          fi
