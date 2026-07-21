@@ -260,6 +260,16 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
   return (
     <TabGroup className="gap-2 p-8 h-full w-full mt-2 mb-8">
+      <div className="mb-2">
+        <h1 className="text-2xl font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+          Response Caching
+        </h1>
+        <Text className="mt-1">
+          Analytics and settings for LiteLLM&apos;s response cache, which returns a stored response for repeated
+          requests instead of calling the provider again. This is separate from provider prompt caching; prompt caching
+          is configured under Settings and its per-request activity shows up as prompt cache tokens on the Logs page
+        </Text>
+      </div>
       <TabList className="flex justify-between mt-2 w-full items-center">
         <div className="flex">
           <Tab>Cache Analytics</Tab>
