@@ -6,7 +6,7 @@ import random
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 from litellm._logging import verbose_logger
@@ -138,7 +138,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         self._periodic_flush_task: Optional[asyncio.Task[Any]] = self._start_periodic_flush_task()
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         """Return the guardrail event hooks this integration supports.
 
         Prompt moderation (``pre_call``) evaluates the user's message before
