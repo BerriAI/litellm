@@ -540,6 +540,47 @@ class TestAgentRBACProxyAdmin:
             assert resp.status_code == 200
 
 
+class TestAgentProtocolVersionValidation:
+    """Registration accepts spec-default semver protocolVersion values and still
+    rejects genuinely unsupported versions."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        self.admin_client = _make_app_with_role(LitellmUserRoles.PROXY_ADMIN)
+        self.mock_registry = MagicMock()
+        monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", self.mock_registry)
+
+    def _create_agent_with_protocol_version(self, protocol_version: str):
+        config = _sample_agent_config()
+        config["agent_card_params"]["protocolVersion"] = protocol_version
+        with patch("litellm.proxy.proxy_server.prisma_client"):
+            self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
+            self.mock_registry.add_agent_to_db = AsyncMock(
+                return_value=_sample_agent_response()
+            )
+            self.mock_registry.register_agent = MagicMock()
+            return self.admin_client.post(
+                "/v1/agents",
+                json=config,
+                headers={"Authorization": "Bearer k"},
+            )
+
+    def test_semver_protocol_version_registers_and_stores_major_minor(self):
+        resp = self._create_agent_with_protocol_version("0.3.0")
+        assert resp.status_code == 200
+        stored_card = self.mock_registry.add_agent_to_db.await_args.kwargs["agent"][
+            "agent_card_params"
+        ]
+        assert stored_card["protocolVersion"] == "0.3"
+        assert stored_card["supportedInterfaces"][0]["protocolVersion"] == "0.3"
+
+    def test_unsupported_protocol_version_is_rejected(self):
+        resp = self._create_agent_with_protocol_version("0.2.6")
+        assert resp.status_code == 400
+        assert "Unsupported protocolVersion '0.2.6'" in resp.json()["detail"]
+        self.mock_registry.add_agent_to_db.assert_not_awaited()
+
+
 class TestCheckAgentManagementPermission:
     """Unit tests for the _check_agent_management_permission helper."""
 
