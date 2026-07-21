@@ -44,6 +44,7 @@ class McpServerNewResponse(BaseModel):
 
 class McpServerRow(BaseModel):
     server_id: str
+    server_name: str | None = None
     alias: str | None = None
     url: str | None = None
 
