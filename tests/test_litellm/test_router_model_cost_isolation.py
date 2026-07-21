@@ -803,6 +803,8 @@ def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
             "litellm_provider": "openai",
             "max_tokens": 128000,
             "supports_vision": True,
+            "supported_endpoints": ["/v1/responses"],
+            "use_openai_responses_path": True,
             "input_cost_per_token": 0.99,
             "output_cost_per_token": 0.99,
             "id": "deploy-a",
@@ -818,7 +820,57 @@ def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
         "litellm_provider": "openai",
         "max_tokens": 128000,
         "supports_vision": True,
+        "supported_endpoints": ["/v1/responses"],
+        "use_openai_responses_path": True,
     }
+
+
+def test_capability_flags_propagate_from_deployment_model_info_to_shared_key():
+    """Backend-model capability facts (supported_endpoints,
+    use_openai_responses_path) declared in a deployment's model_info must reach
+    the shared backend key: the Bedrock Mantle routing gates read them raw off
+    litellm.model_cost and document proxy model_info as an override path for
+    models missing from the built-in cost map.
+    """
+    from litellm.llms.bedrock_mantle.common_utils import (
+        mantle_base_segment,
+        mantle_supports_responses,
+    )
+
+    bare_model = "somelab.lit4544-unmapped-model"
+    backend_model = f"bedrock_mantle/{bare_model}"
+    deploy_id = "lit4544-mantle-deploy"
+
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (bare_model, backend_model, deploy_id)
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "mantle-alias",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                    },
+                    "model_info": {
+                        "id": deploy_id,
+                        "supported_endpoints": ["/v1/responses"],
+                        "use_openai_responses_path": True,
+                    },
+                },
+            ],
+        )
+
+        shared_entry = litellm.model_cost.get(backend_model) or {}
+        assert shared_entry.get("supported_endpoints") == ["/v1/responses"]
+        assert shared_entry.get("use_openai_responses_path") is True
+        assert "id" not in shared_entry
+        assert mantle_supports_responses(bare_model, litellm.model_cost) is True
+        assert mantle_base_segment(bare_model, litellm.model_cost) == "openai/v1"
+    finally:
+        _restore_model_cost_entries(model_keys)
 
 
 def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
