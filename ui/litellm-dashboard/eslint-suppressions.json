@@ -1877,11 +1877,6 @@
       "count": 1
     }
   },
-  "src/components/model_add/credentials.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/model_add/reuse_credentials.tsx": {
     "no-restricted-imports": {
       "count": 1
