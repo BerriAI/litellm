@@ -285,11 +285,15 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
             {agent.object_permission &&
               (agent.object_permission.mcp_servers?.length ||
                 agent.object_permission.mcp_access_groups?.length ||
+                agent.object_permission.mcp_can_delegate ||
                 (agent.object_permission.mcp_tool_permissions &&
                   Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
                 <div style={{ marginTop: 24 }}>
                   <Title>MCP Tool Permissions</Title>
                   <Descriptions bordered column={1} style={{ marginTop: 16 }}>
+                    {agent.object_permission.mcp_can_delegate && (
+                      <Descriptions.Item label="Can act on behalf of users (delegation)">Yes</Descriptions.Item>
+                    )}
                     {agent.object_permission.mcp_servers && agent.object_permission.mcp_servers.length > 0 && (
                       <Descriptions.Item label="MCP Servers">
                         {agent.object_permission.mcp_servers.join(", ")}

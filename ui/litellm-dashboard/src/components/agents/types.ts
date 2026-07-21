@@ -8,6 +8,7 @@ export interface AgentObjectPermission {
   mcp_servers?: string[];
   mcp_access_groups?: string[];
   mcp_tool_permissions?: Record<string, string[]>;
+  mcp_can_delegate?: boolean;
 }
 
 export interface Agent {

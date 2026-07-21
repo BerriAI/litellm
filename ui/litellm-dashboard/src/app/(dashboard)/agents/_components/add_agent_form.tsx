@@ -265,14 +265,19 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       const mcpToolPermissions = values.mcp_tool_permissions || {};
       const entitlementModels = values.entitlement_models || [];
       const entitlementAgents = values.entitlement_agents || [];
+      const canDelegate = values.mcp_can_delegate === true;
       const hasObjectPermission =
         mcpServersAndGroups?.servers?.length > 0 ||
         mcpServersAndGroups?.accessGroups?.length > 0 ||
         Object.keys(mcpToolPermissions).length > 0 ||
         entitlementModels.length > 0 ||
-        entitlementAgents.length > 0;
+        entitlementAgents.length > 0 ||
+        canDelegate;
       if (hasObjectPermission) {
         agentData.object_permission = {};
+        if (canDelegate) {
+          agentData.object_permission.mcp_can_delegate = true;
+        }
         if (mcpServersAndGroups?.servers?.length > 0) {
           agentData.object_permission.mcp_servers = mcpServersAndGroups.servers;
         }
@@ -466,6 +471,22 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             />
           </div>
         )}
+      </Form.Item>
+      <Form.Item
+        label={
+          <span>
+            Can act on behalf of users (delegation)
+            <InfoCircleOutlined
+              title="Allow this agent to make MCP tool calls on behalf of a user who has consented. The call is limited to the intersection of the agent's and the user's access."
+              style={{ marginLeft: "4px" }}
+            />
+          </span>
+        }
+        name="mcp_can_delegate"
+        valuePropName="checked"
+        initialValue={false}
+      >
+        <Switch />
       </Form.Item>
     </div>
   );
