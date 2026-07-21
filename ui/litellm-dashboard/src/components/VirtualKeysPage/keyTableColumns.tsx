@@ -46,7 +46,11 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
   if (!Number.isNaN(expiresAt) && expiresAt < Date.now()) {
     return { tone: "warning", label: "Expired", tooltip: "This key has passed its expiry date." };
   }
-  return { tone: "success", label: "Active" };
+  return {
+    tone: "success",
+    label: "Active",
+    tooltip: "This key is not blocked and has not expired.",
+  };
 };
 
 const UserPopoverCell = ({
