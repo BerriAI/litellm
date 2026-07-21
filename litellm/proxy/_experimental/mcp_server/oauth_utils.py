@@ -465,7 +465,10 @@ def _raise_trusted_redirect_uri_rejected(
         "Align the proxy public URL with the browser URL. Set PROXY_BASE_URL to your "
         "HTTPS origin (e.g. https://litellm.example.com), or enable "
         "general_settings.use_x_forwarded_for with mcp_trusted_proxy_ranges for your "
-        "ingress. Verify: curl https://<host>/.well-known/oauth-authorization-server "
+        "ingress. If the redirect_uri is a legitimate separate-origin OAuth client "
+        "(e.g. a web app registering with the proxy from another host via dynamic client "
+        f"registration), add its origin to {_TRUSTED_REDIRECT_ORIGINS_ENV}. "
+        "Verify: curl https://<host>/.well-known/oauth-authorization-server "
         "| jq .issuer — issuer must match window.location.origin in the UI."
     )
 

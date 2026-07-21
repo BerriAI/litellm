@@ -54,6 +54,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Promptguard: "promptguard",
   LlmAsAJudge: "llm_as_a_judge",
   Xecguard: "xecguard",
+  Deepkeep: "deepkeep",
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
 };
@@ -164,6 +165,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
   "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
   Akto: `${asset_logos_folder}akto.svg`,
+  "DeepKeep AI Firewall": `${asset_logos_folder}deepkeep.svg`,
   "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
   "RepelloAI Argus": `${asset_logos_folder}repelloai.png`,
   Straiker: `${asset_logos_folder}straiker.svg`,

@@ -10,13 +10,15 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import NoBody, Result, Success, unwrap
+from lifecycle import ResourceManager
 from models import (
     ChatBody,
     ChatMessage,
     ChatResponse,
     KeyGenerateBody,
+    LiteLLMParamsBody,
     TeamDeleteBody,
     TeamInfoParams,
     TeamInfoResponse,
@@ -54,7 +56,33 @@ class BedrockGuardrailParamsBody(GuardrailParamsBase):
     aws_region_name: str | None = None
 
 
-GuardrailParamsBody = ContentFilterParamsBody | BedrockGuardrailParamsBody
+class OpenAIModerationParamsBody(GuardrailParamsBase):
+    guardrail: Literal["openai_moderation"] = "openai_moderation"
+    api_key: str | None = None
+    model: str | None = None
+
+
+class PresidioParamsBody(GuardrailParamsBase):
+    guardrail: Literal["presidio"] = "presidio"
+    presidio_analyzer_api_base: str | None = None
+    presidio_anonymizer_api_base: str | None = None
+    # apply_to_output masks PII the model itself emitted, which also makes the
+    # guardrail run post_call. logging_only masks what the proxy logs.
+    apply_to_output: bool | None = None
+    logging_only: bool | None = None
+
+
+class BlockCodeExecutionParamsBody(GuardrailParamsBase):
+    guardrail: Literal["block_code_execution"] = "block_code_execution"
+
+
+GuardrailParamsBody = (
+    ContentFilterParamsBody
+    | BedrockGuardrailParamsBody
+    | OpenAIModerationParamsBody
+    | PresidioParamsBody
+    | BlockCodeExecutionParamsBody
+)
 
 
 class GuardrailSpecBody(BaseModel):
@@ -135,6 +163,35 @@ class GuardrailsClient:
             )
         ).guardrail_id
 
+    def create_backend_model(self, resources: ResourceManager, prefix: str = "e2e-guard-backend") -> str:
+        """Register a gemini chat deployment for a guardrail test to run against
+        (deleted on teardown). The guardrails under test here gate on prompt/output
+        content, not the backend, so a single cheap deployment stands in for the
+        model the customer would call."""
+        model_name = f"{prefix}-{unique_marker()}"
+        model_id = self.proxy.create_model(
+            model_name,
+            LiteLLMParamsBody(model="gemini/gemini-2.5-flash", api_key="os.environ/GEMINI_API_KEY"),
+        )
+        resources.defer(lambda: self.proxy.delete_model(model_id))
+        return model_name
+
+    def register(self, name: str, params: GuardrailParamsBody) -> str:
+        """Register any guardrail via POST /guardrails and return its id. New
+        built-ins register with default_on=False and are opted into per request
+        via the chat body's `guardrails` list, so one guardrail under test never
+        intercepts unrelated traffic on the shared proxy."""
+        return unwrap(
+            self.proxy.transport.post(
+                "/guardrails",
+                headers=self.proxy.transport.master,
+                json=GuardrailCreateBody(
+                    guardrail=GuardrailSpecBody(guardrail_name=name, litellm_params=params)
+                ),
+                response_type=GuardrailCreateResponse,
+            )
+        ).guardrail_id
+
     def delete_guardrail(self, guardrail_id: str) -> None:
         _ = self.proxy.transport.delete(
             f"/guardrails/{guardrail_id}",
@@ -171,13 +228,27 @@ class GuardrailsClient:
             KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user")
         )
 
-    def chat(self, key: str, model: str, text: str) -> Result[ChatResponse]:
+    def chat(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 16,
+    ) -> Result[ChatResponse]:
+        """Drive a chat call, optionally opting into named guardrails for this
+        request only (the per-request `guardrails` selector). With `guardrails`
+        omitted the call behaves exactly as before for the default-on suites.
+        `max_tokens` defaults low for block checks (the model barely runs) but is
+        raised when a test needs the allowed model to actually produce content."""
         return self.proxy.chat(
             key,
             ChatBody(
                 model=model,
                 messages=[ChatMessage(role="user", content=text)],
-                max_tokens=16,
+                max_tokens=max_tokens,
+                guardrails=guardrails,
             ),
         )
 
