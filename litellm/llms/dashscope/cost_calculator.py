@@ -111,9 +111,7 @@ def _calculate_completion_cost(
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
 
-def _calculate_prompt_cost_embedding(
-    breakdown: TokenBreakdown, model_info: ModelInfo
-) -> float:
+def _calculate_prompt_cost_embedding(breakdown: TokenBreakdown, model_info: ModelInfo) -> float:
     text_unit_price = float(model_info.get("input_cost_per_token") or 0.0)
     image_token_price = model_info.get("input_cost_per_image_token")
     if image_token_price is not None and breakdown.image_tokens:
@@ -139,10 +137,11 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     try:
         model_info = get_model_info(model=model, custom_llm_provider="dashscope")
-    except Exception:
+    except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
         import logging
+
         logging.getLogger(__name__).warning(
-            "No pricing entry found for dashscope model=%s; returning 0 cost", model
+            "No pricing entry found for dashscope model=%s (%s); returning 0 cost", model, e
         )
         return 0.0, 0.0
 
