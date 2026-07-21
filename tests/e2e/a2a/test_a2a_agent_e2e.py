@@ -14,6 +14,7 @@ import pytest
 
 from a2a_client import (
     A2ABridgeParams,
+    A2ACapabilities,
     A2AClient,
     A2AJsonRpcRequest,
     A2AMessageSendParams,
@@ -25,7 +26,7 @@ from a2a_client import (
     AgentResponse,
 )
 from e2e_config import unique_marker
-from e2e_http import UnknownApiError, unwrap
+from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 
 BRIDGE = A2ABridgeParams(custom_llm_provider="anthropic", model="claude-haiku-4-5")
@@ -51,6 +52,50 @@ def _register(client: A2AClient, resources: ResourceManager, protocol_version: s
     return agent
 
 
+def _google_sdk_default_card(marker: str) -> AgentCardParams:
+    """Field-for-field the card the Google a2a-sdk 0.3.x line serves for its helloworld
+    sample, whose ``AgentCard`` defaults ``protocolVersion`` to the full semver "0.3.0"
+    (the shape the v1.92 regression rejected); ``url`` and ``name`` are the
+    deployment-specific fields the SDK requires callers to fill. The url points at a
+    reserved example host: a url-bearing card makes message/send dial that upstream
+    rather than the completion bridge, so the verbatim-card test asserts registration
+    and card serving only."""
+    return AgentCardParams(
+        protocol_version="0.3.0",
+        name=f"E2E A2A sdk {marker}",
+        description="Just a hello world agent",
+        version="1.0.0",
+        url="http://e2e-a2a-upstream.example/",
+        capabilities=A2ACapabilities(streaming=True),
+        skills=[
+            A2ASkill(
+                id="hello_world",
+                name="Returns hello world",
+                description="just returns hello world",
+                tags=["hello world"],
+                examples=["hi", "hello world"],
+            )
+        ],
+        preferred_transport="JSONRPC",
+    )
+
+
+def _register_rejection(client: A2AClient, protocol_version: str) -> Result[AgentResponse]:
+    marker = unique_marker()
+    body = AgentRegisterBody(
+        agent_name=f"e2e-a2a-bad-{marker}",
+        agent_card_params=AgentCardParams(
+            protocol_version=protocol_version,
+            name=f"E2E A2A bad {marker}",
+            description="rejected at registration",
+            version="1.0.0",
+            skills=[A2ASkill(id="chat", name="Chat", description="c", tags=["chat"])],
+        ),
+        litellm_params=BRIDGE,
+    )
+    return client.register_agent(body)
+
+
 def _ask(text: str) -> A2AJsonRpcRequest:
     return A2AJsonRpcRequest(
         id=f"e2e-{unique_marker()}",
@@ -72,12 +117,30 @@ class TestA2AAgentLifecycle:
     @pytest.mark.covers("other.a2a.register.semver_version_accepted")
     def test_semver_protocol_version_registers_and_serves(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
         agent = _register(client, resources, "0.3.0")
-        assert agent.agent_card_params.protocol_version.startswith("0.3")
+        assert agent.agent_card_params.protocol_version == "0.3"
         card = unwrap(client.agent_card(agent.agent_id, scoped_key))
-        assert card.protocol_version.startswith("0.3")
+        assert card.protocol_version == "0.3"
+        assert card.supported_interfaces is not None
+        assert card.supported_interfaces[0].protocol_version == "0.3"
         result = unwrap(client.send_message(agent.agent_id, scoped_key, _ask("Say hi in one word"))).result
         assert result is not None
         assert result.text != ""
+
+    @pytest.mark.covers("other.a2a.register.sdk_default_card_accepted")
+    def test_google_sdk_default_card_registers_verbatim(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
+        marker = unique_marker()
+        body = AgentRegisterBody(
+            agent_name=f"e2e-a2a-sdk-{marker}",
+            agent_card_params=_google_sdk_default_card(marker),
+            litellm_params=BRIDGE,
+        )
+        agent = unwrap(client.register_agent(body))
+        resources.defer(lambda: client.delete_agent(agent.agent_id))
+        assert agent.agent_card_params.protocol_version == "0.3"
+        card = unwrap(client.agent_card(agent.agent_id, scoped_key))
+        assert card.protocol_version == "0.3"
+        assert card.supported_interfaces is not None
+        assert card.supported_interfaces[0].protocol_version == "0.3"
 
     @pytest.mark.covers("other.a2a.discovery.proxy_fronted_card")
     def test_discovery_card_is_proxy_fronted(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
@@ -127,23 +190,21 @@ class TestA2AAgentLifecycle:
         assert result.text != ""
 
     @pytest.mark.covers("other.a2a.register.unsupported_version_rejected")
-    def test_unsupported_protocol_version_rejected(self, client: A2AClient, resources: ResourceManager) -> None:
-        marker = unique_marker()
-        body = AgentRegisterBody(
-            agent_name=f"e2e-a2a-bad-{marker}",
-            agent_card_params=AgentCardParams(
-                protocol_version="9.9",
-                name=f"E2E A2A bad {marker}",
-                description="unsupported version",
-                version="1.0.0",
-                skills=[A2ASkill(id="chat", name="Chat", description="c", tags=["chat"])],
-            ),
-            litellm_params=BRIDGE,
-        )
-        result = client.register_agent(body)
+    def test_unsupported_protocol_version_rejected(self, client: A2AClient) -> None:
+        result = _register_rejection(client, "9.9")
         match result:
             case UnknownApiError(status_code=status, body=detail):
                 assert status == 400
                 assert "protocolVersion" in detail
             case _:
                 pytest.fail(f"expected 400 for unsupported protocolVersion, got {result}")
+
+    @pytest.mark.covers("other.a2a.register.malformed_version_rejected")
+    def test_malformed_protocol_version_rejected(self, client: A2AClient) -> None:
+        result = _register_rejection(client, "0.3.garbage")
+        match result:
+            case UnknownApiError(status_code=status, body=detail):
+                assert status == 400
+                assert "Unsupported protocolVersion '0.3.garbage'" in detail
+            case _:
+                pytest.fail(f"expected 400 for malformed protocolVersion, got {result}")

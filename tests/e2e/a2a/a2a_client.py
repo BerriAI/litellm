@@ -30,6 +30,7 @@ class A2ASkill(BaseModel):
     name: str
     description: str
     tags: list[str]
+    examples: list[str] | None = None
 
 
 class AgentCardParams(BaseModel):
@@ -40,10 +41,12 @@ class AgentCardParams(BaseModel):
     name: str
     description: str
     version: str
+    url: str | None = None
     capabilities: A2ACapabilities = A2ACapabilities()
     skills: list[A2ASkill]
     default_input_modes: list[str] = Field(default=["text"], serialization_alias="defaultInputModes")
     default_output_modes: list[str] = Field(default=["text"], serialization_alias="defaultOutputModes")
+    preferred_transport: str | None = Field(default=None, serialization_alias="preferredTransport")
 
 
 class A2ABridgeParams(BaseModel):
