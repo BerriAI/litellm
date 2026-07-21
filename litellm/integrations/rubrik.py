@@ -477,10 +477,28 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         for message in messages or []:
             if not isinstance(message, dict):
                 continue
+            # Base text content (flattens Anthropic content-part arrays)
+            parts = [convert_content_list_to_str(message)]  # pyright: ignore[reportArgumentType]  # dict[str,Any] is AllMessageValues at runtime
+
+            # Tool-call arguments in assistant messages are attacker-controlled
+            # text that must be evaluated by the webhook alongside content.
+            for tc in message.get("tool_calls") or []:
+                if isinstance(tc, dict):
+                    args = (tc.get("function") or {}).get("arguments")
+                    if args:
+                        parts.append(str(args))
+
+            # Deprecated function_call format
+            fc = message.get("function_call")
+            if isinstance(fc, dict):
+                args = fc.get("arguments")
+                if args:
+                    parts.append(str(args))
+
             flattened.append(
                 {
                     "role": message.get("role"),
-                    "content": convert_content_list_to_str(message),  # pyright: ignore[reportArgumentType]  # dict[str,Any] is AllMessageValues at runtime
+                    "content": "\n".join(p for p in parts if p),
                 }
             )
         return flattened
