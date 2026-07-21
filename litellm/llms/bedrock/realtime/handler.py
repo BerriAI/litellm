@@ -7,7 +7,9 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 import asyncio
 import contextlib
 import json
-from typing import Any, Optional
+from typing import Any, List, Optional
+
+from pydantic import TypeAdapter
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -15,6 +17,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
+
+_CLIENT_MODALITIES_ADAPTER: TypeAdapter[Optional[List[str]]] = TypeAdapter(Optional[List[str]])
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -124,6 +128,9 @@ class BedrockRealtime(BaseAWSLLM):
 
             verbose_proxy_logger.debug("Bedrock Realtime: Bidirectional stream established")
 
+            await websocket.send_text(json.dumps(transformation_config.session_created_event(model, logging_obj)))
+            verbose_proxy_logger.debug("Bedrock Realtime: sent session.created to client on connect")
+
             # Track state for transformation
             session_state = {
                 "current_output_item_id": None,
@@ -143,6 +150,7 @@ class BedrockRealtime(BaseAWSLLM):
                     transformation_config,
                     model,
                     session_state,
+                    logging_obj,
                 )
             )
 
@@ -179,6 +187,7 @@ class BedrockRealtime(BaseAWSLLM):
         transformation_config: BedrockRealtimeConfig,
         model: str,
         session_state: dict,
+        logging_obj: Optional[LiteLLMLogging] = None,
     ):
         """Forward messages from client WebSocket to Bedrock stream."""
         from aws_sdk_bedrock_runtime.models import (
@@ -209,6 +218,23 @@ class BedrockRealtime(BaseAWSLLM):
                 # Send transformed messages to Bedrock
                 for bedrock_message in transformed_messages:
                     await send_to_bedrock(bedrock_message)
+
+                if logging_obj is not None:
+                    client_message_type: Optional[str] = None
+                    requested_modalities: Optional[List[str]] = None
+                    with contextlib.suppress(Exception):
+                        parsed_client_message = json.loads(message)
+                        client_message_type = parsed_client_message.get("type")
+                        if client_message_type == "session.update":
+                            requested_modalities = _CLIENT_MODALITIES_ADAPTER.validate_python(
+                                parsed_client_message.get("session", {}).get("modalities")
+                            )
+                    if client_message_type == "session.update":
+                        await client_ws.send_text(
+                            json.dumps(
+                                transformation_config.session_updated_event(model, logging_obj, requested_modalities)
+                            )
+                        )
 
         except Exception as e:
             verbose_proxy_logger.debug(f"Client to Bedrock forwarding ended: {e}", exc_info=True)
