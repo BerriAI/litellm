@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from e2e_config import require_env, unique_marker
 from e2e_http import StreamingResponse, unwrap
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatResponse, ChatTool, ChatToolFunction, LiteLLMParamsBody
+from models import ChatBody, ChatMessage, ChatResponse, ChatTool, ChatToolFunction, LiteLLMParamsBody, ThinkingParam
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
@@ -482,3 +482,33 @@ class TestBedrockConverseChatCompletions:
             )
         )
         _assert_weather_tool_call(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.bedrock_converse.thinking.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_bedrock_converse_chat_returns_reasoning(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-bedrock-thinking")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[ChatMessage(role="user", content="What is 17 times 23? Think it through step by step.")],
+                    thinking=ThinkingParam(type="enabled", budget_tokens=1024),
+                    max_tokens=2048,
+                ),
+            )
+        )
+        assert response.choices, f"bedrock thinking returned no choices: {response}"
+        message = response.choices[0].message
+        assert message and message.content and message.content.strip(), (
+            f"bedrock thinking returned no answer content: {response}"
+        )
+        assert message.reasoning_content and message.reasoning_content.strip(), (
+            "thinking was enabled but no reasoning_content came back on the Bedrock Converse path"
+        )
