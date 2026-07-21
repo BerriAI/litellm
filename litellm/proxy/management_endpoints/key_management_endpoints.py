@@ -2250,6 +2250,12 @@ async def _validate_mcp_servers_for_key_update(
     return normalized_object_permission
 
 
+def _budget_limit_state(
+    budget_limits: list[BudgetLimitEntry] | None,
+) -> tuple[tuple[str, float], ...]:
+    return tuple((window.budget_duration, window.max_budget) for window in budget_limits or [])
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: Any,
@@ -2322,20 +2328,21 @@ async def _validate_update_key_data(
     # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
     #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
     #   / key-owner / team-admin / org-admin of the key).
-    # - max_budget / spend / budget_limits: always require the admin
-    #   check, even for the key owner or a team member (matches the
-    #   existing admin-only budget semantics).  budget_limits uses
-    #   model_fields_set because an explicit null/[] clears the field
-    #   and must gate the same as setting or changing it.
     # - spend gates on presence alone (not a value diff): the DB spend
     #   lags the live cross-pod counter, so letting an "unchanged" spend
     #   through the non-admin path would let a key owner / team member
     #   overwrite the live counter below real usage and silently weaken
     #   enforcement.
+    _existing_budget_limits = [
+        BudgetLimitEntry.model_validate(window) for window in (getattr(existing_key_row, "budget_limits", None) or [])
+    ]
+    _budget_limits_changed = "budget_limits" in data.model_fields_set and _budget_limit_state(
+        data.budget_limits
+    ) != _budget_limit_state(_existing_budget_limits)
     _is_budget_change = (
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
-        or "budget_limits" in data.model_fields_set
+        or _budget_limits_changed
     )
 
     _existing_metadata = getattr(existing_key_row, "metadata", None)
