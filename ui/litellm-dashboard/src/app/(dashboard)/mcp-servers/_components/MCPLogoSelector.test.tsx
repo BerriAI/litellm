@@ -52,4 +52,23 @@ describe("MCPLogoSelector", () => {
     await user.click(githubButton);
     expect(onChange).toHaveBeenCalledWith(undefined);
   });
+
+  it("should render grid logos from bundled static assets instead of public paths", () => {
+    render(<MCPLogoSelector />);
+    const src = screen.getByAltText("GitHub").getAttribute("src");
+    expect(src).toMatch(/^\/_next\//);
+    expect(src).toContain("github.svg");
+  });
+
+  it("should preview a stored well-known path via its bundled asset", () => {
+    render(<MCPLogoSelector value="/ui/assets/logos/github.svg" />);
+    const src = screen.getByAltText("Selected logo").getAttribute("src");
+    expect(src).toMatch(/^\/_next\//);
+    expect(src).toContain("github.svg");
+  });
+
+  it("should preview a custom external URL untouched", () => {
+    render(<MCPLogoSelector value="https://cdn.example.com/logo.png" />);
+    expect(screen.getByAltText("Selected logo").getAttribute("src")).toBe("https://cdn.example.com/logo.png");
+  });
 });

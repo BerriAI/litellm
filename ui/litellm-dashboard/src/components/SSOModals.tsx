@@ -4,6 +4,8 @@ import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 import { parseErrorMessage } from "./shared/errorUtils";
+import { Logo } from "@/components/molecules/logo/Logo";
+import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./Settings/AdminSettings/SSOSettings/constants";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;
@@ -17,13 +19,6 @@ interface SSOModalsProps {
   accessToken: string | null;
   ssoConfigured?: boolean; // Add optional prop to indicate if SSO is configured
 }
-
-const ssoProviderLogoMap: Record<string, string> = {
-  google: "https://artificialanalysis.ai/img/logos/google_small.svg",
-  microsoft: "https://upload.wikimedia.org/wikipedia/commons/a/a8/Microsoft_Azure_Logo.svg",
-  okta: "https://www.okta.com/sites/default/files/Okta_Logo_BrightBlue_Medium.png",
-  generic: "",
-};
 
 // Define the SSO provider configuration type
 interface SSOProviderConfig {
@@ -340,17 +335,14 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                   <Select.Option key={value} value={value}>
                     <div style={{ display: "flex", alignItems: "center", padding: "4px 0" }}>
                       {logo && (
-                        <img
+                        <Logo
                           src={logo}
-                          alt={value}
-                          style={{ height: 24, width: 24, marginRight: 12, objectFit: "contain" }}
+                          label={ssoProviderDisplayNames[value] || value}
+                          className="h-6 w-6 mr-3 object-contain"
                         />
                       )}
                       <span>
-                        {value.toLowerCase() === "okta"
-                          ? "Okta / Auth0"
-                          : value.charAt(0).toUpperCase() + value.slice(1)}{" "}
-                        SSO
+                        {ssoProviderDisplayNames[value] || value.charAt(0).toUpperCase() + value.slice(1) + " SSO"}
                       </span>
                     </div>
                   </Select.Option>

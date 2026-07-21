@@ -41,3 +41,17 @@ describe("AddGuardrailForm close behavior", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("AddGuardrailForm provider options", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders provider options with logos from the bundled guardrail logo map", async () => {
+    renderForm();
+    fireEvent.mouseDown(screen.getByLabelText("Guardrail Provider"));
+
+    const logo = await screen.findByAltText("Presidio PII logo");
+    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+  });
+});
