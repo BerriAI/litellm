@@ -10,8 +10,8 @@ import {
   CredentialItem,
 } from "@/components/networking";
 import { VectorStore } from "@/components/vector_store_management/types";
-import { Providers, providerLogoMap, provider_map } from "@/components/provider_info_helpers";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Providers, provider_map, getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 import VectorStoreTester from "./VectorStoreTester";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
@@ -181,23 +181,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                             return (
                               <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
                                 <div className="flex items-center space-x-2">
-                                  <img
-                                    src={resolveLogoSrc(providerLogoMap[providerDisplayName])}
-                                    alt={`${providerEnum} logo`}
-                                    className="w-5 h-5"
-                                    onError={(e) => {
-                                      // Create a div with provider initial as fallback
-                                      const target = e.target as HTMLImageElement;
-                                      const parent = target.parentElement;
-                                      if (parent) {
-                                        const fallbackDiv = document.createElement("div");
-                                        fallbackDiv.className =
-                                          "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                        fallbackDiv.textContent = providerDisplayName.charAt(0);
-                                        parent.replaceChild(fallbackDiv, target);
-                                      }
-                                    }}
-                                  />
+                                  <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
                                   <span>{providerDisplayName}</span>
                                 </div>
                               </Select2.Option>
@@ -292,43 +276,11 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       <div className="flex items-center space-x-2 mt-1">
                         {(() => {
                           const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
-                          const { displayName, logo } = (() => {
-                            // Find the enum key by matching provider_map values
-                            const enumKey = Object.keys(provider_map).find(
-                              (key) => provider_map[key].toLowerCase() === provider.toLowerCase(),
-                            );
-
-                            if (!enumKey) {
-                              return { displayName: provider, logo: "" };
-                            }
-
-                            // Get the display name from Providers enum and logo from map
-                            const displayName = Providers[enumKey as keyof typeof Providers];
-                            const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
-
-                            return { displayName, logo };
-                          })();
+                          const { displayName } = getProviderLogoAndName(provider);
 
                           return (
                             <>
-                              {logo && (
-                                <img
-                                  src={logo}
-                                  alt={`${displayName} logo`}
-                                  className="w-5 h-5"
-                                  onError={(e) => {
-                                    const target = e.target as HTMLImageElement;
-                                    const parent = target.parentElement;
-                                    if (parent) {
-                                      const fallbackDiv = document.createElement("div");
-                                      fallbackDiv.className =
-                                        "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                      fallbackDiv.textContent = displayName.charAt(0);
-                                      parent.replaceChild(fallbackDiv, target);
-                                    }
-                                  }}
-                                />
-                              )}
+                              <Logo provider={provider} label={displayName} className="w-5 h-5" />
                               <Badge color="blue">{displayName}</Badge>
                             </>
                           );
