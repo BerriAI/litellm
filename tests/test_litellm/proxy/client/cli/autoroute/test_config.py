@@ -16,6 +16,7 @@ from litellm.proxy.client.cli.commands.autoroute.config import (
     build_generated_proxy_config,
     chat_models,
     embedding_models,
+    master_key_from_config,
     parse_discovered_models,
     validate_config,
 )
@@ -206,3 +207,24 @@ class TestValidateConfig:
         config = _base_config(semantic_matching=SemanticMatching(embedding_model="unknown-embedding"))
         with pytest.raises(ConfigGenerationError, match="unknown-embedding"):
             validate_config(config, DISCOVERED)
+
+
+class TestMasterKeyFromConfig:
+    def test_returns_a_persisted_key_verbatim(self):
+        assert master_key_from_config({"general_settings": {"master_key": " sk-abc "}}) == " sk-abc "
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {},
+            {"general_settings": None},
+            {"general_settings": "not-a-dict"},
+            {"general_settings": {}},
+            {"general_settings": {"master_key": None}},
+            {"general_settings": {"master_key": 123}},
+            {"general_settings": {"master_key": ""}},
+            {"general_settings": {"master_key": "   "}},
+        ],
+    )
+    def test_returns_none_when_absent_or_unusable(self, config):
+        assert master_key_from_config(config) is None
