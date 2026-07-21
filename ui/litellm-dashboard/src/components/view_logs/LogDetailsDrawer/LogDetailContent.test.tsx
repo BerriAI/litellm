@@ -255,26 +255,61 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("2 masked")).toBeInTheDocument();
   });
 
-  it("should display cache hit information when cache_hit is true", () => {
+  it("should display a green Response Cache 'Hit' tag when the response cache served the request", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True" })} />);
+
+    expect(screen.getByText("Response Cache")).toBeInTheDocument();
+    expect(screen.getByText("Hit").closest(".ant-tag")).toHaveClass("ant-tag-green");
+  });
+
+  it("should show prompt cache tokens without an alarming red tag when only provider prompt caching occurred", () => {
     render(
       <LogDetailContent
         logEntry={createLogEntry({
-          cache_hit: "true",
+          cache_hit: "False",
           metadata: {
             status: "success",
             additional_usage_values: {
-              cache_read_input_tokens: 100,
-              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 34462,
+              cache_creation_input_tokens: 83,
             },
           },
         })}
       />,
     );
 
-    expect(screen.getByText("Cache Hit")).toBeInTheDocument();
-    expect(screen.getByText("true")).toBeInTheDocument();
-    expect(screen.getByText("Cache Read Tokens")).toBeInTheDocument();
-    expect(screen.getByText("100")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Cache Read Tokens")).toBeInTheDocument();
+    expect(screen.getByText("34,462")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Cache Creation Tokens")).toBeInTheDocument();
+    expect(screen.getByText("83")).toBeInTheDocument();
+    expect(screen.getByText("Miss").closest(".ant-tag")).not.toHaveClass("ant-tag-red");
+    expect(screen.queryByText("Cache Hit")).not.toBeInTheDocument();
+  });
+
+  it("should display Prompt Cache Creation Tokens even when there are no cache read tokens", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          cache_hit: "None",
+          metadata: {
+            status: "success",
+            additional_usage_values: {
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 83,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Prompt Cache Creation Tokens")).toBeInTheDocument();
+    expect(screen.getByText("83")).toBeInTheDocument();
+  });
+
+  it("should hide the Response Cache row when cache_hit is not a true/false value", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "None" })} />);
+
+    expect(screen.queryByText("Response Cache")).not.toBeInTheDocument();
   });
 
   it("should display LiteLLM Overhead when litellm_overhead_time_ms is in metadata", () => {

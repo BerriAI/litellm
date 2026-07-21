@@ -282,6 +282,12 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       <TabPanels>
         <TabPanel>
           <Card>
+            <Text className="text-tremor-content dark:text-dark-tremor-content">
+              Analytics for LiteLLM&apos;s response cache (e.g. Redis / in-memory): requests answered from cache without
+              calling the LLM provider. Provider-side prompt caching (cached input tokens from Anthropic, OpenAI, etc.)
+              is not shown here; see &quot;Prompt Caching Metrics&quot; on the Usage page or individual requests in the
+              Logs page.
+            </Text>
             <Grid numItems={3} className="gap-4 mt-4">
               <Col>
                 <MultiSelect
@@ -340,7 +346,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
               <Card>
                 <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cached Tokens
+                  Cached Completion Tokens
                 </p>
                 <div className="mt-2 flex items-baseline space-x-2.5">
                   <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
