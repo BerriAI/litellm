@@ -12,7 +12,7 @@ import re
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 if TYPE_CHECKING:
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+    from litellm.llms.anthropic.anthropic_routing_handler import (
         AnthropicRouter,
         Backend,
     )
@@ -580,7 +580,7 @@ async def anthropic_proxy_route(
     the request model to a backend via glob matching and forwards with
     automatic health-aware failover across multiple backends.
     """
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+    from litellm.llms.anthropic.anthropic_routing_handler import (
         get_anthropic_router,
     )
 
@@ -653,7 +653,7 @@ async def _route_anthropic_with_multi_backend(
     When all backends are exhausted, returns a 502 with a descriptive
     error body.
     """
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+    from litellm.llms.anthropic.anthropic_routing_handler import (
         extract_model_from_body,
     )
 
@@ -698,7 +698,13 @@ async def _route_anthropic_with_multi_backend(
             endpoint=endpoint,
             target=target_url,
             custom_headers=auth_header,
-            _forward_headers=True,  # Auth is protected by custom_headers dedup in forward_headers_from_request
+            # forward_headers_from_request only dedups request headers whose
+            # name matches a key in custom_headers (e.g. "x-api-key"). For
+            # api-key backends the client's own "Authorization" header is not
+            # in that set, so _forward_headers=True would leak the caller's
+            # LiteLLM key to every configured external backend. Keep this
+            # False; x-pass- prefixed headers still forward regardless.
+            _forward_headers=False,
             is_streaming_request=is_streaming,
             custom_llm_provider="anthropic",
         )
@@ -768,7 +774,7 @@ def _build_backend_auth_header(backend: "Backend") -> dict[str, str]:
     ``backend.auth.key_env`` (supports ``os.environ/…`` syntax via
     LiteLLM's secret manager).
     """
-    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+    from litellm.llms.anthropic.anthropic_routing_handler import (
         AnthropicProxy,
     )
 

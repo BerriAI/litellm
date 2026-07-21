@@ -20,13 +20,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal
 
-import httpx
 from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # ---------------------------------------------------------------------------
 # Pydantic models (inline — not imported from the hub)
@@ -169,12 +166,12 @@ class HealthTracker:
 
 
 class AnthropicProxy:
-    """Forwards HTTP requests to Anthropic-compatible backends via LiteLLM's
-    managed httpx client pool.
+    """Namespace for credential resolution shared by the multi-backend router.
 
-    Preserves the request body as raw bytes — no parsing, no translation.
-    Headers are copied verbatim except Host, Authorization, x-api-key, and
-    Transfer-Encoding which are replaced with the backend's own auth.
+    Request forwarding itself always goes through ``create_pass_through_route``
+    (see ``_route_anthropic_with_multi_backend``) so every attempt receives
+    LiteLLM's standard logging and guardrail treatment; this class does not
+    forward requests on its own.
     """
 
     @staticmethod
@@ -188,76 +185,6 @@ class AnthropicProxy:
         if value is not None:
             return value
         return os.environ.get(key_env, "")
-
-    @staticmethod
-    async def forward(
-        backend: Backend,
-        method: str,
-        path: str,
-        headers: dict[str, str],
-        body: bytes,
-        timeout: float | None = None,
-    ) -> httpx.Response:
-        """Forward a request to the given backend.
-
-        This is a low-level forwarding method that uses LiteLLM's managed
-        httpx client pool directly, bypassing the full passthrough pipeline
-        (guardrails, managed-ID rewriting, spend logging).  The default
-        multi-backend path in ``_route_anthropic_with_multi_backend`` uses
-        ``create_pass_through_route`` instead so that every attempt receives
-        the standard logging and guardrail treatment.
-
-        This method is available for callers that need direct forwarding
-        without the passthrough overhead — health probes, lightweight
-        internal relays, etc.
-
-        Args:
-            backend: Target backend configuration.
-            method: HTTP method (POST, GET, etc.).
-            path: URL path (e.g. /v1/messages).
-            headers: Original request headers.
-            body: Raw request body bytes.
-            timeout: Optional per-request timeout override (seconds).
-
-        Returns:
-            httpx.Response from the backend.
-        """
-        url = f"{backend.url.rstrip('/')}{path}"
-
-        # Resolve credential
-        key = AnthropicProxy._resolve_credential(backend.auth.key_env)
-
-        # Build auth header
-        if backend.auth.type == "api-key":
-            auth_header_name = "x-api-key"
-            auth_header_value = key
-        else:
-            auth_header_name = "authorization"
-            auth_header_value = f"Bearer {key}"
-
-        # Copy headers, stripping auth/host/transfer-encoding
-        strip_headers = {"host", "authorization", "transfer-encoding", "x-api-key"}
-        fwd_headers: dict[str, str] = {}
-        for k, v in headers.items():
-            if k.lower() in strip_headers:
-                continue
-            fwd_headers[k] = v
-        fwd_headers[auth_header_name] = auth_header_value
-
-        # Use LiteLLM's managed httpx client pool
-        request_timeout = timeout or backend.timeout
-        async_client_obj = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.PassThroughEndpoint,
-            params={"timeout": request_timeout},
-        )
-        async_client = async_client_obj.client
-
-        return await async_client.request(
-            method=method,
-            url=url,
-            headers=fwd_headers,
-            content=body,
-        )
 
 
 # ---------------------------------------------------------------------------

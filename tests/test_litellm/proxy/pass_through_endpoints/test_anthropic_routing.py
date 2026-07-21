@@ -13,11 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+from litellm.llms.anthropic.anthropic_routing_handler import (
     AnthropicProxy,
     AnthropicRouter,
     AnthropicRouterConfig,
@@ -36,6 +34,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routin
 # ---------------------------------------------------------------------------
 # HealthTracker
 # ---------------------------------------------------------------------------
+
 
 class TestHealthTracker:
     """Tests for the HealthTracker class."""
@@ -108,6 +107,7 @@ class TestHealthTracker:
 
         # Advance time a bit, then record another failure while DEAD.
         import time as _time
+
         _time.sleep(0.01)
 
         health.record_failure("backend-1")
@@ -132,6 +132,7 @@ class TestHealthTracker:
 # ---------------------------------------------------------------------------
 # AnthropicRouter
 # ---------------------------------------------------------------------------
+
 
 class TestAnthropicRouter:
     """Tests for the AnthropicRouter class."""
@@ -208,6 +209,7 @@ class TestAnthropicRouter:
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
+
 
 class TestConfigLoading:
     """Tests for config parsing and lazy initialisation."""
@@ -286,18 +288,23 @@ class TestConfigLoading:
     def test_get_anthropic_router_lazy_init(self):
         """When proxy_config is not available, get_anthropic_router should
         return None gracefully without permanently disabling the router."""
-        with patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.key_present",
-            None,
-        ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.instance",
-            None,
-        ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.next_retry",
-            0.0,
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config",
-            None,
+        with (
+            patch(
+                "litellm.llms.anthropic.anthropic_routing_handler._state.key_present",
+                None,
+            ),
+            patch(
+                "litellm.llms.anthropic.anthropic_routing_handler._state.instance",
+                None,
+            ),
+            patch(
+                "litellm.llms.anthropic.anthropic_routing_handler._state.next_retry",
+                0.0,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config",
+                None,
+            ),
         ):
             router = get_anthropic_router()
             # Lazy init should not crash when proxy_config is unavailable
@@ -306,12 +313,15 @@ class TestConfigLoading:
     def test_get_anthropic_router_retries_after_failure(self):
         """When config is available but parsing fails, the router should
         schedule a retry instead of permanently disabling itself."""
-        with patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.key_present",
-            None,
-        ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.instance",
-            None,
+        with (
+            patch(
+                "litellm.llms.anthropic.anthropic_routing_handler._state.key_present",
+                None,
+            ),
+            patch(
+                "litellm.llms.anthropic.anthropic_routing_handler._state.instance",
+                None,
+            ),
         ):
             # Simulate config that has the key but with invalid data
             bad_config = {"anthropic_router": {"routes": "not_a_list"}}
@@ -323,21 +333,25 @@ class TestConfigLoading:
                 # Should return None (init failed) but NOT permanently disable
                 assert router is None
                 # _state.key_present should be True (key was present, retry later)
-                from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+                from litellm.llms.anthropic.anthropic_routing_handler import (
                     _state,
                 )
+
                 assert _state.key_present is True
                 assert _state.next_retry > 0
 
     def test_get_anthropic_router_no_key_stops_retrying(self):
         """When the config has no anthropic_router key, the router should
         permanently disable itself (it's an intentional configuration)."""
-        with patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.key_present",
-            None,
-        ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler._state.instance",
-            None,
+        with (
+            patch(
+                "litellm.llms.anthropic.anthropic_routing_handler._state.key_present",
+                None,
+            ),
+            patch(
+                "litellm.llms.anthropic.anthropic_routing_handler._state.instance",
+                None,
+            ),
         ):
             empty_config = {"general_settings": {}, "litellm_settings": {}}
             with patch(
@@ -347,15 +361,17 @@ class TestConfigLoading:
                 router = get_anthropic_router()
                 assert router is None
                 # _state.key_present should be False (intentional)
-                from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler import (
+                from litellm.llms.anthropic.anthropic_routing_handler import (
                     _state,
                 )
+
                 assert _state.key_present is False
 
 
 # ---------------------------------------------------------------------------
 # AnthropicProxy — credential resolution
 # ---------------------------------------------------------------------------
+
 
 class TestAnthropicProxy:
     """Tests for the AnthropicProxy credential resolution."""
@@ -372,7 +388,7 @@ class TestAnthropicProxy:
 
     def test_resolve_credential_via_secret_str(self):
         with patch(
-            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_routing_handler.get_secret_str",
+            "litellm.llms.anthropic.anthropic_routing_handler.get_secret_str",
             return_value="secret-value",
         ):
             result = AnthropicProxy._resolve_credential("os.environ/SECRET")
@@ -382,6 +398,7 @@ class TestAnthropicProxy:
 # ---------------------------------------------------------------------------
 # extract_model_from_body
 # ---------------------------------------------------------------------------
+
 
 class TestExtractModelFromBody:
     def test_extracts_model_from_valid_json(self):
@@ -404,6 +421,7 @@ class TestExtractModelFromBody:
 # Integration — multi-backend route
 # ---------------------------------------------------------------------------
 
+
 class TestMultiBackendRoute:
     """Integration tests for the multi-backend passthrough route."""
 
@@ -425,6 +443,7 @@ class TestMultiBackendRoute:
         # Make body() return bytes and cache it for re-reads
         async def mock_body():
             return body
+
         mock_request.body = mock_body
         # Also mock json() since the passthrough pipeline calls it
         mock_request.json = AsyncMock(return_value=json.loads(body))
@@ -456,14 +475,16 @@ class TestMultiBackendRoute:
 
         mock_endpoint_func = AsyncMock(return_value=mock_passthrough_response)
 
-        with patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-            return_value=mock_endpoint_func,
-        ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
-            return_value=False,
-        ), patch.dict(
-            os.environ, {"ANTHROPIC_API_KEY": "test-api-key"}
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+                return_value=mock_endpoint_func,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+                return_value=False,
+            ),
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-api-key"}),
         ):
             from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
                 _route_anthropic_with_multi_backend,
@@ -497,6 +518,7 @@ class TestMultiBackendRoute:
 
         async def mock_body():
             return body
+
         mock_request.body = mock_body
         mock_request.json = AsyncMock(return_value=json.loads(body))
 
@@ -539,14 +561,16 @@ class TestMultiBackendRoute:
 
         create_route_calls = [raise_proxy_error, succeed]
 
-        with patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-            side_effect=create_route_calls,
-        ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
-            return_value=False,
-        ), patch.dict(
-            os.environ, {"DEEPSEEK_API_KEY": "ds-key", "ANTHROPIC_API_KEY": "anthro-key"}
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+                side_effect=create_route_calls,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+                return_value=False,
+            ),
+            patch.dict(os.environ, {"DEEPSEEK_API_KEY": "ds-key", "ANTHROPIC_API_KEY": "anthro-key"}),
         ):
             from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
                 _route_anthropic_with_multi_backend,
@@ -585,6 +609,7 @@ class TestMultiBackendRoute:
 
         async def mock_body():
             return body
+
         mock_request.body = mock_body
         mock_request.json = AsyncMock(return_value=json.loads(body))
 
@@ -617,14 +642,16 @@ class TestMultiBackendRoute:
         async def raise_backend_error(*args: Any, **kwargs: Any) -> Any:
             raise ProxyException(message="Backend unavailable", type="connection_error", param="", code=502)
 
-        with patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-            return_value=raise_backend_error,
-        ), patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
-            return_value=False,
-        ), patch.dict(
-            os.environ, {"KEY1": "k1", "KEY2": "k2"}
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+                return_value=raise_backend_error,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+                return_value=False,
+            ),
+            patch.dict(os.environ, {"KEY1": "k1", "KEY2": "k2"}),
         ):
             from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
                 _route_anthropic_with_multi_backend,
@@ -658,6 +685,7 @@ class TestMultiBackendRoute:
 
         async def mock_body():
             return body
+
         mock_request.body = mock_body
 
         mock_fastapi_response = MagicMock(spec=FastAPIResponse)
