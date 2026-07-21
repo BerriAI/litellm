@@ -26,12 +26,12 @@ export const vectorStoreProviderMap: Record<string, string> = {
 };
 
 export const vectorStoreProviderLogoMap: Record<string, string> = {
-  [VectorStoreProviders.Bedrock]: providerLogoMap[Providers.Bedrock],
+  [VectorStoreProviders.Bedrock]: providerLogoMap[Providers.Bedrock] ?? "",
   [VectorStoreProviders.PgVector]: postgresqlLogo.src,
-  [VectorStoreProviders.VertexRagEngine]: providerLogoMap[Providers.Vertex_AI],
-  [VectorStoreProviders.VertexAiSearch]: providerLogoMap[Providers.Vertex_AI],
-  [VectorStoreProviders.OpenAI]: providerLogoMap[Providers.OpenAI],
-  [VectorStoreProviders.Azure]: providerLogoMap[Providers.Azure],
+  [VectorStoreProviders.VertexRagEngine]: providerLogoMap[Providers.Vertex_AI] ?? "",
+  [VectorStoreProviders.VertexAiSearch]: providerLogoMap[Providers.Vertex_AI] ?? "",
+  [VectorStoreProviders.OpenAI]: providerLogoMap[Providers.OpenAI] ?? "",
+  [VectorStoreProviders.Azure]: providerLogoMap[Providers.Azure] ?? "",
   [VectorStoreProviders.Milvus]: milvusLogo.src,
   [VectorStoreProviders.S3Vectors]: s3VectorLogo.src,
 };

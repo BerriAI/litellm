@@ -20,8 +20,8 @@ describe("Logo", () => {
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
-  it("renders a dash avatar when neither provider nor src is given", () => {
-    render(<Logo />);
+  it("renders a dash avatar when src is empty and the label has no characters", () => {
+    render(<Logo src={null} label="" />);
     expect(screen.getByText("-")).toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
