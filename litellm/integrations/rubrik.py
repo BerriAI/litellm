@@ -463,7 +463,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             flattened.append(
                 {
                     "role": message.get("role"),
-                    "content": convert_content_list_to_str(message),  # type: ignore[arg-type]
+                    "content": convert_content_list_to_str(message),  # pyright: ignore[reportArgumentType]
                 }
             )
         return flattened
@@ -575,7 +575,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         return call_details.get("litellm_call_id") or (request_data or {}).get("litellm_call_id")
 
     @classmethod
-    def _apply_correlation_id(cls, payload: dict, source: dict) -> None:
+    def _apply_correlation_id(cls, payload: dict[str, Any], source: dict[str, Any]) -> None:
         """Pin ``payload["id"]`` to ``litellm_call_id`` in place so this log
         shares its S3 filename id with the moderation (``_blocking``) and
         failure logs for the same request -- for every provider.
@@ -595,7 +595,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             payload["id"] = correlated
 
     @staticmethod
-    def _prepend_system_prompt(payload: dict, source: dict) -> None:
+    def _prepend_system_prompt(payload: dict[str, Any], source: dict[str, Any]) -> None:
         """Prepend ``source["system"]`` onto ``payload["messages"]``.
 
         Builds a NEW messages list rather than mutating ``payload["messages"]``
@@ -631,8 +631,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         # Deep-copy so mutations don't affect other callbacks sharing this object
         standard_logging_payload: StandardLoggingPayload = safe_deep_copy(kwargs["standard_logging_object"])
 
-        self._apply_correlation_id(standard_logging_payload, kwargs)  # type: ignore[arg-type]
-        self._prepend_system_prompt(standard_logging_payload, kwargs)  # type: ignore[arg-type]
+        self._apply_correlation_id(standard_logging_payload, kwargs)  # pyright: ignore[reportArgumentType]
+        self._prepend_system_prompt(standard_logging_payload, kwargs)  # pyright: ignore[reportArgumentType]
 
         return standard_logging_payload
 
