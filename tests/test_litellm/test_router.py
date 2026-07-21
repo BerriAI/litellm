@@ -1373,6 +1373,132 @@ def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
         assert result.output_cost_per_token is None
 
 
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("1e-05", 1e-05),
+        ("0.00001", 1e-05),
+        (1e-05, 1e-05),
+        (5, 5.0),
+        (None, None),
+        ("not-a-number", None),
+    ],
+)
+def test_cost_value_as_float(value, expected):
+    from litellm.router import _cost_value_as_float
+
+    assert _cost_value_as_float(value) == expected
+
+
+def test_model_group_info_with_stringified_cost_values():
+    """
+    YAML 1.2 parsers emit '1e-05' (integer mantissa) as a string, so cost
+    values in deployment model_info can arrive as str. Aggregating the model
+    group must not raise TypeError('>' between str and float) and must return
+    float costs.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-backend-1",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "input_cost_per_token": "1e-05",
+                    "output_cost_per_token": "1e-05",
+                },
+            },
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-backend-2",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "input_cost_per_token": "2e-05",
+                    "output_cost_per_token": "2e-05",
+                },
+            },
+        ]
+    )
+
+    def _model_info_with_str_costs(model_id: str, model_name: str):
+        for model in router.model_list:
+            if model["model_info"]["id"] == model_id:
+                return {
+                    "key": model_name,
+                    "input_cost_per_token": model["model_info"]["input_cost_per_token"],
+                    "output_cost_per_token": model["model_info"]["output_cost_per_token"],
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                }
+        return None
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=_model_info_with_str_costs
+    ):
+        result = router._set_model_group_info(
+            model_group="my-custom-model",
+            user_facing_model_group_name="my-custom-model",
+        )
+
+    assert result is not None
+    assert result.input_cost_per_token == 2e-05
+    assert result.output_cost_per_token == 2e-05
+    assert isinstance(result.input_cost_per_token, float)
+    assert isinstance(result.output_cost_per_token, float)
+
+
+def test_model_group_info_db_fallback_with_stringified_cost_values():
+    """
+    Fallback path: when get_deployment_model_info returns nothing, costs are
+    read straight from the deployment's model_info dict, which can hold
+    stringified floats parsed from YAML. They must be coerced to float.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-backend-1",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "input_cost_per_token": "1e-05",
+                    "output_cost_per_token": "3e-05",
+                },
+            },
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-backend-2",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "input_cost_per_token": "2e-05",
+                    "output_cost_per_token": "2e-05",
+                },
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._set_model_group_info(
+            model_group="my-custom-model",
+            user_facing_model_group_name="my-custom-model",
+        )
+
+    assert result is not None
+    assert result.input_cost_per_token == 2e-05
+    assert result.output_cost_per_token == 3e-05
+    assert isinstance(result.input_cost_per_token, float)
+    assert isinstance(result.output_cost_per_token, float)
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result
@@ -2638,6 +2764,185 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
     assert calls == [1]
 
 
+def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
+    """
+    Responses API calls pass `input` (str) instead of `messages`. Context-window
+    checks must count tokens from `input` and filter deployments over the limit. Uses
+    the real token_counter so the transform + counting path is a true regression guard.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input="a very long prompt that exceeds the tiny context window",
+        )
+
+
+def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
+    """
+    Responses API `input` can be a list of input items. It must be normalized to
+    chat messages and counted so oversized requests are filtered out. Uses the real
+    token_counter (no mock) so the transform + counting path is a true regression guard.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input=[
+                {"role": "user", "content": "count these tokens against the one token limit please"},
+            ],
+        )
+
+
+def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
+    """
+    Responses API `instructions` become a system message the model receives, so their
+    tokens must be counted too. A request whose `input` alone fits under the limit but
+    whose `input` + `instructions` exceeds it must be filtered (regression for the
+    context-window check under-filtering when instructions were ignored).
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+
+    short_input = "hi"
+    long_instructions = "you are a helpful assistant. " * 20
+
+    input_only_tokens = router._count_pre_call_check_tokens(messages=None, input=short_input)
+    with_instructions_tokens = router._count_pre_call_check_tokens(
+        messages=None, input=short_input, instructions=long_instructions
+    )
+    assert with_instructions_tokens > input_only_tokens
+
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
+    )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            input=short_input,
+            request_kwargs={"instructions": long_instructions},
+        )
+
+
+def test_count_pre_call_check_tokens_across_api_surfaces():
+    """
+    _count_pre_call_check_tokens must count tokens from chat `messages`, a Responses
+    API string `input`, and a Responses API list `input`, and raise when given neither.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+    )
+
+    messages_tokens = router._count_pre_call_check_tokens(
+        messages=[{"role": "user", "content": "hello world"}], input=None
+    )
+    string_input_tokens = router._count_pre_call_check_tokens(messages=None, input="hello world")
+    list_input_tokens = router._count_pre_call_check_tokens(
+        messages=None, input=[{"role": "user", "content": "hello world"}]
+    )
+
+    assert messages_tokens > 0
+    assert string_input_tokens > 0
+    assert list_input_tokens > 0
+
+    with pytest.raises(ValueError):
+        router._count_pre_call_check_tokens(messages=None, input=None)
+
+
+def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
+    """
+    When neither messages nor input is provided (e.g. endpoints without prompt text),
+    token counting is skipped gracefully and all deployments are returned.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    counted: list[dict] = []
+    original = router._count_pre_call_check_tokens
+    monkeypatch.setattr(
+        router,
+        "_count_pre_call_check_tokens",
+        lambda **kwargs: counted.append(kwargs) or original(**kwargs),
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    result = router._pre_call_checks(model="m", healthy_deployments=deployments)
+    assert len(result) == 1
+    assert counted == []  # token counting skipped entirely, so no misleading error is logged
+
+
+@pytest.mark.asyncio
+async def test_aresponses_enforces_context_window_pre_call_check():
+    """
+    End-to-end router regression: a Responses API call whose `input` exceeds the
+    deployment's max_input_tokens must be filtered by the pre-call check, raising
+    ContextWindowExceededError instead of being silently routed. This guards the
+    wiring that forwards `input` from the generic-call path into deployment selection
+    (the deployment uses mock_response, so the check must trip before any real call).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 5},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aresponses(
+            model="small-ctx",
+            input="this responses input is definitely much longer than five tokens for sure",
+        )
+
+
 def test_get_deployment_model_info_base_model_flow():
     """Test that get_deployment_model_info correctly handles the base model flow"""
     from unittest.mock import patch
@@ -3246,6 +3551,125 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
 
     # Cleanup
     litellm.credential_list = []
+
+
+def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
+    return {
+        "model_name": f"model_name_team-1_{model_id}",
+        "litellm_params": {"model": "openai/*", "api_key": api_key},
+        "model_info": {
+            "id": model_id,
+            "team_id": "team-1",
+            "team_public_model_name": "openai/*",
+        },
+    }
+
+
+def test_get_deployment_credentials_with_provider_team_wildcard_priority():
+    """
+    Regression: a global wildcard pattern (e.g. "openai/*") must not shadow a
+    team's own wildcard entry. When team_id is provided, the team wildcard
+    deployment's credentials win; without team_id the global one is used.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "global-key"},
+            },
+            _team_wildcard_model(api_key="team-key"),
+        ],
+    )
+
+    team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-1"
+    )
+    assert team_credentials is not None
+    assert team_credentials["api_key"] == "team-key"
+
+    global_credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2"
+    )
+    assert global_credentials is not None
+    assert global_credentials["api_key"] == "global-key"
+
+
+def test_team_wildcard_credentials_not_usable_after_delete_deployment():
+    """
+    Regression: team_pattern_routers retained deleted deployments, so a team
+    user could keep resolving credentials of a deleted wildcard deployment.
+    """
+    router = litellm.Router(model_list=[_team_wildcard_model(api_key="old-key")])
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is not None
+    )
+
+    router.delete_deployment(id="team-wildcard-id")
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is None
+    )
+
+
+def test_pattern_match_router_remove_deployment():
+    """
+    remove_deployment must drop only the deployment with the given model id and
+    delete patterns whose deployment list becomes empty.
+    """
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    pattern_router = PatternMatchRouter()
+    pattern_router.add_pattern(
+        "openai/*",
+        {"litellm_params": {"model": "openai/*", "api_key": "key-a"}, "model_info": {"id": "dep-a"}},
+    )
+    pattern_router.add_pattern(
+        "openai/*",
+        {"litellm_params": {"model": "openai/*", "api_key": "key-b"}, "model_info": {"id": "dep-b"}},
+    )
+
+    pattern_router.remove_deployment(model_id="dep-a")
+    matches = pattern_router.route("openai/gpt-5.2")
+    assert matches is not None
+    assert [m["model_info"]["id"] for m in matches] == ["dep-b"]
+
+    pattern_router.remove_deployment(model_id="dep-b")
+    assert pattern_router.patterns == {}
+    assert pattern_router.route("openai/gpt-5.2") is None
+
+
+def test_team_wildcard_credentials_refreshed_on_upsert_and_set_model_list():
+    """
+    Regression: replacing a team wildcard deployment (upsert or model list
+    reload) must serve the new credentials, not the stale cached ones.
+    """
+    from litellm.types.router import Deployment
+
+    router = litellm.Router(model_list=[_team_wildcard_model(api_key="old-key")])
+
+    router.upsert_deployment(
+        deployment=Deployment(**_team_wildcard_model(api_key="new-key"))
+    )
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-1"
+    )
+    assert credentials is not None
+    assert credentials["api_key"] == "new-key"
+
+    router.set_model_list(model_list=[])
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/gpt-5.2", team_id="team-1"
+        )
+        is None
+    )
 
 
 def test_get_available_guardrail_single_deployment():
@@ -5328,3 +5752,141 @@ def test_update_settings_tolerates_null_default_litellm_params_and_optional_pre_
 
     assert router.default_litellm_params["timeout"] == 42
     assert router.optional_pre_call_checks == []
+
+
+def test_get_configured_token_limits_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": 32000, "max_output_tokens": 8000},
+            }
+        ]
+    )
+
+    assert router.get_configured_token_limits("my-custom-model") == (32000, 8000)
+
+
+def test_get_configured_token_limits_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-limits-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_token_limits("no-limits-model") == (None, None)
+    assert router.get_configured_token_limits("not-a-real-model") == (None, None)
+
+
+def test_get_configured_token_limits_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"max_input_tokens": 12345},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert router.get_configured_token_limits(
+            "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+        ) == (None, None)
+
+
+def test_get_configured_token_limits_treats_malformed_values_as_absent():
+    malformed = ["", "unlimited", "128,000", [128000], {"max": 128000}, True]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-limit-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": bad, "max_output_tokens": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_token_limits(f"bad-limit-{i}") == (None, None)
+
+
+def test_get_configured_token_limits_coerces_numeric_strings():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "quoted-limits-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": "32000", "max_output_tokens": "8000"},
+            }
+        ]
+    )
+
+    assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
+
+    deployment_tags = [{"key": "application", "value": "config-level"}]
+    request_tags = [{"key": "application", "value": "request-level"}]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-sonnet-5",
+                    "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
+                    "aws_region_name": "us-west-2",
+                    "bedrock_tags": deployment_tags,
+                },
+            }
+        ]
+    )
+
+    def fake_response():
+        return httpx.Response(
+            status_code=200,
+            json={
+                "jobArn": "arn:aws:bedrock:us-west-2:123:model-invocation-job/abc1234567",
+                "status": "Submitted",
+            },
+        )
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=lambda *args, **kwargs: fake_response())
+
+    with patch.object(
+        CommonBatchFilesUtils,
+        "sign_aws_request",
+        return_value=({"Authorization": "signed"}, b"{}"),
+    ) as mock_sign, patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        await router.acreate_batch(
+            model="bedrock-batch-model",
+            input_file_id="s3://bucket/input.jsonl",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+        assert mock_sign.call_args.kwargs["data"]["tags"] == deployment_tags
+
+        await router.acreate_batch(
+            model="bedrock-batch-model",
+            input_file_id="s3://bucket/input.jsonl",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            bedrock_tags=request_tags,
+        )
+        assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags

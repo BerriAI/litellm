@@ -46,7 +46,11 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
   if (!Number.isNaN(expiresAt) && expiresAt < Date.now()) {
     return { tone: "warning", label: "Expired", tooltip: "This key has passed its expiry date." };
   }
-  return { tone: "success", label: "Active" };
+  return {
+    tone: "success",
+    label: "Active",
+    tooltip: "This key is not blocked and has not expired.",
+  };
 };
 
 const UserPopoverCell = ({
@@ -327,7 +331,13 @@ export const getKeyTableColumns = ({
     header: "Models",
     size: 220,
     enableSorting: false,
-    cell: (info) => <ModelsCell models={info.getValue() as string[] | null | undefined} />,
+    cell: (info) => (
+      <ModelsCell
+        models={info.getValue() as string[] | null | undefined}
+        allowedRoutes={info.row.original.allowed_routes}
+        keyType={info.row.original.key_type}
+      />
+    ),
   },
   {
     id: "rate_limits",
@@ -353,6 +363,5 @@ export const KEY_TABLE_HIDDEN_COLUMNS: Record<string, boolean> = {
   created_by: false,
   updated_at: false,
   expires: false,
-  budget_reset_at: false,
   rate_limits: false,
 };

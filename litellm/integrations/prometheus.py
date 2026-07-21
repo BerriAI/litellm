@@ -239,6 +239,18 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_output_audio_tokens_metric"),
             )
 
+            self.litellm_video_duration_seconds_metric = self._counter_factory(
+                "litellm_video_duration_seconds_metric",
+                "Seconds of video generated, from usage.duration_seconds on video generation calls",
+                labelnames=self.get_labels_for_metric("litellm_video_duration_seconds_metric"),
+            )
+
+            self.litellm_images_generated_metric = self._counter_factory(
+                "litellm_images_generated_metric",
+                "Number of images generated, from the image generation response",
+                labelnames=self.get_labels_for_metric("litellm_images_generated_metric"),
+            )
+
             # Remaining Budget for Team
             self.litellm_remaining_team_budget_metric = self._gauge_factory(
                 "litellm_remaining_team_budget_metric",
@@ -1336,6 +1348,12 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
 
+        self._increment_media_generation_metrics(
+            standard_logging_payload=standard_logging_payload,
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+
         # MCP tool call metrics
         self._increment_mcp_tool_call_metrics(
             standard_logging_payload=standard_logging_payload,
@@ -1459,8 +1477,65 @@ class PrometheusLogger(CustomLogger):
             ),
         ]
 
-        for counter, metric_name, value in detail_metrics:
-            if not isinstance(value, (int, float)) or value <= 0:
+        PrometheusLogger._inc_sparse_usage_counters(
+            self,
+            detail_metrics,
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+
+    def _increment_media_generation_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: PrometheusLabelFactoryContext | None = None,
+    ) -> None:
+        """
+        Increment video-seconds and images-generated counters from
+        ``standard_logging_payload["metadata"]["usage_object"]``. Video
+        providers report ``duration_seconds`` there; image generation calls
+        report ``output_image_count``. Both are sparse: only emitted when the
+        value is present and > 0, so token-only call types are unaffected.
+        """
+        metadata = standard_logging_payload.get("metadata") or {}
+        usage_object = metadata.get("usage_object") if isinstance(metadata, dict) else None
+        if not isinstance(usage_object, dict):
+            return
+
+        media_metrics: list[tuple[Any, DEFINED_PROMETHEUS_METRICS, Any]] = [
+            (
+                self.litellm_video_duration_seconds_metric,
+                "litellm_video_duration_seconds_metric",
+                usage_object.get("duration_seconds"),
+            ),
+            (
+                self.litellm_images_generated_metric,
+                "litellm_images_generated_metric",
+                usage_object.get("output_image_count"),
+            ),
+        ]
+
+        PrometheusLogger._inc_sparse_usage_counters(
+            self,
+            media_metrics,
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+
+    def _inc_sparse_usage_counters(
+        self,
+        counters_with_values: list[tuple[Any, DEFINED_PROMETHEUS_METRICS, Any]],
+        enum_values: UserAPIKeyLabelValues,
+        label_context: PrometheusLabelFactoryContext | None = None,
+    ) -> None:
+        """
+        Increment each ``(counter, metric_name, value)`` entry whose value is
+        a positive number. Non-numeric values (including booleans from
+        malformed provider usage dicts) and values <= 0 are skipped, keeping
+        scrape output sparse.
+        """
+        for counter, metric_name, value in counters_with_values:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
                 continue
             PrometheusLogger._inc_labeled_counter(
                 self,

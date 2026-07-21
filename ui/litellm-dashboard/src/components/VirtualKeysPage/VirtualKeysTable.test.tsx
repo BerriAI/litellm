@@ -174,10 +174,26 @@ it("should render VirtualKeysTable component", () => {
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
-it("renders the page header with the create-key action slot", () => {
+it("shows the Budget Reset column by default", async () => {
+  renderWithProviders(<VirtualKeysTable />);
+  await waitFor(() => {
+    expect(screen.getByText("Budget Reset")).toBeInTheDocument();
+  });
+});
+
+it("left-anchors the create-key CTA below the title, between the header and the table toolbar", () => {
   renderWithProviders(<VirtualKeysTable headerActions={<button>Create New Key</button>} />);
-  expect(screen.getByRole("heading", { name: "Virtual Keys" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Create New Key" })).toBeInTheDocument();
+
+  const heading = screen.getByRole("heading", { name: "Virtual Keys" });
+  const ctas = screen.getAllByRole("button", { name: "Create New Key" });
+  expect(ctas).toHaveLength(1);
+  const cta = ctas[0];
+  const search = screen.getByPlaceholderText(/Search by key alias/);
+
+  // The CTA follows the title row...
+  expect(heading.compareDocumentPosition(cta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // ...and precedes the table's search toolbar, so it sits in its own row above the table.
+  expect(cta.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 it("should display key information correctly", async () => {
@@ -489,8 +505,13 @@ describe("Status column reflects blocked / expiry / scim metadata", () => {
 
     renderWithProviders(<VirtualKeysTable />);
 
+    const tag = await screen.findByTestId(`key-status-${mockKey.token_id}`);
+    expect(tag).toHaveTextContent("Active");
+
+    const user = userEvent.setup();
+    await user.hover(tag);
     await waitFor(() => {
-      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Active");
+      expect(screen.getByText(/not blocked and has not expired/i)).toBeInTheDocument();
     });
   });
 
