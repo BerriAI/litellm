@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Spin, Checkbox, Select, Input, Typography, Tooltip } from "antd";
 import { Button, Card } from "@tremor/react";
 import {
@@ -92,6 +92,14 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
       loadModels();
     }
   }, [visible]);
+
+  const enrichAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!visible) enrichAbortRef.current?.abort();
+  }, [visible]);
+
+  useEffect(() => () => enrichAbortRef.current?.abort(), []);
 
   const loadModels = async () => {
     if (!accessToken) return;
@@ -287,6 +295,9 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
 
     setIsEnriching(true);
     setEnrichStatusMessage("");
+    enrichAbortRef.current?.abort();
+    const controller = new AbortController();
+    enrichAbortRef.current = controller;
     try {
       for (const template of templatesToEnrich) {
         const paramName = template.llm_enrichment.parameter;
@@ -343,7 +354,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
             (error) => {
               finish(() => reject(new Error(error)));
             },
-            undefined,
+            { signal: controller.signal },
             (status) => setEnrichStatusMessage(status),
           ).catch((error) => {
             finish(() => reject(error));
@@ -351,7 +362,9 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
         });
       }
     } catch (e) {
-      console.error("Failed to enrich templates:", e);
+      if (!controller.signal.aborted) {
+        console.error("Failed to enrich templates:", e);
+      }
     } finally {
       setIsEnriching(false);
       setEnrichStatusMessage("");
