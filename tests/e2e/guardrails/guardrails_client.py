@@ -66,9 +66,9 @@ class PresidioParamsBody(GuardrailParamsBase):
     guardrail: Literal["presidio"] = "presidio"
     presidio_analyzer_api_base: str | None = None
     presidio_anonymizer_api_base: str | None = None
-    # When true the anonymized (masked) text replaces the model's output on the
-    # response path; the request path always masks what reaches the upstream.
-    output_parse_pii: bool | None = None
+    # apply_to_output masks PII the model itself emitted, which also makes the
+    # guardrail run post_call.
+    apply_to_output: bool | None = None
 
 
 class BlockCodeExecutionParamsBody(GuardrailParamsBase):
