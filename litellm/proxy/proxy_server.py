@@ -7930,23 +7930,24 @@ class ProxyStartupEvent:
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### PTU RESERVATION DAILY ROLLUP ###
-        if general_settings.get("enable_ptu_cost_attribution", False):
-            from litellm.proxy.spend_tracking.ptu_reservation_rollup import (
-                PTU_ROLLUP_JOB_ID,
-                run_ptu_reservation_rollup,
-            )
+        from litellm.proxy.spend_tracking.ptu_reservation_rollup import (
+            PTU_ROLLUP_JOB_ID,
+            run_ptu_reservation_rollup,
+        )
 
-            scheduler.add_job(
-                run_ptu_reservation_rollup,
-                "cron",
-                hour=0,
-                minute=15,
-                args=[prisma_client],
-                id=PTU_ROLLUP_JOB_ID,
-                replace_existing=True,
-                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            )
-            verbose_proxy_logger.info("PTU reservation rollup job scheduled at 00:15 UTC daily")
+        scheduler.add_job(
+            run_ptu_reservation_rollup,
+            "cron",
+            hour=0,
+            minute=15,
+            args=[prisma_client],
+            id=PTU_ROLLUP_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        verbose_proxy_logger.info(
+            "PTU reservation rollup job scheduled at 00:15 UTC daily (no-ops until enable_ptu_cost_attribution is set)"
+        )
 
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:

@@ -41,12 +41,16 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
         require_auth_for_public_ai_hub: {
           description: "Require authentication for public AI Hub",
         },
+        enable_ptu_cost_attribution: {
+          description: "Enable PTU cost attribution",
+        },
       },
     },
     values: {
       disable_model_add_for_internal_users: false,
       disable_team_admin_delete_team_user: false,
       require_auth_for_public_ai_hub: false,
+      enable_ptu_cost_attribution: false,
     },
   },
   isLoading: false,
@@ -161,5 +165,34 @@ describe("UISettings", () => {
       }),
     );
     expect(NotificationManager.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  it("should toggle enable PTU cost attribution setting and call update with page-refresh notice", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable PTU cost attribution" });
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { enable_ptu_cost_attribution: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(NotificationManager.success).toHaveBeenCalledWith("UI settings updated successfully. Refreshing page...");
   });
 });
