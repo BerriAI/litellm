@@ -196,6 +196,13 @@ unset POSTGRES_BODY
 az resource wait --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_NAME" \
   --resource-type Microsoft.DBforPostgreSQL/flexibleServers \
   --custom "properties.state=='Ready'" --interval 20 --timeout 1800 --only-show-errors
+retry_postgres_busy az rest --method patch \
+  --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.DBforPostgreSQL/flexibleServers/$POSTGRES_NAME?api-version=2024-08-01" \
+  --body '{"properties":{"network":{"publicNetworkAccess":"Enabled"}}}' --only-show-errors >/dev/null
+az resource wait --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_NAME" \
+  --resource-type Microsoft.DBforPostgreSQL/flexibleServers \
+  --custom "properties.state=='Ready' && properties.network.publicNetworkAccess=='Enabled'" \
+  --interval 20 --timeout 1800 --only-show-errors
 retry_postgres_busy az postgres flexible-server firewall-rule create --resource-group "$RESOURCE_GROUP" \
   --server-name "$POSTGRES_NAME" --name operator-bootstrap \
   --start-ip-address "$PUBLIC_IP" --end-ip-address "$PUBLIC_IP" --only-show-errors >/dev/null
