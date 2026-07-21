@@ -780,6 +780,55 @@ async def test_increment_org_spend_counter_no_org_is_noop_invalid_id(monkeypatch
     assert fake_cache.redis_cache.async_increment.called is False
 
 
+@pytest.mark.asyncio
+async def test_increment_project_spend_counter_increments_when_project_present(monkeypatch):
+    fake_cache = _make_spend_counter_cache(
+        redis_get_value=None, redis_increment_value=10.0
+    )
+    fake_user_cache = _make_user_api_key_cache()
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    await ps._increment_project_spend_counter(
+        project_id="project-1",
+        response_cost=10.0,
+        reserved_counter_keys=set(),
+    )
+
+    observed = {
+        "increment_called": fake_cache.redis_cache.async_increment.called,
+        "increment_calls": fake_cache.redis_cache.async_increment.call_count,
+        "counter_key_arg": fake_cache.redis_cache.async_increment.call_args.kwargs[
+            "key"
+        ],
+    }
+    assert normalize(observed) == {
+        "increment_called": True,
+        "increment_calls": 1,
+        "counter_key_arg": "spend:project:project-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_increment_project_spend_counter_skips_when_already_reserved(monkeypatch):
+    fake_cache = _make_spend_counter_cache()
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    await ps._increment_project_spend_counter(
+        project_id="project-1",
+        response_cost=1.0,
+        reserved_counter_keys={"spend:project:project-1"},
+    )
+
+    assert fake_cache.redis_cache.async_increment.called is False
+
+    assert fake_cache.redis_cache.async_increment.called is False
+
+
 # ---------------------------------------------------------------------------
 # _init_and_increment_unreserved_spend_counter
 # ---------------------------------------------------------------------------
