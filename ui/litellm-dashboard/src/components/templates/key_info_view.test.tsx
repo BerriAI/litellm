@@ -482,6 +482,82 @@ describe("KeyInfoView", () => {
 
       expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
+
+    it("should show the Edit Settings button for a team member with /key/update on a service account key", async () => {
+      const teamId = "test-team-id";
+      const memberUserId = "team-member-user";
+      vi.mocked(useTeams).mockReturnValue({
+        teams: [
+          {
+            team_id: teamId,
+            team_alias: "Test Team",
+            models: [],
+            max_budget: null,
+            budget_duration: null,
+            tpm_limit: null,
+            rpm_limit: null,
+            organization_id: "org-1",
+            created_at: "2025-01-01T00:00:00Z",
+            keys: [],
+            members_with_roles: [{ user_id: memberUserId, role: "user" }],
+            team_member_permissions: ["/key/info", "/key/update"],
+            spend: 0,
+          },
+        ],
+        setTeams: vi.fn(),
+      });
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: memberUserId,
+        userRole: "Internal User",
+      });
+
+      await renderAndOpenSettingsTab({
+        ...MOCK_KEY_DATA,
+        team_id: teamId,
+        user_id: null as unknown as string,
+      });
+
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    it("should not show the Edit Settings button for a team member without /key/update on a service account key", async () => {
+      const teamId = "test-team-id";
+      const memberUserId = "team-member-user";
+      vi.mocked(useTeams).mockReturnValue({
+        teams: [
+          {
+            team_id: teamId,
+            team_alias: "Test Team",
+            models: [],
+            max_budget: null,
+            budget_duration: null,
+            tpm_limit: null,
+            rpm_limit: null,
+            organization_id: "org-1",
+            created_at: "2025-01-01T00:00:00Z",
+            keys: [],
+            members_with_roles: [{ user_id: memberUserId, role: "user" }],
+            team_member_permissions: ["/key/info", "/key/health"],
+            spend: 0,
+          },
+        ],
+        setTeams: vi.fn(),
+      });
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: memberUserId,
+        userRole: "Internal User",
+      });
+
+      await renderAndOpenSettingsTab({
+        ...MOCK_KEY_DATA,
+        team_id: teamId,
+        user_id: null as unknown as string,
+      });
+
+      expect(screen.queryByRole("button", { name: /edit settings/i })).not.toBeInTheDocument();
+    });
   });
 
   it("should display guardrails when present", async () => {

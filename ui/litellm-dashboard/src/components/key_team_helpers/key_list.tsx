@@ -17,6 +17,7 @@ export interface Team {
   keys_count?: number;
   members_count?: number;
   members_with_roles: Member[];
+  team_member_permissions?: string[];
   spend: number;
   access_group_ids?: string[];
   access_group_models?: string[];

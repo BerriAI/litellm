@@ -46,7 +46,26 @@ interface KeyEditViewProps {
   userID: string | null;
   userRole: string | null;
   premiumUser?: boolean;
+  isPrivilegedEditor?: boolean;
 }
+
+const LOCKED_FIELDS_FOR_NON_PRIVILEGED_EDITOR = [
+  "allowed_routes",
+  "allowed_passthrough_routes",
+  "max_budget",
+  "budget_duration",
+  "budget_limits",
+  "vector_stores",
+  "mcp_servers_and_groups",
+  "mcp_tool_permissions",
+  "agents_and_groups",
+  "access_group_ids",
+  "team_id",
+  "organization_id",
+  "guardrails",
+  "disable_global_guardrails",
+  "policies",
+] as const;
 
 // Add this helper function
 const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): string[] => {
@@ -96,7 +115,9 @@ export function KeyEditView({
   userID,
   userRole,
   premiumUser = false,
+  isPrivilegedEditor = true,
 }: KeyEditViewProps) {
+  const lockSensitive = !isPrivilegedEditor;
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const [form] = Form.useForm();
   const [promptsList, setPromptsList] = useState<string[]>([]);
@@ -306,18 +327,24 @@ export function KeyEditView({
         values.duration = null;
       }
 
-      // Reconcile multi-window budget limits from the editor state, dropping
-      // incomplete entries (no max_budget). Sending [] tells the backend to clear
-      // all stored windows, so only send it when the user removed every window;
-      // when entries remain but are still incomplete, omit the field so the saved
-      // windows are left untouched (JSON.stringify drops the undefined key).
-      const validWindows = budgetLimits.filter(
-        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
-      );
-      if (validWindows.length > 0) {
-        values.budget_limits = validWindows;
-      } else if (budgetLimits.length === 0) {
-        values.budget_limits = [];
+      if (isPrivilegedEditor) {
+        // Reconcile multi-window budget limits from the editor state, dropping
+        // incomplete entries (no max_budget). Sending [] tells the backend to clear
+        // all stored windows, so only send it when the user removed every window;
+        // when entries remain but are still incomplete, omit the field so the saved
+        // windows are left untouched (JSON.stringify drops the undefined key).
+        const validWindows = budgetLimits.filter(
+          (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+        );
+        if (validWindows.length > 0) {
+          values.budget_limits = validWindows;
+        } else if (budgetLimits.length === 0) {
+          values.budget_limits = [];
+        }
+      } else {
+        for (const field of LOCKED_FIELDS_FOR_NON_PRIVILEGED_EDITOR) {
+          delete values[field];
+        }
       }
 
       // Always send the current per-tag limit map so removing every row
@@ -340,6 +367,22 @@ export function KeyEditView({
 
   return (
     <Form form={form} onFinish={handleSubmit} initialValues={initialValues} layout="vertical">
+      {lockSensitive && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: "8px 12px",
+            background: "#f5f5f5",
+            borderRadius: 6,
+            fontSize: 13,
+            color: "#555",
+          }}
+        >
+          <InfoCircleOutlined style={{ marginRight: 6 }} />
+          Budgets, allowed routes, guardrails and policies, access scope (vector stores, MCP, agents, access groups),
+          and organization or team assignment can only be changed by a team or proxy admin
+        </div>
+      )}
       <Form.Item label="Key Alias" name="key_alias">
         <TextInput />
       </Form.Item>
@@ -426,6 +469,7 @@ export function KeyEditView({
                 placeholder="Select key type"
                 style={{ width: "100%" }}
                 optionLabelProp="label"
+                disabled={lockSensitive}
                 value={keyTypeValue}
                 onChange={(value) => {
                   switch (value) {
@@ -483,15 +527,23 @@ export function KeyEditView({
         }
         name="allowed_routes"
       >
-        <Input placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes" />
+        <Input
+          disabled={lockSensitive}
+          placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes"
+        />
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
-        <NumericalInput step={0.01} style={{ width: "100%" }} placeholder="Enter a numerical value" />
+        <NumericalInput
+          step={0.01}
+          style={{ width: "100%" }}
+          placeholder="Enter a numerical value"
+          disabled={lockSensitive}
+        />
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
-        <Select placeholder="n/a">
+        <Select placeholder="n/a" disabled={lockSensitive}>
           <Select.Option value="daily">Daily</Select.Option>
           <Select.Option value="weekly">Weekly</Select.Option>
           <Select.Option value="monthly">Monthly</Select.Option>
@@ -508,7 +560,7 @@ export function KeyEditView({
           </span>
         }
       >
-        <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+        <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} disabled={lockSensitive} />
       </Form.Item>
 
       <Form.Item
@@ -587,7 +639,7 @@ export function KeyEditView({
               form.setFieldValue("guardrails", v);
             }}
             accessToken={accessToken}
-            disabled={!canEditGuardrails}
+            disabled={!canEditGuardrails || lockSensitive}
           />
         )}
       </Form.Item>
@@ -604,7 +656,7 @@ export function KeyEditView({
         name="disable_global_guardrails"
         valuePropName="checked"
       >
-        <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
+        <Switch disabled={!canEditGuardrails || lockSensitive} checkedChildren="Yes" unCheckedChildren="No" />
       </Form.Item>
 
       <Form.Item
@@ -624,7 +676,7 @@ export function KeyEditView({
               form.setFieldValue("policies", v);
             }}
             accessToken={accessToken}
-            disabled={!premiumUser}
+            disabled={!premiumUser || lockSensitive}
           />
         )}
       </Form.Item>
@@ -671,7 +723,7 @@ export function KeyEditView({
         }
         name="access_group_ids"
       >
-        <AccessGroupSelector placeholder="Select access groups (optional)" />
+        <AccessGroupSelector placeholder="Select access groups (optional)" disabled={lockSensitive} />
       </Form.Item>
 
       <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
@@ -691,7 +743,7 @@ export function KeyEditView({
                   ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
                   : "Select or enter allowed pass through routes"
             }
-            disabled={!premiumUser}
+            disabled={!premiumUser || lockSensitive}
           />
         </Tooltip>
       </Form.Item>
@@ -702,6 +754,7 @@ export function KeyEditView({
           value={form.getFieldValue("vector_stores")}
           accessToken={accessToken || ""}
           placeholder="Select vector stores"
+          disabled={lockSensitive}
         />
       </Form.Item>
 
@@ -712,6 +765,7 @@ export function KeyEditView({
           accessToken={accessToken || ""}
           placeholder="Select MCP servers or access groups (optional)"
           allowNoMcpServers
+          disabled={lockSensitive}
         />
       </Form.Item>
 
@@ -736,6 +790,7 @@ export function KeyEditView({
               )}
               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
               onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
+              disabled={lockSensitive}
             />
           </div>
         )}
@@ -747,6 +802,7 @@ export function KeyEditView({
           value={form.getFieldValue("agents_and_groups")}
           accessToken={accessToken || ""}
           placeholder="Select agents or access groups (optional)"
+          disabled={lockSensitive}
         />
       </Form.Item>
 
@@ -764,7 +820,7 @@ export function KeyEditView({
         <OrganizationDropdown
           organizations={organizations}
           loading={isOrganizationsLoading}
-          disabled={userRole !== "Admin"}
+          disabled={userRole !== "Admin" || lockSensitive}
           onChange={(orgId) => {
             setSelectedOrganizationId(orgId || null);
             form.setFieldValue("team_id", undefined);
@@ -780,7 +836,7 @@ export function KeyEditView({
         <Select
           placeholder="Select team"
           showSearch
-          disabled={enableProjectsUI && hasProject}
+          disabled={(enableProjectsUI && hasProject) || lockSensitive}
           style={{ width: "100%" }}
           onChange={(teamId) => {
             const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;

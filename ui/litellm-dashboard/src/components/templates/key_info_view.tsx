@@ -9,7 +9,12 @@ import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels,
 import { Form, Modal, Tag } from "antd";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import {
+  canTeamMemberUpdateKey,
+  isProxyAdminRole,
+  isUserTeamAdminForSingleTeam,
+  rolesWithWriteAccess,
+} from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -381,14 +386,14 @@ export default function KeyInfoView({
     return `${dateStr} at ${timeStr}`;
   };
 
+  const keyTeam = teamsData?.find((team) => team.team_id === currentKeyData.team_id);
+
   const canModifyKey =
     isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      )) ||
+    isUserTeamAdminForSingleTeam(keyTeam?.members_with_roles ?? null, userID || "") ||
     (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+
+  const canEditKeySettings = canModifyKey || canTeamMemberUpdateKey(keyTeam, userID || "");
 
   const canResetSpend =
     isProxyAdminRole(userRole || "") ||
@@ -648,7 +653,7 @@ export default function KeyInfoView({
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing && canModifyKey && <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>}
+                {!isEditing && canEditKeySettings && <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>}
               </div>
 
               {isEditing ? (
@@ -661,6 +666,7 @@ export default function KeyInfoView({
                   userID={userID}
                   userRole={userRole}
                   premiumUser={premiumUser}
+                  isPrivilegedEditor={canModifyKey}
                 />
               ) : (
                 <div className="space-y-4">

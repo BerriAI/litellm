@@ -721,6 +721,103 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("locks sensitive fields and strips them from submit for a non-privileged editor", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithScope = {
+      ...MOCK_KEY_DATA,
+      team_id: "team-1",
+      max_budget: 100,
+      budget_duration: "30d",
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+      allowed_routes: ["llm_api_routes"],
+      access_group_ids: ["ag-1"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithScope}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"Internal User"}
+        premiumUser={false}
+        isPrivilegedEditor={false}
+      />,
+    );
+
+    const maxBudgetLabel = await screen.findByText(/Max Budget \(USD\)/);
+    const maxBudgetInput = maxBudgetLabel.closest(".ant-form-item")!.querySelector("input")!;
+    expect(maxBudgetInput).toBeDisabled();
+
+    const allowedRoutesInput = screen.getByLabelText(/allowed routes/i);
+    expect(allowedRoutesInput).toBeDisabled();
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      for (const field of [
+        "allowed_routes",
+        "allowed_passthrough_routes",
+        "max_budget",
+        "budget_duration",
+        "budget_limits",
+        "vector_stores",
+        "mcp_servers_and_groups",
+        "mcp_tool_permissions",
+        "agents_and_groups",
+        "access_group_ids",
+        "team_id",
+        "organization_id",
+        "guardrails",
+        "disable_global_guardrails",
+        "policies",
+      ]) {
+        expect(field in callArgs).toBe(false);
+      }
+    });
+  });
+
+  it("keeps sensitive fields editable and submitted for a privileged editor", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithScope = {
+      ...MOCK_KEY_DATA,
+      team_id: "team-1",
+      max_budget: 100,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+      access_group_ids: ["ag-1"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithScope}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+        isPrivilegedEditor={true}
+      />,
+    );
+
+    const maxBudgetLabel = await screen.findByText(/Max Budget \(USD\)/);
+    const maxBudgetInput = maxBudgetLabel.closest(".ant-form-item")!.querySelector("input")!;
+    expect(maxBudgetInput).not.toBeDisabled();
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toEqual([{ budget_duration: "30d", max_budget: 100 }]);
+      expect("team_id" in callArgs).toBe(true);
+      expect("access_group_ids" in callArgs).toBe(true);
+    });
+  });
+
   it("should display 'AI APIs' label for the llm_api key type option", async () => {
     const keyDataWithLlmApiRoutes = {
       ...MOCK_KEY_DATA,
