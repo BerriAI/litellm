@@ -2330,13 +2330,21 @@ def _supports_provider_info_factory(
     return None
 
 
-def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
+def _supports_factory(
+    model: str,
+    custom_llm_provider: Optional[str],
+    key: str,
+    base_model: Optional[str] = None,
+) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
 
     Parameters:
     model (str): The model name to be checked.
     custom_llm_provider (Optional[str]): The provider to be checked.
+    base_model (Optional[str]): If set, used as a fallback when the model
+        string itself is not found in the registry (e.g. custom Azure
+        deployment names).
 
     Returns:
     bool: True if the model supports function calling, False otherwise.
@@ -2367,6 +2375,17 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             supported_by_provider = _supports_provider_info_factory(model, custom_llm_provider, key)
             if supported_by_provider is not None:
                 return supported_by_provider
+
+        # GH#31243: when model is a custom deployment name (e.g.
+        # azure/gpt-5.1_2025-11-13_global) that is not a registry key,
+        # try the configured base_model as a fallback.
+        if base_model is not None and base_model != model:
+            _m, _p, _, _ = litellm.get_llm_provider(
+                model=base_model, custom_llm_provider=custom_llm_provider
+            )
+            _info = _get_model_info_helper(model=_m, custom_llm_provider=_p)
+            if _info.get(key, False) is True:
+                return True
 
         return False
     except Exception as e:
@@ -2408,6 +2427,7 @@ def _is_explicitly_disabled_factory(model: str, custom_llm_provider: Optional[st
                 bare_entry = litellm.model_cost.get(bare_model_key) or {}
                 if bare_entry.get(key) is False:
                     return True
+
         return False
     except Exception as e:
         verbose_logger.debug(
