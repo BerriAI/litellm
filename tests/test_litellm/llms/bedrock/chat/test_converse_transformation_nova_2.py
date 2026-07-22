@@ -206,7 +206,7 @@ class TestNova2ParameterMapping:
         """Test that APAC regional variant of Nova 2 works correctly."""
         config = AmazonConverseConfig()
 
-        model = "apac.amazon.nova-2-lite-v1:0"
+        model = "apac.amazon.nova-2-pro-preview-20251202-v1:0"
         non_default_params = {"reasoning_effort": "high"}
         optional_params = {}
 
@@ -299,7 +299,7 @@ class TestNova15SupportedParameters:
         """Test that APAC regional variant returns same supported params."""
         config = AmazonConverseConfig()
 
-        model = "apac.amazon.nova-2-lite-v1:0"
+        model = "apac.amazon.nova-2-pro-preview-20251202-v1:0"
         supported_params = config.get_supported_openai_params(model)
 
         # Verify reasoning_effort is in supported params
