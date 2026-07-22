@@ -4,14 +4,17 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import (
+    LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    Member,
     NewUserRequest,
     NewUserResponse,
     ProxyException,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     UserProvisionerHelpers,
+    _apply_group_patch_updates,
     _extract_group_member_ids,
     _handle_team_membership_changes,
     _process_group_patch_operations,
@@ -19,6 +22,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     create_group,
     create_user,
     delete_group,
+    get_groups,
     get_users,
     get_service_provider_config,
     patch_group,
@@ -2855,3 +2859,161 @@ async def test_patch_group_rename_recomputes_retained_members(mocker):
 
     recompute_mock.assert_awaited_once()
     assert set(recompute_mock.call_args[0][1]) == {"user1"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_operations_add_retains_existing_members(
+    mocker, monkeypatch
+):
+    """A SCIM group ``add`` operation must not drop members already in the team.
+
+    Team membership lives in members_with_roles; team creation leaves the legacy
+    ``members`` column empty. Seeding the patch result from that empty column
+    made an ``add`` recompute the member set from scratch and remove everyone
+    already in the team. The result set must be seeded from members_with_roles so
+    existing members survive an add of a new one.
+    """
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_upsert_user": True}}
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],  # legacy column intentionally empty, as real teams leave it
+        members_with_roles=[Member(user_id="existing-user", role="user")],
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(op="add", path="members", value=[{"value": "new-user"}])
+        ],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    # new-user already exists in the DB
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock(user_id="new-user")
+    )
+
+    _, final_members = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert final_members == {"existing-user", "new-user"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_operations_remove_uses_members_with_roles(
+    mocker, monkeypatch
+):
+    """A ``remove`` op must diff against members_with_roles, so removing one
+    member leaves the rest of the team intact rather than emptying it."""
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_upsert_user": True}}
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[
+            Member(user_id="keep-user", role="user"),
+            Member(user_id="drop-user", role="user"),
+        ],
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(
+                op="remove", path="members", value=[{"value": "drop-user"}]
+            )
+        ],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock(user_id="drop-user")
+    )
+
+    _, final_members = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert final_members == {"keep-user"}
+
+
+@pytest.mark.asyncio
+async def test_get_groups_reports_members_from_members_with_roles(mocker):
+    """GET /Groups must report members from members_with_roles (the source of
+    truth), not the legacy ``members`` column that team creation leaves empty.
+    Reporting an empty member list makes the IdP repeatedly re-provision."""
+    team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],  # legacy column empty
+        members_with_roles=[Member(user_id="member-1", role="user")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team])
+    mock_prisma_client.db.litellm_teamtable.count = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=mocker.MagicMock(user_id="member-1", user_email="member-1@example.com")
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    response = await get_groups(startIndex=1, count=10, filter=None)
+
+    assert [m.value for m in response.Resources[0].members] == ["member-1"]
+
+
+@pytest.mark.asyncio
+async def test_apply_group_patch_updates_does_not_write_legacy_members(mocker):
+    """The group PATCH apply must not write the legacy ``members`` column.
+
+    Membership is reconciled onto the source of truth (members_with_roles and
+    each member's user.teams) separately; writing the legacy column here too
+    would create a second, unread copy of membership that can drift from the
+    source of truth, which is the inconsistency this PR removes.
+    """
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    updated = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+
+    result = await _apply_group_patch_updates(
+        group_id="team-1",
+        update_data={"team_alias": "Renamed"},
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is updated
+    mock_prisma_client.db.litellm_teamtable.update.assert_awaited_once()
+    written = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
+    assert "members" not in written
+    assert written["team_alias"] == "Renamed"

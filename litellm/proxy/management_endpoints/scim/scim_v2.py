@@ -1654,8 +1654,11 @@ async def get_groups(
         # Convert to SCIM format
         scim_groups = []
         for team in teams:
-            # Get team members with display names
-            members = await _get_team_members_display(team.members or [])
+            # Get team members with display names. members_with_roles is the
+            # source of truth; the legacy `members` column is not populated by
+            # team creation, so reading it here would report an empty member
+            # list to the IdP and trigger repeated re-provisioning.
+            members = await _get_team_members_display(await _get_team_member_user_ids_from_team(team))
             verbose_proxy_logger.debug(f"SCIM GET GROUPS members: {members}")
             team_alias = getattr(team, "team_alias", team.team_id)
             team_created_at = team.created_at.isoformat() if team.created_at else None
@@ -1885,8 +1888,12 @@ async def _process_group_patch_operations(
     existing_metadata = existing_team.metadata or {}
     metadata = dict(existing_metadata) if existing_metadata else {}
 
-    # Track member changes
-    current_members = set(existing_team.members or [])
+    # Track member changes. members_with_roles is the source of truth for team
+    # membership; the legacy `members` column is not populated by team creation
+    # or the real team endpoints, so seeding from it would make an `add`/`remove`
+    # operation recompute the member set from an empty base and silently drop
+    # everyone already in the team.
+    current_members = set(await _get_team_member_user_ids_from_team(existing_team))
     final_members = current_members.copy()
 
     # Process each patch operation
@@ -1963,24 +1970,24 @@ async def _process_group_patch_operations(
     return update_data, final_members
 
 
-async def _apply_group_patch_updates(
-    group_id: str, update_data: Dict[str, Any], final_members: Set[str], prisma_client
-):
-    """Apply patch updates to the group in the database."""
-    # Serialize metadata if present
+async def _apply_group_patch_updates(group_id: str, update_data: Dict[str, Any], prisma_client):
+    """Apply the group's metadata/displayName patch updates to the database.
+
+    Membership itself is not written here; it is reconciled onto the source of
+    truth (members_with_roles and each member's user.teams) by
+    _handle_group_membership_changes via team_member_add/team_member_delete.
+    Writing the legacy `members` column here too would create a second, unread
+    copy of membership that could drift from the source of truth.
+    """
     if "metadata" in update_data and isinstance(update_data["metadata"], dict):
         update_data["metadata"] = safe_dumps(update_data["metadata"])
 
-    # Update members list
-    update_data["members"] = list(final_members)
-
-    # Update team in database
-    updated_team = await TeamRepository(prisma_client).table.update(
-        where={"team_id": group_id},
-        data=update_data,
-    )
-
-    return updated_team
+    if update_data:
+        return await TeamRepository(prisma_client).table.update(
+            where={"team_id": group_id},
+            data=update_data,
+        )
+    return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
 
 
 async def _handle_group_membership_changes(group_id: str, current_members: Set[str], final_members: Set[str]):
@@ -2036,8 +2043,8 @@ async def patch_group(
         # Track current members BEFORE update for comparison
         current_members = set(await _get_team_member_user_ids_from_team(existing_team))
 
-        # Apply updates to the database
-        updated_team = await _apply_group_patch_updates(group_id, update_data, final_members, prisma_client)
+        # Apply the metadata/displayName updates to the database
+        updated_team = await _apply_group_patch_updates(group_id, update_data, prisma_client)
 
         # Refresh team data from database to get the latest state after concurrent updates
         # This prevents race conditions when multiple PATCH requests come in simultaneously
