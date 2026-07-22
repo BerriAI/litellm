@@ -16,22 +16,22 @@ from litellm.proxy.client.cli.commands.autoroute.config import DiscoveredModel
 from litellm.proxy.client.cli.commands.autoroute.wizard import run_configure_wizard
 
 CHAT_AND_EMBEDDING_GROUPS: List[Dict[str, Any]] = [
-    {"model_group": "gpt-4o-mini", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
-    {"model_group": "gpt-4o", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
-    {"model_group": "claude-opus", "mode": "chat"},
-    {"model_group": "o1", "mode": "chat"},
-    {"model_group": "text-embedding-3-small", "mode": "embedding"},
+    {"id": "gpt-4o-mini", "object": "model", "mode": "chat", "max_input_tokens": 128000},
+    {"id": "gpt-4o", "object": "model", "mode": "chat", "max_input_tokens": 128000},
+    {"id": "claude-opus", "object": "model", "mode": "chat"},
+    {"id": "o1", "object": "model", "mode": "chat"},
+    {"id": "text-embedding-3-small", "object": "model", "mode": "embedding"},
 ]
 
 CHAT_ONLY_GROUPS: List[Dict[str, Any]] = [
-    {"model_group": "gpt-4o-mini", "mode": "chat"},
-    {"model_group": "gpt-4o", "mode": "chat"},
-    {"model_group": "claude-opus", "mode": "chat"},
-    {"model_group": "o1", "mode": "chat"},
+    {"id": "gpt-4o-mini", "object": "model", "mode": "chat"},
+    {"id": "gpt-4o", "object": "model", "mode": "chat"},
+    {"id": "claude-opus", "object": "model", "mode": "chat"},
+    {"id": "o1", "object": "model", "mode": "chat"},
 ]
 
 EMBEDDING_ONLY_GROUPS: List[Dict[str, Any]] = [
-    {"model_group": "text-embedding-3-small", "mode": "embedding"},
+    {"id": "text-embedding-3-small", "object": "model", "mode": "embedding"},
 ]
 
 
@@ -73,7 +73,7 @@ def _run(
         patch.object(wizard_module, "_render_and_prompt_for_models", side_effect=_fake_prompt_for_models),
         patch.object(wizard_module, "_render_and_prompt_for_model", side_effect=_fake_prompt_for_model),
     ):
-        mock_client_cls.return_value.model_groups.info.return_value = raw_groups
+        mock_client_cls.return_value.models.list.return_value = raw_groups
         result = runner.invoke(
             _invoke_wizard,
             obj={"base_url": "http://localhost:4000", "api_key": "sk-test"},
@@ -262,7 +262,7 @@ class TestRunConfigureWizardNoChatModels:
 
         assert result.exit_code != 0
         assert result.exception is None or not isinstance(result.exception, AssertionError)
-        assert "Unexpected response from /model_group/info" in result.output
+        assert "Unexpected response from /v1/models" in result.output
         assert not config_path.exists()
 
 
@@ -275,7 +275,7 @@ class TestRunConfigureWizardNotInteractive:
             patch.object(wizard_module, "CONFIG_PATH", config_path),
             patch.object(wizard_module, "_is_interactive", return_value=False),
         ):
-            mock_client_cls.return_value.model_groups.info.return_value = CHAT_AND_EMBEDDING_GROUPS
+            mock_client_cls.return_value.models.list.return_value = CHAT_AND_EMBEDDING_GROUPS
             result = runner.invoke(_invoke_wizard, obj={"base_url": "http://localhost:4000", "api_key": "sk-test"})
 
         assert result.exit_code != 0
