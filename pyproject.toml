@@ -117,6 +117,14 @@ stt-nvidia-riva = [
     "numpy>=1.26.0",
 ]
 google = ["google-cloud-aiplatform>=1.133.0,<2.0"]
+bedrock-realtime = [
+    # Bedrock Nova Sonic realtime (speech-to-speech) uses the
+    # InvokeModelWithBidirectionalStream API, which boto3 cannot do. This
+    # experimental AWS SDK (with its smithy-* deps, pulled transitively)
+    # provides the bidirectional stream; imported lazily in the realtime
+    # handler so litellm core stays usable without it.
+    "aws-sdk-bedrock-runtime>=0.7.0,<0.8.0; python_version >= '3.12'",
+]
 proxy-runtime = [
     # Historically bundled in the proxy Docker images via requirements.txt.
     # Keep these in a dedicated extra so uv-based images preserve the same
