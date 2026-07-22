@@ -1788,9 +1788,15 @@ async def _cache_team_object(
     # the cache from a verified single row.
     if team_table.team_alias:
         alias_key = "team_alias:{}".format(team_table.team_alias)
-        await user_api_key_cache.async_delete_cache(key=alias_key)
+        try:
+            await user_api_key_cache.async_delete_cache(key=alias_key)
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Error deleting team_alias cache: {e}")
         if proxy_logging_obj is not None:
-            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
+            try:
+                await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error deleting internal_usage team_alias cache: {e}")
 
 
 async def _cache_key_object(
@@ -1821,11 +1827,17 @@ async def _delete_cache_key_object(
 ):
     key = hashed_token
 
-    await user_api_key_cache.async_delete_cache(key=key)
+    try:
+        await user_api_key_cache.async_delete_cache(key=key)
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error deleting key cache: {e}")
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        try:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Error deleting internal_usage key cache: {e}")
 
 
 @log_db_metrics
@@ -2018,11 +2030,17 @@ async def _delete_cache_access_object(
 ):
     key = "access_group_id:{}".format(access_group_id)
 
-    await user_api_key_cache.async_delete_cache(key=key)
+    try:
+        await user_api_key_cache.async_delete_cache(key=key)
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error deleting access group cache: {e}")
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        try:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Error deleting internal_usage access group cache: {e}")
 
 
 @log_db_metrics
