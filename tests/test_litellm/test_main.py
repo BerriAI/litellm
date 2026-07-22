@@ -998,6 +998,29 @@ def test_responses_api_bridge_check_dict_effort_none_with_summary_routes_to_resp
     assert model_info.get("mode") == "responses"
 
 
+@pytest.mark.parametrize("blank_api_base", [None, "", "   ", "\t"])
+def test_responses_api_bridge_check_blank_api_base_is_default_openai(blank_api_base):
+    """
+    A blank api_base (None, empty, or whitespace) resolves to the default OpenAI
+    endpoint downstream, which enforces the reasoning+tools constraint, so gpt-5.4+
+    function-tool requests with unset reasoning_effort must still auto-bridge.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base=blank_api_base,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat():
     """
     Chat-only OpenAI-compatible backends registered under the openai provider with a
