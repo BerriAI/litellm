@@ -48,12 +48,16 @@ vi.mock("@/utils/roles", () => ({
   isAdminRole: vi.fn((role: string) => role === "admin"),
 }));
 
-vi.mock("./guardrail_info_helpers", () => ({
-  getGuardrailLogoAndName: vi.fn(() => ({
-    logo: null,
-    displayName: "Test Provider",
-  })),
-}));
+vi.mock("./guardrail_info_helpers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./guardrail_info_helpers")>();
+  return {
+    ...actual,
+    getGuardrailLogoAndName: vi.fn(() => ({
+      logo: null,
+      displayName: "Test Provider",
+    })),
+  };
+});
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
