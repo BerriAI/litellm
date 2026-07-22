@@ -120,6 +120,20 @@ def resize_image_high_res(
     width: int,
     height: int,
 ) -> Tuple[int, int]:
+    """Resize image dimensions to fit within OpenAI high-res image token limits.
+
+    Scales the image so its shorter side is at most ``MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES``
+    (768 px) and its longer side is at most ``MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES`` (2000 px),
+    preserving the original aspect ratio. Images already within these limits are returned
+    unchanged.
+
+    Args:
+        width: Original image width in pixels.
+        height: Original image height in pixels.
+
+    Returns:
+        A ``(width, height)`` tuple with the resized dimensions.
+    """
     # Maximum dimensions for high res mode
     max_short_side = MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
     max_long_side = MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES
@@ -161,6 +175,22 @@ def calculate_tiles_needed(
     tile_width=MAX_TILE_WIDTH,
     tile_height=MAX_TILE_HEIGHT,
 ):
+    """Calculate the number of tiles required to cover a resized image.
+
+    Divides the image into a grid of tiles using ceiling division so that every
+    pixel is covered even when the image dimensions are not exact multiples of
+    the tile size.  Used by the OpenAI vision token-counting logic to determine
+    how many 512 × 512 tiles an image occupies in high-res mode.
+
+    Args:
+        resized_width: Image width in pixels after high-res resizing.
+        resized_height: Image height in pixels after high-res resizing.
+        tile_width: Width of each tile in pixels. Defaults to ``MAX_TILE_WIDTH``.
+        tile_height: Height of each tile in pixels. Defaults to ``MAX_TILE_HEIGHT``.
+
+    Returns:
+        The total number of tiles needed to cover the image.
+    """
     tiles_across = (resized_width + tile_width - 1) // tile_width
     tiles_down = (resized_height + tile_height - 1) // tile_height
     total_tiles = tiles_across * tiles_down
