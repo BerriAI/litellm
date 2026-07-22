@@ -483,8 +483,57 @@ class LiteLLMCompletionResponsesConfig:
                     messages.extend(deduped_in_place)
                     continue
 
-                messages.extend(chat_completion_messages)
+                messages.extend(
+                    message
+                    for message in chat_completion_messages
+                    if not LiteLLMCompletionResponsesConfig._is_blank_assistant_message(message)
+                )
         return messages
+
+    @staticmethod
+    def _is_blank_assistant_message(
+        message: Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+        ],
+    ) -> bool:
+        """
+        Whether an assistant message has no tool calls and no non-empty content.
+
+        Codex-style Responses input includes an assistant message item whose text
+        is empty when that turn only produced a tool call. Converting it yields a
+        content-less assistant message that strict OpenAI-compatible providers
+        (e.g. DeepSeek) reject when it trails an assistant tool_calls message,
+        since a tool_calls message must be followed by tool results.
+        """
+        get = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value
+        role = cast(object, get(message, "role"))
+        if role != "assistant":
+            return False
+        tool_calls = cast(object, get(message, "tool_calls"))
+        if tool_calls:
+            return False
+        content = cast(object, get(message, "content"))
+        if content is None or content == "":
+            return True
+        if isinstance(content, str):
+            return content.strip() == ""
+        if isinstance(content, list):
+            parts = cast(List[object], content)
+            return all(LiteLLMCompletionResponsesConfig._is_empty_text_part(part) for part in parts)
+        return False
+
+    @staticmethod
+    def _is_empty_text_part(part: object) -> bool:
+        if not isinstance(part, dict):
+            return False
+        typed_part = cast(Dict[str, object], part)
+        if typed_part.get("type") not in (None, "text"):
+            return False
+        text = typed_part.get("text")
+        return not (isinstance(text, str) and bool(text.strip()))
 
     @staticmethod
     def _deduplicate_tool_call_output_messages(
