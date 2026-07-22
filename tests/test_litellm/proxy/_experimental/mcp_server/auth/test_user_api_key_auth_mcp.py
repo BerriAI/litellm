@@ -15,6 +15,7 @@ from starlette.datastructures import Headers
 
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
+    _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -205,6 +206,31 @@ class TestMCPRequestHandler:
             result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
 
         assert sorted(result) == sorted(expected)
+
+    async def test_admitted_subject_not_zeroed_by_require_key_mcp_access_defined(self):
+        """10x-flow regression: with require_key_mcp_access_defined ON (team = ceiling for keys), a
+        keyless gateway/bridge-admitted subject whose ONLY access path is team membership must still
+        inherit the team's servers. The flag zeros empty *virtual keys* that must declare their own
+        access; a keyless admitted user has no key to declare it on, so it must not be zeroed."""
+        auth = UserAPIKeyAuth(api_key=None, user_id="sso-user")
+        auth.mcp_admitted_user_subject = True
+        with (
+            patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_key", new_callable=AsyncMock, return_value=[]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=["team_server1", "team_server2"],
+            ),
+            patch.object(
+                MCPRequestHandler, "_get_key_access_group_mcp_server_extras", new_callable=AsyncMock, return_value=[]
+            ),
+            patch("litellm.proxy.proxy_server.general_settings", {"require_key_mcp_access_defined": True}),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert sorted(result) == ["team_server1", "team_server2"]
 
     @pytest.mark.parametrize(
         "key_servers,grants,expected,scenario",
@@ -5302,6 +5328,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             self._patch_user_reload(
                 return_value=MagicMock(
                     user_id="sso-user-7",
+                    organization_id=None,
                     metadata={"scim_active": True},
                     user_role=None,
                     object_permission=None,
@@ -5344,6 +5371,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             self._patch_user_reload(
                 return_value=MagicMock(
                     user_id="sso-user-7",
+                    organization_id=None,
                     metadata={"scim_active": True},
                     user_role=None,
                     object_permission=object_permission,
@@ -5421,7 +5449,9 @@ class TestMCPDcrBridgeDelegateAdmission:
         with (
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            self._patch_user_reload(return_value=MagicMock(user_id="offboarded-user", metadata={"scim_active": False})),
+            self._patch_user_reload(
+                return_value=MagicMock(user_id="offboarded-user", organization_id=None, metadata={"scim_active": False})
+            ),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
@@ -6204,7 +6234,9 @@ class TestAggregateGatewayDcrChallenge:
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope())
         www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
-        assert 'resource_metadata="http://testserver/.well-known/oauth-protected-resource/litellm/mcp"' in www_authenticate
+        assert (
+            'resource_metadata="http://testserver/.well-known/oauth-protected-resource/litellm/mcp"' in www_authenticate
+        )
 
     async def test_no_challenge_for_explicit_litellm_key(self):
         """An explicit x-litellm-api-key declares a litellm-key client; a typo
@@ -6225,9 +6257,7 @@ class TestAggregateGatewayDcrChallenge:
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
         ):
             with pytest.raises(ProxyException):
-                await MCPRequestHandler.process_mcp_request(
-                    self._scope(extra_headers=((b"x-mcp-servers", b"github"),))
-                )
+                await MCPRequestHandler.process_mcp_request(self._scope(extra_headers=((b"x-mcp-servers", b"github"),)))
 
     async def test_no_challenge_for_path_named_server(self):
         """/mcp/{server} targets one server; the aggregate challenge must not
@@ -6261,3 +6291,1394 @@ class TestAggregateGatewayDcrChallenge:
             with pytest.raises(ProxyException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope())
         assert str(exc_info.value.code) == "500"
+
+
+@pytest.mark.asyncio
+class TestGatewaySessionAdmission:
+    """The aggregate /mcp session-bearer admission arm (mcp_gateway_dcr). A valid session
+    token admits under the LIVE litellm user it references; an invalid/expired/refresh/foreign
+    token fails closed with the aggregate invalid_token challenge; the arm fires ONLY at the
+    aggregate scope, never for named servers or per-server flows."""
+
+    _MASTER_KEY = "sk-gateway-session-admission-master-key"
+
+    def _session_bearer(self, user_id="sso-user-42", client_id="llm_dcrc_abc"):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            session_keys_from_master_key,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+            SessionPrincipal,
+            mint_session_token,
+            mint_session_refresh_token,
+        )
+
+        keys = session_keys_from_master_key(self._MASTER_KEY)
+        principal = SessionPrincipal(user_id=user_id, client_id=client_id)
+        return mint_session_token, mint_session_refresh_token, principal, keys
+
+    def _access_token(self, **kw):
+        from datetime import datetime, timezone
+
+        mint, _refresh, principal, keys = self._session_bearer(**kw)
+        return mint(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+
+    def _scope(self, bearer, path="/mcp", extra_headers=()):
+        return {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"host", b"testserver"), (b"authorization", f"Bearer {bearer}".encode()), *extra_headers],
+        }
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _patch_user_reload(*, user_id, active=True, organization_id=None, tpm_limit=None, rpm_limit=None):
+        get_user_object = AsyncMock(
+            return_value=MagicMock(
+                user_id=user_id,
+                organization_id=organization_id,
+                metadata={"scim_active": active} if not active else {"scim_active": True},
+                user_role=None,
+                object_permission=None,
+                object_permission_id=None,
+                tpm_limit=tpm_limit,
+                rpm_limit=rpm_limit,
+            )
+        )
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ):
+            yield get_user_object
+
+    async def test_session_admission_binds_org_id_so_the_org_ceiling_applies(self):
+        """The admitted auth carries the user's org_id, so get_allowed_mcp_servers keeps the
+        org-level MCP ceiling in force for a gateway session instead of skipping it."""
+        token = self._access_token(user_id="org-user")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="org-user", organization_id="org-123"),
+        ):
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert auth_result.org_id == "org-123"
+
+    async def test_session_admission_copies_user_rate_limits(self):
+        """Security regression: the reconstructed auth must carry the live user's RPM/TPM, exactly as
+        the standard user-subject path does. The parallel limiter reads these off the auth object and
+        treats None as unlimited, so a keyless subject with them unset would invoke tools past their
+        configured user rate limits."""
+        token = self._access_token(user_id="rl-user")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="rl-user", tpm_limit=1000, rpm_limit=50),
+        ):
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert auth_result.user_tpm_limit == 1000
+        assert auth_result.user_rpm_limit == 50
+
+    async def test_valid_session_admits_under_live_user_at_aggregate_scope(self):
+        token = self._access_token(user_id="sso-user-42")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            self._patch_user_reload(user_id="sso-user-42") as get_user_object,
+        ):
+            auth_result, _h, _servers, mcp_server_auth_headers, _o, _r = await MCPRequestHandler.process_mcp_request(
+                self._scope(token)
+            )
+        assert get_user_object.await_args.kwargs["user_id"] == "sso-user-42"
+        assert auth_result.user_id == "sso-user-42"
+        mock_auth.assert_not_called()
+        # Identity-only admission injects no per-server upstream credential (unlike the
+        # bridge envelope arm); the headers dict is whatever the request carried, here empty.
+        assert not mcp_server_auth_headers
+
+    async def test_expired_session_fails_closed_with_invalid_token_challenge(self):
+        from datetime import datetime, timezone
+
+        mint, _refresh, principal, keys = self._session_bearer()
+        token = mint(principal, keys, datetime(2020, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert exc_info.value.status_code == 401
+        assert 'error="invalid_token"' in (exc_info.value.headers or {})["WWW-Authenticate"]
+
+    async def test_tampered_session_fails_closed(self):
+        token = self._access_token()
+        tampered = token[:-3] + ("aaa" if not token.endswith("aaa") else "bbb")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(tampered))
+        assert exc_info.value.status_code == 401
+
+    async def test_deactivated_user_fails_with_invalid_token_challenge(self):
+        """A cryptographically valid bearer whose referenced user is SCIM-deactivated must fail with
+        the aggregate invalid_token challenge (WWW-Authenticate), matching the expired/tampered arms,
+        so the DCR client re-authorizes instead of getting a bare 401 with no challenge."""
+        token = self._access_token(user_id="offboarded-user")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="offboarded-user", active=False),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert exc_info.value.status_code == 401
+        assert 'error="invalid_token"' in (exc_info.value.headers or {})["WWW-Authenticate"]
+
+    async def test_session_bearer_scrubbed_from_egress_header_contexts(self):
+        """Security regression (credential leak): after a keyless session admission, the session
+        bearer must be removed from BOTH returned egress header contexts (oauth2_headers and the raw
+        headers) so no passthrough/OBO egress can forward it upstream for replay as this user."""
+        token = self._access_token(user_id="sso-user-42")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="sso-user-42"),
+        ):
+            _auth, _h, _servers, _msah, oauth2_headers, raw_headers = await MCPRequestHandler.process_mcp_request(
+                self._scope(token)
+            )
+        # the request carried "Authorization: Bearer <session>"; both egress contexts must be scrubbed
+        assert oauth2_headers is None
+        assert not any(k.lower() == "authorization" for k in (raw_headers or {}))
+
+    async def test_refresh_token_is_not_admitted_at_the_tool_edge(self):
+        from datetime import datetime, timezone
+
+        _mint, refresh, principal, keys = self._session_bearer()
+        refresh_token = refresh(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(refresh_token))
+        assert exc_info.value.status_code == 401
+
+    async def test_foreign_key_session_fails_closed(self):
+        token = self._access_token()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", "sk-a-totally-different-master-key"),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(token))
+        assert exc_info.value.status_code == 401
+
+    async def test_arm_does_not_fire_for_named_server(self):
+        """A session-shaped bearer aimed at a named server (path scope) does not enter the
+        aggregate arm; it is treated as an ordinary bearer on that server."""
+        token = self._access_token()
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                side_effect=ProxyException(message="bad key", type="auth_error", param="api_key", code=401),
+            ) as mock_auth,
+        ):
+            with pytest.raises((HTTPException, ProxyException)):
+                await MCPRequestHandler.process_mcp_request(self._scope(token, path="/mcp/github"))
+        mock_auth.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestUserSubjectTeamUnion:
+    """_get_allowed_mcp_servers_for_team unions across ALL a user's teams for a keyless
+    user-subject caller (the gateway DCR session bearer and bridge user-envelope), while a
+    key-based caller keeps its single-team behavior byte-identically."""
+
+    def _team(self, team_id, mcp_servers, members=("sso-user",), tool_perms=None):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, Member
+
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            members_with_roles=[Member(user_id=u, role="user") for u in members],
+            access_group_ids=[],
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"op-{team_id}", mcp_servers=mcp_servers, mcp_tool_permissions=tool_perms
+            ),
+        )
+
+    @contextlib.contextmanager
+    def _patch(self, *, teams_by_id, user_teams=None, orgs_by_id=None):
+        async def _get_team_object(team_id, **kw):
+            return teams_by_id.get(team_id)
+
+        async def _get_user_object(user_id, **kw):
+            return MagicMock(user_id=user_id, teams=user_teams or [])
+
+        async def _get_org_object(org_id, **kw):
+            return (orgs_by_id or {}).get(org_id)
+
+        async def _spend_from_fallback(counter_key, fallback_spend, max_budget=None, **kw):
+            # The budget owners read cross-pod spend Redis-first with the row's spend as fallback;
+            # unit tests have no Redis, so the fallback IS the spend.
+            return fallback_spend
+
+        with (
+            patch("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object),
+            patch("litellm.proxy.auth.auth_checks.get_user_object", _get_user_object),
+            patch("litellm.proxy.auth.auth_checks.get_org_object", _get_org_object),
+            patch("litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups", AsyncMock(return_value=[])),
+            patch("litellm.proxy.proxy_server.get_current_spend", _spend_from_fallback),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        ):
+            yield
+
+    @staticmethod
+    def _admitted_subject(user_id):
+        auth = UserAPIKeyAuth(user_id=user_id, api_key=None)
+        auth.mcp_admitted_user_subject = True
+        return auth
+
+    async def test_keyless_user_unions_servers_across_all_their_teams(self):
+        teams = {"team-a": self._team("team-a", ["srv1", "srv2"]), "team-b": self._team("team-b", ["srv2", "srv3"])}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(result) == {"srv1", "srv2", "srv3"}
+
+    async def test_key_based_caller_uses_single_team_only(self):
+        """A key-based caller (api_key set) with a team_id sees ONLY that team, even though the
+        same user belongs to other teams: key auth must be byte-identical to before."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2", "srv3"])}
+        auth = UserAPIKeyAuth(user_id="sso-user", api_key="sk-hash", team_id="team-a")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert set(result) == {"srv1"}
+
+    async def test_keyless_user_with_explicit_team_id_uses_that_team_only(self):
+        """A keyless caller that already pins a team_id (not the user-subject fan-out shape)
+        resolves only that team; the union is strictly for the no-team-id user-subject case."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2"])}
+        auth = UserAPIKeyAuth(user_id="sso-user", api_key=None, team_id="team-a")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert set(result) == {"srv1"}
+
+    async def test_keyless_user_with_no_teams_gets_nothing_from_teams(self):
+        auth = self._admitted_subject("lonely-user")
+        with self._patch(teams_by_id={}, user_teams=[]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert result == []
+
+    async def test_ui_session_team_id_still_resolves_to_nothing(self):
+        from litellm.proxy._types import UI_TEAM_ID
+
+        auth = UserAPIKeyAuth(user_id="dash-user", api_key="sk-hash", team_id=UI_TEAM_ID)
+        with self._patch(teams_by_id={}, user_teams=["team-a"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert result == []
+
+    async def test_team_ids_helper_gates_on_shape(self):
+        from litellm.proxy._types import UI_TEAM_ID
+
+        # key-based with team -> that team
+        assert await MCPRequestHandler._team_ids_for_mcp_grant(
+            UserAPIKeyAuth(api_key="sk", team_id="t1", user_id="u")
+        ) == ["t1"]
+        # An admitted subject never fans out HERE: it resolves one source per team first, and each of
+        # those pins a team_id, so this helper only ever answers the single-team question. The fan-out
+        # itself is _admitted_subject_sources' job, asserted below.
+        with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
+            assert await MCPRequestHandler._team_ids_for_mcp_grant(self._admitted_subject("u")) == []
+        # keyless, no user_id -> nothing
+        assert await MCPRequestHandler._team_ids_for_mcp_grant(UserAPIKeyAuth(api_key=None)) == []
+        # keyless with a user_id but NOT admission-marked (JWT auth) -> nothing (unchanged behavior)
+        with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
+            assert (
+                await MCPRequestHandler._team_ids_for_mcp_grant(UserAPIKeyAuth(api_key=None, user_id="jwt-user")) == []
+            )
+        # UI sentinel -> nothing
+        assert (
+            await MCPRequestHandler._team_ids_for_mcp_grant(
+                UserAPIKeyAuth(api_key="sk", team_id=UI_TEAM_ID, user_id="u")
+            )
+            == []
+        )
+
+    async def test_org_outage_is_not_treated_as_a_missing_org(self):
+        """A CONFIRMED-absent org places no ceiling; a FAILED lookup must not be read as the same
+        fact. get_org_object used to relabel every error as "doesn't exist", so a DB outage silently
+        dropped a real org's ceiling for as long as it lasted. Absent -> the team's grant stands;
+        outage -> the keyless source denies."""
+        from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
+
+        teams = {"t1": self._team("t1", ["srv1"])}
+        teams["t1"].organization_id = "org-a"
+        auth = self._admitted_subject("sso-user")
+
+        absent = AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db."))
+        with self._patch(teams_by_id=teams, user_teams=["t1"]):
+            with patch("litellm.proxy.auth.auth_checks.get_org_object", absent):
+                reachable = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(reachable) == {"srv1"}, "a deleted org places no ceiling"
+
+        outage = AsyncMock(side_effect=RuntimeError("connection reset by peer"))
+        with self._patch(teams_by_id=teams, user_teams=["t1"]):
+            with patch("litellm.proxy.auth.auth_checks.get_org_object", outage):
+                reachable = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert reachable == [], "an unresolvable ceiling must deny a keyless source, not be skipped"
+
+    async def test_org_ceiling_fault_fails_closed_for_admitted_but_open_for_keys(self):
+        """An unresolvable org ceiling is NOT the same fact as "this org places no restriction".
+
+        For a virtual key the ceiling is one of several bounds and a DB blip must not lock working
+        keys out, so it stays fail-open. For a keyless admitted subject the per-source org ceiling is
+        the ONLY org bound, so dropping it on a fault would widen a cross-org user to servers their
+        team's org forbids. That is escalation, not an availability blip, so it fails closed."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        boom = AsyncMock(side_effect=RuntimeError("org lookup exploded"))
+        # The subject must actually REACH something, or the assertion passes either way and pins
+        # nothing (a fail-open mutant survived an earlier version of this test for exactly that).
+        auth = self._admitted_subject("sso-user")
+        auth.org_id = "org-a"
+        auth.object_permission = LiteLLM_ObjectPermissionTable(object_permission_id="op-u", mcp_servers=["srv1"])
+        with self._patch(teams_by_id={}, user_teams=[]):
+            assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == {"srv1"}  # control
+            with patch.object(MCPRequestHandler, "_get_org_object_permission", boom):
+                admitted = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert admitted == [], "admitted subject must fail CLOSED when its org ceiling cannot resolve"
+
+        key_auth = UserAPIKeyAuth(user_id="u", api_key="sk-hash", team_id="t1", org_id="org-a")
+        with self._patch(teams_by_id={"t1": self._team("t1", ["srv1"])}, user_teams=[]):
+            with patch.object(MCPRequestHandler, "_get_org_object_permission", boom):
+                keyed = await MCPRequestHandler.get_allowed_mcp_servers(key_auth)
+        assert set(keyed) == {"srv1"}, "key auth must keep its long-standing fail-open behavior"
+
+    async def test_only_the_attributing_team_bucket_is_charged(self):
+        """A team's mcp_rpm_limit bounds that team's SHARED bucket. Charging every granting team let
+        one cross-team user drain several teams' buckets on a single call, blocking their other
+        members for access those teams did not provide. Exactly one source is charged, and it is the
+        SAME source billing picks — one owner for both, so they cannot disagree."""
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+
+        t1 = self._team("t1", ["srv1"])
+        t1.metadata = {"mcp_rpm_limit": {"srv1": 5}}
+        t2 = self._team("t2", ["srv1"])
+        t2.metadata = {"mcp_rpm_limit": {"srv1": 9}}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id={"t1": t1, "t2": t2}, user_teams=["t1", "t2"]):
+            auth.mcp_source_team_rpm_limits = await MCPRequestHandler._admitted_subject_team_rpm_limits(auth)
+            billed = await MCPRequestHandler.attributing_source_for_server(auth, "srv1")
+        assert auth.mcp_source_team_rpm_limits == {"t1": {"srv1": 5}}, "t2's shared bucket is untouched"
+        assert billed is not None and billed.team_id == "t1", "throttling and billing pick the same source"
+
+        descriptors: list = []
+        limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+        limiter._add_mcp_per_team_rate_limit_descriptor(auth, "srv1", descriptors)
+        charged = {d["value"]: d["rate_limit"]["requests_per_unit"] for d in descriptors}
+        assert charged == {"t1:srv1": 5}, "only the attributing team's bucket is charged"
+
+    async def test_direct_user_grant_charges_no_team_bucket(self):
+        """When the user's OWN grant reaches the server, no team provided the access, so no team
+        bucket may be charged — the user's own rpm/tpm is what bounds them. Mirrors billing, which
+        bills the user and their own org for exactly this case."""
+        t1 = self._team("t1", ["srv1"])
+        t1.metadata = {"mcp_rpm_limit": {"srv1": 5}}
+        auth = self._admitted_subject("sso-user")
+        auth.object_permission = LiteLLM_ObjectPermissionTable(object_permission_id="op-u", mcp_servers=["srv1"])
+        with self._patch(teams_by_id={"t1": t1}, user_teams=["t1"]):
+            limits = await MCPRequestHandler._admitted_subject_team_rpm_limits(auth)
+            billed = await MCPRequestHandler.attributing_source_for_server(auth, "srv1")
+        assert limits is None, "a direct user grant must not charge any team's shared bucket"
+        assert billed is None, "and billing agrees: the user is billed, not a team"
+
+    def _manager_with(self, server_ids, allow_all=()):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        manager = MCPServerManager()
+        for sid in server_ids:
+            manager.registry[sid] = MCPServer(
+                server_id=sid,
+                name=sid,
+                server_name=sid,
+                url="https://example.com/mcp",
+                transport=MCPTransport.http,
+                allow_all_keys=sid in allow_all,
+            )
+        manager._get_active_submitted_mcp_server_ids_for_user = AsyncMock(return_value=[])
+        return manager
+
+    async def test_team_derived_call_bills_the_granting_team_and_its_org(self):
+        """ACCOUNTING half of team budgets. Without attribution the admitted auth kept team_id=None,
+        so spend skipped team updates (the team's budget never accumulated, so it could never begin
+        to block) and charged the user's PRIMARY org rather than the org owning the granting team."""
+        t_grant = self._team("t-grant", ["srv1"])
+        t_grant.organization_id = "org-team"
+        auth = self._admitted_subject("sso-user")
+        auth.org_id = "org-user-primary"
+        with self._patch(teams_by_id={"t-grant": t_grant}, user_teams=["t-grant"]):
+            source = await MCPRequestHandler.attributing_source_for_server(auth, "srv1")
+        assert source is not None and source.team_id == "t-grant"
+        assert source.org_id == "org-team", "the granting team's org is charged, not the user's primary"
+        assert auth.team_id is None and auth.org_id == "org-user-primary", "authz object untouched"
+
+    async def test_billing_auth_carries_team_and_org_onto_the_spend_object(self):
+        """Asserted on billing_auth_for_tool_call itself, not on the source it picks: the source
+        already carries the team's org by construction, so asserting there leaves the copy step
+        unpinned (a mutant dropping org_id survived exactly that). This is the object spend reads."""
+        t_grant = self._team("t-grant", ["srv1"])
+        t_grant.organization_id = "org-team"
+        auth = self._admitted_subject("sso-user")
+        auth.org_id = "org-user-primary"
+        server = MagicMock(server_id="srv1")
+        with self._patch(teams_by_id={"t-grant": t_grant}, user_teams=["t-grant"]):
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager._get_mcp_server_from_tool_name",
+                MagicMock(return_value=server),
+            ):
+                billed = await MCPRequestHandler.billing_auth_for_tool_call(auth, tool_name="t-grant/tool_a")
+        assert (billed.team_id, billed.org_id) == ("t-grant", "org-team")
+        assert (auth.team_id, auth.org_id) == (None, "org-user-primary"), "authz object must be untouched"
+
+    async def test_own_grant_bills_the_user_not_a_team(self):
+        """A server the user's OWN grant reaches is not reached "through a team", so it bills the
+        user and their own org — attributing it to an unrelated team the user happens to belong to
+        would charge that team for access it never provided."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        t_other = self._team("t-other", ["srv1"])
+        auth = self._admitted_subject("sso-user")
+        auth.object_permission = LiteLLM_ObjectPermissionTable(object_permission_id="op-u", mcp_servers=["srv1"])
+        with self._patch(teams_by_id={"t-other": t_other}, user_teams=["t-other"]):
+            assert await MCPRequestHandler.attributing_source_for_server(auth, "srv1") is None
+
+    async def test_billing_attribution_is_deterministic_across_several_granting_teams(self):
+        """When several teams grant the same server the pick must be stable and reproducible rather
+        than dependent on dict/roster ordering, or the same call bills different teams run to run."""
+        teams = {"t-b": self._team("t-b", ["srv1"]), "t-a": self._team("t-a", ["srv1"])}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["t-b", "t-a"]):
+            first = await MCPRequestHandler.attributing_source_for_server(auth, "srv1")
+        with self._patch(teams_by_id=teams, user_teams=["t-a", "t-b"]):
+            second = await MCPRequestHandler.attributing_source_for_server(auth, "srv1")
+        assert first is not None and first.team_id == "t-a"
+        assert second is not None and second.team_id == "t-a", "roster order must not change who is billed"
+
+    async def test_billing_auth_leaves_non_admitted_callers_untouched(self):
+        """Key and JWT billing must be byte-identical: the attribution wrapper returns the very same
+        object for anything that is not a keyless admitted subject."""
+        key_auth = UserAPIKeyAuth(user_id="u", api_key="sk-hash", team_id="t1", org_id="org-a")
+        assert await MCPRequestHandler.billing_auth_for_tool_call(key_auth, tool_name="srv1-tool") is key_auth
+
+    async def test_admitted_tools_never_run_the_single_credential_prelude(self):
+        """ORDERING is the invariant: the admitted branch is the FIRST statement of the tools
+        resolver, exactly as in the servers resolver. A fault in a lookup the subject never uses
+        (its own mcp_toolsets) must not reach it at all — when this branch sat after the prelude,
+        such a fault hit the fail-closed handler and denied tools its teams did grant."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        teams = {"t1": self._team("t1", ["srv1"], tool_perms={"srv1": ["read"]})}
+        auth = self._admitted_subject("sso-user")
+        # The subject must carry a toolset, or the prelude never resolves one and the fault below is
+        # unreachable — the branch could sit anywhere and the test would still pass (it did).
+        auth.object_permission = LiteLLM_ObjectPermissionTable(object_permission_id="op-u", mcp_toolsets=["ts-1"])
+        boom = AsyncMock(side_effect=RuntimeError("toolset resolution exploded"))
+        with self._patch(teams_by_id=teams, user_teams=["t1"]):
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.resolve_toolset_tool_permissions",
+                boom,
+            ):
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        # The fault DOES fire, correctly, inside the subject's own source (which carries its
+        # toolsets) — that source contributes nothing. What must not happen is the top-level
+        # prelude running it first and denying the team's grant through the fail-closed handler.
+        assert tools == ["read"], "a fault in the subject's own toolsets must not deny its team's tools"
+
+    async def test_admitted_own_byom_servers_stay_open(self):
+        """BYOM suppression-by-explicit-scope is a rule about a CREDENTIAL carrying its own
+        mcp_servers list. An admitted subject's object_permission is the user's own row, whose
+        mcp_servers column is [] by DB default — applying the rule would hide almost every admitted
+        user's OWN submitted servers. A key with an explicit scope still gets no BYOM widening."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        manager = self._manager_with(["srv-byom"])
+        manager._get_active_submitted_mcp_server_ids_for_user = AsyncMock(return_value=["srv-byom"])
+        db_default_perm = LiteLLM_ObjectPermissionTable(object_permission_id="op-u", mcp_servers=[])
+
+        admitted = self._admitted_subject("sso-user")
+        admitted.object_permission = db_default_perm
+        scoped_key = UserAPIKeyAuth(user_id="u", api_key="sk-hash", object_permission=db_default_perm)
+
+        assert await manager.operator_open_server_ids(admitted) == {"srv-byom"}
+        assert await manager.operator_open_server_ids(scoped_key) == set(), "explicit key scope still suppresses BYOM"
+
+    async def test_admitted_admin_is_scoped_to_grants_not_full_registry(self):
+        """The wrapper's admin short-circuit hands the FULL registry to any admin-role auth before
+        the grant union or the per-team org ceilings run. A session bearer is a third-party client
+        credential, not the dashboard: an admin signing in through the connect flow gets their
+        grants like anyone else. A real admin key keeps the dashboard behavior unchanged."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        manager = self._manager_with(["srv-granted", "srv-secret"])
+        admitted = self._admitted_subject("admin-user")
+        admitted.user_role = LitellmUserRoles.PROXY_ADMIN
+        with patch.object(MCPRequestHandler, "get_allowed_mcp_servers", AsyncMock(return_value=["srv-granted"])):
+            admitted_view = set(await manager.get_allowed_mcp_servers(admitted))
+            key_admin_view = set(
+                await manager.get_allowed_mcp_servers(
+                    UserAPIKeyAuth(user_id="admin-user", api_key="sk-hash", user_role=LitellmUserRoles.PROXY_ADMIN)
+                )
+            )
+        assert admitted_view == {"srv-granted"}, "an admitted admin gets their grants, not the registry"
+        assert key_admin_view == {"srv-granted", "srv-secret"}, "admin KEY behavior must be unchanged"
+
+    async def test_admitted_opt_out_via_wrapper_keeps_team_servers(self):
+        """The wrapper's no_mcp_servers early-return is a KEY rule (a scoped credential's opt-out is
+        absolute). The admitted subject's opt-out silences only its own source, which the resolver
+        enforces per source — the wrapper must defer to it, or the resolver-level rule is dead code
+        on the production path."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, SpecialMCPServerNames
+
+        manager = self._manager_with(["srv-team"])
+        opt_out = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-u", mcp_servers=[SpecialMCPServerNames.no_mcp_servers.value]
+        )
+        admitted = self._admitted_subject("sso-user")
+        admitted.object_permission = opt_out
+        with patch.object(MCPRequestHandler, "get_allowed_mcp_servers", AsyncMock(return_value=["srv-team"])):
+            admitted_view = set(await manager.get_allowed_mcp_servers(admitted))
+            key_view = await manager.get_allowed_mcp_servers(
+                UserAPIKeyAuth(user_id="u", api_key="sk-hash", object_permission=opt_out)
+            )
+        assert "srv-team" in admitted_view, "user opt-out must not zero team grants on the wrapper path"
+        assert key_view == [], "a key's opt-out stays absolute"
+
+    async def test_open_channel_confers_reachability_not_a_ceiling_waiver(self):
+        """An open channel (allow_all_keys / own BYOM) makes a server REACHABLE. It is not a waiver
+        of the ceilings that bound it: the user's own mcp_tool_permissions still apply, exactly as a
+        virtual key's key_tools do on the same allow_all server. Returning None outright let a
+        session holder invoke tools their own policy excludes."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        auth = self._admitted_subject("sso-user")
+        # The user is restricted to `read` on srv-open, and NO grant source names that server —
+        # it is reachable only through the open channel, which is exactly the bypass path.
+        auth.object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-u", mcp_servers=[], mcp_tool_permissions={"srv-open": ["read"]}
+        )
+        open_ids = AsyncMock(return_value={"srv-open"})
+        with self._patch(teams_by_id={}, user_teams=[]):
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.operator_open_server_ids",
+                open_ids,
+            ):
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv-open", auth)
+        assert tools == ["read"], "the user's own tool policy must still bind on an open-channel server"
+
+    async def test_open_channel_server_gets_default_open_tools_for_admitted(self):
+        """A server reachable through an open channel (allow_all_keys / own BYOM) is granted by NO
+        source, so the source union alone returns [] — listable but uninvokable. The tools axis asks
+        the same open-channel owner the server union uses, so the server is default-open for tools
+        exactly as a virtual key experiences it."""
+        auth = self._admitted_subject("sso-user")
+        open_ids = AsyncMock(return_value={"srv-open"})
+        with self._patch(teams_by_id={}, user_teams=[]):
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.operator_open_server_ids",
+                open_ids,
+            ):
+                open_tools = await MCPRequestHandler.get_allowed_tools_for_server("srv-open", auth)
+                closed_tools = await MCPRequestHandler.get_allowed_tools_for_server("srv-ungranted", auth)
+        assert open_tools is None, "open-channel server must be default-open for tools"
+        assert closed_tools == [], "a server no source or channel grants stays deny-all"
+
+    async def test_over_budget_team_grants_nothing_and_healthy_team_stands(self):
+        """Budget ENFORCEMENT is the sibling of blocked: a team that has already exceeded its
+        max_budget is rejected outright for a virtual key pinned to it (common_checks), so it must
+        not keep granting servers, tools or throttle scope to a keyless union subject either.
+        Enforced through the SAME owner the key path uses (_team_max_budget_check). Distinct from
+        budget ATTRIBUTION of new spend, which stays with the user (documented deferral)."""
+        t_over = self._team("t-over", ["srv1"])
+        t_over.max_budget = 10.0
+        t_over.spend = 11.0
+        t_ok = self._team("t-ok", ["srv2"])
+        t_ok.max_budget = 10.0
+        t_ok.spend = 1.0
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id={"t-over": t_over, "t-ok": t_ok}, user_teams=["t-over", "t-ok"]):
+            servers = set(await MCPRequestHandler.get_allowed_mcp_servers(auth))
+            limits = await MCPRequestHandler._admitted_subject_team_rpm_limits(auth)
+        assert servers == {"srv2"}, "an over-budget team must stop granting; the healthy team stands"
+        assert limits is None, "an over-budget team is not a source, so it stamps no throttle either"
+
+    async def test_team_in_over_budget_org_grants_nothing(self):
+        """The org axis of the same rule, judged against the TEAM's own org (not the caller's
+        primary): a team owned by an org over its budget grants nothing, exactly as a key in that
+        org is rejected by _organization_max_budget_check."""
+        t_in_broke_org = self._team("t-b", ["srv1"])
+        t_in_broke_org.organization_id = "org-broke"
+        # object_permission_id=None: the org has NO MCP ceiling, so the source is denied by the
+        # budget gate alone. A truthy auto-Mock id here made an earlier version of this test pass
+        # through the org-CEILING fault path with the budget gate deleted — vacuous.
+        org = MagicMock(object_permission_id=None, litellm_budget_table=MagicMock(max_budget=5.0), spend=9.0)
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id={"t-b": t_in_broke_org}, user_teams=["t-b"], orgs_by_id={"org-broke": org}):
+            servers = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert servers == [], "a team in an over-budget org must not grant through the union"
+
+    async def test_one_faulting_team_does_not_deny_the_other_sources(self):
+        """The unit of fault isolation is the SOURCE. One team's row being momentarily unreadable
+        contributes nothing for THAT team (access only narrows) while the user's own grants and every
+        other resolvable team stand — it must not collapse the whole union to deny-all on either
+        axis."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        t_ok = self._team("t-ok", ["srv1"], tool_perms={"srv1": ["read"]})
+        auth = self._admitted_subject("sso-user")
+        auth.object_permission = LiteLLM_ObjectPermissionTable(object_permission_id="op-u", mcp_servers=["srv-own"])
+        teams = {"t-ok": t_ok}  # t-boom absent from the map -> our patched get_team_object RAISES for it
+
+        async def _team_or_boom(team_id, **kw):
+            if team_id not in teams:
+                raise RuntimeError(f"transient DB blip loading {team_id}")
+            return teams[team_id]
+
+        with self._patch(teams_by_id=teams, user_teams=["t-boom", "t-ok"]):
+            with patch("litellm.proxy.auth.auth_checks.get_team_object", _team_or_boom):
+                servers = set(await MCPRequestHandler.get_allowed_mcp_servers(auth))
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert servers == {"srv-own", "srv1"}, "healthy sources must stand when one team faults"
+        assert tools == ["read"], "the healthy team's tool grant must survive the other team's fault"
+
+    async def test_key_org_tool_ceiling_fault_keeps_key_restrictions(self):
+        """Virtual-key tools axis mirrors its servers axis on an unresolvable org ceiling: the org
+        intersect is SKIPPED and the key's own tool restrictions stand. Letting the fault escape
+        collapsed the whole resolution to None (allow-all), which is fail-open WIDER than before the
+        fault — key restrictions must never be dropped by an org lookup blip."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        key_auth = UserAPIKeyAuth(user_id="u", api_key="sk-hash", org_id="org-a")
+        key_auth.object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-k", mcp_servers=["srv1"], mcp_tool_permissions={"srv1": ["read"]}
+        )
+        boom = AsyncMock(side_effect=RuntimeError("org permission load exploded"))
+        with self._patch(teams_by_id={}, user_teams=[]):
+            with patch.object(MCPRequestHandler, "_get_org_object_permission", boom):
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", key_auth)
+        assert tools == ["read"], "key tool restrictions must survive an unresolvable org ceiling"
+
+    async def test_team_rpm_limit_binds_only_within_that_teams_grant_scope(self):
+        """A limit rides the same scope as the access it bounds. A roster team is charged ONLY for
+        servers its own grant reaches: not for a server the user reaches through a DIFFERENT team
+        (else this user's calls drain a bucket shared by that team's keys for access the team never
+        provided), not for map entries beyond its grant, and never when the team is blocked."""
+        # t-granting grants srv1 and limits it; also names srv9 in its map, which it does NOT grant.
+        t_granting = self._team("t-granting", ["srv1"])
+        t_granting.metadata = {"mcp_rpm_limit": {"srv1": 5, "srv9": 7}}
+        # t-other grants only srv2 but retains limit metadata for srv1 -> must not be charged for it.
+        t_other = self._team("t-other", ["srv2"])
+        t_other.metadata = {"mcp_rpm_limit": {"srv1": 3}}
+        # t-blocked grants srv1 and limits it, but is blocked -> grants nothing, charges nothing.
+        t_blocked = self._team("t-blocked", ["srv1"])
+        t_blocked.metadata = {"mcp_rpm_limit": {"srv1": 2}}
+        t_blocked.blocked = True
+
+        auth = self._admitted_subject("sso-user")
+        teams = {"t-granting": t_granting, "t-other": t_other, "t-blocked": t_blocked}
+        with self._patch(teams_by_id=teams, user_teams=["t-granting", "t-other", "t-blocked"]):
+            limits = await MCPRequestHandler._admitted_subject_team_rpm_limits(auth)
+
+        assert limits == {"t-granting": {"srv1": 5}}, (
+            "only the granting team's bucket, and only for the server it grants"
+        )
+
+    async def test_non_roster_team_rpm_limit_does_not_apply(self):
+        """The roster gates grants and throttles through one owner, so a team the user was removed
+        from neither grants servers nor gets charged for their calls."""
+        stale = self._team("t-stale", ["srv1"], members=("someone-else",))
+        stale.metadata = {"mcp_rpm_limit": {"srv1": 1}}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id={"t-stale": stale}, user_teams=["t-stale"]):
+            limits = await MCPRequestHandler._admitted_subject_team_rpm_limits(auth)
+        assert limits is None
+
+    async def test_org_list_caps_a_source_but_never_becomes_a_grant(self):
+        """The admitted model is a union of GRANTS, so an org allowlist may only narrow what a source
+        already grants. For a virtual key with no lower-level restriction the org list legitimately
+        BECOMES the allowed set, and inheriting that arm would hand every admitted user with an
+        org_id their whole org's server list with no direct or team grant behind it."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        auth = self._admitted_subject("sso-user")
+        auth.org_id = "org-a"  # org allows srv1+srv2; the user and their teams grant NOTHING
+        org_perm = AsyncMock(
+            return_value=LiteLLM_ObjectPermissionTable(object_permission_id="op-org-a", mcp_servers=["srv1", "srv2"])
+        )
+        with self._patch(teams_by_id={}, user_teams=[]):
+            with patch.object(MCPRequestHandler, "_get_org_object_permission", org_perm):
+                result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert result == [], "an org ceiling must not grant servers the user was never granted"
+
+    async def test_tool_ceiling_fails_closed_when_a_SOURCE_faults(self):
+        """Each source is resolved through an UNMARKED auth, so a fault under a source must still
+        deny. Returning None there would win the union as allow-all and drop every team/org tool
+        ceiling on a DB blip -- the marker alone only covers faults raised before the fan-out."""
+        auth = self._admitted_subject("sso-user")
+        teams = {"t1": self._team("t1", ["srv1"])}
+        # Fault INSIDE the tool resolution only. Faulting something the server path also uses would
+        # make the source grant nothing, so the union would return [] without the tool path ever
+        # running -- the test would pass while pinning nothing (an earlier version did exactly that).
+        boom = AsyncMock(side_effect=RuntimeError("org tool ceiling exploded"))
+        with self._patch(teams_by_id=teams, user_teams=["t1"]):
+            assert await MCPRequestHandler.get_allowed_mcp_servers(auth) == ["srv1"]  # control: granted
+            with patch.object(MCPRequestHandler, "_apply_agent_and_org_tool_ceilings", boom):
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == [], "a source-level fault must deny tools, never collapse to allow-all"
+
+    async def test_own_opt_out_silences_only_that_source_not_the_teams(self):
+        """no_mcp_servers on the USER's own grants opts that source out. It must not zero the teams:
+        the sources are independent, so an opt-out on one silences one. (The same sentinel on a
+        virtual KEY still overrides team inheritance -- that is the key ceiling model, unchanged.)"""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, SpecialMCPServerNames
+
+        auth = self._admitted_subject("sso-user")
+        auth.object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-user", mcp_servers=[SpecialMCPServerNames.no_mcp_servers.value]
+        )
+        with self._patch(teams_by_id={"t1": self._team("t1", ["srv1"])}, user_teams=["t1"]):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(result) == {"srv1"}, "the user's own opt-out must not zero their team's grants"
+
+    async def test_sources_fan_out_per_team_and_drop_non_roster_teams(self):
+        """The fan-out lives here now. One source per grant source: the user's own grants (no team_id,
+        carrying their object_permission) plus each team they are a LIVE roster member of. A team that
+        lingers in the user's cached `teams` array but no longer lists them in members_with_roles is
+        dropped, which is what revokes access after a team_member_delete the user row hasn't caught up
+        on. Each team source carries that team's own org, which is what makes the shared resolver apply
+        the team's owning-org ceiling rather than the caller's home org."""
+        teams = {
+            "t-member": self._team("t-member", ["srv1"], members=("sso-user",)),
+            "t-stale": self._team("t-stale", ["srv2"], members=("someone-else",)),
+        }
+        teams["t-member"].organization_id = "org-a"
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["t-member", "t-stale"]):
+            sources = await MCPRequestHandler._admitted_subject_sources(auth)
+
+        assert [(s.team_id, s.org_id) for s in sources] == [(None, None), ("t-member", "org-a")]
+        # The user's own source carries their grants; a team source must NOT, or the team would be
+        # widened by grants the team never made.
+        assert sources[0].object_permission is auth.object_permission
+        assert sources[1].object_permission is None
+        # Every source is an ordinary caller, so it cannot re-enter the admitted fan-out.
+        assert all(not s.mcp_admitted_user_subject for s in sources)
+        # Nothing that meters or elevates the request may ride along onto a per-source clone.
+        assert all(s.api_key is None and s.user_role is None for s in sources)
+
+    async def test_jwt_keyless_user_without_team_claim_does_not_union(self):
+        """Regression for the review finding: a JWT-authenticated caller is also keyless with a
+        user_id and (with no team claim) no team_id, but it is NOT admission-marked, so it must
+        keep its prior behavior of inheriting no team grants rather than silently gaining the
+        union across every team the user belongs to."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2"])}
+        jwt_auth = UserAPIKeyAuth(user_id="jwt-user", api_key=None)  # no admission marker
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(jwt_auth)
+        assert result == []
+
+    async def test_forged_metadata_marker_on_a_real_key_grants_no_union(self):
+        """Security regression (forged admission marker): the admitted-subject marker is a
+        server-only ``UserAPIKeyAuth`` field, NOT a metadata key, precisely because virtual-key
+        metadata is caller-controlled at key creation. A user who sets
+        ``mcp_admitted_user_subject: true`` in their own key's metadata (api_key present, no
+        team_id) must NOT be treated as an admitted subject and must gain no cross-team union."""
+        teams = {"team-a": self._team("team-a", ["srv1"]), "team-b": self._team("team-b", ["srv2"])}
+        forged = UserAPIKeyAuth(
+            user_id="attacker",
+            api_key="sk-real-key",
+            metadata={"mcp_admitted_user_subject": True},  # caller-forged marker in key metadata
+        )
+        assert _is_mcp_admitted_user_subject(forged) is False
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
+            assert await MCPRequestHandler._team_ids_for_mcp_grant(forged) == []
+            assert await MCPRequestHandler._get_allowed_mcp_servers_for_team(forged) == []
+
+    async def test_admitted_subject_team_tool_restriction_binds(self):
+        """Security regression (team tool restrictions bypassed): a keyless admitted subject whose
+        granting team restricts ``srv1`` to ``{tool_a}`` must NOT receive allow-all on srv1. The
+        single-team-id tool lookup returns None (allow-all) for a keyless multi-team user, dropping
+        the exclusion; the union across granting teams restores it."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, Member
+
+        team = LiteLLM_TeamTable(
+            team_id="team-a",
+            members_with_roles=[Member(user_id="sso-user", role="user")],
+            access_group_ids=[],
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-team-a",
+                mcp_servers=["srv1"],
+                mcp_tool_permissions={"srv1": ["tool_a"]},
+            ),
+        )
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id={"team-a": team}, user_teams=["team-a"]):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == ["tool_a"]
+
+    async def test_blocked_team_grants_no_servers_to_admitted_subject(self):
+        """Security regression: a blocked team grants nothing. The central policy gate enforces this
+        for a key pinned to a single team_id, but a keyless admitted subject unions across ALL its
+        teams (no team_id), so a blocked team's MCP grants must be dropped at the per-team resolver."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, Member
+
+        blocked = LiteLLM_TeamTable(
+            team_id="team-blocked",
+            blocked=True,
+            members_with_roles=[Member(user_id="sso-user", role="user")],
+            access_group_ids=[],
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-blk", mcp_servers=["srv-secret"]),
+        )
+        teams = {"team-ok": self._team("team-ok", ["srv-ok"]), "team-blocked": blocked}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-ok", "team-blocked"]):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(result) == {"srv-ok"}
+
+    async def test_admitted_subject_not_on_team_roster_gets_no_grant(self):
+        """Security regression (membership containment): a keyless subject whose user_id is NOT on a
+        team's roster inherits nothing from it, even when the team id lingers in the user's (stale or
+        cached) teams array. The team roster is the source of truth, so a removed or foreign
+        membership revokes access at the union rather than granting it."""
+        teams = {"team-x": self._team("team-x", ["srv-x"], members=("someone-else",))}
+        auth = self._admitted_subject("sso-user")  # in user.teams for team-x, but NOT on its roster
+        with self._patch(teams_by_id=teams, user_teams=["team-x"]):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(auth)
+        assert result == []
+
+    async def test_tool_resolution_fails_closed_on_db_error(self):
+        """Security regression: ANY error resolving the tool allowlist for a keyless admitted subject
+        must DENY the server's tools ([]) rather than collapse to allow-all (None). Patches an await
+        OUTSIDE the multi-team fan-out (the team-object lookup) to prove the whole function fails
+        closed, not just the one helper — mirroring the fail-closed server path."""
+        auth = self._admitted_subject("sso-user")
+        with patch.object(
+            MCPRequestHandler,
+            "_get_team_object_permission",
+            new=AsyncMock(side_effect=RuntimeError("db blip")),
+        ):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == []
+
+    async def test_admission_marker_cannot_be_set_from_validated_input(self):
+        """Defense-in-depth: the mcp_admitted_user_subject marker is server-only. Supplying it in any
+        validated input (constructor kwargs OR model_validate, e.g. a future JWT/key claim splat) is
+        stripped by the before-validator, so ONLY the admission path's post-construction assignment
+        can set it."""
+        via_kwarg = UserAPIKeyAuth(user_id="u", api_key=None, mcp_admitted_user_subject=True)
+        via_validate = UserAPIKeyAuth.model_validate({"user_id": "u", "mcp_admitted_user_subject": True})
+        assert via_kwarg.mcp_admitted_user_subject is False
+        assert via_validate.mcp_admitted_user_subject is False
+        assert _is_mcp_admitted_user_subject(via_kwarg) is False
+        assert _is_mcp_admitted_user_subject(via_validate) is False
+
+
+@pytest.mark.asyncio
+class TestAdmittedSubjectPerTeamOrgCap:
+    """A keyless admitted subject unions grants across teams that may span organizations. Each team's
+    grant (servers AND tools) is capped by that team's OWN org, and the user's direct grants by the
+    user's own org — never the caller's primary org applied over the whole cross-org union. Guards the
+    Veria 'team grants bypass their owning policies' finding."""
+
+    def _team(self, team_id, mcp_servers, *, org_id=None, tool_perms=None, members=("sso-user",)):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, Member
+
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            organization_id=org_id,
+            members_with_roles=[Member(user_id=u, role="user") for u in members],
+            access_group_ids=[],
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"op-{team_id}",
+                mcp_servers=mcp_servers,
+                mcp_tool_permissions=tool_perms,
+            ),
+        )
+
+    @staticmethod
+    def _admitted_subject(user_id, *, org_id=None, own_servers=None, own_tool_perms=None):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        op = None
+        if own_servers is not None or own_tool_perms is not None:
+            op = LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"userop-{user_id}",
+                mcp_servers=own_servers or [],
+                mcp_tool_permissions=own_tool_perms,
+            )
+        auth = UserAPIKeyAuth(user_id=user_id, api_key=None, org_id=org_id, object_permission=op)
+        auth.mcp_admitted_user_subject = True
+        return auth
+
+    #: sentinel for org_perms: org has an object_permission_id but its load returns None (a swallowed
+    #: DB error / dangling id), which _object_permission_for_org must treat as fail-closed.
+    LOAD_FAILS = "__load_fails__"
+
+    @contextlib.contextmanager
+    def _patch(self, *, teams_by_id, user_teams, org_perms=None, registry=None):
+        """org_perms: {org_id: LiteLLM_ObjectPermissionTable | None | LOAD_FAILS}.
+        - table  → org exists, ceiling = that permission.
+        - None   → org exists but carries no object_permission (no ceiling).
+        - LOAD_FAILS → org exists with an object_permission_id, but the permission load returns None.
+        - org_id ABSENT from the map → org row missing: get_org_object RAISES a bare Exception, exactly
+          as production does (it does NOT return None or raise HTTPException)."""
+        org_perms = org_perms or {}
+
+        async def _get_team_object(team_id, **kw):
+            return teams_by_id.get(team_id)
+
+        async def _get_user_object(user_id, **kw):
+            return MagicMock(user_id=user_id, teams=user_teams)
+
+        async def _get_org_object(org_id, **kw):
+            if org_id not in org_perms:
+                from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
+
+                # matches production: a CONFIRMED-absent org raises this specific type, so callers
+                # can tell it apart from an outage (a bare Exception now means "lookup failed").
+                raise OrganizationNotFoundError(f"Organization doesn't exist. Org={org_id}.")
+            op = org_perms[org_id]
+            has_permission_id = op is not None  # a table OR LOAD_FAILS carries an id; None does not
+            return MagicMock(
+                organization_id=org_id,
+                object_permission_id=(f"orgop-{org_id}" if has_permission_id else None),
+                # Real typed values: the budget owners compare these, and a bare MagicMock attribute
+                # would explode the comparison and silently drop the source (bare-Mock rule).
+                litellm_budget_table=None,
+                spend=0.0,
+            )
+
+        async def _get_object_permission(object_permission_id, **kw):
+            for oid, op in org_perms.items():
+                if op is not None and op != self.LOAD_FAILS and object_permission_id == f"orgop-{oid}":
+                    return op
+            return None  # LOAD_FAILS (or an unknown id) → None, simulating get_object_permission's swallow
+
+        cms = [
+            patch("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object),
+            patch("litellm.proxy.auth.auth_checks.get_user_object", _get_user_object),
+            patch("litellm.proxy.auth.auth_checks.get_org_object", _get_org_object),
+            patch("litellm.proxy.auth.auth_checks.get_object_permission", _get_object_permission),
+            patch(
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                AsyncMock(return_value=[]),
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        ]
+        if registry is not None:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            # registry may be a list of bare server_ids (MagicMock servers) OR a dict of
+            # {server_id: server_obj} for tests that need real alias/name resolution (config servers).
+            reg = registry if isinstance(registry, dict) else {s: MagicMock() for s in registry}
+            cms.append(patch.object(global_mcp_server_manager, "get_registry", return_value=reg))
+        with contextlib.ExitStack() as es:
+            for cm in cms:
+                es.enter_context(cm)
+            yield
+
+    # ---- server axis ----
+
+    async def test_team_grant_capped_by_its_own_org(self):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        teams = {"team-a": self._team("team-a", ["srv1", "srv2"], org_id="org-a")}
+        org_perms = {"org-a": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-a", mcp_servers=["srv1"])}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms=org_perms):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(result) == {"srv1"}  # srv2 capped out by org-a's ceiling
+
+    async def test_cross_org_teams_each_capped_by_own_org(self):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        teams = {
+            "team-a": self._team("team-a", ["srv1", "srv2"], org_id="org-a"),
+            "team-b": self._team("team-b", ["srv3", "srv4"], org_id="org-b"),
+        }
+        org_perms = {
+            "org-a": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-a", mcp_servers=["srv1"]),
+            "org-b": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-b", mcp_servers=["srv3"]),
+        }
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"], org_perms=org_perms):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(result) == {"srv1", "srv3"}  # each team clipped by its OWN org, then unioned
+
+    async def test_all_proxy_grant_capped_by_org(self):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, SpecialMCPServerName
+
+        teams = {"team-a": self._team("team-a", [SpecialMCPServerName.all_proxy_servers.value], org_id="org-a")}
+        org_perms = {"org-a": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-a", mcp_servers=["srv1"])}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(
+            teams_by_id=teams, user_teams=["team-a"], org_perms=org_perms, registry=["srv1", "srv2", "srv3"]
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        # all_proxy expands to the whole registry, then org-a caps to {srv1} — the cell the old partial
+        # patch missed (it returned the full registry before capping).
+        assert set(result) == {"srv1"}
+
+    async def test_org_row_without_object_permission_does_not_cap(self):
+        teams = {"team-a": self._team("team-a", ["srv1", "srv2"], org_id="org-a")}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms={"org-a": None}):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(result) == {"srv1", "srv2"}  # empty ceiling = no restriction
+
+    async def test_direct_grants_unioned_with_team_and_capped_by_user_org(self):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        teams = {"team-a": self._team("team-a", ["srv1"], org_id="org-a")}
+        org_perms = {
+            "org-a": None,  # the team's org imposes no ceiling
+            "org-u": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-u", mcp_servers=["srvD", "srv1"]),
+        }
+        auth = self._admitted_subject("sso-user", org_id="org-u", own_servers=["srvD", "srvX"])
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms=org_perms):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        # direct {srvD,srvX} ∩ user-org {srvD,srv1} = {srvD}; UNIONed with team {srv1} (not intersected).
+        # srvX capped out by the user's org; team's srv1 NOT clipped by the user's primary org.
+        assert set(result) == {"srvD", "srv1"}
+
+    async def test_single_team_key_uses_primary_org_cap_not_per_team(self):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        # A KEY (not admitted): the per-team org cap must NOT fire; the top-level primary-org cap applies,
+        # byte-identical to before. team-a (org-a) grants {srv1,srv2}; the key's primary org is org-k.
+        teams = {"team-a": self._team("team-a", ["srv1", "srv2"], org_id="org-a")}
+        org_perms = {
+            "org-a": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-a", mcp_servers=["srv2"]),
+            "org-k": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-k", mcp_servers=["srv1"]),
+        }
+        key_auth = UserAPIKeyAuth(user_id="u", api_key="sk-hash", team_id="team-a", org_id="org-k")
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms=org_perms):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(key_auth)
+        # If the per-team (org-a) cap wrongly fired, team-a would clip to {srv2} then org-k → {} (empty).
+        # Correct key behavior: no per-team cap; primary-org (org-k) cap → {srv1}.
+        assert set(result) == {"srv1"}
+
+    # ---- tool axis ----
+
+    async def test_org_tool_ceiling_binds_when_team_places_no_tool_restriction(self):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        # team grants srv1 with NO tool restriction; org-a restricts srv1's tools to {tool_a}.
+        teams = {"team-a": self._team("team-a", ["srv1"], org_id="org-a")}
+        org_perms = {
+            "org-a": LiteLLM_ObjectPermissionTable(
+                object_permission_id="orgop-org-a",
+                mcp_servers=["srv1"],
+                mcp_tool_permissions={"srv1": ["tool_a"]},
+            )
+        }
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms=org_perms):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        # Without the per-team org tool ceiling this would be None (all tools) — org-a's tool ceiling
+        # would be bypassed exactly like the server case.
+        assert tools == ["tool_a"]
+
+    async def test_tool_union_across_cross_org_teams(self):
+        teams = {
+            "team-a": self._team("team-a", ["srv1"], org_id="org-a", tool_perms={"srv1": ["t1"]}),
+            "team-b": self._team("team-b", ["srv1"], org_id="org-b", tool_perms={"srv1": ["t2"]}),
+        }
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"], org_perms={"org-a": None, "org-b": None}):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert set(tools) == {"t1", "t2"}
+
+    async def test_tool_deny_all_when_team_grant_and_org_tool_ceiling_disjoint(self):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        teams = {"team-a": self._team("team-a", ["srv1"], org_id="org-a", tool_perms={"srv1": ["t1"]})}
+        org_perms = {
+            "org-a": LiteLLM_ObjectPermissionTable(
+                object_permission_id="orgop-org-a",
+                mcp_servers=["srv1"],
+                mcp_tool_permissions={"srv1": ["t2"]},
+            )
+        }
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms=org_perms):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        # team {t1} ∩ org {t2} = {} → deny every tool ([]), NOT allow-all (None).
+        assert tools == []
+
+    # ---- error contract (adversarial-review findings) ----
+
+    async def test_missing_org_row_is_treated_as_no_ceiling_not_lockout(self):
+        """A team's organization_id may point to an org row that no longer exists (deleted / not yet
+        synced). get_org_object RAISES a bare Exception for that; it must be treated as 'no ceiling' and
+        must NOT lock the admitted subject out of the team's grants (parity with the key path, which
+        tolerates a deleted org)."""
+        teams = {"team-a": self._team("team-a", ["srv1", "srv2"], org_id="org-gone")}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms={}):  # org-gone absent → raises
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(result) == {"srv1", "srv2"}
+
+    async def test_org_permission_load_failure_fails_closed(self):
+        """The org carries an object_permission_id but the permission load returns None (a swallowed DB
+        error / dangling id). The ceiling cannot be verified, so the admitted subject must fail CLOSED
+        for that team — NOT skip the ceiling, which would leak org-forbidden servers."""
+        teams = {"team-a": self._team("team-a", ["srv1", "srv2"], org_id="org-a")}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms={"org-a": self.LOAD_FAILS}):
+            # Asserted through the PUBLIC resolver: the per-source org ceiling is applied there now,
+            # so calling the single-team helper would return [] for an admitted subject either way
+            # and pin nothing.
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert result == []  # fail closed, not {srv1, srv2}
+
+    # ---- open bot-thread findings (2026-07-21 re-review) ----
+
+    async def test_org_less_team_grant_capped_by_user_primary_org(self):
+        """HIGH (cursor): a team with NO organization_id must still be bounded by the user's PRIMARY
+        org — otherwise, since admitted subjects skip the top-level primary-org cap, an org-less team's
+        grant would bypass every org ceiling and reach servers the user's home org forbids."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        teams = {"team-noorg": self._team("team-noorg", ["srv1", "srv2"], org_id=None)}
+        org_perms = {"org-U": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-U", mcp_servers=["srv1"])}
+        auth = self._admitted_subject("sso-user", org_id="org-U")
+        with self._patch(teams_by_id=teams, user_teams=["team-noorg"], org_perms=org_perms):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        # org-less team falls back to the user's primary org (org-U → {srv1}); srv2 capped out.
+        assert set(result) == {"srv1"}
+
+    async def test_tool_empty_contributions_fails_closed(self):
+        """MEDIUM (greptile/cursor): when no source in the tool-resolution view grants the server (a
+        TOCTOU/cache-lag inconsistency on a server that passed the server gate), the admitted path must
+        fail CLOSED (deny all tools = []), NOT allow-all (None)."""
+        teams = {"team-a": self._team("team-a", ["srv1"], org_id="org-a")}
+        auth = self._admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-a"], org_perms={"org-a": None}):
+            # 'srv-nobody' is granted by neither the team nor the user directly → empty contributions.
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv-nobody", auth)
+        assert tools == []
+
+    async def test_tool_no_db_honors_in_memory_direct_restriction(self):
+        """MEDIUM (cursor): with no DB, the tool path must still honor the user's OWN in-memory
+        object_permission tool restriction (resolvable without a DB) rather than blanket-allow (None)."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        auth = self._admitted_subject(
+            "sso-user", own_servers=["srv1"], own_tool_perms={"srv1": ["t1"]}
+        )  # no org_id, direct grant of srv1 restricted to {t1}
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == ["t1"]  # in-memory restriction honored, not widened to all tools
+
+    # ---- config.yaml-defined servers (incl. OAuth) ----
+
+    async def test_config_defined_oauth_server_by_alias_reached_and_org_capped(self):
+        """A config.yaml-defined MCP OAuth server flows through the SAME resolution as a DB server:
+        the team grant (and the org ceiling) reference it by ALIAS, expand_permission_list resolves it
+        via the config+DB registry union to its server_id, and the per-team org cap applies identically.
+        (The config server's OAuth *client* persistence is #33768 — an orthogonal egress concern; this
+        pins the grant/reachability side of the 10x flow for config-defined servers.)"""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        cfg_server = MagicMock()
+        cfg_server.server_id = "cfg-oauth-1"
+        cfg_server.alias = "linear_cfg"
+        cfg_server.server_name = "linear_cfg"
+        cfg_server.name = "linear_cfg"
+
+        # team grants the config server BY ALIAS alongside a DB-style bare id; org-a's ceiling lists
+        # ONLY the config server (also by alias).
+        teams = {"team-a": self._team("team-a", ["linear_cfg", "srv-db"], org_id="org-a")}
+        org_perms = {
+            "org-a": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-a", mcp_servers=["linear_cfg"])
+        }
+        auth = self._admitted_subject("sso-user")
+        with self._patch(
+            teams_by_id=teams,
+            user_teams=["team-a"],
+            org_perms=org_perms,
+            registry={"cfg-oauth-1": cfg_server},
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        # 'linear_cfg' alias resolves to the config server_id and survives org-a's ceiling; 'srv-db'
+        # (not in org-a's allowlist) is capped out — same per-team org cap, config server included.
+        assert set(result) == {"cfg-oauth-1"}
+
+    async def test_config_oauth_server_alias_resolution_feeds_the_org_cap(self):
+        """A config-defined OAuth server granted BY ALIAS whose OWN org forbids it is capped out — AND the
+        cap is proven to run on RESOLVED server_ids, not raw strings. A control config server, granted by
+        alias and allowed by the org via its RESOLVED id, must survive: that inclusion is impossible unless
+        expand_permission_list resolved the grant alias to the id the ceiling lists, so a broken alias path
+        yields {} and FAILS this test — whereas a bare `assert empty` would pass even if resolution never
+        ran (the weakness Cursor flagged)."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        forbidden = MagicMock()  # granted by alias, but its org forbids it → must be capped out
+        forbidden.server_id = "cfg-oauth-1"
+        forbidden.alias = forbidden.server_name = forbidden.name = "linear_cfg"
+        control = MagicMock()  # granted by alias, allowed by the org via its RESOLVED id → must survive
+        control.server_id = "control-id"
+        control.alias = control.server_name = control.name = "control_alias"
+
+        teams = {"team-b": self._team("team-b", ["linear_cfg", "control_alias"], org_id="org-b")}
+        # org-b's ceiling allows ONLY the control server, referenced by its RESOLVED server_id.
+        org_perms = {
+            "org-b": LiteLLM_ObjectPermissionTable(object_permission_id="orgop-org-b", mcp_servers=["control-id"])
+        }
+        auth = self._admitted_subject("sso-user")
+        with self._patch(
+            teams_by_id=teams,
+            user_teams=["team-b"],
+            org_perms=org_perms,
+            registry={"cfg-oauth-1": forbidden, "control-id": control},
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        # control survives ('control_alias' resolved to 'control-id', matching the id-based ceiling); the
+        # forbidden config server ('cfg-oauth-1') is capped out. A broken alias path → {} → fails here.
+        assert set(result) == {"control-id"}
+
+
+@pytest.mark.asyncio
+class TestSessionBearerEgressScrub:
+    """The gateway session bearer / bridge envelope is an admission credential, never an upstream token.
+    The leak-defense scrub is anchored to the credential SHAPE, so a session-shaped Authorization is
+    stripped from every egress context even when it reaches a non-aggregate scope that never set the
+    admission marker (design-review finding: a session bearer misdirected to a per-server true_passthrough
+    path would otherwise be forwarded upstream verbatim and replayed against the aggregate endpoint)."""
+
+    async def test_session_bearer_misdirected_to_passthrough_is_scrubbed(self):
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [(b"authorization", b"Bearer llm_session_synthetic-shaped-token")],
+        }
+        ttp_server = MagicMock()
+        ttp_server.auth_type = MCPAuth.true_passthrough
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = ttp_server
+            (_auth, _mah, _srv, _sah, oauth2_headers, raw_headers) = await MCPRequestHandler.process_mcp_request(scope)
+
+        mock_auth.assert_not_called()  # true_passthrough → LiteLLM auth skipped (anonymous arm, no marker)
+        assert oauth2_headers is None  # session-shaped bearer scrubbed from oauth2 egress
+        assert all(k.lower() != "authorization" for k in raw_headers)  # ...and from raw egress headers
+
+    async def test_legitimate_upstream_token_is_not_scrubbed(self):
+        """A genuine upstream/passthrough token is never session- or envelope-shaped, so the shape-anchored
+        scrub must leave it intact for forwarding (guards against over-stripping)."""
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/passthrough_server",
+            "headers": [(b"authorization", b"Bearer real-upstream-opaque-token-xyz")],
+        }
+        ttp_server = MagicMock()
+        ttp_server.auth_type = MCPAuth.true_passthrough
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = ttp_server
+            (_auth, _mah, _srv, _sah, oauth2_headers, _raw) = await MCPRequestHandler.process_mcp_request(scope)
+
+        assert oauth2_headers.get("Authorization") == "Bearer real-upstream-opaque-token-xyz"
+
+    async def test_scrub_removes_gateway_credential_from_every_egress_context(self):
+        """The scrub is anchored to the credential SHAPE and covers ALL egress contexts, not just
+        Authorization: a session bearer placed in x-mcp-auth OR a per-server x-mcp-{alias}-authorization
+        header is stripped too (the High-severity gap: those were forwarded upstream before)."""
+        sess = "Bearer llm_session_abc"
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": sess},
+            raw_headers={
+                "authorization": sess,
+                "x-mcp-auth": "llm_session_xyz",
+                "x-mcp-github-authorization": "llm_session_ghi",
+            },
+            mcp_auth_header="llm_session_xyz",
+            mcp_server_auth_headers={"github": {"Authorization": "llm_session_ghi"}},
+        )
+        assert oauth2 is None
+        assert "authorization" not in {k.lower() for k in raw}
+        assert all("llm_session_" not in v for v in raw.values())  # x-mcp-auth + per-server raw values gone
+        assert mcp_auth is None  # deprecated x-mcp-auth value scrubbed
+        assert per_server == {}  # per-server session bearer removed → now-empty server dict dropped
+
+    async def test_scrub_keeps_real_upstream_tokens(self):
+        """A legitimate upstream token is never session-/envelope-shaped, so every context is forwarded
+        unchanged — guards against over-stripping a real credential the caller meant for the upstream."""
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": "Bearer real-upstream-xyz"},
+            raw_headers={"authorization": "Bearer real-upstream-xyz", "x-mcp-github-authorization": "Bearer gh_real"},
+            mcp_auth_header="some-api-key-123",
+            mcp_server_auth_headers={"github": {"Authorization": "Bearer gh_real"}},
+        )
+        assert oauth2 == {"Authorization": "Bearer real-upstream-xyz"}
+        assert raw["authorization"] == "Bearer real-upstream-xyz"
+        assert mcp_auth == "some-api-key-123"
+        assert per_server == {"github": {"Authorization": "Bearer gh_real"}}
+
+    async def test_scrub_admitted_drops_authorization_but_keeps_injected_upstream_token(self):
+        """An admitted subject's top-level Authorization is dropped unconditionally, while the real
+        upstream token the bridge arm INJECTS into a per-server header (not gateway-shaped) survives."""
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+            admitted=True,
+            oauth2_headers={"Authorization": "Bearer llm_session_abc"},
+            raw_headers={"authorization": "Bearer llm_session_abc"},
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"github": {"Authorization": "Bearer gh_injected_upstream"}},
+        )
+        assert oauth2 is None
+        assert "authorization" not in {k.lower() for k in raw}
+        assert per_server == {"github": {"Authorization": "Bearer gh_injected_upstream"}}

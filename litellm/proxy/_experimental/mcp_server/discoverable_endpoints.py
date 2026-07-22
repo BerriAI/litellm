@@ -33,6 +33,7 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     _finish_bridge_mint,
     _prepare_bridge_mint,
     _prepare_bridge_refresh,
+    _reload_active_user_by_id,
 )
 from litellm.proxy._experimental.mcp_server.faults import (
     CallerRejected,
@@ -42,6 +43,14 @@ from litellm.proxy._experimental.mcp_server.faults import (
     classify_upstream_token_rejection,
     dcr_fault_detail,
     render_token_fault,
+)
+from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    aggregate_authorize,
+    aggregate_token,
+    complete_connect_flow,
+    is_gateway_dcr_client_id,
+    register_aggregate_client,
+    relative_request_url,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
@@ -324,14 +333,25 @@ def redeem_passthrough_authorization_code(
     return sealed
 
 
+def _session_cookie_user_id(request: Request) -> str | None:
+    """The signed-in litellm user for a browser request, or ``None``. Thin wrapper so the
+    aggregate DCR flow's verbs receive the identity as a plain value instead of parsing
+    cookies themselves."""
+    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # circular import at module load
+        _user_id_from_session_cookie,
+    )
+
+    return _user_id_from_session_cookie(request)
+
+
 def _redirect_to_litellm_login(request: Request) -> RedirectResponse:
     """Send an unauthenticated browser through litellm login before the interactive bridge authorize
     can capture its identity. The bridge oauth_delegate flow seals the SSO user into the gateway code,
-    so a session is required; without one there is nothing to bind. After login the user re-initiates
-    the connection, which then finds the session cookie (the seamless return-to round-trip, which is
-    origin-validated against the control-plane URL, is a follow-up)."""
+    so a session is required; without one there is nothing to bind. A same-origin relative
+    ``return_to`` (honored by the SSO callback) brings the browser straight back to this authorize
+    request after login instead of stranding it on the dashboard."""
     base_url = get_request_base_url(request)
-    return RedirectResponse(f"{base_url}/sso/key/generate")
+    return RedirectResponse(f"{base_url}/sso/key/generate?{urlencode({'return_to': relative_request_url(request)})}")
 
 
 # LIT-4197: some upstream authorization servers reject an over-long ``state``
@@ -1601,6 +1621,18 @@ async def authorize(
         global_mcp_server_manager,
     )
 
+    if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id):
+        return aggregate_authorize(
+            request=request,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            state=state,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            response_type=response_type,
+            session_user_id=_session_cookie_user_id(request),
+        )
+
     lookup_name: Optional[str] = mcp_server_name or client_id
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = (
@@ -1664,6 +1696,25 @@ async def token_endpoint(
         global_mcp_server_manager,
     )
 
+    if mcp_server_name is None and is_gateway_dcr_client_id(client_id):
+        from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
+            master_key,
+            user_api_key_cache,
+        )
+
+        return await aggregate_token(
+            request=request,
+            grant_type=grant_type,
+            code=code,
+            redirect_uri=redirect_uri,
+            client_id=client_id,
+            code_verifier=code_verifier,
+            refresh_token=refresh_token,
+            master_key=master_key,
+            reload_user=_reload_active_user_by_id,
+            cache=user_api_key_cache,
+        )
+
     lookup_name = mcp_server_name or client_id
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip)
@@ -1682,6 +1733,21 @@ async def token_endpoint(
         code_verifier=code_verifier,
         refresh_token=refresh_token,
         scope=scope,
+    )
+
+
+@router.post("/authorize/complete")
+async def authorize_complete(request: Request, flow: str = Form(...)):
+    """Finish an aggregate connect flow: mint the gateway authorization code for the
+    signed-in user and redirect back to the DCR client. POST plus the per-flow HttpOnly
+    cookie set at /authorize; an anonymous or bad-flow request just 400s."""
+    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # circular import at module load
+
+    return await complete_connect_flow(
+        request=request,
+        flow_handle=flow,
+        session_user_id=_session_cookie_user_id(request),
+        cache=user_api_key_cache,
     )
 
 
@@ -2422,6 +2488,13 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     }
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:
+        # A real DCR request carries redirect_uris (RFC 7591): route it to the aggregate DCR
+        # endpoint the aggregate authorization-server metadata advertises. A single-server
+        # deployment registers at /{server}/register instead (its bare-origin discovery
+        # advertises that), so this does not affect it. A request without redirect_uris is not
+        # a DCR request, so the legacy single-server-or-dummy fallback is kept for it.
+        if data.get("redirect_uris"):
+            return await register_aggregate_client(request=request, request_body=data)
         resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             return await register_client_with_server(
