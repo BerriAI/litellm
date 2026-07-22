@@ -2818,6 +2818,7 @@ if MCP_AVAILABLE:
                 proxy_logging_obj=proxy_logging_obj,  # type: ignore[arg-type]
                 server=mcp_server,
                 raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -3055,6 +3056,20 @@ if MCP_AVAILABLE:
             traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             from litellm.proxy.proxy_server import proxy_logging_obj
 
+            # Build the status="failure" standard_logging_object BEFORE post_call_failure_hook.
+            # A pre-call guardrail block raises into this except, and the failure spend-log row is
+            # written by post_call_failure_hook -> get_logging_payload, which reads
+            # guardrail_information off the logging obj's standard_logging_object. That object is
+            # only populated once the failure handlers run, so without this the row persists with
+            # guardrail_information=None and the block is never counted on the Guardrails Monitor
+            # (totalBlocked stays 0). Running the failure handlers here also flips has_logged_sync_failure/
+            # has_logged_async_failure, so the @client wrapper's own post-raise failure logging
+            # short-circuits on should_run_logging and does not double-count this same logging obj.
+            end_time = datetime.now()
+            if litellm_logging_obj is not None:
+                litellm_logging_obj.failure_handler(e, traceback_str, start_time, end_time)
+                await litellm_logging_obj.async_failure_handler(e, traceback_str, start_time, end_time)
+
             if proxy_logging_obj and user_api_key_auth:
                 await proxy_logging_obj.post_call_failure_hook(
                     request_data=kwargs,
@@ -3232,6 +3247,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
+            litellm_logging_obj=litellm_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
