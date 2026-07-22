@@ -1871,13 +1871,9 @@ async def websocket_passthrough_request(
     upstream_headers = custom_headers.copy()
 
     if forward_headers:
-        # Forward relevant headers from the incoming request
         incoming_headers = dict(websocket.headers)
         for header_name, header_value in incoming_headers.items():
-            # Only forward certain headers to avoid conflicts
             if header_name.lower() in [
-                "authorization",
-                "x-api-key",
                 "x-goog-user-project",
             ]:
                 upstream_headers[header_name] = header_value
