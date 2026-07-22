@@ -13493,7 +13493,8 @@
         "output_dbu_cost_per_token": 3.5714e-05,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_creation_min_tokens": 2048
     },
     "databricks/databricks-gemini-2-5-pro": {
         "input_cost_per_token": 1.24999e-06,
@@ -13510,7 +13511,8 @@
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_creation_min_tokens": 2048
     },
     "databricks/databricks-gemma-3-12b": {
         "input_cost_per_token": 1.5000999999999998e-07,
@@ -14682,7 +14684,8 @@
         "mode": "chat",
         "supports_tool_choice": true,
         "supports_function_calling": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "deepinfra/google/gemini-2.5-pro": {
         "max_tokens": 1000000,
@@ -14693,7 +14696,8 @@
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "cache_creation_min_tokens": 2048
     },
     "deepinfra/google/gemma-3-12b-it": {
         "max_tokens": 131072,
@@ -17338,7 +17342,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -17382,7 +17387,8 @@
         "supports_vision": true,
         "supports_web_search": false,
         "tpm": 8000000,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-3-pro-image": {
         "input_cost_per_image": 0.0011,
@@ -17422,7 +17428,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -17462,7 +17469,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3.1-flash-image": {
         "input_cost_per_image": 0.00056,
@@ -17500,7 +17508,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -17538,7 +17547,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -17586,7 +17596,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -17642,7 +17653,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3.5-flash-lite": {
         "cache_read_input_token_cost": 3e-08,
@@ -17697,7 +17709,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -17776,7 +17789,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -17821,7 +17835,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -17866,7 +17881,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -18002,7 +18018,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -18046,7 +18063,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "cache_creation_min_tokens": 2048
     },
     "gemini-3-pro-preview": {
         "deprecation_date": "2026-03-26",
@@ -18102,7 +18120,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3.1-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -18159,7 +18178,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3.1-pro-preview-customtools": {
         "cache_read_input_token_cost": 2e-07,
@@ -18210,7 +18230,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -18265,7 +18286,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -18313,7 +18335,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.5-flash": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -18364,7 +18387,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.6-flash": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -18418,7 +18442,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.1-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -18475,7 +18500,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.1-pro-preview-customtools": {
         "cache_read_input_token_cost": 2e-07,
@@ -18532,7 +18558,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -18567,7 +18594,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "cache_creation_min_tokens": 2048
     },
     "gemini-robotics-er-1.5-preview": {
         "cache_read_input_token_cost": 0,
@@ -18671,7 +18699,8 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-embedding-001": {
         "input_cost_per_token": 1.5e-07,
@@ -18812,7 +18841,8 @@
         "rpm": 10000,
         "source": "https://ai.google.dev/gemini-api/docs/embeddings#multimodal",
         "supports_multimodal": true,
-        "tpm": 10000000
+        "tpm": 10000000,
+        "cache_creation_min_tokens": 32768
     },
     "gemini/gemini-2.0-flash": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -18973,7 +19003,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -19023,7 +19054,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-3-pro-image": {
         "input_cost_per_image": 0.0011,
@@ -19066,7 +19098,8 @@
             "search_context_size_high": 0.014
         },
         "web_search_billing_unit": "per_query",
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -19109,7 +19142,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3.1-flash-image": {
         "input_cost_per_token": 2.5e-07,
@@ -19151,7 +19185,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3.1-flash-image-preview": {
         "input_cost_per_token": 2.5e-07,
@@ -19193,7 +19228,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -19281,7 +19317,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -19328,7 +19365,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -19375,7 +19413,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-flash-latest": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -19515,7 +19554,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
@@ -19527,7 +19567,8 @@
             "/v1/audio/speech"
         ],
         "tpm": 4000000,
-        "rpm": 10
+        "rpm": 10,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -19576,7 +19617,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
         "input_cost_per_token": 1.25e-06,
@@ -19606,7 +19648,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tpm": 800000
+        "tpm": 800000,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-3-pro-preview": {
         "deprecation_date": "2026-03-09",
@@ -19662,7 +19705,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -19712,7 +19756,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -19770,7 +19815,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3.5-flash-lite": {
         "cache_read_input_token_cost": 3e-08,
@@ -19827,7 +19873,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -19879,7 +19926,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3.5-flash": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -19933,7 +19981,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3.6-flash": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -19990,7 +20039,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-omni-flash-preview": {
         "input_cost_per_audio_token": 1.5e-06,
@@ -20080,7 +20130,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-3.1-pro-preview-customtools": {
         "cache_read_input_token_cost": 2e-07,
@@ -20137,7 +20188,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -20187,7 +20239,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-omni-flash-preview": {
         "input_cost_per_audio_token": 1.5e-06,
@@ -20270,7 +20323,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini-3.6-flash": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -20325,7 +20379,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -20361,7 +20416,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-exp-1114": {
         "input_cost_per_token": 0,
@@ -20750,7 +20806,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_creation_min_tokens": 2048
     },
     "github_copilot/gemini-3-pro-preview": {
         "litellm_provider": "github_copilot",
@@ -20760,7 +20817,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_creation_min_tokens": 4096
     },
     "github_copilot/gpt-3.5-turbo": {
         "litellm_provider": "github_copilot",
@@ -21352,7 +21410,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_creation_min_tokens": 4096
     },
     "gmi/google/gemini-3-flash-preview": {
         "input_cost_per_token": 5e-07,
@@ -21363,7 +21422,8 @@
         "mode": "chat",
         "output_cost_per_token": 3e-06,
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_creation_min_tokens": 4096
     },
     "gmi/moonshotai/Kimi-K2-Thinking": {
         "input_cost_per_token": 8e-07,
@@ -29453,7 +29513,8 @@
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_native_streaming": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "oci/google.gemini-2.5-pro": {
         "input_cost_per_token": 1.25e-06,
@@ -29467,7 +29528,8 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "cache_creation_min_tokens": 2048
     },
     "oci/google.gemini-2.5-flash-lite": {
         "input_cost_per_token": 7.5e-08,
@@ -29482,7 +29544,8 @@
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_native_streaming": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "oci/cohere.command-a-vision": {
         "input_cost_per_token": 1.56e-06,
@@ -30510,7 +30573,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "openrouter/google/gemini-2.5-pro": {
         "input_cost_per_audio_token": 7e-07,
@@ -30526,7 +30590,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_creation_min_tokens": 2048
     },
     "openrouter/google/gemini-3-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -30567,7 +30632,8 @@
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_creation_min_tokens": 4096
     },
     "openrouter/google/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -30608,7 +30674,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 800000
+        "tpm": 800000,
+        "cache_creation_min_tokens": 4096
     },
     "openrouter/google/gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -30651,7 +30718,8 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 800000
+        "tpm": 800000,
+        "cache_creation_min_tokens": 4096
     },
     "openrouter/google/gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -30694,7 +30762,8 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 800000
+        "tpm": 800000,
+        "cache_creation_min_tokens": 4096
     },
     "openrouter/google/gemini-3.1-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -30727,7 +30796,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "cache_creation_min_tokens": 4096
     },
     "openrouter/gryphe/mythomax-l2-13b": {
         "input_cost_per_token": 1.875e-06,
@@ -32337,21 +32407,24 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "cache_creation_min_tokens": 4096
     },
     "perplexity/google/gemini-3-flash-preview": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "cache_creation_min_tokens": 4096
     },
     "perplexity/google/gemini-2.5-pro": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "cache_creation_min_tokens": 2048
     },
     "perplexity/google/gemini-2.5-flash": {
         "litellm_provider": "perplexity",
@@ -32359,7 +32432,8 @@
         "supports_web_search": true,
         "supports_reasoning": false,
         "supports_function_calling": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "perplexity/xai/grok-4-1-fast-non-reasoning": {
         "litellm_provider": "perplexity",
@@ -32864,7 +32938,8 @@
         "supports_vision": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "cache_creation_min_tokens": 4096
     },
     "replicate/anthropic/claude-4.5-sonnet": {
         "input_cost_per_token": 3e-06,
@@ -32942,7 +33017,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "replicate/openai/gpt-oss-120b": {
         "input_cost_per_token": 1.8e-07,
@@ -35730,7 +35806,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "vercel_ai_gateway/google/gemini-2.5-pro": {
         "input_cost_per_token": 2.5e-06,
@@ -35743,7 +35820,8 @@
         "supports_vision": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "cache_creation_min_tokens": 2048
     },
     "vercel_ai_gateway/google/gemini-embedding-001": {
         "input_cost_per_token": 1.5e-07,
@@ -37435,7 +37513,8 @@
         "supports_vision": true,
         "supports_web_search": false,
         "tpm": 8000000,
-        "supports_image_size": false
+        "supports_image_size": false,
+        "cache_creation_min_tokens": 2048
     },
     "vertex_ai/gemini-3-pro-image": {
         "input_cost_per_image": 0.0011,
@@ -37451,7 +37530,8 @@
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
         "supports_reasoning": false,
-        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
+        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -37467,7 +37547,8 @@
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
         "supports_reasoning": false,
-        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
+        "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.1-flash-image": {
         "input_cost_per_image": 0.00056,
@@ -37481,7 +37562,8 @@
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
         "supports_reasoning": false,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -37495,7 +37577,8 @@
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
         "supports_reasoning": false,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.1-flash-lite-preview": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -37543,7 +37626,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -37599,7 +37683,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/gemini-3.5-flash-lite": {
         "cache_read_input_token_cost": 3e-08,
@@ -37654,7 +37739,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_creation_min_tokens": 4096
     },
     "vertex_ai/deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -44259,7 +44345,8 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": true,
-        "gemini_native_audio": true
+        "gemini_native_audio": true,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -44284,7 +44371,8 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": true,
-        "gemini_native_audio": true
+        "gemini_native_audio": true,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -44309,7 +44397,8 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": true,
-        "gemini_native_audio": true
+        "gemini_native_audio": true,
+        "cache_creation_min_tokens": 2048
     },
     "gemini-3.1-flash-live-preview": {
         "input_cost_per_audio_token": 3e-06,
@@ -44342,7 +44431,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "gemini_audio_only_live": true
+        "gemini_audio_only_live": true,
+        "cache_creation_min_tokens": 4096
     },
     "gemini/gemini-2.5-flash-native-audio-latest": {
         "input_cost_per_audio_token": 1e-06,
@@ -44369,7 +44459,8 @@
         "supports_audio_output": true,
         "tpm": 250000,
         "rpm": 10,
-        "gemini_native_audio": true
+        "gemini_native_audio": true,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-2.5-flash-native-audio-preview-09-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -44396,7 +44487,8 @@
         "supports_audio_output": true,
         "tpm": 250000,
         "rpm": 10,
-        "gemini_native_audio": true
+        "gemini_native_audio": true,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
         "input_cost_per_audio_token": 1e-06,
@@ -44423,7 +44515,8 @@
         "supports_audio_output": true,
         "tpm": 250000,
         "rpm": 10,
-        "gemini_native_audio": true
+        "gemini_native_audio": true,
+        "cache_creation_min_tokens": 2048
     },
     "gemini/gemini-3.1-flash-live-preview": {
         "input_cost_per_audio_token": 3e-06,
@@ -44458,7 +44551,8 @@
         "supports_web_search": true,
         "tpm": 250000,
         "rpm": 10,
-        "gemini_audio_only_live": true
+        "gemini_audio_only_live": true,
+        "cache_creation_min_tokens": 4096
     },
     "gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
@@ -44468,7 +44562,8 @@
         "source": "https://ai.google.dev/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
-        ]
+        ],
+        "cache_creation_min_tokens": 2048
     },
     "gemini-flash-latest": {
         "cache_read_input_token_cost": 3e-08,

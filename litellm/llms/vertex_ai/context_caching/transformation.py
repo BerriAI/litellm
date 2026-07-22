@@ -140,7 +140,7 @@ def _is_valid_ttl_format(ttl: str) -> bool:
         return False
 
 
-def _normalize_ttl_to_seconds(ttl: object) -> Optional[str]:
+def _normalize_ttl_to_seconds(ttl: object) -> str | None:
     """
     Normalize a cache_control TTL into Gemini's "<seconds>s" format.
 
@@ -168,6 +168,8 @@ def _normalize_ttl_to_seconds(ttl: object) -> Optional[str]:
     # Cap explicit caches to 24 hours to prevent unbounded billing costs
     seconds = min(seconds, 86400.0)
 
+    # Google Protobuf Duration requires up to 9 fractional digits
+    seconds = round(seconds, 9)
     return f"{int(seconds)}s" if seconds.is_integer() else f"{seconds}s"
 
 
@@ -175,15 +177,19 @@ def get_gemini_context_caching_min_tokens(model: str) -> int:
     """
     Minimum input token count required to create an explicit Gemini context cache.
 
-    Gemini rejects a cachedContents create below a per-model floor with a 400, so
-    the caller skips caching below this value. Figures from
-    https://ai.google.dev/gemini-api/docs/caching (Gemini 1.5 -> 32768, Gemini 2.5
-    -> 2048, Gemini 3.x -> 4096). Unknown Gemini models default to the highest
-    known floor so a create is never attempted below the real minimum.
+    Looks up the `cache_creation_min_tokens` property from model_prices_and_context_window.json.
+    Defaults to string-matching fallbacks for unknown models.
     """
+    import litellm
+
+    try:
+        model_info = litellm.get_model_info(model=model)
+        if model_info and "cache_creation_min_tokens" in model_info:
+            return int(model_info["cache_creation_min_tokens"])
+    except Exception:  # noqa: BLE001  # fallback to string-matching heuristic if model lookup fails
+        pass
+
     model_lower = model.lower()
-    if "gemini-1.5" in model_lower or "gemini-1-5" in model_lower:
-        return 32768
     if "gemini-2.5" in model_lower or "gemini-2-5" in model_lower:
         return 2048
     if "gemini-3" in model_lower:
