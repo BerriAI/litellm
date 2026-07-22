@@ -2722,6 +2722,13 @@ def register_model(model_cost: Union[str, dict]):
                 existing_model = {}
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
+                if builtin_entry is None:
+                    base_model = value.get("base_model")
+                    if isinstance(base_model, str) and base_model:
+                        builtin_entry = _resolve_builtin_model_cost_entry(key=base_model, provider=provider)
+                        if builtin_entry is None:
+                            base_model_cost = litellm.model_cost.get(base_model)
+                            builtin_entry = dict(base_model_cost) if base_model_cost is not None else None
                 if builtin_entry is not None:
                     for field in _CACHE_PRICING_FIELDS:
                         if value.get(field) is None and builtin_entry.get(field) is not None:
