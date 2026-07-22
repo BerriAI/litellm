@@ -80,6 +80,27 @@ def test_unserializable_object():
     assert result == "Unserializable Object"
 
 
+def test_repeated_unserializable_sibling_is_not_circular():
+    # The same non-serializable object appearing twice as siblings is not a
+    # circular reference and both occurrences must be serialized.
+    class Stringable:
+        def __str__(self):
+            return "value"
+
+    obj = Stringable()
+
+    assert json.loads(safe_dumps([obj, obj])) == ["value", "value"]
+    assert json.loads(safe_dumps({"a": obj, "b": obj})) == {
+        "a": "value",
+        "b": "value",
+    }
+
+    # A genuine self-cycle must still be reported.
+    cycle = {}
+    cycle["self"] = cycle
+    assert json.loads(safe_dumps(cycle))["self"] == "CircularReference Detected"
+
+
 def test_non_standard_dict_keys():
     try:
         # Test handling of dictionaries with non-standard keys
