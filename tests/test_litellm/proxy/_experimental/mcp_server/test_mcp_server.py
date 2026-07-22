@@ -7375,6 +7375,10 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
         ("", None),
         ("not a url", None),
         ("http://[::1", None),
+        # urlsplit validates the port lazily on attribute access, so a malformed port must not
+        # raise out of the helper: the server loaders call it while warning about exactly this
+        # kind of typo'd url (LIT-4658)
+        ("https://example.com:bad/mcp", None),
     ],
 )
 def test_redact_mcp_resource_url_strips_credentials(url, expected):
