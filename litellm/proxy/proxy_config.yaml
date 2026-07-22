@@ -60,4 +60,10 @@ litellm_settings:
     embedding_model: "text-embedding-3-small"
     top_k: 5
     similarity_threshold: 0.3
-  
+
+  mcp_trust_scoring:
+    enabled: false
+    min_trust_score: 0.5
+    cache_ttl_seconds: 3600
+    fail_open: true
+    # api_key: os.environ/DO_API_KEY

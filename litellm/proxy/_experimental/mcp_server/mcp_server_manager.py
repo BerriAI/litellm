@@ -2481,6 +2481,23 @@ class MCPServerManager:
         """
         allowed_mcp_servers = await self.get_allowed_mcp_servers(user_api_key_auth)
 
+        from litellm.proxy._experimental.mcp_server.mcp_trust_scoring import (
+            apply_trust_filter_to_allowed_mcp_servers,
+            get_mcp_trust_scoring_client,
+        )
+
+        trust_client = get_mcp_trust_scoring_client()
+        if trust_client is not None and trust_client.enabled:
+            allowed_server_objects = tuple(
+                server
+                for server_id in allowed_mcp_servers
+                if (server := self.get_mcp_server_by_id(server_id)) is not None
+            )
+            trusted_servers = await apply_trust_filter_to_allowed_mcp_servers(  # any-ok: awaited coroutine, Send/Recv Any is a typing artifact and the result is fully typed
+                allowed_server_objects
+            )
+            allowed_mcp_servers = [server.server_id for server in trusted_servers]
+
         verbose_logger.debug("SERVER MANAGER LISTING TOOLS")
 
         async def _fetch_server_tools(server_id: str) -> list[MCPTool]:
