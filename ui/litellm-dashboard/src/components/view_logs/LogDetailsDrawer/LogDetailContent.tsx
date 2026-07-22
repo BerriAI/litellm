@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin } from "antd";
+import { Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -112,7 +113,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       )}
 
       {/* Request Details */}
-      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
         <Card title="Request Details" size="small" bordered={false} style={{ marginBottom: 0 }}>
           <Descriptions column={2} size="small">
             <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
@@ -163,7 +164,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 
       {/* Request/Response JSON */}
       {isLoadingDetails ? (
-        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+        <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
           <Spin size="default" />
           <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
         </div>
@@ -234,7 +235,7 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4 mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
       <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
       </Text>
@@ -278,6 +279,40 @@ function getUncachedInputTextTokens(metadata: Record<string, any>): number | und
   return Number.isFinite(n) ? n : undefined;
 }
 
+const RESPONSE_CACHE_TOOLTIP =
+  "Whether this request was served from LiteLLM's response cache (e.g. Redis / in-memory), skipping the LLM provider call entirely. This is separate from provider prompt caching; a Miss here does not mean prompt caching failed.";
+const PROMPT_CACHE_READ_TOOLTIP =
+  "Input tokens read from the LLM provider's prompt cache (e.g. Anthropic / OpenAI), billed at a discounted rate. Reported by the provider.";
+const PROMPT_CACHE_CREATION_TOOLTIP =
+  "Input tokens written to the LLM provider's prompt cache for reuse by later requests.";
+const RESPONSE_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/proxy/caching";
+const PROMPT_CACHE_DOCS_URL = "https://docs.litellm.ai/docs/completion/prompt_caching";
+
+function MetricLabel({ label, tooltip, docsUrl }: { label: string; tooltip: string; docsUrl: string }) {
+  return (
+    <Space size={4}>
+      {label}
+      <Tooltip
+        title={
+          <>
+            {tooltip}{" "}
+            <a
+              href={docsUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "#91caff", textDecoration: "underline" }}
+            >
+              Docs
+            </a>
+          </>
+        }
+      >
+        <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
+      </Tooltip>
+    </Space>
+  );
+}
+
 function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
   const completionStartTime = logEntry.completionStartTime;
   const ttftMs =
@@ -285,21 +320,18 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       ? new Date(completionStartTime).getTime() - new Date(logEntry.startTime).getTime()
       : null;
 
-  const hasCacheActivity =
-    logEntry.cache_hit ||
-    (metadata?.additional_usage_values?.cache_read_input_tokens &&
-      metadata.additional_usage_values.cache_read_input_tokens > 0);
-
-  const cacheHitValue = String(logEntry.cache_hit ?? "None");
-  const cacheHitColor =
-    cacheHitValue.toLowerCase() === "true" ? "green" : cacheHitValue.toLowerCase() === "false" ? "red" : "default";
+  const responseCacheValue = String(logEntry.cache_hit ?? "").toLowerCase();
+  const isResponseCacheHit = responseCacheValue === "true";
+  const showResponseCache = isResponseCacheHit || responseCacheValue === "false";
+  const promptCacheReadTokens = Number(metadata?.additional_usage_values?.cache_read_input_tokens) || 0;
+  const promptCacheCreationTokens = Number(metadata?.additional_usage_values?.cache_creation_input_tokens) || 0;
 
   const uncachedInputTokens = getUncachedInputTextTokens(metadata);
   const showAnthropicMessagesInputOutput =
     logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
         <Descriptions column={2} size="small">
           {showAnthropicMessagesInputOutput ? (
@@ -326,22 +358,44 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
             <Descriptions.Item label="Time to First Token">{(ttftMs / 1000).toFixed(3)} s</Descriptions.Item>
           )}
 
-          {hasCacheActivity && (
-            <>
-              <Descriptions.Item label="Cache Hit">
-                <Tag color={cacheHitColor}>{cacheHitValue}</Tag>
-              </Descriptions.Item>
-              {metadata?.additional_usage_values?.cache_read_input_tokens > 0 && (
-                <Descriptions.Item label="Cache Read Tokens">
-                  {formatNumberWithCommas(metadata.additional_usage_values.cache_read_input_tokens)}
-                </Descriptions.Item>
-              )}
-              {metadata?.additional_usage_values?.cache_creation_input_tokens > 0 && (
-                <Descriptions.Item label="Cache Creation Tokens">
-                  {formatNumberWithCommas(metadata.additional_usage_values.cache_creation_input_tokens)}
-                </Descriptions.Item>
-              )}
-            </>
+          {showResponseCache && (
+            <Descriptions.Item
+              label={
+                <MetricLabel
+                  label="Response Cache"
+                  tooltip={RESPONSE_CACHE_TOOLTIP}
+                  docsUrl={RESPONSE_CACHE_DOCS_URL}
+                />
+              }
+            >
+              <Tag color={isResponseCacheHit ? "green" : "default"}>{isResponseCacheHit ? "Hit" : "Miss"}</Tag>
+            </Descriptions.Item>
+          )}
+          {promptCacheReadTokens > 0 && (
+            <Descriptions.Item
+              label={
+                <MetricLabel
+                  label="Prompt Cache Read Tokens"
+                  tooltip={PROMPT_CACHE_READ_TOOLTIP}
+                  docsUrl={PROMPT_CACHE_DOCS_URL}
+                />
+              }
+            >
+              {formatNumberWithCommas(promptCacheReadTokens)}
+            </Descriptions.Item>
+          )}
+          {promptCacheCreationTokens > 0 && (
+            <Descriptions.Item
+              label={
+                <MetricLabel
+                  label="Prompt Cache Creation Tokens"
+                  tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+                  docsUrl={PROMPT_CACHE_DOCS_URL}
+                />
+              }
+            >
+              {formatNumberWithCommas(promptCacheCreationTokens)}
+            </Descriptions.Item>
           )}
 
           {metadata?.litellm_overhead_time_ms !== undefined && metadata.litellm_overhead_time_ms !== null && (
@@ -420,7 +474,7 @@ function RequestResponseSection({
       : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         defaultActiveKey={["1"]}
         expandIconPosition="start"
@@ -548,7 +602,7 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
 
 function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapse
         defaultActiveKey={["1"]}
         expandIconPosition="start"

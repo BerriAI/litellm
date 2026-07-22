@@ -214,12 +214,14 @@ def server_applies_tool_allowlist(mcp_server: Any) -> bool:
 
 def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
     """
-    Validate and normalize MCP server payload fields (server_name and alias).
+    Validate and normalize MCP server payload fields (server_name, alias, and
+    tool_name_to_display_name).
 
     This function:
     1. Validates that server_name and alias don't contain the MCP_TOOL_PREFIX_SEPARATOR
-    2. Normalizes alias by replacing spaces with underscores
-    3. Sets default alias if not provided (using server_name as base)
+    2. Validates that tool_name_to_display_name values satisfy Bedrock's tool-name pattern
+    3. Normalizes alias by replacing spaces with underscores
+    4. Sets default alias if not provided (using server_name as base)
 
     Args:
         payload: The payload object containing server_name and alias fields
@@ -234,6 +236,10 @@ def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
     # Alias validation: disallow '-'
     if hasattr(payload, "alias") and payload.alias:
         validate_mcp_server_name(payload.alias, raise_http_exception=True)
+
+    # Tool display name validation: must satisfy Bedrock's tool-name pattern
+    if hasattr(payload, "tool_name_to_display_name") and payload.tool_name_to_display_name:
+        validate_tool_display_names(payload.tool_name_to_display_name)
 
     # Alias normalization and defaulting
     alias = getattr(payload, "alias", None)
@@ -407,6 +413,61 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message})
         else:
             raise Exception(error_message)
+
+
+def extract_mcp_tool_result_error_message(result: object) -> Optional[str]:
+    """The first text content of an ``isError=True`` tool result, or ``None``
+    when the result is not an error.
+
+    Accepts both ``mcp.types.CallToolResult`` objects and their dict
+    equivalents, duck-typed so the ``mcp`` package is not required.
+    """
+    is_error: object = result.get("isError") if isinstance(result, Mapping) else getattr(result, "isError", None)
+    if is_error is not True:
+        return None
+    content: object = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    if isinstance(content, (list, tuple)):
+        for item in content:
+            text: object = item.get("text") if isinstance(item, Mapping) else getattr(item, "text", None)
+            if isinstance(text, str) and text:
+                return text
+    return "MCP tool call returned isError=true"
+
+
+TOOL_DISPLAY_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def validate_tool_display_names(tool_name_to_display_name: Optional[Mapping[str, str]]) -> None:
+    """
+    Validate tool display name overrides against Bedrock's tool-name constraint.
+
+    A display name replaces the tool name sent to the LLM provider, so it must
+    satisfy the strictest provider requirement in use (Bedrock's
+    ``[a-zA-Z0-9_-]+``); a name with spaces or other characters saves
+    successfully but fails every subsequent Bedrock tool call.
+
+    Raises:
+        HTTPException: If any display name fails the pattern.
+    """
+    if not tool_name_to_display_name:
+        return
+
+    for original_name, display_name in tool_name_to_display_name.items():
+        if display_name and not TOOL_DISPLAY_NAME_PATTERN.match(display_name):
+            from fastapi import HTTPException
+            from starlette import status
+
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        f"Invalid display name '{display_name}' for tool '{original_name}'. "
+                        "Display names may only contain letters, digits, underscores, and "
+                        "hyphens (no spaces or other special characters), since they replace "
+                        "the tool name sent to the LLM provider."
+                    )
+                },
+            )
 
 
 class MCPMissingUserEnvVarsError(Exception):

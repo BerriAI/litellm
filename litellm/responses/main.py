@@ -127,7 +127,7 @@ def mock_responses_api_response(
                 "input_tokens": 36,
                 "input_tokens_details": {"cached_tokens": 0},
                 "output_tokens": 87,
-                "output_tokens_details": {"reasoning_tokens": 0},
+                "output_tokens_details": {},
                 "total_tokens": 123,
             },
             "user": None,
@@ -212,6 +212,7 @@ async def aresponses_api_with_mcp(
         litellm_trace_id=kwargs.get("litellm_trace_id"),
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
+        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
 
@@ -260,7 +261,7 @@ async def aresponses_api_with_mcp(
             pre_processed_mcp_tools=original_mcp_tools,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
+        mcp_streaming_response = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
             all_tools=all_tools,
@@ -271,6 +272,10 @@ async def aresponses_api_with_mcp(
             tool_server_map=tool_server_map,
             **kwargs,
         )
+        await mcp_streaming_response._create_initial_response_iterator()
+        if mcp_streaming_response._initial_creation_error is not None:
+            raise mcp_streaming_response._initial_creation_error
+        return mcp_streaming_response
 
     # Determine if we should auto-execute tools
     should_auto_execute = bool(mcp_tools_with_litellm_proxy) and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
@@ -327,6 +332,7 @@ async def aresponses_api_with_mcp(
                 raw_headers=raw_headers_from_request,
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
+                request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
             )
 
             if tool_results:
@@ -382,6 +388,7 @@ async def aresponses_api_with_mcp(
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                         mcp_auth_header=mcp_auth_header,
                         mcp_server_auth_headers=mcp_server_auth_headers,
+                        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
                     )
                     final_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
                         response=final_response,
@@ -1063,11 +1070,13 @@ def responses(
             )
 
         # Get optional parameters for the responses API
+        request_drop_params = kwargs.get("drop_params")
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
+            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -1889,11 +1898,13 @@ def compact_responses(
         )
 
         # Get optional parameters for the responses API
+        request_drop_params = kwargs.get("drop_params")
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=None,
+            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
         )
 
         # Pre Call logging

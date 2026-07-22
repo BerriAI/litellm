@@ -28,7 +28,7 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
   return (
     <div className="flex items-center gap-2">
       <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
-        {uploadComponent && <div className="flex-shrink-0 mr-2">{uploadComponent}</div>}
+        {uploadComponent && <div className="shrink-0 mr-2">{uploadComponent}</div>}
         <TextArea
           value={value}
           onChange={(e) => onChange(e.target.value)}

@@ -1,4 +1,5 @@
 import copy
+import os
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, Optional
 
 import litellm
@@ -564,11 +565,8 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
 
     env_vars_dict: dict[str, str | None] = {}
     for _var in env_vars:
-        env_variable = environment_variables.get(_var, None)
-        if env_variable is None:
-            env_vars_dict[_var] = None
-        else:
-            env_vars_dict[_var] = env_variable
+        stored_value = environment_variables.get(_var, None)
+        env_vars_dict[_var] = stored_value if stored_value is not None else os.getenv(_var)
 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
 
@@ -611,10 +609,17 @@ def _transform_callback_vars(metadata: Any, transform: Callable[[str, Any], Any]
     return out
 
 
-def _is_sensitive_callback_var(key: str) -> bool:
-    """Match codebase precedent: only credential-bearing fields get encrypted;
-    routing/identifier fields (host, base_url, project, region) stay plain."""
-    if key in _EXTRA_SENSITIVE_CALLBACK_KEYS:
+def is_sensitive_callback_key(
+    key: str,
+    extra: Optional[set[str]] = None,
+) -> bool:
+    """Return ``True`` if ``key`` is present in ``extra`` (checked as-is), or
+    if its lowercase form is in ``_EXTRA_SENSITIVE_CALLBACK_KEYS``, or if
+    ``_CALLBACK_VAR_MASKER.is_sensitive_key`` matches it.
+    """
+    if extra and key in extra:
+        return True
+    if key.lower() in _EXTRA_SENSITIVE_CALLBACK_KEYS:
         return True
     return _CALLBACK_VAR_MASKER.is_sensitive_key(key)
 
@@ -622,7 +627,7 @@ def _is_sensitive_callback_var(key: str) -> bool:
 def _encrypt_if_plaintext(key: str, value: Any) -> Any:
     if not isinstance(value, str) or not value:
         return value
-    if not _is_sensitive_callback_var(key):
+    if not is_sensitive_callback_key(key):
         return value
     if value.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
         # Already encrypted — round-tripping ciphertext (e.g. UI Edit Settings

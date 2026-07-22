@@ -7,6 +7,7 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -19,6 +20,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_key_tag_rpm_limit,
     get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
@@ -328,6 +330,70 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
                 request_body=request_body, request_headers=headers
             )
         assert result == "body-user"
+
+
+def _request_dispatched_to(endpoint) -> Request:
+    """Build a minimal Request whose FastAPI-resolved endpoint is ``endpoint``,
+    mirroring what Starlette sets in ``scope`` once routing has matched."""
+    return Request(scope={"type": "http", "headers": [], "endpoint": endpoint})
+
+
+def _pass_through_endpoint():
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    def endpoint():  # stand-in for create_pass_through_route's handler
+        ...
+
+    setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return endpoint
+
+
+def test_get_model_from_request_skips_pass_through_dispatched_request():
+    """When FastAPI dispatched the request to a user-defined pass-through handler,
+    the body `model` names an upstream model and must not be treated as a LiteLLM
+    model for allowlist/budget enforcement."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "upstream-special-model"},
+            route="/my-custom-endpoint",
+            request=_request_dispatched_to(_pass_through_endpoint()),
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_enforces_when_builtin_handler_dispatched():
+    """A custom pass-through path that collides with a built-in route resolves to the
+    built-in handler (no marker), so the body `model` must still be extracted and
+    enforced. Same request path as above, but dispatched to a non-pass-through
+    endpoint: the model must NOT be suppressed."""
+
+    def builtin_chat_completions():
+        ...
+
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            request=_request_dispatched_to(builtin_chat_completions),
+        )
+        == "gpt-4o"
+    )
+
+
+def test_get_model_from_request_no_request_extracts_model():
+    """Callers without a request object (e.g. budget reservation) still extract the
+    model; the pass-through suppression only applies to a dispatched pass-through
+    handler."""
+    assert (
+        get_model_from_request(
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+        )
+        == "gpt-4o"
+    )
 
 
 def test_get_model_from_request_supports_google_model_names_with_slashes():
@@ -658,7 +724,16 @@ def test_get_model_from_request_ignores_session_model_on_non_realtime_routes():
 
 
 def test_abbreviate_api_key():
-    assert abbreviate_api_key("sk-test-1234") == "sk-...1234"
+    assert abbreviate_api_key("sk-test-1234-abcdefgh") == "sk-...efgh"
+    assert abbreviate_api_key("sk-abcdefghijklm") == "sk-...jklm"
+
+
+def test_abbreviate_api_key_short_key_is_fully_masked():
+    """Regression test for LIT-4355: for keys shorter than the enforced minimum,
+    showing the last 4 characters can reveal the entire key (sk-1234 -> sk-...1234)."""
+    assert abbreviate_api_key("sk-1234") == "sk-..."
+    assert abbreviate_api_key("sk-test-1234") == "sk-..."
+    assert abbreviate_api_key("") == "sk-..."
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():
@@ -1512,13 +1587,49 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         }
         out = get_dynamic_litellm_params(
             litellm_params=dict(admin_params),
-            request_kwargs={"base_url": "https://attacker.example"},
+            request_kwargs={"base_url": "https://attacker.example", "api_key": "sk-caller"},
         )
         assert "aws_access_key_id" not in out
         assert "aws_secret_access_key" not in out
         assert "aws_session_token" not in out
         assert "vertex_credentials" not in out
         assert "vertex_project" not in out
+
+    def test_clears_nvcf_function_id_on_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        admin_params = {
+            "model": "nvidia_riva/parakeet",
+            "api_base": "grpc.nvcf.nvidia.com:443",
+            "api_key": "nvapi-admin",
+            "nvcf_function_id": "admin-pinned-function",
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(admin_params),
+            request_kwargs={"api_base": "self-hosted.example.com:50051", "api_key": "sk-caller"},
+        )
+        assert out["api_base"] == "self-hosted.example.com:50051"
+        assert "nvcf_function_id" not in out
+
+    def test_clears_use_ssl_on_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        admin_params = {
+            "model": "nvidia_riva/parakeet",
+            "api_base": "grpc.nvcf.nvidia.com:443",
+            "api_key": "nvapi-admin",
+            "use_ssl": True,
+        }
+        out = get_dynamic_litellm_params(
+            litellm_params=dict(admin_params),
+            request_kwargs={"api_base": "self-hosted.example.com:50051", "api_key": "sk-caller"},
+        )
+        assert out["api_base"] == "self-hosted.example.com:50051"
+        assert "use_ssl" not in out
 
     def test_caller_resupplied_value_overrides_admin_value_on_base_override(self):
         # When the caller redirects ``api_base`` and *also* supplies their
@@ -1540,6 +1651,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
             },
             request_kwargs={
                 "api_base": "https://attacker.example",
+                "api_key": "sk-caller",
                 "organization": "org-attacker",
                 "extra_body": {"attacker": "value"},
             },
@@ -1563,6 +1675,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
             },
             request_kwargs={
                 "api_base": "https://attacker.example",
+                "api_key": "sk-caller",
                 "organization": "",
                 "extra_body": "",
             },
@@ -1589,6 +1702,310 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["organization"] == "org-admin"
         assert out["api_version"] == "2026-04-01"
         assert out["api_base"] == "https://admin.upstream/v1"
+
+    def test_client_api_key_used_when_supplied_with_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+
+        out = get_dynamic_litellm_params(
+            litellm_params={
+                "model": "gpt-4",
+                "api_key": "sk-admin-secret",
+                "api_base": "https://admin.upstream/v1",
+            },
+            request_kwargs={
+                "api_base": "https://attacker.example",
+                "api_key": "sk-client-byok",
+            },
+        )
+        assert out["api_key"] == "sk-client-byok"
+        assert "sk-admin-secret" not in str(out)
+
+
+_OPENAI_CHAT_RESPONSE = {
+    "id": "chatcmpl-x",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+class TestClientsideBaseOverrideOutboundKey:
+    """Drive a completion through the router and assert on the outbound request
+    when the caller overrides ``api_base``."""
+
+    def _router(self):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "sk-SERVER-CONFIG",
+                        "api_base": "https://admin.upstream/v1",
+                    },
+                }
+            ]
+        )
+
+    @pytest.fixture(autouse=True)
+    def _ambient_server_key(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-SERVER-ENV")
+        monkeypatch.setattr(litellm, "api_key", None, raising=False)
+
+    def test_caller_key_override_sends_caller_key_never_server_key(self):
+        import httpx
+        import respx
+
+        with respx.mock:
+            route = respx.post("https://caller.example/v1/chat/completions").mock(
+                return_value=httpx.Response(200, json=_OPENAI_CHAT_RESPONSE)
+            )
+            self._router().completion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://caller.example/v1",
+                api_key="sk-CALLER",
+            )
+            authorization = route.calls.last.request.headers.get("authorization")
+            assert authorization == "Bearer sk-CALLER"
+            assert "SERVER" not in (authorization or "")
+
+
+def _rounds_deep_api_base_payload(rounds, field):
+    """Build a fallbacks payload with ``api_base`` on a target nested ``rounds``
+    fallback-rounds deep, each round wrapped in its own grouping dict."""
+    node = {"model": "leaf", "api_base": "https://attacker.example"}
+    for i in range(rounds):
+        node = {"model": f"m{i}", field: [{"grp": [node]}]}
+    return {"model": "gpt-4", field: [{"grp": [node]}]}
+
+
+class TestIsRequestBodySafeBlocksFallbackSmuggle:
+    """``is_request_body_safe`` runs the banned-param check on every dict target
+    inside the fallback lists."""
+
+    @pytest.fixture(autouse=True)
+    def _disable_url_validation(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+
+    @pytest.mark.parametrize(
+        "fallback_key",
+        ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"],
+    )
+    def test_api_base_smuggled_via_nested_fallback_is_rejected(self, fallback_key):
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    fallback_key: [
+                        {
+                            "gpt-4": [
+                                {"model": "evil", "api_base": "https://attacker.example"},
+                            ]
+                        }
+                    ],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_string_only_fallbacks_are_accepted(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "fallbacks": [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_benign_dict_fallback_entry_is_accepted(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "fallbacks": [{"gpt-4": [{"model": "gpt-3.5-turbo"}]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_smuggled_fallback_allowed_under_proxy_wide_opt_in(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "fallbacks": [
+                        {"gpt-4": [{"model": "byok", "api_base": "https://my-byok.example"}]}
+                    ],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "fallback_field",
+        ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"],
+    )
+    @pytest.mark.parametrize("surface", ["top_level", "router_settings_override"])
+    def test_deeply_nested_api_base_smuggle_rejected_on_both_surfaces(self, fallback_field, surface):
+        nested = [
+            {
+                "always-fail": [
+                    {
+                        "model": "x",
+                        fallback_field: [
+                            {"x": [{"model": "deepseek-chat", "api_base": "http://attacker"}]}
+                        ],
+                    }
+                ]
+            }
+        ]
+        request_body = {"model": "gpt-4"}
+        if surface == "top_level":
+            request_body[fallback_field] = nested
+        else:
+            request_body["router_settings_override"] = {fallback_field: nested}
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body=request_body,
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_router_settings_override_single_level_api_base_rejected(self):
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "router_settings_override": {
+                        "fallbacks": [{"gpt-4": [{"model": "x", "api_base": "http://attacker"}]}]
+                    },
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_model_less_config_dict_api_base_rejected(self):
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "fallbacks": [{"gpt-4": [{"api_base": "http://attacker"}]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_nested_api_base_caught_across_router_fallback_rounds(self):
+        """An ``api_base`` target nested ``ROUTER_MAX_FALLBACKS - 1`` rounds deep
+        is still reached and rejected."""
+        import litellm
+
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body=_rounds_deep_api_base_payload(litellm.ROUTER_MAX_FALLBACKS - 1, "fallbacks"),
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_grouping_only_deep_chain_is_rejected_at_depth_limit(self):
+        """A deep grouping-only chain (``{"g": [{"g": [...]}]}``) is rejected at the
+        validation-depth limit rather than accepted or raising RecursionError."""
+        node: object = ["safe-model"]
+        for _ in range(5000):
+            node = [{"grp": node}]
+        with pytest.raises(ValueError, match="depth"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "fallbacks": node},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_pathologically_deep_model_nesting_is_rejected(self):
+        with pytest.raises(ValueError, match="depth"):
+            is_request_body_safe(
+                request_body=_rounds_deep_api_base_payload(5000, "fallbacks"),
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+
+class TestIsRequestBodySafeRejectsUrlValuedFallback:
+    @pytest.mark.parametrize("fallback_field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    def test_url_valued_string_fallback_is_rejected(self, fallback_field):
+        with pytest.raises(ValueError, match="URL-valued fallback"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    fallback_field: [{"gpt-4": ["huggingface/http://attacker.example/path"]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    @pytest.mark.parametrize("fallback_field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    def test_url_valued_dict_model_fallback_is_rejected(self, fallback_field):
+        with pytest.raises(ValueError, match="URL-valued fallback"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    fallback_field: [{"gpt-4": [{"model": "huggingface/http://attacker.example/path"}]}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_ordinary_string_fallback_is_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "fallbacks": [{"gpt-4": ["gpt-4-backup"]}]},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_ordinary_dict_model_fallback_is_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "fallbacks": [{"gpt-4": [{"model": "gpt-4-backup"}]}]},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
 
 
 class TestIsRequestBodySafeBlocksEndpointTargetingFields:
@@ -1712,6 +2129,252 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
         )
 
 
+class TestIsRequestBodySafeBlocksVertexCredentialAlias:
+    @pytest.mark.parametrize("field", ["vertex_ai_credentials"])
+    def test_field_in_request_body_is_rejected(self, field):
+        with pytest.raises(ValueError, match=field):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", field: "attacker-supplied"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    @pytest.mark.parametrize("field", ["vertex_ai_credentials"])
+    def test_admin_opt_in_proxy_wide_allows(self, field):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", field: "byok-supplied"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_legitimate_request_body_param_still_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "temperature": 0.7,
+                    "max_tokens": 128,
+                    "user": "end-user-123",
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
+    """``nvcf_function_id`` is rejected as a request-body param unless the
+    admin opted in proxy-wide or per-deployment."""
+
+    def test_nvcf_function_id_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="nvcf_function_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "nvcf_function_id": "caller-supplied",
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+
+    def test_nvcf_function_id_with_api_key_still_rejected(self):
+        with pytest.raises(ValueError, match="nvcf_function_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "api_key": "sk-anything",
+                    "nvcf_function_id": "caller-supplied",
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_nvcf_function_id(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "nvcf_function_id": "byok-function-id",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_nvcf_function_id(self, monkeypatch):
+        """The error message lists per-deployment ``configurable_clientside_auth_params``
+        as a second opt-in. Cover that path too so it can't silently regress."""
+        from litellm.proxy.auth import auth_utils
+
+        monkeypatch.setattr(
+            auth_utils,
+            "_allow_model_level_clientside_configurable_parameters",
+            lambda model, param, request_body_value, llm_router: param == "nvcf_function_id",
+        )
+
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "nvcf_function_id": "byok-function-id",
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBlocksRivaUseSsl:
+    """``use_ssl`` is rejected as a request-body param unless the admin
+    opted in proxy-wide or per-deployment."""
+
+    def test_use_ssl_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="use_ssl"):
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "use_ssl": False,
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_use_ssl(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "use_ssl": True,
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_use_ssl(self, monkeypatch):
+        from litellm.proxy.auth import auth_utils
+
+        monkeypatch.setattr(
+            auth_utils,
+            "_allow_model_level_clientside_configurable_parameters",
+            lambda model, param, request_body_value, llm_router: param == "use_ssl",
+        )
+
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "use_ssl": True,
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBlocksBedrockTags:
+    """``bedrock_tags`` lands as AWS resource tags on Bedrock batch jobs
+    created with the proxy's AWS identity, so a caller-supplied value can
+    forge ownership or cost-allocation labels; like
+    ``aws_bedrock_project_id`` it is blocked without an admin opt-in."""
+
+    def test_bedrock_tags_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="bedrock_tags"):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=None,
+                model="bedrock-batch-opus",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_bedrock_tags(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="bedrock-batch-opus",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_bedrock_tags(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch-opus",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-opus-4-7",
+                        "configurable_clientside_auth_params": ["bedrock_tags"],
+                    },
+                }
+            ]
+        )
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=router,
+                model="bedrock-batch-opus",
+            )
+            is True
+        )
+
+    def test_per_deployment_opt_in_for_other_param_still_rejects_bedrock_tags(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-batch-opus",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-opus-4-7",
+                        "configurable_clientside_auth_params": ["api_base"],
+                    },
+                }
+            ]
+        )
+        with pytest.raises(ValueError, match="bedrock_tags"):
+            is_request_body_safe(
+                request_body={
+                    "model": "bedrock-batch-opus",
+                    "bedrock_tags": [{"key": "application", "value": "genai-proxy"}],
+                },
+                general_settings={},
+                llm_router=router,
+                model="bedrock-batch-opus",
+            )
+
+
 # ── is_request_body_safe nested-config recursion (VERIA-6) ────────────────────
 
 
@@ -1746,6 +2409,22 @@ class TestIsRequestBodySafeNestedConfig:
                 general_settings={},
                 llm_router=None,
                 model="milvus-store",
+            )
+
+    def test_nested_nvcf_function_id_in_metadata_blocked(self):
+        """Smuggling ``nvcf_function_id`` via ``metadata`` / ``extra_body``
+        is the same shape as the VERIA-6 ``api_base`` bypass — must be
+        rejected by the recursive walk so the NVCF override gate cannot
+        be sidestepped with nesting."""
+        with pytest.raises(ValueError, match="nvcf_function_id"):
+            is_request_body_safe(
+                request_body={
+                    "model": "nvidia_riva/parakeet",
+                    "litellm_metadata": {"nvcf_function_id": "attacker-via-metadata"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="nvidia_riva/parakeet",
             )
 
     def test_nested_langfuse_host_in_embedding_config_blocked(self):
@@ -1930,6 +2609,21 @@ class TestObservabilityCallbackBans:
                 model="gpt-4",
             )
         assert field in str(exc.value)
+
+    def test_observability_field_in_litellm_params_metadata_is_rejected(self):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "litellm_params": {
+                        "metadata": {"turn_off_message_logging": False}
+                    },
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert "turn_off_message_logging" in str(exc.value)
 
     @pytest.mark.parametrize(
         "metadata_key",
@@ -2205,3 +2899,17 @@ class TestIsRequestBodySafeBlocksModelList:
             )
             is True
         )
+
+
+class TestGetKeyTagRateLimits:
+    """Tests for get_key_tag_rpm_limit."""
+
+    def test_reads_tag_rpm_limit_from_metadata(self):
+        key = UserAPIKeyAuth(
+            api_key="sk-123", metadata={"tag_rpm_limit": {"cell-1": 5}}
+        )
+        assert get_key_tag_rpm_limit(key) == {"cell-1": 5}
+
+    def test_returns_none_when_unset(self):
+        key = UserAPIKeyAuth(api_key="sk-123")
+        assert get_key_tag_rpm_limit(key) is None

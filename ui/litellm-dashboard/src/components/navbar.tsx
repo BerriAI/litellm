@@ -5,7 +5,7 @@ import { useWorker } from "@/hooks/useWorker";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
+import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { Tag } from "antd";
@@ -56,14 +56,14 @@ const Navbar: React.FC<NavbarProps> = ({
     clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
-    window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
+    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
   };
 
   return (
     <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white">
       <div className="w-full">
         <div className="flex h-14 items-center px-4">
-          <div className="flex flex-shrink-0 items-center">
+          <div className="flex shrink-0 items-center">
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
@@ -102,7 +102,7 @@ const Navbar: React.FC<NavbarProps> = ({
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex-shrink-0"
+                      className="shrink-0"
                     >
                       v{version}
                     </a>

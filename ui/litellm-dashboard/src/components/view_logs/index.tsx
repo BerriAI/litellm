@@ -8,7 +8,7 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import FilterComponent from "../molecules/filter";
 import { keyInfoV1Call } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-import AuditLogs from "./audit_logs";
+import AuditLogsPanel from "./AuditLogsPanel";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { getLogFilterOptions } from "./filter_options";
@@ -224,7 +224,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   };
 
   return (
-    <div className="w-full max-w-screen p-6 overflow-x-hidden box-border">
+    <div className="w-full p-6 overflow-x-hidden box-border">
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
         <TabList>
           <Tab>Request Logs</Tab>
@@ -252,7 +252,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
                 />
-                <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
+                <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
                   <LogsTableToolbar
                     searchTerm={filters[FILTER_KEYS.REQUEST_ID]}
                     onSearchChange={(value) => handleFilterChange({ [FILTER_KEYS.REQUEST_ID]: value })}
@@ -277,6 +277,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   <DataTable
                     columns={columns}
                     data={deferredData}
+                    getRowId={(row) => row.request_id}
                     onRowClick={handleRowClick}
                     isLoading={isLogsLoading}
                   />
@@ -285,7 +286,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
             )}
           </TabPanel>
           <TabPanel>
-            <AuditLogs
+            <AuditLogsPanel
               userID={userID}
               userRole={userRole}
               token={token}

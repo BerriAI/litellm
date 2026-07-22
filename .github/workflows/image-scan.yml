@@ -58,6 +58,8 @@ jobs:
       # free OSS, run as a pinned, checksum-verified binary; no GitHub Action
       # dependency and no vendor SaaS callout.
       - name: Scan image for fixable HIGH/CRITICAL CVEs
+        env:
+          GRYPE_MATCH_PYTHON_USING_CPES: "true"
         run: |
           "$RUNNER_TEMP/grype" litellm-image-scan:${{ github.sha }} \
             --only-fixed \

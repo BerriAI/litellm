@@ -241,7 +241,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                                 <Button
                                   type="text"
                                   size="small"
-                                  className="flex-shrink-0"
+                                  className="shrink-0"
                                   icon={
                                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                       <path

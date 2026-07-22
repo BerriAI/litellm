@@ -13,7 +13,7 @@ the test body is run(), and the fixture's teardown is teardown().
 from dataclasses import dataclass, field
 from typing import Callable, List, Protocol, runtime_checkable
 
-from e2e_gateway import Gateway
+from proxy_client import ProxyClient
 from models import KeyGenerateBody
 
 
@@ -52,7 +52,7 @@ def run_case(case: E2ECase) -> None:
 @runtime_checkable
 class ResourceClient(Protocol):
     """Proxy operations the convenience creators use. Resource types without a
-    creator here are handled generically via ResourceManager.defer(). The Gateway
+    creator here are handled generically via ResourceManager.defer(). The ProxyClient
     satisfies this."""
 
     def generate_key(self, body: KeyGenerateBody) -> str: ...
@@ -63,12 +63,12 @@ class ResourceClient(Protocol):
 
 
 @runtime_checkable
-class GatewayProvider(Protocol):
-    """Every suite's client exposes the shared Gateway, which the resources fixture
+class ProxyClientProvider(Protocol):
+    """Every suite's client exposes the shared ProxyClient, which the resources fixture
     uses for cleanup. The client adds its own route methods on top."""
 
     @property
-    def gateway(self) -> Gateway: ...
+    def proxy(self) -> ProxyClient: ...
 
 
 @dataclass
@@ -98,9 +98,12 @@ class ResourceManager:
         """Register a teardown action for any resource the test just created."""
         self._cleanups.append(cleanup)
 
-    def key(self) -> str:
-        """Create an all-models virtual key; delete it on teardown."""
-        key = self.client.generate_key(KeyGenerateBody(models=[]))
+    def key(self, models: list[str] | None = None, user_id: str | None = "e2e-test-user") -> str:
+        """Create a virtual key; delete it on teardown. `models` restricts which
+        models the key may call (None/[] means all). `user_id` is required for
+        managed-batch ACL: the proxy stores created_by=user_id and checks it on
+        retrieve/cancel; None here means the 403 guard fires."""
+        key = self.client.generate_key(KeyGenerateBody(models=models or [], user_id=user_id))
         self.defer(lambda: self.client.delete_key(key))
         return key
 

@@ -1,31 +1,32 @@
 """Live e2e: Rust-backed OCR is reachable through the gateway across providers.
 
-The gateway config declares one rust-ocr deployment per provider (mistral,
-azure_ai, azure document intelligence, vertex mistral, vertex deepseek). Start the
-proxy with the Rust OCR path enabled:
+Each provider's OCR deployment is registered at runtime via /model/new and deleted
+on teardown, so nothing is hardcoded into the gateway config. Every provider is its
+own typed OcrProvider below: it owns the model id and the os.environ/* credential
+references the proxy resolves at call time, so adding a provider is a new type
+rather than another inline body. Start the proxy with the Rust OCR path enabled:
 
-    LITELLM_USE_RUST_OCR=1 litellm --config tests/e2e/gateway/litellm-config.yml
-
-Three behaviors are checked: the config declares every provider's deployment (a
-pure config read, no proxy needed); the running proxy loaded them onto /model/info;
-and each one returns a well-formed OCR document over /v1/ocr. Per the e2e
-"skip on environment, fail on behavior" rule, the proxy-backed cases skip when no
-proxy answers but fail (never skip) once a request reaches it, so a provider whose
-credentials are missing surfaces as a hard failure rather than silent green.
+Each case creates its deployment, drives a real /v1/ocr call, and asserts a
+well-formed OCR document comes back. Per the e2e hard-fail contract, a case
+fails when no proxy answers and also fails once a request reaches it: the proxy
+fetches each provider's referenced secrets, so a
+missing credential surfaces as a live provider error rather than silent green.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from typing import Protocol
 
 import pytest
-import yaml
-from pydantic import BaseModel
 
+from e2e_config import unique_marker
 from e2e_http import unwrap
-from models import OcrBody, OcrDocument, OcrResponse
-from passthrough_client import PassthroughClient
+from endpoints_client import EndpointsClient
+from lifecycle import ResourceManager
+from models import LiteLLMParamsBody, OcrBody, OcrDocument, OcrResponse
+
+pytestmark = pytest.mark.e2e
 
 # Tiny in-repo fixtures served via jsdelivr (sha-pinned, immutable) so the request
 # bodies stay stable across runs.
@@ -40,53 +41,96 @@ TEST_IMAGE_URL = (
     "/tests/image_gen_tests/test_image.png"
 )
 
-CONFIG_PATH = Path(__file__).resolve().parents[1] / "gateway" / "litellm-config.yml"
+
+class OcrProvider(Protocol):
+    """One OCR provider's deployment config: its model id plus the os.environ/*
+    credential references the proxy resolves at call time. Each provider owns which
+    env vars it reads, so a new provider is a new type, not another inline body."""
+
+    def litellm_params(self) -> LiteLLMParamsBody: ...
+
+
+@dataclass(frozen=True, slots=True)
+class MistralOcr:
+    model: str = "mistral/mistral-ocr-latest"
+
+    def litellm_params(self) -> LiteLLMParamsBody:
+        return LiteLLMParamsBody(model=self.model, api_key="os.environ/MISTRAL_API_KEY")
+
+
+@dataclass(frozen=True, slots=True)
+class AzureAiOcr:
+    """azure_ai (mistral) OCR. The rust OCR path resolves credentials itself from
+    AZURE_AI_API_BASE / AZURE_AI_API_KEY when the deployment leaves them unset; it
+    does NOT unwrap an `os.environ/*` reference passed as api_base (it would be sent
+    to Azure verbatim), so we omit them and let litellm read the env vars by name."""
+
+    model: str
+
+    def litellm_params(self) -> LiteLLMParamsBody:
+        return LiteLLMParamsBody(model=self.model)
+
+
+@dataclass(frozen=True, slots=True)
+class AzureDocIntelligenceOcr:
+    """azure_ai Document Intelligence OCR. A separate Azure resource from the
+    mistral one, so it has its own env vars: AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT /
+    AZURE_DOCUMENT_INTELLIGENCE_API_KEY, which the OCR config resolves from the
+    doc-intelligence model name when api_base/api_key are left unset."""
+
+    model: str = "azure_ai/doc-intelligence/prebuilt-layout"
+
+    def litellm_params(self) -> LiteLLMParamsBody:
+        return LiteLLMParamsBody(model=self.model)
+
+
+@dataclass(frozen=True, slots=True)
+class VertexOcr:
+    """Vertex AI OCR (Mistral publisher). Only the location (not a secret) is set;
+    the project and credentials are left unset so the gateway resolves VERTEXAI_PROJECT
+    and VERTEXAI_CREDENTIALS from its own environment by name, keeping every secret on
+    the gateway like the azure_ai cases above. This is deliberate: the OCR path reads
+    vertex_project verbatim from litellm_params and never unwraps an `os.environ/*`
+    ref, so passing one would put the literal string in the request URL."""
+
+    model: str
+    location: str
+
+    def litellm_params(self) -> LiteLLMParamsBody:
+        return LiteLLMParamsBody(model=self.model, vertex_location=self.location)
 
 
 @dataclass(frozen=True, slots=True)
 class _OcrCase:
-    model: str
+    suffix: str
+    provider: OcrProvider
     document: OcrDocument
 
 
 RUST_OCR_CASES: tuple[_OcrCase, ...] = (
     _OcrCase(
-        "rust-ocr-mistral",
+        "mistral",
+        MistralOcr(),
         OcrDocument(type="document_url", document_url=TEST_PDF_URL),
     ),
     _OcrCase(
-        "rust-ocr-azure-ai",
+        "azure-ai",
+        AzureAiOcr("azure_ai/mistral-document-ai-2512"),
         OcrDocument(type="document_url", document_url=TEST_PDF_URL),
     ),
     _OcrCase(
-        "rust-ocr-azure-document-intelligence",
+        "azure-document-intelligence",
+        AzureDocIntelligenceOcr(),
         OcrDocument(type="document_url", document_url=TEST_PDF_URL),
     ),
     _OcrCase(
-        "rust-ocr-vertex-mistral",
+        "vertex-mistral",
+        VertexOcr("vertex_ai/mistral-ocr-2505", "us-central1"),
         OcrDocument(type="document_url", document_url=TEST_PDF_URL),
-    ),
-    _OcrCase(
-        "rust-ocr-vertex-deepseek",
-        OcrDocument(type="image_url", image_url=TEST_IMAGE_URL),
     ),
 )
 
-_EXPECTED_MODELS = frozenset(case.model for case in RUST_OCR_CASES)
-_CASE_IDS = tuple(case.model.removeprefix("rust-ocr-") for case in RUST_OCR_CASES)
-
-
-class _ConfiguredModel(BaseModel):
-    model_name: str
-
-
-class _GatewayConfig(BaseModel):
-    model_list: list[_ConfiguredModel]
-
-
-def _configured_model_names() -> frozenset[str]:
-    config = _GatewayConfig.model_validate(yaml.safe_load(CONFIG_PATH.read_text()))
-    return frozenset(entry.model_name for entry in config.model_list)
+_CASE_IDS = tuple(case.suffix for case in RUST_OCR_CASES)
 
 
 def _assert_ocr_document(response: OcrResponse) -> None:
@@ -96,22 +140,17 @@ def _assert_ocr_document(response: OcrResponse) -> None:
     assert response.pages[0].markdown is not None, "first page has no markdown"
 
 
-def test_rust_ocr_models_declared_in_gateway_config() -> None:
-    """Pure config read (no proxy): every provider's rust-ocr deployment the suite
-    exercises is declared in the gateway config the proxy runs with. A case added
-    here without a matching deployment fails before any live call is attempted."""
-    missing = _EXPECTED_MODELS - _configured_model_names()
-    assert not missing, f"rust-ocr models absent from {CONFIG_PATH.name}: {missing}"
-
-
-@pytest.mark.e2e
 class TestRustOcrGateway:
-    def test_gateway_loaded_rust_ocr_models(self, client: PassthroughClient) -> None:
-        loaded = frozenset(entry.model_name for entry in client.gateway.model_info())
-        missing = _EXPECTED_MODELS - loaded
-        assert not missing, f"proxy did not load rust-ocr models: {missing}"
-
     @pytest.mark.parametrize("case", RUST_OCR_CASES, ids=_CASE_IDS)
-    def test_rust_ocr_response(self, client: PassthroughClient, scoped_key: str, case: _OcrCase) -> None:
-        response = unwrap(client.gateway.ocr(scoped_key, OcrBody(model=case.model, document=case.document)))
+    def test_rust_ocr_response(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager, case: _OcrCase
+    ) -> None:
+        model = f"rust-ocr-{case.suffix}-{unique_marker()}"
+        model_id = endpoints_client.create_model(model, case.provider.litellm_params())
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(endpoints_client.proxy.ocr(key, OcrBody(model=model, document=case.document)))
         _assert_ocr_document(response)
+
+

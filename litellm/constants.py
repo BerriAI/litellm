@@ -2,7 +2,7 @@ import os
 import sys
 from typing import List, Literal, Optional
 
-from litellm.litellm_core_utils.env_utils import get_env_int
+from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
 
 DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
@@ -264,14 +264,26 @@ MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT",
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
 TOOL_POLICY_CACHE_TTL_SECONDS = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 60))
+GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS = int(
+    os.getenv("GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS", 24 * 60 * 60)
+)
 # Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
 # Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8)))
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000))
 ###############################################################################################
-MINIMUM_PROMPT_CACHE_TOKEN_COUNT = int(
-    os.getenv("MINIMUM_PROMPT_CACHE_TOKEN_COUNT", 1024)
-)  # minimum number of tokens to cache a prompt by Anthropic
+# Providers will not cache a prefix below a minimum size. That minimum is per-model, not global:
+# Anthropic's ranges from 512 to 4096 depending on the model, and can differ per platform for the
+# same model. The real minimum is resolved from `prompt_cache_min_tokens` in the model cost map;
+# this value is only the fallback for models the cost map has no entry for, and doubles as a global
+# escape hatch when `MINIMUM_PROMPT_CACHE_TOKEN_COUNT` is explicitly set.
+MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE: int | None = get_env_int_or_none("MINIMUM_PROMPT_CACHE_TOKEN_COUNT")
+DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT = 1024
+MINIMUM_PROMPT_CACHE_TOKEN_COUNT = (
+    MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE
+    if MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE is not None
+    else DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+)
 DEFAULT_TRIM_RATIO = float(
     os.getenv("DEFAULT_TRIM_RATIO", 0.75)
 )  # default ratio of tokens to trim from the end of a prompt
@@ -332,6 +344,10 @@ REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5
 REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5))
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60))
 REDIS_CIRCUIT_BREAKER_ENABLED = os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+# Seconds of idle before a Redis cluster connection is validated with a PING and
+# reconnected if dead, so a connection silently dropped by a cluster restart
+# (e.g. ElastiCache Serverless maintenance) is not reused while broken
+REDIS_CLUSTER_HEALTH_CHECK_INTERVAL = 25
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -456,6 +472,7 @@ LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
     "bytez",
+    "gdc",
     "xai",
     "custom_openai",
     "text-completion-openai",
@@ -503,6 +520,7 @@ LITELLM_CHAT_PROVIDERS = [
     "text-completion-codestral",
     "text-completion-inception",
     "deepseek",
+    "tencent",
     "sambanova",
     "maritalk",
     "cloudflare",
@@ -709,6 +727,7 @@ openai_compatible_endpoints: List = [
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
+    "https://api.meta.ai/v1",
 ]
 
 
@@ -724,6 +743,7 @@ openai_compatible_providers: List = [
     "volcengine",
     "codestral",
     "deepseek",
+    "tencent",
     "deepinfra",
     "perplexity",
     "xinference",
@@ -774,6 +794,7 @@ openai_compatible_providers: List = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
 ]
 openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
     "together_ai",
@@ -1123,6 +1144,7 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-fable-5",
+    "anthropic.claude-sonnet-5",
     "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
@@ -1273,6 +1295,7 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
+RETURN_RAW_MODEL_NAME_METADATA_KEY = "_complexity_router_return_raw_model_name"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
     "Truncation is a DB storage safeguard. "
@@ -1449,6 +1472,7 @@ _batch_polling_env = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
 PROXY_BATCH_POLLING_ENABLED = _batch_polling_env == "true"
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605))
 PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
+PROXY_CONFIG_RELOAD_INTERVAL_SECONDS = get_env_int("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS", 30)
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
@@ -1486,6 +1510,7 @@ MAX_TEAM_LIST_LIMIT = int(os.getenv("MAX_TEAM_LIST_LIMIT", 20))
 MAX_POLICY_ESTIMATE_IMPACT_ROWS = int(os.getenv("MAX_POLICY_ESTIMATE_IMPACT_ROWS", 1000))
 DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7))
 LENGTH_OF_LITELLM_GENERATED_KEY = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
+MINIMUM_CUSTOM_KEY_LENGTH = int(os.getenv("MINIMUM_CUSTOM_KEY_LENGTH", 16))
 SECRET_MANAGER_REFRESH_INTERVAL = int(os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400))
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
@@ -1496,6 +1521,13 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "public_model_groups_links",
     "cost_discount_config",
     "cost_margin_config",
+    "budget_exceeded_throttle_percentage",
+    # Every field editable from the Admin UI (proxy_server._GENERAL_SETTINGS_UI_LITELLM_FIELDS)
+    # must be listed here so a DB write from one worker overrides the live litellm attribute on
+    # the others when config reloads; otherwise peer workers stay on their startup value.
+    # test_general_settings_ui_fields_are_db_overridable enforces that pairing.
+    "enable_anthropic_prompt_caching",
+    "anthropic_prompt_caching_ttl",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

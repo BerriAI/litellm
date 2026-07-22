@@ -31,9 +31,6 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-# print contents of ui_colors.json
-echo "Contents of ui_colors.json:"
-cat ui_colors.json
 
 # Run npm build
 npm run build
@@ -49,8 +46,7 @@ if [ $? -eq 0 ]; then
   # Specify the destination directory
   destination_dir="../../litellm/proxy/_experimental/out"
 
-  # Ensure the destination directory exists, then clear it
-  mkdir -p "$destination_dir"
+  # Remove existing files in the destination directory
   rm -rf "$destination_dir"/*
 
   # Copy the contents of the output directory to the specified destination

@@ -464,6 +464,42 @@ async def test_pre_call_fails_closed_when_current_team_fetch_fails_for_all_team_
 
 
 @pytest.mark.asyncio
+async def test_pre_call_allows_teamless_all_team_models_key():
+    """A teamless key with all-team-models must be allowed to submit batch jobs
+    for any model (same as leaving models empty = unrestricted). Fails if
+    someone re-introduces a teamless denial in _resolve_key_models_for_auth_check
+    or adds a team_id guard that blocks the batch path."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    file_dict = [
+        {
+            "body": {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-orphan",
+        user_id="alice",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", None):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            models=_models(file_dict),
+        )
+
+
+@pytest.mark.asyncio
 async def test_pre_call_allows_authorized_model_in_batch_file():
     """If every model in the JSONL is on the caller's allowlist, the hook
     must not raise."""

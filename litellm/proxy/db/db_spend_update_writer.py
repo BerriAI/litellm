@@ -27,7 +27,7 @@ from typing import (
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache, RedisCache
+from litellm.caching import RedisCache
 from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
@@ -44,7 +44,6 @@ from litellm.proxy._types import (
     DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
     Litellm_EntityType,
-    LiteLLM_UserTable,
     SpendLogsMetadata,
     SpendLogsPayload,
     SpendUpdateQueueItem,
@@ -60,6 +59,10 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.compression_savings import (
+    extract_compression_saved_tokens,
+)
+from litellm.proxy.spend_tracking.savings import compute_savings_spend
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
@@ -137,7 +140,6 @@ class DBSpendUpdateWriter:
             disable_spend_logs,
             litellm_proxy_budget_name,
             prisma_client,
-            user_api_key_cache,
         )
         from litellm.proxy.utils import ProxyUpdateSpend, hash_token
 
@@ -175,16 +177,9 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
-            # One deepcopy shared by all 6 daily spend helpers (was 5, fixes agent bug)
-            payload_copy = copy.deepcopy(payload)
-
-            # Deepcopy request_tags for _update_tag_db
-            request_tags = copy.deepcopy(payload.get("request_tags"))
-
-            # Keep _insert_spend_log_to_db awaited inline (not a task, preserve current behavior)
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
-                    payload=copy.deepcopy(payload),
+                    payload=payload,
                     prisma_client=prisma_client,
                 )
             else:
@@ -202,10 +197,8 @@ class DBSpendUpdateWriter:
                     org_id=org_id,
                     end_user_id=end_user_id,
                     prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
-                    payload_copy=payload_copy,
-                    request_tags=request_tags,
+                    payload=payload,
                 )
             )
 
@@ -334,22 +327,24 @@ class DBSpendUpdateWriter:
         org_id: Optional[str],
         end_user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
-        payload_copy: SpendLogsPayload,
-        request_tags: Optional[Any],
+        payload: SpendLogsPayload,
     ):
         """
         Runs all 11 spend-update helpers sequentially inside a single asyncio task.
 
         Each helper is wrapped in try/except so one failure doesn't prevent the others.
+
+        The deepcopy runs here, off the awaited request path, so the daily spend
+        helpers get a payload isolated from the spend-log queue entry and the caller.
         """
+        payload_copy = copy.deepcopy(payload)
+        request_tags = payload_copy.get("request_tags")
         try:
             await self._update_user_db(
                 response_cost=response_cost,
                 user_id=user_id,
                 prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
                 litellm_proxy_budget_name=litellm_proxy_budget_name,
                 end_user_id=end_user_id,
             )
@@ -514,7 +509,6 @@ class DBSpendUpdateWriter:
         response_cost: Optional[float],
         user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
         end_user_id: Optional[str] = None,
     ):
@@ -522,10 +516,6 @@ class DBSpendUpdateWriter:
         - Update that user's row
         - Update litellm-proxy-budget row (global proxy spend)
         """
-        ## if an end-user is passed in, do an upsert - we can't guarantee they already exist in db
-        existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
-        if existing_user_obj is not None and isinstance(existing_user_obj, dict):
-            existing_user_obj = LiteLLM_UserTable(**existing_user_obj)
         try:
             if prisma_client is not None:  # update
                 user_ids = [user_id]
@@ -1568,6 +1558,18 @@ class DBSpendUpdateWriter:
                                         common_data["cache_creation_input_tokens"] = transaction.get(
                                             "cache_creation_input_tokens", 0
                                         )
+                                    if "compression_saved_tokens" in transaction:
+                                        common_data["compression_saved_tokens"] = transaction.get(
+                                            "compression_saved_tokens", 0
+                                        )
+                                    if "compression_savings_spend" in transaction:
+                                        common_data["compression_savings_spend"] = transaction.get(
+                                            "compression_savings_spend", 0
+                                        )
+                                    if "prompt_caching_savings_spend" in transaction:
+                                        common_data["prompt_caching_savings_spend"] = transaction.get(
+                                            "prompt_caching_savings_spend", 0
+                                        )
 
                                     if entity_type == "tag" and "request_id" in transaction:
                                         common_data["request_id"] = transaction.get("request_id")
@@ -1590,6 +1592,18 @@ class DBSpendUpdateWriter:
                                     if "cache_creation_input_tokens" in transaction:
                                         update_data["cache_creation_input_tokens"] = {
                                             "increment": transaction.get("cache_creation_input_tokens", 0)
+                                        }
+                                    if "compression_saved_tokens" in transaction:
+                                        update_data["compression_saved_tokens"] = {
+                                            "increment": transaction.get("compression_saved_tokens", 0)
+                                        }
+                                    if "compression_savings_spend" in transaction:
+                                        update_data["compression_savings_spend"] = {
+                                            "increment": transaction.get("compression_savings_spend", 0)
+                                        }
+                                    if "prompt_caching_savings_spend" in transaction:
+                                        update_data["prompt_caching_savings_spend"] = {
+                                            "increment": transaction.get("prompt_caching_savings_spend", 0)
                                         }
 
                                     if entity_type == "tag" and "request_id" in transaction:
@@ -1840,6 +1854,15 @@ class DBSpendUpdateWriter:
             if call_type:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
 
+            cache_read_input_tokens = _extract_cache_read_tokens(usage_obj)
+            compression_saved_tokens = extract_compression_saved_tokens(_metadata)
+            savings_spend = compute_savings_spend(
+                model=payload.get("model", None),
+                custom_llm_provider=payload.get("custom_llm_provider", None),
+                compression_saved_tokens=compression_saved_tokens,
+                cache_read_input_tokens=cache_read_input_tokens,
+            )
+
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
                 api_key=payload["api_key"],
@@ -1854,8 +1877,11 @@ class DBSpendUpdateWriter:
                 api_requests=1,
                 successful_requests=1 if request_status == "success" else 0,
                 failed_requests=1 if request_status != "success" else 0,
-                cache_read_input_tokens=_extract_cache_read_tokens(usage_obj),
+                cache_read_input_tokens=cache_read_input_tokens,
                 cache_creation_input_tokens=_extract_cache_creation_tokens(usage_obj),
+                compression_saved_tokens=compression_saved_tokens,
+                compression_savings_spend=savings_spend.compression,
+                prompt_caching_savings_spend=savings_spend.prompt_caching,
             )
             return daily_transaction
         except Exception as e:

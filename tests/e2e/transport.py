@@ -13,7 +13,14 @@ from typing import Protocol
 from pydantic import BaseModel
 
 import e2e_http
-from e2e_http import URL, AuthHeaders, ProbeResult, Result, StreamingResponse
+from e2e_http import (
+    URL,
+    AuthHeaders,
+    BinaryStream,
+    ProbeResult,
+    Result,
+    StreamingResponse,
+)
 
 
 class Transport(Protocol):
@@ -24,6 +31,15 @@ class Transport(Protocol):
     def stream(
         self, path: str, *, headers: BaseModel, json: BaseModel
     ) -> StreamingResponse: ...
+
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream: ...
 
     def send(
         self,
@@ -45,10 +61,39 @@ class Transport(Protocol):
     ) -> Result[R]: ...
 
     def delete[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
+    ) -> Result[R]: ...
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]: ...
+
+    def put[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]: ...
 
     def probe(self, path: str, *, params: BaseModel) -> ProbeResult: ...
+
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: BaseModel,
+        filename: str,
+        content: bytes,
+        file_content_type: str = "application/jsonl",
+        params: BaseModel | None = None,
+        response_type: type[R],
+    ) -> Result[R]: ...
+
+    def download(self, path: str, *, headers: BaseModel) -> StreamingResponse: ...
 
     def bearer(self, key: str) -> AuthHeaders: ...
 
@@ -100,9 +145,38 @@ class HttpTransport:
         )
 
     def delete[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
     ) -> Result[R]:
         return e2e_http.delete(
+            self._url(path),
+            headers=headers,
+            json=json,
+            params=params,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return e2e_http.patch(
+            self._url(path),
+            headers=headers,
+            json=json,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def put[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return e2e_http.put(
             self._url(path),
             headers=headers,
             json=json,
@@ -115,6 +189,22 @@ class HttpTransport:
     ) -> StreamingResponse:
         return e2e_http.stream(
             self._url(path), headers=headers, json=json, timeout=self.request_timeout
+        )
+
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream:
+        return e2e_http.stream_binary(
+            self._url(path),
+            headers=headers,
+            json=json,
+            chunk_size=chunk_size,
+            timeout=self.request_timeout,
         )
 
     def send(
@@ -143,6 +233,35 @@ class HttpTransport:
             timeout=self.request_timeout,
         )
 
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: BaseModel,
+        filename: str,
+        content: bytes,
+        file_content_type: str = "application/jsonl",
+        params: BaseModel | None = None,
+        response_type: type[R],
+    ) -> Result[R]:
+        return e2e_http.upload(
+            self._url(path),
+            headers=headers,
+            form=form,
+            filename=filename,
+            content=content,
+            file_content_type=file_content_type,
+            params=params,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
+        return e2e_http.download(
+            self._url(path), headers=headers, timeout=self.request_timeout
+        )
+
 
 # Top-level management/admin route groups. In a split deployment these are served
 # by the control plane (a different service from the LLM data plane). LLM routes
@@ -154,11 +273,15 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/team",
     "/organization",
     "/customer",
+    "/end_user",
     "/tag",
     "/budget",
-    "/model/info",
+    "/model/",
+    "/access_group",
     "/spend",
     "/global",
+    "/config",
+    "/guardrails",
     "/openapi.json",
 )
 
@@ -216,9 +339,33 @@ class SplitTransport:
         )
 
     def delete[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
     ) -> Result[R]:
         return self._route(path).delete(
+            path,
+            headers=headers,
+            json=json,
+            response_type=response_type,
+            params=params,
+        )
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).patch(
+            path, headers=headers, json=json, response_type=response_type
+        )
+
+    def put[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).put(
             path, headers=headers, json=json, response_type=response_type
         )
 
@@ -226,6 +373,18 @@ class SplitTransport:
         self, path: str, *, headers: BaseModel, json: BaseModel
     ) -> StreamingResponse:
         return self._route(path).stream(path, headers=headers, json=json)
+
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream:
+        return self._route(path).stream_binary(
+            path, headers=headers, json=json, chunk_size=chunk_size
+        )
 
     def send(
         self,
@@ -242,3 +401,29 @@ class SplitTransport:
 
     def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
         return self._route(path).probe(path, params=params)
+
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: BaseModel,
+        filename: str,
+        content: bytes,
+        file_content_type: str = "application/jsonl",
+        params: BaseModel | None = None,
+        response_type: type[R],
+    ) -> Result[R]:
+        return self._route(path).upload(
+            path,
+            headers=headers,
+            form=form,
+            filename=filename,
+            content=content,
+            file_content_type=file_content_type,
+            params=params,
+            response_type=response_type,
+        )
+
+    def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
+        return self._route(path).download(path, headers=headers)
