@@ -1,3 +1,15 @@
+# LAR-1 Semantic Routing — Ollama example
+#
+# WARNING: Do not hardcode a master_key in production config files.
+# Use the LITELLM_MASTER_KEY environment variable instead.
+#
+# SECURITY NOTE: By default, LAR-1 routing ignores client-supplied
+# metadata.lar1 signals. Deployments are selected using the server-side
+# default_deployment_type. To enable client-driven routing, set
+#   accept_client_metadata: true
+# in routing_strategy_args — but only do so when you trust the clients
+# or when middleware derives the LAR-1 signals server-side.
+
 model_list:
   - model_name: agent-router
     litellm_params:
@@ -37,9 +49,11 @@ router_settings:
     confidence_threshold_low: 0.3
     confidence_threshold_medium: 0.5
     confidence_threshold_high: 0.7
+    # default_deployment_type: cloud-smart  # optional, used when accept_client_metadata: false
+    # accept_client_metadata: false          # default; set true only with trusted clients
 
 general_settings:
-  master_key: sk-lar1-demo
+  master_key: os.environ/LITELLM_MASTER_KEY
 
 litellm_settings:
   set_verbose: true
