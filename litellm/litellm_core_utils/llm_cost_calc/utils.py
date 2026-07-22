@@ -380,21 +380,35 @@ def _calculate_modality_token_cost(
     cost_key: str,
     tokens: int,
     fallback_cost_per_token: float,
+    alternative_pricing: Tuple[Tuple[float, str], ...] = (),
 ) -> float:
     """
     Cost for a modality (audio/image/video) input token count.
 
-    Uses the modality-specific per-token rate when the model defines one, otherwise falls back to
-    the resolved input per-token rate (``fallback_cost_per_token``), which is already tier-aware
-    (e.g. long-context ``_above_200k_tokens``) and service-tier-aware. Providers like Gemini bill
-    audio/video input at the standard input rate and expose no modality-specific key, so dropping
-    these tokens (or billing them at the untiered base rate) severely undercounts multimodal spend.
+    Resolution order:
+      1. Modality-specific per-token rate (``cost_key``), including the service-tier suffix
+         fallback to the base key handled by ``_get_cost_per_unit``. A present-but-malformed rate
+         resolves to 0 here, preserving prior behavior.
+      2. If this request is already billed for the modality by count/duration
+         (``alternative_pricing`` pairs of ``(usage_amount, cost_key)`` such as the image count
+         with ``input_cost_per_image``), charge nothing here so the dedicated count/duration
+         component is not double-billed. Only a measurement actually present in this usage suppresses
+         the fallback; a model that merely lists a count price still bills reported tokens.
+      3. Otherwise fall back to ``fallback_cost_per_token``, the resolved input per-token rate that
+         is already tier-aware (e.g. long-context ``_above_200k_tokens``) and service-tier-aware.
+         Providers like Gemini bill audio/video input at the standard input rate and expose no
+         modality-specific key, so dropping these tokens severely undercounts multimodal spend.
     """
     if tokens <= 0:
         return 0.0
-    if model_info.get(cost_key) is None:
-        return float(tokens) * fallback_cost_per_token
-    return calculate_cost_component(model_info, cost_key, tokens)
+    if model_info.get(cost_key) is not None:
+        return calculate_cost_component(model_info, cost_key, tokens)
+    resolved_cost_per_unit = _get_cost_per_unit(model_info, cost_key, None)
+    if resolved_cost_per_unit is not None:
+        return float(tokens) * resolved_cost_per_unit
+    if any(amount and model_info.get(alt_key) is not None for amount, alt_key in alternative_pricing):
+        return 0.0
+    return float(tokens) * fallback_cost_per_token
 
 
 def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: Optional[float] = 0.0) -> Optional[float]:
@@ -603,17 +617,29 @@ def _calculate_input_cost(
     ### AUDIO COST
     audio_cost_key = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
     prompt_cost += _calculate_modality_token_cost(
-        model_info, audio_cost_key, prompt_tokens_details["audio_tokens"], prompt_base_cost
+        model_info,
+        audio_cost_key,
+        prompt_tokens_details["audio_tokens"],
+        prompt_base_cost,
+        alternative_pricing=((prompt_tokens_details["audio_length_seconds"], "input_cost_per_audio_per_second"),),
     )
 
     ### IMAGE TOKEN COST
     prompt_cost += _calculate_modality_token_cost(
-        model_info, "input_cost_per_image_token", prompt_tokens_details["image_tokens"], prompt_base_cost
+        model_info,
+        "input_cost_per_image_token",
+        prompt_tokens_details["image_tokens"],
+        prompt_base_cost,
+        alternative_pricing=((prompt_tokens_details["image_count"], "input_cost_per_image"),),
     )
 
     ### VIDEO TOKEN COST
     prompt_cost += _calculate_modality_token_cost(
-        model_info, "input_cost_per_video_token", prompt_tokens_details["video_tokens"], prompt_base_cost
+        model_info,
+        "input_cost_per_video_token",
+        prompt_tokens_details["video_tokens"],
+        prompt_base_cost,
+        alternative_pricing=((prompt_tokens_details["video_length_seconds"], "input_cost_per_video_per_second"),),
     )
 
     ### CACHE WRITING COST - Now uses tiered pricing

@@ -447,6 +447,90 @@ def test_multimodal_input_tokens_use_tiered_rate_gemini_3_1_pro():
     )
 
 
+def test_service_tier_audio_tokens_use_base_audio_rate():
+    """A service-tier request must still bill audio tokens at the base input_cost_per_audio_token.
+
+    When only the base audio rate exists (no _priority variant), the modality helper must resolve
+    it via the service-tier suffix fallback instead of dropping to the generic prompt rate.
+    """
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_audio_token": 5e-6,
+    }
+
+    audio_tokens = 100
+    text_tokens = 10
+    usage = Usage(
+        prompt_tokens=text_tokens + audio_tokens,
+        completion_tokens=20,
+        total_tokens=text_tokens + audio_tokens + 20,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=text_tokens, audio_tokens=audio_tokens
+        ),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, _ = generic_cost_per_token(
+            model="test-model",
+            usage=usage,
+            custom_llm_provider="test-provider",
+            service_tier="priority",
+        )
+
+    # audio billed at the base audio rate, not the generic prompt rate
+    assert round(prompt_cost, 12) == round(text_tokens * 1e-6 + audio_tokens * 5e-6, 12)
+
+
+def test_count_and_duration_priced_modalities_not_double_billed():
+    """Count/duration-priced modalities must not also incur a generic per-token charge.
+
+    A model priced by input_cost_per_image (count) and input_cost_per_video_per_second (duration)
+    exposes no per-token modality rate. The token fallback must stay silent so only the dedicated
+    count/duration components bill, avoiding double-charging the same modality.
+    """
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_image": 0.005,
+        "input_cost_per_video_per_second": 0.001,
+    }
+
+    text_tokens = 10
+    image_tokens = 1000
+    video_tokens = 500
+    usage = Usage(
+        prompt_tokens=text_tokens + image_tokens + video_tokens,
+        completion_tokens=20,
+        total_tokens=text_tokens + image_tokens + video_tokens + 20,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            image_tokens=image_tokens,
+            video_tokens=video_tokens,
+            image_count=2,
+            video_length_seconds=10.0,
+        ),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, _ = generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="test-provider"
+        )
+
+    expected = (text_tokens * 1e-6) + (2 * 0.005) + (10.0 * 0.001)
+    assert round(prompt_cost, 12) == round(expected, 12)
+
+
 def test_get_token_base_cost_picks_highest_crossed_tier():
     """Regression test for #30345.
 
