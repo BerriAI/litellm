@@ -1073,6 +1073,7 @@ class HTTPHandler:
         disable_default_headers: Optional[
             bool
         ] = False,  # arize phoenix returns different API responses when user agent header in request
+        transport: Optional[httpx.BaseTransport] = None,
     ):
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -1088,11 +1089,13 @@ class HTTPHandler:
         default_headers = get_default_headers() if not disable_default_headers else None
 
         if client is None:
-            transport = self._create_sync_transport()
+            _transport = (
+                transport if transport is not None else self._create_sync_transport()
+            )
 
             # Create a client with a connection pool
             self.client = httpx.Client(
-                transport=transport,
+                transport=_transport,
                 timeout=timeout,
                 verify=ssl_config,
                 cert=cert,

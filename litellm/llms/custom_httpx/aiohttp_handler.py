@@ -1,8 +1,14 @@
+import asyncio
+import ipaddress
+import os
+import socket
 from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
+from urllib.parse import urlparse
 
 import aiohttp
 import httpx  # type: ignore
 from aiohttp import ClientSession, FormData
+from aiohttp.abc import AbstractResolver
 
 import litellm
 import litellm.litellm_core_utils
@@ -12,10 +18,11 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_ssl_configuration,
 )
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.types.llms.openai import FileTypes
@@ -30,6 +37,287 @@ else:
     LiteLLMLoggingObj = Any
 
 DEFAULT_TIMEOUT = 600
+
+# CGNAT (100.64.0.0/10) is misclassified as global on Python < 3.11
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _is_blocked_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if addr is not globally routable (private, loopback, reserved, etc.).
+
+    Uses Python's built-in is_global to cover all IANA special-use ranges —
+    including RFC 5737 documentation (192.0.2.0/24), RFC 2544 benchmarking
+    (198.18.0.0/15), and class E (240.0.0.0/4) — without maintaining a manual list.
+    CGNAT (100.64.0.0/10) is explicitly checked for Python < 3.11 compat.
+    """
+    # Unwrap IPv4-mapped IPv6 (::ffff:10.0.0.1 → 10.0.0.1)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    # Python < 3.11 incorrectly marks CGNAT as global
+    if isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT:
+        return True
+    return not addr.is_global or addr.is_multicast
+
+
+def _assert_not_private_url(url: str) -> None:
+    """Raise ValueError if url resolves to any private/reserved IP (SSRF protection).
+
+    Validates all DNS answers, not just the first, to prevent A-record rotation attacks.
+
+    On the sync path this is defence-in-depth for externally-supplied httpx clients.
+    Internally-created clients use ``_SSRFGuardTransport``, which resolves, validates,
+    and pins the IP at TCP-connect time — eliminating the DNS-rebinding TOCTOU window
+    that a preflight-only check cannot close.
+
+    Set ``litellm.allow_requests_to_internal_ips = True`` to disable this check
+    for self-hosted / on-prem deployments where api_base is an internal address.
+    """
+    if litellm.allow_requests_to_internal_ips:
+        return
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        return
+    try:
+        answers = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return  # DNS failure — request will fail naturally
+    for answer in answers:
+        raw_ip = answer[4][0]
+        try:
+            addr = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+        if _is_blocked_address(addr):
+            raise ValueError(
+                f"api_base '{url}' resolves to a private/reserved IP address "
+                f"({raw_ip}) which is not allowed (SSRF protection)"
+            )
+
+
+def _assert_not_private_ip_literal(url: str) -> None:
+    """Raise ValueError if the url host is a private/reserved IP address literal.
+
+    aiohttp's TCPConnector skips _SSRFGuardResolver when the host is already an
+    IP address (no DNS lookup needed), so the resolver cannot block such URLs.
+    This function fills that gap with a fast, non-blocking check (no DNS I/O).
+    Hostname-based URLs are handled by _SSRFGuardResolver at connect time.
+
+    Set ``litellm.allow_requests_to_internal_ips = True`` to disable this check.
+    """
+    if litellm.allow_requests_to_internal_ips:
+        return
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        return
+    try:
+        addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        return  # Not an IP literal — resolver will validate at connect time
+    if _is_blocked_address(addr):
+        raise ValueError(
+            f"api_base '{url}' contains a private/reserved IP address "
+            f"({hostname}) which is not allowed (SSRF protection)"
+        )
+
+
+class _SSRFGuardResolver(AbstractResolver):
+    """Custom aiohttp resolver that validates IPs at TCP-connection time.
+
+    By hooking into aiohttp's resolver — used for every connection including
+    redirect targets — this eliminates the DNS-rebinding TOCTOU window that
+    a separate preflight check cannot close.  All DNS answers are validated,
+    not just the first, to defend against A-record rotation.
+    """
+
+    async def resolve(
+        self, host: str, port: int = 0, family: int = socket.AF_INET
+    ) -> list:
+        loop = asyncio.get_running_loop()
+        try:
+            infos = await loop.getaddrinfo(
+                host, port, family=family, type=socket.SOCK_STREAM
+            )
+        except socket.gaierror:
+            raise  # Propagate so aiohttp wraps it in a ClientConnectorError
+        if not litellm.allow_requests_to_internal_ips:
+            for info in infos:
+                raw_ip = info[4][0]
+                try:
+                    addr = ipaddress.ip_address(raw_ip)
+                except ValueError:
+                    continue
+                if _is_blocked_address(addr):
+                    raise ValueError(
+                        f"Host '{host}' resolves to a private/reserved IP address "
+                        f"({raw_ip}) which is not allowed (SSRF protection)"
+                    )
+        return [
+            {
+                "hostname": host,
+                "host": info[4][0],
+                "port": info[4][1] if len(info[4]) > 1 else port,
+                "family": info[0],
+                "proto": info[2],
+                "flags": socket.AI_NUMERICHOST | socket.AI_NUMERICSERV,
+            }
+            for info in infos
+        ]
+
+    async def close(self) -> None:
+        pass
+
+
+class _SSRFGuardTransport(httpx.HTTPTransport):
+    """Sync httpx transport that eliminates the DNS-rebinding TOCTOU gap.
+
+    Mirrors ``_SSRFGuardResolver`` on the async path: resolves the hostname
+    once, validates every returned IP, then pins the TCP connection to the
+    first safe address by rewriting the request URL to an IP literal.
+    httpcore skips DNS for IP-literal hosts, so the second resolution that
+    creates the TOCTOU window never occurs.
+
+    The original hostname is preserved in the ``Host`` header and the
+    ``sni_hostname`` extension so that TLS certificate validation and
+    virtual-host routing are unaffected.
+
+    Set ``litellm.allow_requests_to_internal_ips = True`` to disable all
+    SSRF checking.
+    """
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:  # type: ignore[override]
+        if not litellm.allow_requests_to_internal_ips:
+            host = request.url.host
+            try:
+                addr: Optional[ipaddress.IPv4Address | ipaddress.IPv6Address] = (
+                    ipaddress.ip_address(host)
+                )
+            except ValueError:
+                addr = None
+
+            if addr is not None:
+                # IP-literal host: validate inline — no DNS needed, no TOCTOU window.
+                if _is_blocked_address(addr):
+                    raise ValueError(
+                        f"Host '{host}' is a private/reserved IP address "
+                        f"which is not allowed (SSRF protection)"
+                    )
+            else:
+                # Hostname path: resolve, validate all answers, then pin to prevent
+                # a second DNS lookup (closes the DNS-rebinding TOCTOU window).
+                port = request.url.port or (
+                    443 if request.url.scheme == "https" else 80
+                )
+                try:
+                    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+                except socket.gaierror:
+                    raise
+
+                for info in infos:
+                    raw_ip = info[4][0]
+                    try:
+                        resolved = ipaddress.ip_address(raw_ip)
+                    except ValueError:
+                        continue
+                    if _is_blocked_address(resolved):
+                        raise ValueError(
+                            f"Host '{host}' resolves to a private/reserved IP "
+                            f"address ({raw_ip}) which is not allowed (SSRF protection)"
+                        )
+
+                if infos:
+                    # Rewrite the URL to the first validated IP so that httpcore
+                    # connects directly without a second DNS resolution — this closes
+                    # the TOCTOU window entirely.
+                    pinned_ip = infos[0][4][0]
+                    pinned_url = request.url.copy_with(host=pinned_ip)
+
+                    # Preserve the original hostname in the Host header (virtual
+                    # hosting) and sni_hostname extension (TLS cert validation).
+                    headers = [
+                        (k, v) for k, v in request.headers.raw if k.lower() != b"host"
+                    ]
+                    default_port = 443 if request.url.scheme == "https" else 80
+                    _port = request.url.port
+                    host_header = (
+                        f"{host}:{_port}"
+                        if _port is not None and _port != default_port
+                        else host
+                    )
+                    headers.append((b"host", host_header.encode("utf-8")))
+                    extensions = {**request.extensions, "sni_hostname": host}
+                    request = httpx.Request(
+                        method=request.method,
+                        url=pinned_url,
+                        headers=headers,
+                        content=request.stream,
+                        extensions=extensions,
+                    )
+
+        return super().handle_request(request)
+
+
+async def _on_ssrf_request_start(
+    session: Any,
+    trace_config_ctx: Any,
+    params: Any,
+) -> None:
+    """Block IP-literal redirect targets before aiohttp makes the connection.
+
+    _SSRFGuardResolver handles all hostname-based requests (including redirect
+    hops) at DNS-resolution time.  This hook closes the gap where a server
+    returns a Location header containing a bare IP literal — aiohttp skips DNS
+    for those, so the resolver never fires.  Hostname-based URLs pass through
+    untouched here.
+    """
+    _assert_not_private_ip_literal(str(params.url))
+
+
+def _make_ssrf_trace_config() -> aiohttp.TraceConfig:
+    """Return a TraceConfig that blocks IP-literal redirect targets."""
+    cfg = aiohttp.TraceConfig()
+    cfg.on_request_start.append(_on_ssrf_request_start)
+    return cfg
+
+
+_SSRF_SAFE_CLIENT_CACHE_KEY = "ssrf_safe_httpx_client"
+
+
+def _get_ssrf_safe_sync_client() -> HTTPHandler:
+    """Return a cached HTTPHandler whose transport validates and pins IPs at connect time.
+
+    Mirrors the caching behaviour of ``_get_httpx_client`` (1-hour TTL via
+    ``in_memory_llm_clients_cache``) so that persistent TCP/TLS connections are
+    reused across requests — fixing the per-call pool regression that a naive
+    ``HTTPHandler(transport=_SSRFGuardTransport())`` would introduce.
+
+    SSL settings (``litellm.ssl_verify``, ``SSL_CERTIFICATE`` env-var) are
+    forwarded to ``_SSRFGuardTransport`` so that callers using self-signed certs
+    or mTLS are not silently broken.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is None:
+        from litellm.caching.llm_caching_handler import LLMClientCache
+
+        cache = LLMClientCache()
+        setattr(litellm, "in_memory_llm_clients_cache", cache)
+
+    _cached_client = cache.get_cache(_SSRF_SAFE_CLIENT_CACHE_KEY)
+    if _cached_client:
+        return _cached_client
+
+    ssl_config = get_ssl_configuration(None)
+    cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
+    _new_client = HTTPHandler(
+        transport=_SSRFGuardTransport(verify=ssl_config, cert=cert)
+    )
+    cache.set_cache(
+        key=_SSRF_SAFE_CLIENT_CACHE_KEY,
+        value=_new_client,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    )
+    return _new_client
 
 
 class BaseLLMAIOHTTPHandler:
@@ -89,8 +377,15 @@ class BaseLLMAIOHTTPHandler:
             session = aiohttp.ClientSession(connector=connector)
             return session
         else:
-            # Default session creation
-            session = aiohttp.ClientSession()
+            # Default session creation — attach SSRF guard resolver so every
+            # TCP connection (including redirect targets) is validated at the
+            # network layer, eliminating the DNS-rebinding TOCTOU window.
+            # The trace config adds a second layer: it blocks IP-literal
+            # redirect targets that bypass the resolver (no DNS lookup needed).
+            session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(resolver=_SSRFGuardResolver()),
+                trace_configs=[_make_ssrf_trace_config()],
+            )
             return session
 
     def _get_async_client_session(self, dynamic_client_session: Optional[ClientSession] = None) -> ClientSession:
@@ -127,26 +422,17 @@ class BaseLLMAIOHTTPHandler:
         """
         if self.client_session is not None and not self.client_session.closed and self._owns_session:
             try:
-                import asyncio
-
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Event loop is running - schedule cleanup task
-                        asyncio.create_task(self.close())
-                    else:
-                        # Event loop exists but not running - run cleanup
-                        loop.run_until_complete(self.close())
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.close())
                 except RuntimeError:
-                    # No event loop available - create one for cleanup
+                    # No running loop — run cleanup in a temporary one.
                     loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
                     try:
                         loop.run_until_complete(self.close())
                     finally:
                         loop.close()
             except Exception:
-                # Silently ignore errors during __del__ to avoid issues
                 pass
 
     async def _make_common_async_call(
@@ -166,6 +452,13 @@ class BaseLLMAIOHTTPHandler:
 
         response: Optional[aiohttp.ClientResponse] = None
         async_client_session = self._get_async_client_session(dynamic_client_session=async_client_session)
+
+        # IP-literal URLs bypass _SSRFGuardResolver because aiohttp's TCPConnector
+        # skips DNS resolution for hosts that are already IP addresses.  Check them
+        # here with a fast, non-blocking parse (no socket I/O).  Hostname-based URLs
+        # are handled by _SSRFGuardResolver at TCP-connect time, which also covers
+        # redirect targets, eliminating the DNS-rebinding TOCTOU window.
+        _assert_not_private_ip_literal(api_base)
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
@@ -208,6 +501,8 @@ class BaseLLMAIOHTTPHandler:
         params: Optional[dict] = None,
     ) -> httpx.Response:
         max_retry_on_unprocessable_entity_error = provider_config.max_retry_on_unprocessable_entity_error
+
+        _assert_not_private_url(api_base)
 
         response: Optional[httpx.Response] = None
 
@@ -394,7 +689,7 @@ class BaseLLMAIOHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_ssrf_safe_sync_client()
         else:
             sync_httpx_client = client
 
@@ -435,7 +730,7 @@ class BaseLLMAIOHTTPHandler:
         client: Optional[HTTPHandler] = None,
     ) -> Tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_ssrf_safe_sync_client()
         else:
             sync_httpx_client = client
         stream = True
@@ -618,7 +913,7 @@ class BaseLLMAIOHTTPHandler:
             )  # type: ignore
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_ssrf_safe_sync_client()
         else:
             sync_httpx_client = client
 
