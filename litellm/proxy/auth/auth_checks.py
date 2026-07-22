@@ -1788,7 +1788,7 @@ async def _cache_team_object(
     # the cache from a verified single row.
     if team_table.team_alias:
         alias_key = "team_alias:{}".format(team_table.team_alias)
-        user_api_key_cache.delete_cache(key=alias_key)
+        await user_api_key_cache.async_delete_cache(key=alias_key)
         if proxy_logging_obj is not None:
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
 
@@ -1821,7 +1821,7 @@ async def _delete_cache_key_object(
 ):
     key = hashed_token
 
-    user_api_key_cache.delete_cache(key=key)
+    await user_api_key_cache.async_delete_cache(key=key)
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
@@ -2018,7 +2018,7 @@ async def _delete_cache_access_object(
 ):
     key = "access_group_id:{}".format(access_group_id)
 
-    user_api_key_cache.delete_cache(key=key)
+    await user_api_key_cache.async_delete_cache(key=key)
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
