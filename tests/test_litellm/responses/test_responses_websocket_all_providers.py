@@ -1058,6 +1058,61 @@ class TestNativeWebSocketGuardrails:
         )
 
     @pytest.mark.asyncio
+    async def test_native_websocket_merges_deployment_defaults(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.responses.main import _aresponses_websocket
+
+        class FakeBackendWebSocket:
+            def __init__(self):
+                self.send = AsyncMock()
+                self.close = AsyncMock()
+
+            async def recv(self, decode=False):
+                await asyncio.Future()
+
+        backend_websocket = FakeBackendWebSocket()
+
+        class FakeConnect:
+            def __init__(self, url, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return backend_websocket
+
+            async def __aexit__(self, *args):
+                pass
+
+        first_message = json.dumps(
+            {
+                "type": "response.create",
+                "model": "gpt-4o-mini",
+                "input": "hi",
+                "service_tier": "default",
+            }
+        )
+        websocket = MagicMock()
+        websocket.receive_text = AsyncMock(side_effect=RuntimeError("disconnect"))
+
+        with patch("websockets.connect", FakeConnect):
+            await _aresponses_websocket.__wrapped__(
+                model="openai/gpt-4o-mini",
+                websocket=websocket,
+                api_key="sk-test",
+                litellm_logging_obj=MagicMock(),
+                first_message=first_message,
+                reasoning_effort="high",
+                service_tier="priority",
+                extra_body={"provider_default": "configured"},
+            )
+
+        sent_message = json.loads(backend_websocket.send.await_args.args[0])
+        assert sent_message["reasoning"] == {"effort": "high"}
+        assert sent_message["service_tier"] == "default"
+        assert sent_message["provider_default"] == "configured"
+
+    @pytest.mark.asyncio
     async def test_completed_event_with_null_response_passes_through(self):
         from unittest.mock import MagicMock
 

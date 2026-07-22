@@ -6147,6 +6147,7 @@ class BaseLLMHTTPHandler:
         litellm_metadata: Optional[Dict[str, Any]] = None,
         custom_llm_provider: Optional[str] = None,
         first_message: Optional[str] = None,
+        request_defaults: dict[str, object] | None = None,
         **kwargs: Any,
     ):
         """
@@ -6295,6 +6296,7 @@ class BaseLLMHTTPHandler:
                     guardrail_callbacks=_ws_guardrail_callbacks,
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
                     authorized_model=model,
+                    request_defaults=request_defaults,
                 )
                 await streaming.bidirectional_forward()
 
