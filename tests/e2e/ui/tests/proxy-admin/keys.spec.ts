@@ -6,6 +6,7 @@ import {
   E2E_UPDATE_LIMITS_KEY_ALIAS,
   E2E_INTERNAL_USER_KEY_ALIAS,
   E2E_TEAM_CRUD_ALIAS,
+  E2E_UI_OPENAI_MODEL,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
@@ -166,7 +167,7 @@ test.describe("Proxy Admin - Keys", () => {
     // Open the model multi-select and pick a single specific model. Use
     // getByRole("option", ...) to avoid the strict-mode collision between
     // the option container and its inner text node.
-    const modelName = "fake-openai-gpt-4";
+    const modelName = E2E_UI_OPENAI_MODEL;
     await page.locator(".ant-select-selection-overflow").click();
     const option = page.locator(".ant-select-dropdown:visible").getByRole("option", { name: modelName, exact: true });
     await option.waitFor({ state: "attached" });
@@ -182,8 +183,8 @@ test.describe("Proxy Admin - Keys", () => {
 
     // Grab the new key from the success modal (rendered inside a <pre>) and
     // verify it can call /chat/completions for the model it was scoped to.
-    // The mock LLM server (fixtures/mock_llm_server/server.py) replies with
-    // a fixed "This is a mock response." body.
+    // The deployment routes to a real provider, so this costs a fraction of
+    // a cent and proves the whole key -> router -> provider path.
     const apiKey = (await page.locator(".ant-modal:visible pre").innerText()).trim();
     expect(apiKey).toMatch(/^sk-/);
 
@@ -191,12 +192,12 @@ test.describe("Proxy Admin - Keys", () => {
       headers: { Authorization: `Bearer ${apiKey}` },
       data: {
         model: modelName,
-        messages: [{ role: "user", content: "ping" }],
+        messages: [{ role: "user", content: "Reply with the single word: pong" }],
       },
     });
     expect(response.status()).toBe(200);
     const body = await response.json();
-    expect(body.choices?.[0]?.message?.content).toBe("This is a mock response.");
+    expect(body.choices?.[0]?.message?.content?.length).toBeGreaterThan(0);
 
     await page.keyboard.press("Escape");
 

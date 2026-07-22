@@ -2777,19 +2777,9 @@ jobs:
           name: Push Prisma schema
           command: uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
       - run:
-          name: Seed database
-          command: |
-            PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
-              -f tests/e2e/ui/fixtures/seed.sql
-      - run:
-          name: Start mock LLM server
-          command: uv run --no-sync python tests/e2e/ui/fixtures/mock_llm_server/server.py
-          background: true
-      - run:
           name: Start LiteLLM proxy
           environment:
             LITELLM_MASTER_KEY: "sk-1234"
-            MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: ""
             # PROXY_LOGOUT_URL is inherited from the job-level environment so the
@@ -2905,19 +2895,9 @@ jobs:
           name: Push Prisma schema
           command: uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
       - run:
-          name: Seed database
-          command: |
-            PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
-              -f tests/e2e/ui/fixtures/seed.sql
-      - run:
-          name: Start mock LLM server
-          command: uv run --no-sync python tests/e2e/ui/fixtures/mock_llm_server/server.py
-          background: true
-      - run:
           name: Start LiteLLM proxy under a server root path
           environment:
             LITELLM_MASTER_KEY: "sk-1234"
-            MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
           # Output flows to this step's own log, so a boot crash is visible here
           # rather than swallowed by a downstream readiness probe.

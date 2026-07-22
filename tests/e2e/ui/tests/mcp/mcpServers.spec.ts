@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, APIRequestContext } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
@@ -8,8 +8,33 @@ import { Page } from "../../fixtures/pages";
 // — SSE / stdio / OpenAPI transports, API Key / Bearer / OAuth2 / Basic / Token
 // / AWS SigV4 auth, edit/delete, BYOK credentials, tool list/call (needs a real
 // or mocked MCP server in the e2e fixture stack), and access-group permissions.
+
+// Leftover e2e_mcp_* servers point at a dead URL, and the MCP page's health
+// checks against them keep the network busy long enough that navigation's
+// networkidle wait times out on the next run against a persistent gateway.
+async function purgeE2eMcpServers(request: APIRequestContext): Promise<void> {
+  const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
+  const auth = { Authorization: `Bearer ${masterKey}` };
+  const res = await request.get("/v1/mcp/server", { headers: auth });
+  if (!res.ok()) return;
+  const servers: Array<{ server_id: string; server_name?: string }> = await res.json();
+  for (const server of servers) {
+    if (server.server_name?.startsWith("e2e_mcp_")) {
+      await request.delete(`/v1/mcp/server/${server.server_id}`, { headers: auth });
+    }
+  }
+}
+
 test.describe("MCP Servers", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
+
+  test.beforeEach(async ({ request }) => {
+    await purgeE2eMcpServers(request);
+  });
+
+  test.afterEach(async ({ request }) => {
+    await purgeE2eMcpServers(request);
+  });
 
   test("Add a custom MCP server via the discovery → custom form", async ({ page }) => {
     await navigateToPage(page, Page.McpServers);
