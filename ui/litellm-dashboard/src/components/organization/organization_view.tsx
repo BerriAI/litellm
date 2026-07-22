@@ -24,6 +24,7 @@ import {
   organizationUpdateCall,
 } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
+import { CopyableBadge } from "../shared/copyable_badge";
 import NumericalInput from "../shared/numerical_input";
 import MemberModal from "../team/EditMembership";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -303,9 +304,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   <Text>Teams</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {orgData.teams?.map((team, index) => (
-                      <Badge key={index} color="red">
-                        {teamAliasMap[team.team_id] || team.team_id}
-                      </Badge>
+                      <CopyableBadge key={index} value={teamAliasMap[team.team_id] || team.team_id} />
                     ))}
                   </div>
                 </Card>

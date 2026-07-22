@@ -1,0 +1,41 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+
+import { CopyableBadge } from "./copyable_badge";
+
+const { copyToClipboardMock } = vi.hoisted(() => ({ copyToClipboardMock: vi.fn() }));
+
+vi.mock("@/utils/dataUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/dataUtils")>()),
+  copyToClipboard: copyToClipboardMock,
+}));
+
+describe("CopyableBadge", () => {
+  it("renders the value and truncates it", () => {
+    render(<CopyableBadge value="app-aigateway-inference-producttech-product-default" />);
+    const label = screen.getByText("app-aigateway-inference-producttech-product-default");
+    expect(label.className).toContain("truncate");
+    expect(label.className).toContain("max-w-[220px]");
+  });
+
+  it("copies the full value when clicked", async () => {
+    copyToClipboardMock.mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(<CopyableBadge value="team-alias-long-name" dataTestId="team-badge" />);
+
+    await user.click(screen.getByTestId("team-badge"));
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith("team-alias-long-name");
+  });
+
+  it("exposes a copy affordance via accessible label", () => {
+    render(<CopyableBadge value="my-team" />);
+    expect(screen.getByRole("button", { name: "Copy my-team" })).toBeInTheDocument();
+  });
+
+  it("honors a custom max width", () => {
+    render(<CopyableBadge value="short" maxWidthClassName="max-w-[120px]" />);
+    expect(screen.getByText("short").className).toContain("max-w-[120px]");
+  });
+});
