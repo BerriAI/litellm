@@ -1114,3 +1114,90 @@ def test_count_content_list_rejects_unknown_type():
     message = str(exc_info.value)
     assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
+    assert "file" in message
+
+
+def test_token_counter_with_file_content_block():
+    """
+    Regression test for issue #28409: a message containing an OpenAI `file`
+    content block (document understanding) must NOT raise from token_counter
+    or trim_messages.
+
+    The real token cost of a file is the provider's server-side extraction and
+    cannot be derived client-side; only the lightweight textual fields
+    (file_id / filename / format) are counted — the opaque base64 `file_data`
+    blob must not inflate the count.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this document."},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "file-abc123",
+                        "filename": "report.pdf",
+                        "format": "application/pdf",
+                    },
+                },
+            ],
+        }
+    ]
+
+    tokens = token_counter_new(model="gpt-4o", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+
+    # base64 file_data is opaque — it must not blow up the count
+    small_blob = dict(messages[0]["content"][1]["file"], file_data="data:application/pdf;base64,AAAA")
+    big_blob = dict(messages[0]["content"][1]["file"], file_data="data:application/pdf;base64," + "A" * 100_000)
+    tokens_small = token_counter_new(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": [{"type": "file", "file": small_blob}]}],
+    )
+    tokens_big = token_counter_new(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": [{"type": "file", "file": big_blob}]}],
+    )
+    assert tokens_small == tokens_big, "opaque file_data blob must not be counted"
+
+    # a bare file block (e.g. only file_data) must also not raise
+    tokens_bare = token_counter_new(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_data": "data:application/pdf;base64,AAAA"}}],
+            }
+        ],
+    )
+    assert tokens_bare >= 0
+
+
+def test_trim_messages_with_file_content_block():
+    """The original repro from issue #28409: trim_messages on a document
+    understanding payload raised ValueError from token_counter (1.83.14) —
+    current versions swallow that error and silently return the messages
+    UNTRIMMED instead. With the fix, trimming must actually happen."""
+    messages = [
+        {"role": "user", "content": "filler message " * 200},
+        {"role": "user", "content": "filler message " * 200},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this file?"},
+                {
+                    "type": "file",
+                    "file": {"file_id": "file-abc123", "filename": "report.pdf"},
+                },
+            ],
+        },
+    ]
+
+    trimmed = litellm.utils.trim_messages(messages, model="gpt-4o", max_tokens=120)
+
+    assert trimmed is not None
+    assert len(trimmed) < len(messages), (
+        "trim_messages must actually trim an over-budget conversation containing "
+        f"a file content block — got {len(trimmed)} messages back (input {len(messages)})"
+    )

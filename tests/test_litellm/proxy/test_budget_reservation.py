@@ -1099,6 +1099,45 @@ def test_reservation_uses_most_expensive_deployment_in_group():
     assert estimated == pytest.approx(expected_expensive)
 
 
+def test_estimate_input_tokens_reserves_max_for_file_content_blocks():
+    """A `file` content block's real token cost is the provider's server-side
+    extraction of the referenced document — token_counter only sees the
+    filename/id, so counting it would under-reserve arbitrarily large uploads.
+    Reservation must fall back to the conservative max_input_tokens instead."""
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        _estimate_input_tokens,
+    )
+
+    file_request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize this document."},
+                    {"type": "file", "file": {"file_id": "file-abc123"}},
+                ],
+            }
+        ]
+    }
+    estimated = _estimate_input_tokens(
+        request_body=file_request,
+        route="/chat/completions",
+        model="gpt-4o",
+        model_info={"max_input_tokens": 128000},
+    )
+    assert estimated == 128000
+
+    # Plain text messages must still be counted, not blanket-reserved.
+    text_request = {"messages": [{"role": "user", "content": "hi"}]}
+    counted = _estimate_input_tokens(
+        request_body=text_request,
+        route="/chat/completions",
+        model="gpt-4o",
+        model_info={"max_input_tokens": 128000},
+    )
+    assert counted is not None and 0 < counted < 128000
+
+
 @pytest.mark.asyncio
 async def test_should_clamp_reservation_to_model_ceiling_when_caller_overrequests(
     spend_counter_state,
