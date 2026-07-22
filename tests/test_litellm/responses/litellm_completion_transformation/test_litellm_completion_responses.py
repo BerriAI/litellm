@@ -2370,6 +2370,58 @@ class TestStreamingIDConsistency:
             len(tool_messages) == 2
         ), f"Expected 2 tool messages, got {len(tool_messages)}"
 
+    def test_assistant_message_between_function_call_and_output_is_merged(self):
+        input_items = [
+            {"type": "message", "role": "user", "content": "Run pwd"},
+            {
+                "type": "function_call",
+                "call_id": "call_01",
+                "name": "exec_command",
+                "arguments": '{"cmd":"pwd"}',
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "I'll inspect the working directory.",
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "It should be quick.",
+                    }
+                ],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_01",
+                "output": "/workspace",
+            },
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+
+        assert [message.get("role") for message in messages] == [
+            "user",
+            "assistant",
+            "tool",
+        ]
+        assert messages[1].get("content") == [
+            {"type": "text", "text": "I'll inspect the working directory."},
+            {"type": "text", "text": "It should be quick."},
+        ]
+        assert messages[1].get("tool_calls")[0].get("id") == "call_01"
+        assert messages[2].get("tool_call_id") == "call_01"
+
     def test_single_tool_call_still_works_after_merge_fix(self):
         """
         Ensure the parallel-tool-call merging fix does not break the existing

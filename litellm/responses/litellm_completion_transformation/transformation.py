@@ -402,6 +402,36 @@ class LiteLLMCompletionResponsesConfig:
                     )
                 )
 
+                if (
+                    messages
+                    and len(chat_completion_messages) == 1
+                    and not LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item=_input)
+                    and not LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item=_input)
+                ):
+                    last_msg = messages[-1]
+                    new_msg = chat_completion_messages[0]
+                    if (
+                        isinstance(last_msg, dict)
+                        and isinstance(new_msg, dict)
+                        and last_msg.get("role") == "assistant"
+                        and last_msg.get("tool_calls")
+                        and new_msg.get("role") == "assistant"
+                    ):
+                        last_content = last_msg.get("content")
+                        new_content = new_msg.get("content")
+                        if last_content is None:
+                            merged_content = new_content
+                        elif isinstance(last_content, list):
+                            merged_content = last_content + (
+                                new_content if isinstance(new_content, list) else [new_content]
+                            )
+                        elif isinstance(new_content, list):
+                            merged_content = [last_content, *new_content]
+                        else:
+                            merged_content = f"{last_content}{new_content}"
+                        last_msg["content"] = merged_content
+                        continue
+
                 if LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item=_input):
                     call_id_raw = _input.get("call_id") or _input.get("id") or ""
                     if call_id_raw:
