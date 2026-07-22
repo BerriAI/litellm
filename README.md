@@ -10,6 +10,7 @@
         <a href="https://railway.com/deploy/RhvhdC?referralCode=7mRv9K&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway" height="40"></a>
         <a href="https://console.aws.amazon.com/cloudshell/home" target="_blank" rel="nofollow"><img src="./.github/deploy-on-aws.png" alt="Deploy on AWS" height="40"></a>
         <a href="https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Flitellm&cloudshell_workspace=terraform%2Flitellm%2Fgcp%2Fexamples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true" target="_blank" rel="nofollow"><img src="./.github/deploy-on-gcp.png" alt="Deploy on GCP" height="40"></a>
+        <a href="https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBerriAI%2Flitellm%2Fmain%2Fterraform%2Flitellm%2Fazure%2Fexamples%2Fdefault%2Fazuredeploy.json" target="_blank" rel="nofollow"><img src="./.github/deploy-on-azure.png" alt="Deploy on Azure" height="40"></a>
         </p>
     </p>
 <h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">LiteLLM Proxy Server (AI Gateway)</a> | <a href="https://docs.litellm.ai/docs/enterprise#hosted-litellm-proxy" target="_blank"> Hosted Proxy</a> | <a href="https://litellm.ai/enterprise"target="_blank">Enterprise Tier</a> | <a href="https://www.litellm.ai/ai-gateway" target="_blank">Website</a></h4>
@@ -535,16 +536,71 @@ terraform apply
 
 Provider API keys live in Secret Manager; reference resource IDs (e.g. `projects/my-gcp-project/secrets/openai-api-key`) via `gateway_extra_secrets`. Full input list and architecture diagram on the [registry page](https://registry.terraform.io/modules/BerriAI/litellm/google/latest?tab=inputs).
 
+#### Azure: Container Apps + App Gateway
+
+Container Apps + Application Gateway with path-based routing, matching the AWS / GCP stacks. Pulls the four componentized images directly from GHCR (no mirror needed for Azure).
+
+```bash
+git clone https://github.com/BerriAI/litellm.git
+cd litellm/terraform/litellm/azure/examples/default
+cp terraform.tfvars.example terraform.tfvars   # edit location/tenant/env
+terraform init && terraform apply
+```
+
+[Module page →](https://registry.terraform.io/modules/BerriAI/litellm/azure/latest)
+
+To call the module from your own root config:
+
+```hcl
+# main.tf
+terraform {
+  required_version = ">= 1.6.0"
+  required_providers {
+    azurerm = { source = "hashicorp/azurerm", version = "~> 3.117" }
+  }
+}
+
+provider "azurerm" {
+  features {}
+}
+
+module "litellm" {
+  source  = "BerriAI/litellm/azure"
+  version = "~> 1.89"
+
+  location = "eastus"
+  tenant   = "acme"
+  env      = "prod"
+  azs      = ["1", "2"]
+
+  # Production: upload a TLS cert to Key Vault and reference it here.
+  # Without one, set allow_plaintext_app_gateway = true (dev/trial only).
+  # key_vault_certificate_id = "https://acmekv.vault.azure.net/certificates/litellm-cert/<version>"
+  allow_plaintext_app_gateway = true
+}
+
+output "litellm_url" {
+  value = module.litellm.app_gateway_url
+}
+```
+
+```bash
+terraform init
+terraform apply
+```
+
+Provider API keys live in Key Vault; reference secret IDs via `gateway_extra_secrets`. Full input list on the [module README](./terraform/litellm/azure/README.md).
+
 #### Both stacks include
 
 - The full componentized split (gateway / backend / UI as independent services)
-- Managed Postgres (writer + reader) and Redis
+- Managed Postgres and Redis
 - Versioned object store for proxy state + file uploads
 - An auto-generated `LITELLM_MASTER_KEY` in your cloud's secret manager
 - A one-off migration job that runs `prisma migrate deploy` before the proxy starts
-- The same `proxy_config` surface as the [Helm chart](./helm/litellm/) — pass YAML as a typed map
+- The same `proxy_config` surface as the [Helm chart](./helm/litellm/), pass YAML as a typed map
 
-The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws/) and [`terraform/litellm/gcp/`](./terraform/litellm/gcp/) in this repo; the registry entries are read-only mirrors updated on each release.
+The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws/), [`terraform/litellm/gcp/`](./terraform/litellm/gcp/), and [`terraform/litellm/azure/`](./terraform/litellm/azure/) in this repo; the registry entries are read-only mirrors updated on each release.
 
 ### Run in Developer Mode
 #### Services
