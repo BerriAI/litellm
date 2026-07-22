@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import os
+import random
 import smtplib
 import ssl
 import sys
@@ -5192,7 +5193,9 @@ class ProxyUpdateSpend:
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
                 # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
+                await asyncio.sleep(
+                    random.uniform(2**i, 2 ** (i + 1))
+                )  # Randomized exponential backoff
             except Exception as e:
                 _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
 
@@ -5270,7 +5273,7 @@ class ProxyUpdateSpend:
                     )
                     if i >= n_retry_times:
                         raise
-                    await asyncio.sleep(2**i)
+                    await asyncio.sleep(random.uniform(2**i, 2 ** (i + 1)))
         except Exception as e:
             # Logs already removed from queue at start - don't put them back
             # This matches the original behavior where logs are removed even on error
