@@ -1317,6 +1317,13 @@ async def delete_user(
                     where={"team_id": team.team_id}, data={"members": new_members}
                 )
 
+            team_row = LiteLLM_TeamTable(**team.model_dump())
+            if any(member.user_id == user_id for member in team_row.members_with_roles or []):
+                await team_member_delete(
+                    data=TeamMemberDeleteRequest(team_id=team_row.team_id, user_id=user_id),
+                    user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                )
+
         await _set_user_keys_blocked(user_id=user_id, blocked=True)
 
         await _delete_rows_referencing_user(prisma_client, user_id=user_id)
@@ -1925,8 +1932,16 @@ async def delete_group(
 
 async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team, prisma_client
-) -> Tuple[Dict[str, Any], Set[str]]:
-    """Process patch operations for a group and return update data and final members."""
+) -> Tuple[Dict[str, Any], Set[str], Set[str] | None]:
+    """Process patch operations for a group and return update data, final members
+    and, when the request contained a member ``replace`` op, the absolute target
+    roster it declared (``None`` otherwise).
+
+    ``add``/``remove`` are deltas relative to the current roster, but ``replace``
+    is absolute: it declares the roster is exactly this set, so the caller must
+    reconcile against it as a set-to-target rather than rebasing it onto a
+    concurrently-mutated roster.
+    """
     update_data: Dict[str, Any] = {}
 
     # Create a fresh copy of existing metadata to avoid Prisma issues
@@ -2012,7 +2027,12 @@ async def _process_group_patch_operations(
     if metadata:
         update_data["metadata"] = metadata
 
-    return update_data, final_members
+    member_replace_present = any(
+        op.op == "replace" and (op.path or "").lower().startswith("members") for op in patch_ops.Operations
+    )
+    replace_target = set(final_members) if member_replace_present else None
+
+    return update_data, final_members, replace_target
 
 
 async def _apply_group_patch_updates(group_id: str, update_data: Dict[str, Any], prisma_client):
@@ -2083,27 +2103,29 @@ async def patch_group(
         existing_team = await _check_team_exists(group_id)
 
         # Process patch operations
-        update_data, final_members = await _process_group_patch_operations(patch_ops, existing_team, prisma_client)
+        update_data, final_members, replace_target = await _process_group_patch_operations(
+            patch_ops, existing_team, prisma_client
+        )
 
-        # Track current members BEFORE update for comparison
-        current_members = set(await _get_team_member_user_ids_from_team(existing_team))
+        snapshot_members = set(await _get_team_member_user_ids_from_team(existing_team))
+        intended_add = final_members - snapshot_members
+        intended_remove = snapshot_members - final_members
 
         # Apply the metadata/displayName updates to the database
         updated_team = await _apply_group_patch_updates(group_id, update_data, prisma_client)
 
-        # Refresh team data from database to get the latest state after concurrent updates
-        # This prevents race conditions when multiple PATCH requests come in simultaneously
         refreshed_team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
-        if refreshed_team:
-            # Re-read current members from refreshed team to account for concurrent updates
-            refreshed_current_members = set(
-                await _get_team_member_user_ids_from_team(LiteLLM_TeamTable(**refreshed_team.model_dump()))
-            )
-            # Use the refreshed members for comparison
-            current_members = refreshed_current_members
+        refreshed_current = (
+            set(await _get_team_member_user_ids_from_team(LiteLLM_TeamTable(**refreshed_team.model_dump())))
+            if refreshed_team
+            else snapshot_members
+        )
 
-        # Handle user-team relationship changes
-        await _handle_group_membership_changes(group_id, current_members, final_members)
+        effective_final = (
+            replace_target if replace_target is not None else (refreshed_current | intended_add) - intended_remove
+        )
+
+        await _handle_group_membership_changes(group_id, refreshed_current, effective_final)
 
         # A rename can flip whether this group matches scim_admin_group by display
         # name, so retained members must be re-resolved too, not just the ones whose
@@ -2112,7 +2134,7 @@ async def patch_group(
         alias_changed = new_alias != existing_team.team_alias
         await _recompute_scim_member_roles(
             prisma_client,
-            (current_members | final_members if alias_changed else current_members ^ final_members),
+            (refreshed_current | effective_final if alias_changed else refreshed_current ^ effective_final),
         )
 
         # Refresh team one more time to get final state after membership changes
