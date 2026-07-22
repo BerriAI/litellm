@@ -32,7 +32,6 @@ const config: ViteUserConfig = {
         "**/*.spec.*",
 
         "tests/**",
-        "e2e_tests/**",
 
         "node_modules/**",
         ".next/**",
@@ -44,7 +43,7 @@ const config: ViteUserConfig = {
         "next.config.*",
       ],
     },
-    exclude: ["e2e_tests/**", "node_modules/**"],
+    exclude: ["node_modules/**"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts", "tests/**/*.test.tsx"],
   },
   resolve: {
