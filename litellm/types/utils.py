@@ -200,6 +200,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_200k_tokens: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
+    cache_creation_input_token_cost_priority: Optional[float]  # OpenAI priority service tier cache-write pricing
+    cache_creation_input_token_cost_flex: Optional[float]  # OpenAI flex service tier cache-write pricing
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float]  # Long-context (>272k) cache-write pricing
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing

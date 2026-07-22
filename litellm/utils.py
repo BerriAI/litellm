@@ -2615,6 +2615,9 @@ _CACHE_PRICING_FIELDS = (
     "cache_creation_input_token_cost",
     "cache_creation_input_token_cost_above_1hr",
     "cache_creation_input_token_cost_above_200k_tokens",
+    "cache_creation_input_token_cost_priority",
+    "cache_creation_input_token_cost_flex",
+    "cache_creation_input_token_cost_above_272k_tokens",
     "cache_read_input_token_cost",
     "cache_read_input_token_cost_above_200k_tokens",
 )
@@ -5431,6 +5434,15 @@ def _get_model_info_helper(
                 cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
+                ),
+                cache_creation_input_token_cost_priority=_model_info.get(
+                    "cache_creation_input_token_cost_priority", None
+                ),
+                cache_creation_input_token_cost_flex=_model_info.get(
+                    "cache_creation_input_token_cost_flex", None
+                ),
+                cache_creation_input_token_cost_above_272k_tokens=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens", None
                 ),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
                 input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
