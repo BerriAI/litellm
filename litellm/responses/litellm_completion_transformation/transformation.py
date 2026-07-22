@@ -1181,9 +1181,16 @@ class LiteLLMCompletionResponsesConfig:
         Normalize a Responses API object (Pydantic model or custom class) to a dictionary
         """
         if hasattr(item, "model_dump"):
-            return item.model_dump()
+        if hasattr(item, "model_dump"):
+            try:
+                return item.model_dump(exclude_none=True)
+            except Exception:  # noqa: BLE001  # fallback if custom model_dump does not accept exclude_none
+                return item.model_dump()
         elif hasattr(item, "dict"):
-            return item.dict()
+            try:
+                return item.dict(exclude_none=True)
+            except Exception:  # noqa: BLE001  # fallback if custom dict does not accept exclude_none
+                return item.dict()
 
         target_attrs = (
             "type",

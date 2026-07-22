@@ -30,6 +30,16 @@ class TestGeminiContextCachingMinTokens:
     def test_min_tokens_by_model(self, model, expected):
         assert get_gemini_context_caching_min_tokens(model) == expected
 
+    def test_min_tokens_from_model_info(self, monkeypatch):
+        """Should prefer cache_creation_min_tokens from model_info if present."""
+        import litellm
+        monkeypatch.setattr(
+            litellm,
+            "get_model_info",
+            lambda model, **kwargs: {"cache_creation_min_tokens": 12345}
+        )
+        assert get_gemini_context_caching_min_tokens("gemini-1.5-pro") == 12345
+
 
 class TestTTLValidation:
     """Test TTL format validation"""
@@ -70,6 +80,7 @@ class TestTTLNormalization:
         [
             ("3600s", "3600s"),
             ("1.5s", "1.5s"),
+            ("1.3333333333333333s", "1.333333333s"),
             ("5m", "300s"),
             ("90m", "5400s"),
             ("1h", "3600s"),
