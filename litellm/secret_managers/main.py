@@ -1,7 +1,8 @@
 import ast
 import os
 import traceback
-from typing import Optional, Union
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import httpx
 
@@ -13,6 +14,11 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
 from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
+
+if TYPE_CHECKING:
+    from types_boto3_sts.client import STSClient
+else:
+    STSClient = object
 
 oidc_cache = DualCache()
 
@@ -77,6 +83,86 @@ def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandl
     if timeout is None:
         timeout = httpx.Timeout(timeout=600.0, connect=5.0)
     return HTTPHandler(timeout=timeout)
+
+
+def _resolve_aws_region() -> str:
+    """
+    Resolve the AWS region for the STS ``GetWebIdentityToken`` call.
+
+    ``GetWebIdentityToken`` is served only from a regional STS endpoint, never
+    the global one, so a concrete region must be known before the client is
+    built.
+    """
+    env_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    if env_region:
+        return env_region
+
+    import boto3
+
+    session_region = boto3.Session().region_name
+    if session_region:
+        return session_region
+
+    raise ValueError(
+        "AWS OIDC provider requires a region. Set AWS_REGION or AWS_DEFAULT_REGION; "
+        "GetWebIdentityToken is served only from a regional STS endpoint, not the global one."
+    )
+
+
+def _get_aws_sts_client(region: str) -> "STSClient":
+    """
+    Build an STS client pinned to the regional endpoint. Injected into
+    ``_get_aws_oidc_token`` so tests can supply a stub without real AWS calls.
+    """
+    import boto3
+
+    return boto3.client(
+        "sts",
+        region_name=region,
+        endpoint_url=f"https://sts.{region}.amazonaws.com",
+    )
+
+
+def _aws_oidc_cache_ttl(expiration: datetime | None) -> int | None:
+    if expiration is None:
+        return None
+    aware_expiration = expiration if expiration.tzinfo is not None else expiration.replace(tzinfo=timezone.utc)
+    remaining = int((aware_expiration - datetime.now(timezone.utc)).total_seconds()) - 60
+    return remaining if remaining > 0 else None
+
+
+def _get_aws_oidc_token(
+    oidc_aud: str,
+    cache_key: str,
+    sts_client_factory: Callable[[str], "STSClient"] | None = None,
+) -> str:
+    """
+    Mint a signed JWT for ``oidc_aud`` via AWS IAM Outbound Identity Federation.
+
+    RS256 is required (not ES384) because Entra federated credentials reject
+    ES384. The token is cached until just before its STS-reported expiry.
+    """
+    cached_token = oidc_cache.get_cache(key=cache_key)
+    if isinstance(cached_token, str):
+        return cached_token
+
+    from botocore.exceptions import ClientError
+
+    build_client = sts_client_factory or _get_aws_sts_client
+    sts_client = build_client(_resolve_aws_region())
+    try:
+        response = sts_client.get_web_identity_token(
+            Audience=[oidc_aud],
+            SigningAlgorithm="RS256",
+        )
+    except ClientError as e:
+        raise ValueError(f"AWS OIDC provider failed: {e}") from e
+    oidc_token = response["WebIdentityToken"]
+
+    ttl = _aws_oidc_cache_ttl(response.get("Expiration"))
+    if ttl is not None:
+        oidc_cache.set_cache(key=cache_key, value=oidc_token, ttl=ttl)
+    return oidc_token
 
 
 ######### Secret Manager ############################
@@ -271,6 +357,8 @@ def get_secret(
             with open(token_file_path, "r") as f:
                 oidc_token = f.read()
                 return oidc_token
+        elif oidc_provider == "aws":
+            return _get_aws_oidc_token(oidc_aud=oidc_aud, cache_key=secret_name)
         else:
             raise ValueError("Unsupported OIDC provider")
 
