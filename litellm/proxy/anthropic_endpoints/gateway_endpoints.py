@@ -248,7 +248,9 @@ async def oauth_token(request: Request) -> JSONResponse:
         )
 
     return _oauth_error_response(
-        _oauth_error(status_code=400, error="unsupported_grant_type", description=f"Unsupported grant_type: {grant_type}")
+        _oauth_error(
+            status_code=400, error="unsupported_grant_type", description=f"Unsupported grant_type: {grant_type}"
+        )
     )
 
 
