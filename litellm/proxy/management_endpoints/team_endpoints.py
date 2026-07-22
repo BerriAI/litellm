@@ -101,6 +101,9 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
+from litellm.proxy.management_helpers.team_metadata_validation import (
+    validate_team_metadata_if_configured,
+)
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -1144,6 +1147,18 @@ async def new_team(
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
 
+        if isinstance(data.metadata, dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
+
+        await validate_team_metadata_if_configured(
+            operation="create",
+            metadata=data.metadata,
+            existing_metadata=None,
+            team_id=data.team_id,
+            team_alias=data.team_alias,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         ## ADD TO MODEL TABLE
         _model_id = None
         if data.model_aliases is not None and isinstance(data.model_aliases, dict):
@@ -1158,9 +1173,6 @@ async def new_team(
 
             _model_id = model_dict.id
 
-        ## Create Team Member Budget Table
-        if isinstance(data.metadata, dict):
-            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
         data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
@@ -1821,6 +1833,18 @@ async def update_team(
         # be written by the same code path that creates the underlying rows.
         if isinstance(updated_kv.get("metadata"), dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
+
+        if "metadata" in updated_kv:
+            stored_metadata = dict(existing_team_row.metadata) if isinstance(existing_team_row.metadata, dict) else None
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(stored_metadata)
+            await validate_team_metadata_if_configured(
+                operation="update",
+                metadata=updated_kv.get("metadata"),
+                existing_metadata=stored_metadata,
+                team_id=data.team_id,
+                team_alias=data.team_alias if data.team_alias is not None else existing_team_row.team_alias,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)

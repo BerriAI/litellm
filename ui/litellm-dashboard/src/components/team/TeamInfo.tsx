@@ -34,6 +34,10 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import MetadataKeyValueFields, {
+  metadataObjectToPairs,
+  metadataPairsToObject,
+} from "../common_components/MetadataKeyValueFields";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -64,6 +68,18 @@ import {
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+
+const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "logging",
+  "secret_manager_settings",
+  "soft_budget_alerting_emails",
+  "model_tpm_limit",
+  "model_rpm_limit",
+  "allowed_passthrough_routes",
+  "guardrails",
+  "opted_out_global_guardrails",
+  "disable_global_guardrails",
+]);
 
 export interface TeamMembership {
   user_id: string;
@@ -462,16 +478,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       if (!accessToken) return;
       setIsTeamSaving(true);
 
-      let parsedMetadata = {};
-      try {
-        const rawMetadata = values.metadata ? JSON.parse(values.metadata) : {};
-        // Exclude soft_budget_alerting_emails from parsed metadata since it's handled separately
-        const { soft_budget_alerting_emails, ...rest } = rawMetadata;
-        parsedMetadata = rest;
-      } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in metadata field");
-        return;
-      }
+      const parsedMetadata = metadataPairsToObject(values.metadata);
 
       let secretManagerSettings: Record<string, any> | undefined;
       if (typeof values.secret_manager_settings === "string") {
@@ -981,21 +988,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
                         ? info.metadata.soft_budget_alerting_emails.join(", ")
                         : "",
-                      metadata: info.metadata
-                        ? JSON.stringify(
-                            (({
-                              logging,
-                              secret_manager_settings,
-                              soft_budget_alerting_emails,
-                              model_tpm_limit,
-                              model_rpm_limit,
-                              allowed_passthrough_routes,
-                              ...rest
-                            }) => rest)(info.metadata),
-                            null,
-                            2,
-                          )
-                        : "",
+                      metadata: metadataObjectToPairs(info.metadata, UI_MANAGED_METADATA_KEYS),
                       logging_settings: info.metadata?.logging || [],
                       secret_manager_settings: info.metadata?.secret_manager_settings
                         ? JSON.stringify(info.metadata.secret_manager_settings, null, 2)
@@ -1169,6 +1162,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
                       <NumericalInput step={1} style={{ width: "100%" }} />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Metadata"
+                      help='Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {"region": "us"}.'
+                    >
+                      <MetadataKeyValueFields form={form} />
                     </Form.Item>
 
                     <Form.Item
@@ -1495,10 +1495,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
                         disabled={!premiumUser}
                       />
-                    </Form.Item>
-
-                    <Form.Item label="Metadata" name="metadata">
-                      <Input.TextArea rows={10} />
                     </Form.Item>
 
                     <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 -bottom-6 -inset-x-6">

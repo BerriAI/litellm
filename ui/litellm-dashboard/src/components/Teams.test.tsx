@@ -550,6 +550,94 @@ describe("Teams - access_group_ids in team create", () => {
   });
 });
 
+describe("Teams - metadata key-value pairs in team create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "Test Team",
+      models: ["gpt-4"],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    });
+    mockUseOrganizations.mockReturnValue({
+      data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }],
+    });
+  });
+
+  const openCreateModal = async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+  };
+
+  it("renders the metadata editor in the main form without opening Additional Settings", async () => {
+    await openCreateModal();
+
+    expect(screen.getByRole("button", { name: /add key-value pair/i })).toBeInTheDocument();
+  });
+
+  it("submits metadata built from key-value pairs as a typed JSON object", async () => {
+    await openCreateModal();
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Key")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByPlaceholderText("Key"), { target: { value: "cost_center" } });
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "eng-42" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    await waitFor(() => {
+      expect(screen.getAllByPlaceholderText("Key")).toHaveLength(2);
+    });
+    fireEvent.change(screen.getAllByPlaceholderText("Key")[1], { target: { value: "tier" } });
+    fireEvent.change(screen.getAllByPlaceholderText("Value")[1], { target: { value: "3" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+
+    const submittedValues = vi.mocked(teamCreateCall).mock.calls[0][1];
+    expect(JSON.parse(submittedValues.metadata)).toEqual({ cost_center: "eng-42", tier: 3 });
+  });
+
+  it("omits metadata entirely when no pairs are added", async () => {
+    await openCreateModal();
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+    fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+
+    expect(vi.mocked(teamCreateCall).mock.calls[0][1].metadata).toBeUndefined();
+  });
+});
+
 describe("Teams - models dropdown options", () => {
   beforeEach(() => {
     vi.clearAllMocks();
