@@ -880,6 +880,98 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
 
 
 @pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_recovers_from_transient_read_error(monkeypatch):
+    """
+    Regression (#32412): the startup `store_model_in_db` lookup reads
+    general_settings straight off the Prisma HTTP engine. A transient transport
+    blip (httpx.ReadError) on that first read must be healed by one
+    reconnect-and-retry, like every other DB read path, instead of leaving the
+    connection poisoned and the DB-persisted store_model_in_db=True ignored.
+    """
+    import types
+
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    record = types.SimpleNamespace(param_value={"store_model_in_db": True})
+    find_first = AsyncMock(side_effect=[httpx.ReadError("Server disconnected"), record])
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = find_first
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    assert find_first.await_count == 2
+    mock_proxy_config.add_deployment.assert_awaited()
+    mock_proxy_config.init_mcp_servers_from_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_normalizes_string_general_settings(monkeypatch):
+    """
+    Regression (#32412): Prisma can return the general_settings JSON column as a
+    raw string rather than a parsed dict. The startup store_model_in_db lookup
+    must json.loads that string before reading the flag, otherwise a
+    DB-persisted store_model_in_db=True is silently skipped for string-valued
+    rows and the proxy comes up as if model storage were off.
+    """
+    import types
+
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    record = types.SimpleNamespace(param_value='{"store_model_in_db": true}')
+    find_first = AsyncMock(return_value=record)
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = find_first
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    assert find_first.await_count == 1
+    mock_prisma_client.attempt_db_reconnect.assert_not_awaited()
+    mock_proxy_config.add_deployment.assert_awaited()
+    mock_proxy_config.init_mcp_servers_from_db.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_init_mcp_servers_from_db_respects_supported_db_objects(monkeypatch):
     """
     init_mcp_servers_from_db hydrates MCP from the DB by default but skips it when
