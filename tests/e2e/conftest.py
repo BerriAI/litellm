@@ -43,6 +43,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
     )
+    config.addinivalue_line(
+        "markers",
+        "weekly: real-provider anomaly load test that spends real money; deselected unless E2E_WEEKLY_ANOMALY is set",
+    )
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

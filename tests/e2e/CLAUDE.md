@@ -18,7 +18,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)
-- `load/` - throughput/performance under concurrency: drives real concurrent traffic through the whole stack with Locust and asserts a throughput SLO; marked `load` so the parent conftest collects it last and it never perturbs latency-sensitive suites
+- `load/` - throughput/performance under concurrency: drives real concurrent traffic through the whole stack with Locust and asserts a throughput SLO; marked `load` so the parent conftest collects it last and it never perturbs latency-sensitive suites. Also home of the weekly session-anomaly test (`test_weekly_session_anomaly_e2e.py`): Claude Code-shaped multi-turn sessions against real providers with ceilings on error rate, cache read/write, turn time, and spend; additionally marked `weekly` and deselected unless `E2E_WEEKLY_ANOMALY` is set, because it spends real provider money (driven by `.github/workflows/weekly_load_anomaly.yml`)
 - `other/` - the holding-pen suite for the `other.*` registry cluster with no home of its own yet: the master-key auth gate and the process-lifecycle health probes (liveness, public readiness, authenticated readiness diagnostics). Promote a cluster out once it is large/stable enough for its own suite
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
 - `claude_code/` - the Claude Code compatibility matrix: drives the real `claude` CLI (and HTTP probes) against a proxy for each feature x provider cell, reporting tagged-union outcomes via the `compat_result` fixture; ships its own driver/builder/publisher plus `_*_unit_tests/` trees. The HTTP probes ride the shared transport (`ProxyClient.count_tokens` / `ProxyClient.messages`); the CLI-driving path stays bespoke
@@ -132,7 +132,7 @@ reliability.<behavior>.<variant>.<assertion>
   behavior  : fallback | retry | cooldown | timeout | routing | cache | circuit_breaker | perf
   variant   : <trigger>   5xx | context_window | content_policy | 429 | timeout
               <strategy>  simple_shuffle | usage_based | latency_based | cost_based | least_busy
-              <dimension> latency | throughput   (perf only; SLO/threshold assertion, not binary)
+              <dimension> latency | throughput | session_anomaly   (perf only; SLO/threshold assertion, not binary)
   assertion : routes_to_fallback | succeeds_within_retries | picks_under_tpm | returns_cached
               | trips_then_recovers | under_slo
   e.g.  reliability.fallback.context_window.routes_to_fallback     exercised_on=[chat_completions]
