@@ -452,11 +452,26 @@ def filter_internal_params(data: dict, additional_internal_params: Optional[set]
     if not isinstance(data, dict):
         return data
 
-    # Known internal parameters that should never be sent to provider APIs
+    # Known internal parameters that should never be sent to provider APIs.
+    #
+    # ``client_metadata`` is sent by some clients (e.g. OpenAI Codex CLI,
+    # Claude Code) to attach run-level metadata. Most providers ignore
+    # unknown fields, but Bedrock Converse with custom *application
+    # inference profiles* rejects it because the underlying inference
+    # profile validates ``additionalModelRequestFields`` strictly:
+    #
+    #     The model returned the following errors: client_metadata: Extra
+    #     inputs are not permitted
+    #
+    # ``drop_params`` does not cover this because ``client_metadata`` is
+    # not a known OpenAI parameter, so it survives as part of
+    # ``additional_request_params`` and ends up in the Converse payload.
+    # Filter it here so every provider path sees the same sanitization.
     internal_params = {
         "skip_mcp_handler",
         "mcp_handler_context",
         "_skip_mcp_handler",
+        "client_metadata",
     }
 
     # Add any additional internal params if provided
