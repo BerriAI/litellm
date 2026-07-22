@@ -230,6 +230,27 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
+            # The base64-encoded unified_file_id is an opaque LiteLLM-internal
+            # token (unified_id + target_model_names), not a real
+            # provider-side file reference. Provider-specific handlers (e.g.
+            # Vertex AI's batch transformation, which parses a `publishers/`
+            # segment out of the file URI) require the actual backend storage
+            # location. Resolve it from LiteLLM_ManagedFileTable before
+            # dispatching, mirroring the same lookup already used by the
+            # files retrieve/download endpoints for managed files.
+            from litellm.proxy.proxy_server import prisma_client
+
+            if prisma_client is not None:
+                from litellm.repositories.table_repositories import (
+                    ManagedFileRepository,
+                )
+
+                db_file = await ManagedFileRepository(prisma_client).table.find_first(
+                    where={"unified_file_id": unified_file_id}
+                )
+                if db_file is not None and db_file.storage_url:
+                    _create_batch_data["input_file_id"] = db_file.storage_url
+
             response = await llm_router.acreate_batch(**_create_batch_data)
             response.input_file_id = input_file_id
             response._hidden_params["unified_file_id"] = unified_file_id

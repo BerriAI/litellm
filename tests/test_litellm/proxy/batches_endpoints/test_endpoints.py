@@ -536,6 +536,90 @@ async def test_create__unified_file_id_not_exactly_one_model_400(harness, models
 
 
 @pytest.mark.asyncio
+async def test_create__unified_file_id_resolves_real_storage_url(harness):
+    """A base64 unified_file_id is a LiteLLM-internal token, not a real
+    provider-side file reference (e.g. Vertex AI's batch transformation parses
+    a `publishers/` segment out of the file URI and crashes on the opaque
+    base64 string). The real backend location (`storage_url`) must be looked
+    up from LiteLLM_ManagedFileTable and substituted before dispatch - the
+    unified id itself must never reach the router/provider call."""
+    set_body(
+        harness,
+        {
+            "input_file_id": "litellm_proxy_unified_id",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    fake_db_file = MagicMock(
+        storage_url="gs://bucket/litellm-vertex-files/publishers/google/models/gemini-2.0/abc"
+    )
+    find_first = AsyncMock(return_value=fake_db_file)
+    fake_repo_instance = MagicMock()
+    fake_repo_instance.table.find_first = find_first
+    fake_repo_cls = MagicMock(return_value=fake_repo_instance)
+
+    fake_prisma_client = MagicMock()
+
+    with patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"
+    ), patch.object(
+        endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]
+    ), patch.object(
+        proxy_server, "prisma_client", fake_prisma_client
+    ), patch(
+        "litellm.repositories.table_repositories.ManagedFileRepository",
+        fake_repo_cls,
+    ):
+        resp = await call_create(harness)
+
+    # The real storage_url - not the opaque unified id - must be what's
+    # forwarded to the router/provider.
+    assert harness.router_kwargs()["input_file_id"] == fake_db_file.storage_url
+    find_first.assert_awaited_once_with(where={"unified_file_id": "unified-xyz"})
+    # The unified id is still what's returned to the client.
+    assert resp.input_file_id == "litellm_proxy_unified_id"
+    assert resp._hidden_params["unified_file_id"] == "unified-xyz"
+
+
+@pytest.mark.asyncio
+async def test_create__unified_file_id_no_managed_file_record_falls_back_to_raw_id(
+    harness,
+):
+    """If there's no LiteLLM_ManagedFileTable row (or it has no storage_url),
+    fall back to the previous behavior instead of raising - callers/providers
+    that don't need the resolved path (or legacy data) keep working."""
+    set_body(
+        harness,
+        {
+            "input_file_id": "litellm_proxy_unified_id",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    find_first = AsyncMock(return_value=None)
+    fake_repo_instance = MagicMock()
+    fake_repo_instance.table.find_first = find_first
+    fake_repo_cls = MagicMock(return_value=fake_repo_instance)
+
+    with patch.object(
+        endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"
+    ), patch.object(
+        endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]
+    ), patch.object(
+        proxy_server, "prisma_client", MagicMock()
+    ), patch(
+        "litellm.repositories.table_repositories.ManagedFileRepository",
+        fake_repo_cls,
+    ):
+        await call_create(harness)
+
+    assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
+
+
+@pytest.mark.asyncio
 async def test_create__model_encoded_beats_unified(harness):
     """Precedence row: a file id that is BOTH model-encoded and (pretend) unified
     must take the model-encoded branch (checked first)."""
