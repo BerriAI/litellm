@@ -5176,7 +5176,16 @@ def _extract_response_obj_and_hidden_params(
         hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
+    elif callable(getattr(init_response_obj, "model_dump", None)):
+        response_obj = init_response_obj.model_dump()
+        hidden_params = getattr(init_response_obj, "_hidden_params", None)
+    elif callable(getattr(init_response_obj, "dict", None)):
+        response_obj = init_response_obj.dict()
+        hidden_params = getattr(init_response_obj, "_hidden_params", None)
     else:
+        response_obj = {}
+
+    if not isinstance(response_obj, dict):
         response_obj = {}
 
     if original_exception is not None and hidden_params is None:
