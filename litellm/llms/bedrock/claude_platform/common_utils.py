@@ -7,6 +7,16 @@ from litellm.secret_managers.main import get_secret_str
 CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = "aws-external-anthropic"
 CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
 
+# Aliases litellm accepts for the workspace identifier; all of them are
+# consumed only as the `anthropic-workspace-id` HTTP header and must be
+# stripped from request-body params before transformation (#29272).
+_WORKSPACE_ID_PARAM_KEYS: Tuple[str, ...] = (
+    "workspace_id",
+    "aws_workspace_id",
+    "anthropic-workspace-id",
+    "anthropic_workspace_id",
+)
+
 
 def strip_claude_platform_route(model: str) -> str:
     if model.startswith(CLAUDE_PLATFORM_BEDROCK_ROUTE):
@@ -30,6 +40,20 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         if workspace_id is not None:
             return str(workspace_id)
         return get_secret_str("ANTHROPIC_AWS_WORKSPACE_ID") or get_secret_str("ANTHROPIC_WORKSPACE_ID")
+
+    @staticmethod
+    def _pop_workspace_id_params(optional_params: dict, litellm_params: dict) -> None:
+        """Strip every workspace_id alias from both param dicts.
+
+        ``workspace_id`` (and its aliases) is consumed only as the
+        ``anthropic-workspace-id`` HTTP header. If we leave the keys in
+        ``optional_params``, the inherited ``AnthropicConfig.transform_request``
+        serializes them into the JSON body, and Anthropic's ``/v1/messages``
+        rejects unknown top-level fields (#29272).
+        """
+        for key in _WORKSPACE_ID_PARAM_KEYS:
+            optional_params.pop(key, None)
+            litellm_params.pop(key, None)
 
     def _get_required_aws_region_name(self, optional_params: dict) -> str:
         aws_region_name = (
