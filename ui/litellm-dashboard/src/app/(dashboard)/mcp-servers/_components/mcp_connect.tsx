@@ -6,6 +6,7 @@ import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import IdpDelegationPanel from "./IdpDelegationPanel";
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
@@ -112,9 +113,10 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
 
 interface MCPConnectProps {
   currentServerAccessGroups?: string[];
+  accessToken?: string | null;
 }
 
-const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
+const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [], accessToken }) => {
   const proxyBaseUrl = getProxyBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [serverHeaders, setServerHeaders] = useState<Record<string, string[]>>({
@@ -532,6 +534,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             </TabPanel>
           </TabPanels>
         </TabGroup>
+        {accessToken && <IdpDelegationPanel accessToken={accessToken} />}
       </Space>
     </div>
   );

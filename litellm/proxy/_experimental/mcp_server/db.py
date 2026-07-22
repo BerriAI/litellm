@@ -1246,6 +1246,17 @@ async def get_user_idp_grant(
     return _decode_idp_grant_payload(row.credential_b64)
 
 
+async def list_user_idp_grants(prisma_client: PrismaClient, user_id: str) -> list[dict[str, Any]]:
+    """Return the user's IdP-grant payloads (for the consent panel), each tagged with its ``idp_key``.
+
+    Payloads still carry the access/refresh tokens; the caller must strip those before returning them
+    to a client (the consent panel only needs the IdP identity, connected-at, and expiry).
+    """
+    rows = await MCPUserCredentialsRepository(prisma_client).table.find_many(where={"user_id": user_id})
+    decoded = ((row.server_id, _decode_idp_grant_payload(row.credential_b64)) for row in rows)
+    return [{**payload, "idp_key": idp_key} for idp_key, payload in decoded if payload is not None]
+
+
 def _decrypted_credential_field(creds: Dict[str, object], field: str) -> object:
     """Return one credential field decrypted with the global salt key; non-string and legacy
     plaintext values come back unchanged (decrypt_value_helper returns the original on failure)."""
