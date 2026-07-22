@@ -117,6 +117,7 @@ LITELLM_METADATA_ROUTES = (
     "/v1/messages",
     "responses",
     "files",
+    "/cursor/chat/completions",
 )
 
 _UNTRUSTED_ROOT_CONTROL_FIELDS = (
