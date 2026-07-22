@@ -20,6 +20,16 @@ def parse_tool_calls(tool_calls):
         return None
 
     def clean_tool_call(tool_call):
+        custom = getattr(tool_call, "custom", None)
+        if custom is not None:
+            return {
+                "type": tool_call.type,
+                "id": tool_call.id,
+                "function": {
+                    "name": custom.name,
+                    "arguments": custom.input,
+                },
+            }
         serialized = {
             "type": tool_call.type,
             "id": tool_call.id,
@@ -31,7 +41,11 @@ def parse_tool_calls(tool_calls):
 
         return serialized
 
-    return [clean_tool_call(tool_call) for tool_call in tool_calls if getattr(tool_call, "function", None) is not None]
+    return [
+        clean_tool_call(tool_call)
+        for tool_call in tool_calls
+        if getattr(tool_call, "function", None) is not None or getattr(tool_call, "custom", None) is not None
+    ]
 
 
 def parse_messages(input):
