@@ -1,6 +1,11 @@
 import json
 import re
-from typing import Any, Collection, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Collection, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.audio_utils.streaming_multipart import (
+        StreamingMultipartUpload,
+    )
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -39,6 +44,37 @@ def _is_json_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) == "application/json"
 
 
+_STREAMING_AUDIO_SUFFIXES = ("/audio/transcriptions", "/audio/translations")
+
+
+def _is_streaming_audio_upload_path(request: Request | None) -> bool:
+    return request is not None and request.url.path.endswith(_STREAMING_AUDIO_SUFFIXES)
+
+
+def get_streaming_audio_upload(request: Request) -> "StreamingMultipartUpload | None":
+    """The incrementally-parsed upload stashed by the auth-time body pre-read, if any."""
+    return request.scope.get("streaming_audio_upload")
+
+
+async def _read_streaming_audio_body(request: Request, content_type: str) -> dict:
+    from litellm.litellm_core_utils.audio_utils.streaming_multipart import (
+        open_transcription_multipart,
+    )
+
+    try:
+        boundary = extract_multipart_boundary(content_type)
+    except ValueError as e:
+        raise ProxyException(
+            message=str(e), type="invalid_request_error", param="request_body", code=status.HTTP_400_BAD_REQUEST
+        )
+    upload = await open_transcription_multipart(request.stream(), boundary, max_file_bytes=None)
+    request.scope["streaming_audio_upload"] = upload
+    parsed_body = {key: value for key, value in upload.fields.items()}
+    if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
+        parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+    return parsed_body
+
+
 async def _read_request_body(request: Optional[Request]) -> Dict:
     """
     Safely read the request body and parse it as JSON.
@@ -62,25 +98,32 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         content_type = _request_headers.get("content-type", "")
 
         if _is_form_content_type(content_type):
-            try:
-                form_data = await request.form()
-            except Exception as e:
-                # ``request.form()`` raises on malformed multipart (missing
-                # boundary, malformed chunk encoding, …). Surface as 400 so
-                # the auth-time pre-read does not silently cache ``{}`` while
-                # a later raw-body re-read sees the original payload —
-                # banned-param checks must see the same body the handler
-                # acts on.
-                verbose_proxy_logger.error(f"Invalid form payload: {e}")
-                raise ProxyException(
-                    message=f"Invalid form payload: {e}",
-                    type="invalid_request_error",
-                    param="request_body",
-                    code=status.HTTP_400_BAD_REQUEST,
-                )
-            parsed_body = dict(form_data)
-            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
-                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+            if content_type.strip().startswith("multipart/form-data") and _is_streaming_audio_upload_path(request):
+                # For audio transcription/translation, parse the multipart incrementally so the file
+                # part is left as a resumable stream (see StreamingMultipartUpload) instead of being
+                # fully buffered by request.form(). This is the FIRST body read (auth pre-read), so the
+                # parsed upload is stashed on request.scope for the route handler to stream from.
+                parsed_body = await _read_streaming_audio_body(request=request, content_type=content_type)
+            else:
+                try:
+                    form_data = await request.form()
+                except Exception as e:
+                    # ``request.form()`` raises on malformed multipart (missing
+                    # boundary, malformed chunk encoding, …). Surface as 400 so
+                    # the auth-time pre-read does not silently cache ``{}`` while
+                    # a later raw-body re-read sees the original payload —
+                    # banned-param checks must see the same body the handler
+                    # acts on.
+                    verbose_proxy_logger.error(f"Invalid form payload: {e}")
+                    raise ProxyException(
+                        message=f"Invalid form payload: {e}",
+                        type="invalid_request_error",
+                        param="request_body",
+                        code=status.HTTP_400_BAD_REQUEST,
+                    )
+                parsed_body = dict(form_data)
+                if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
+                    parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:
             # Read the request body
             body = await request.body()
@@ -230,7 +273,7 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[Deployment] = llm_router.get_deployment_by_model_group_name(
+            deployment: Deployment | None = llm_router.get_deployment_by_model_group_name(
                 model_group_name=request_data["model"]
             )
             if (
@@ -264,6 +307,62 @@ def check_file_size_under_limit(
             )
 
     return True
+
+
+def extract_multipart_boundary(content_type: str) -> bytes:
+    """Extract the multipart boundary from a Content-Type header, or raise ValueError."""
+    from multipart.multipart import parse_options_header
+
+    media_type, params = parse_options_header(content_type)
+    if media_type != b"multipart/form-data":
+        raise ValueError(f"Expected multipart/form-data, got {media_type.decode('latin-1') or 'no content type'}")
+    boundary = params.get(b"boundary")
+    if boundary is None:
+        raise ValueError("Missing boundary in multipart Content-Type")
+    return boundary
+
+
+def resolve_max_file_bytes(
+    request_data: dict,
+    router_model_names: Collection[str],
+) -> int | None:
+    """
+    Resolve the max upload size (bytes) for a streaming transcription request from the deployment's
+    max_file_size_mb, enforcing the premium-user gate. Returns None when no limit is configured.
+
+    Unlike check_file_size_under_limit this cannot compare against the file size up front (the file
+    is still streaming); the caller enforces the returned limit incrementally as bytes arrive.
+    """
+    from litellm.proxy.proxy_server import (
+        CommonProxyErrors,
+        ProxyException,
+        llm_router,
+        premium_user,
+    )
+
+    if llm_router is None or request_data.get("model") not in router_model_names:
+        return None
+
+    try:
+        deployment: Deployment | None = llm_router.get_deployment_by_model_group_name(
+            model_group_name=request_data["model"]
+        )
+    except Exception as e:  # noqa: BLE001  # router deployment lookup may raise arbitrary errors; degrade to no limit
+        verbose_proxy_logger.error("Got error when resolving max file size: %s", str(e))
+        return None
+
+    if deployment is None or deployment.litellm_params is None or deployment.litellm_params.max_file_size_mb is None:
+        return None
+
+    max_file_size_mb = deployment.litellm_params.max_file_size_mb
+    if not premium_user:
+        raise ProxyException(
+            message=f"Tried setting max_file_size_mb for /audio/transcriptions. {CommonProxyErrors.not_premium_user.value}",
+            code=status.HTTP_400_BAD_REQUEST,
+            type="bad_request",
+            param="file",
+        )
+    return int(max_file_size_mb * 1024 * 1024)
 
 
 async def get_form_data(request: Request) -> Dict[str, Any]:

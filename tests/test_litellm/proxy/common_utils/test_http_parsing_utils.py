@@ -126,6 +126,7 @@ async def test_form_data_with_json_metadata():
     # Mock the form method to return the test data as an awaitable
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.url.path = "/v1/generic"
     mock_request.scope = {}
     mock_request.state._cached_headers = None
 
@@ -167,6 +168,7 @@ async def test_form_data_with_invalid_json_metadata():
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.url.path = "/v1/generic"
     mock_request.scope = {}
     mock_request.state._cached_headers = None
 
@@ -221,6 +223,7 @@ async def test_form_data_with_empty_metadata():
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.url.path = "/v1/generic"
     mock_request.scope = {}
     mock_request.state._cached_headers = None
 
@@ -256,6 +259,7 @@ async def test_form_data_with_dict_metadata():
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.url.path = "/v1/generic"
     mock_request.scope = {}
     mock_request.state._cached_headers = None
 
@@ -287,6 +291,7 @@ async def test_form_data_with_none_metadata():
     # Mock the form method to return the test data
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.url.path = "/v1/generic"
     mock_request.scope = {}
     mock_request.state._cached_headers = None
 
@@ -1000,6 +1005,7 @@ class TestReadRequestBodyFormParseFailure:
         mock_request = MagicMock()
         mock_request.form = AsyncMock(side_effect=raised_exception)
         mock_request.headers = {"content-type": "multipart/form-data"}
+        mock_request.url.path = "/v1/generic"
         mock_request.scope = {}
 
         with pytest.raises(ProxyException) as exc_info:
@@ -1046,3 +1052,59 @@ class TestGetRequestBody:
         mock_request = MagicMock()
         mock_request.method = "GET"
         assert await get_request_body(mock_request) == {}
+
+
+class _FakeStreamRequest:
+    """Minimal request whose body is a real async byte stream (not a MagicMock)."""
+
+    def __init__(self, path: str, content_type: str, body: bytes, chunk: int = 64):
+        self.method = "POST"
+        self.headers = {"content-type": content_type}
+        self.url = MagicMock()
+        self.url.path = path
+        self.scope = {}
+        self.state = MagicMock()
+        self._body = body
+        self._chunk = chunk
+
+    async def stream(self):
+        for i in range(0, len(self._body), self._chunk):
+            yield self._body[i : i + self._chunk]
+
+    async def form(self):
+        raise AssertionError("form() must not be called on the streaming audio path")
+
+
+def _multipart_body(boundary: str, model: str, audio: bytes, filename: str = "a.wav") -> bytes:
+    return (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="model"\r\n\r\n{model}\r\n'
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: audio/wav\r\n\r\n"
+    ).encode() + audio + f"\r\n--{boundary}--\r\n".encode()
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_multipart_streams_and_stashes_upload():
+    from litellm.litellm_core_utils.audio_utils.streaming_multipart import (
+        StreamingMultipartUpload,
+    )
+
+    audio = os.urandom(4096)
+    boundary = "boundaryABC"
+    body = _multipart_body(boundary, "my-model", audio)
+    request = _FakeStreamRequest(
+        "/v1/audio/transcriptions", f"multipart/form-data; boundary={boundary}", body
+    )
+
+    parsed = await _read_request_body(request)  # type: ignore[arg-type]
+
+    # fields returned for auth checks, file NOT buffered (form() would have raised)
+    assert parsed == {"model": "my-model"}
+    upload = request.scope["streaming_audio_upload"]
+    assert isinstance(upload, StreamingMultipartUpload)
+    assert upload.filename == "a.wav"
+    assert upload.started is False  # file part still un-consumed, ready to stream
+    streamed = b"".join([chunk async for chunk in upload.stream()])
+    assert streamed == audio

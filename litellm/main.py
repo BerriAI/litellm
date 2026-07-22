@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import datetime
 import inspect
+import io
 import json
 import os
 import random
@@ -83,6 +84,9 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
+)
+from litellm.litellm_core_utils.audio_utils.streaming_multipart import (
+    StreamingMultipartUpload,
 )
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
@@ -7473,14 +7477,27 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     file = kwargs.get("file", None)
     custom_llm_provider = None
     try:
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+
+        # Streaming uploads pass straight through only for openai-compatible providers on the first
+        # attempt. Otherwise (unsupported provider, or a retry after the stream was already started)
+        # buffer the teed bytes so the SDK path, retries, and duration-based cost keep working.
+        if isinstance(file, StreamingMultipartUpload):
+            supports_streaming = (
+                custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers
+            )
+            if not supports_streaming or file.started:
+                buffered = io.BytesIO(await file.getvalue())
+                buffered.name = file.filename or "audio"
+                kwargs["file"] = buffered
+                file = buffered
+
         # Use a partial function to pass your keyword arguments
         func = partial(transcription, *args, **kwargs)
 
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
-
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
@@ -7505,7 +7522,8 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         if response is not None and not isinstance(response, Coroutine) and file is not None:
             existing_duration = getattr(response, "duration", None)
             if existing_duration is None:
-                calculated_duration = calculate_request_duration(file)
+                duration_source = file.buffered if isinstance(file, StreamingMultipartUpload) else file
+                calculated_duration = calculate_request_duration(duration_source)
                 if calculated_duration is not None:
                     response._hidden_params["audio_transcription_duration"] = calculated_duration
 
