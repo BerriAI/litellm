@@ -12,9 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
@@ -51,10 +49,31 @@ class MockDynamicGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
-        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(
-            request_data
-        )
+        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
         return inputs
+
+
+class MockMaskingGuardrail(CustomGuardrail):
+    """Capture request inputs and mask one known prohibited value."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="masking-test")
+        self.skip_system_message_in_guardrail = True
+        self.inputs: Optional[GenericGuardrailAPIInputs] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.inputs = inputs.copy()
+        masked_inputs = inputs.copy()
+        masked_inputs["texts"] = [
+            "[MASKED]" if text == "prohibited correction" else text for text in inputs.get("texts", [])
+        ]
+        return masked_inputs
 
 
 class TestAnthropicMessagesHandlerStreamingOutputProcessing:
@@ -103,20 +122,58 @@ class TestAnthropicMessagesHandlerInputProcessing:
         data = {
             "model": "claude-3-5-sonnet-20241022",
             "messages": [{"role": "user", "content": "hello"}],
-            "litellm_metadata": {
-                "guardrails": [
-                    {"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}
-                ]
-            },
+            "litellm_metadata": {"guardrails": [{"cygnal-monitor": {"extra_body": {"policy_id": "policy-123"}}}]},
         }
 
         with patch("litellm.proxy.proxy_server.premium_user", True):
-            await handler.process_input_messages(
-                data=data, guardrail_to_apply=guardrail
-            )
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         assert data.get("litellm_metadata", {}).get("guardrails")
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
+
+    @pytest.mark.asyncio
+    async def test_midturn_system_correction_is_guardrailed_as_user_content(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "user", "content": "safe text"},
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "unsupported", "text": "discarded text"},
+                        {"type": "text", "text": "prohibited correction"},
+                    ],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["safe text", "prohibited correction"]
+        assert "trusted top-level system prompt" not in guardrail.inputs["texts"]
+        assert data["messages"][1]["content"][0]["text"] == "discarded text"
+        assert data["messages"][1]["content"][1]["text"] == "[MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_string_midturn_system_correction_is_guardrailed_as_user_content(
+        self,
+    ):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [{"role": "system", "content": "prohibited correction"}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["prohibited correction"]
+        assert data["messages"][0]["content"] == "[MASKED]"
 
     @pytest.mark.asyncio
     async def test_process_output_streaming_response_empty_choices(self):
@@ -216,9 +273,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         # Mock _check_streaming_has_ended to return False (stream not ended)
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=False),
-            patch.object(
-                handler, "get_streaming_string_so_far", return_value="partial text"
-            ),
+            patch.object(handler, "get_streaming_string_so_far", return_value="partial text"),
         ):
             responses_so_far = [b"data: some chunk"]
 
@@ -249,9 +304,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         data = {
             "model": "claude-opus-4-6",
-            "messages": [
-                {"role": "user", "content": "What is the weather in San Francisco?"}
-            ],
+            "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
             "tools": [
                 {
                     "type": "tool_search_tool_regex_20251119",
