@@ -2198,6 +2198,47 @@ def test_bedrock_tool_call_invoke_empty_arguments():
     assert result[0]["toolUse"]["input"] == {}
 
 
+def test_bedrock_tool_call_invoke_truncates_long_tool_id():
+    """
+    Models without a native litellm registry entry (e.g. bedrock/zai.glm-5)
+    can pass tool_call ids longer than Bedrock's 64-char toolUseId limit.
+    These must be truncated so the Converse API doesn't reject them.
+    Regression test for: https://github.com/BerriAI/litellm/issues/34239
+    """
+    long_id = "a" * 100
+    tool_calls = [
+        {
+            "id": long_id,
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston, MA"}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result[0]["toolUse"]["toolUseId"]) <= 64
+    assert result[0]["toolUse"]["toolUseId"] == long_id[:64]
+
+
+def test_bedrock_tool_call_invoke_sanitizes_invalid_chars_in_tool_id():
+    """Tool ids with characters outside [a-zA-Z0-9_-] must be sanitized."""
+    tool_calls = [
+        {
+            "id": "call:abc/123.xyz",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston, MA"}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    tool_use_id = result[0]["toolUse"]["toolUseId"]
+    assert all(c.isalnum() or c in "_-" for c in tool_use_id)
+
+
+
 def test_bedrock_tool_call_invoke_concatenated_json():
     """
     Tool call whose arguments contain multiple concatenated JSON objects
@@ -2903,6 +2944,27 @@ def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
     assert "document" in tool_result["content"][0]
     assert tool_result["content"][0]["document"]["format"] == "pdf"
     assert tool_result["content"][0]["document"]["source"]["bytes"] == pdf_b64
+
+
+def test_bedrock_tool_call_result_truncates_long_tool_call_id():
+    """
+    Regression test for: https://github.com/BerriAI/litellm/issues/34239
+    toolResult.toolUseId must also respect Bedrock's 64-char limit,
+    for models without a native litellm registry entry that pass
+    their own long tool_call ids straight through.
+    """
+    long_id = "b" * 100
+    message = {
+        "tool_call_id": long_id,
+        "role": "tool",
+        "name": "fetch_document",
+        "content": "some result",
+    }
+    result = _convert_to_bedrock_tool_call_result(message)
+    tool_use_id = result["toolResult"]["toolUseId"]
+    assert len(tool_use_id) <= 64
+    assert tool_use_id == long_id[:64]
+
 
 
 def test_bedrock_converse_messages_pt_document_various_formats():
