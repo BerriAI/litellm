@@ -55,11 +55,13 @@ class VectorStoreIndexRegistry:
                 return
         self.vector_store_indexes.append(vector_store_index)
 
-    def delete_vector_store_index(self, index_name: str):
+    def delete_vector_store_index(self, vector_store_index: str):
         """
         Deletes a vector store index from the registry
         """
-        self.vector_store_indexes = [index for index in self.vector_store_indexes if index.index_name != index_name]
+        self.vector_store_indexes = [
+            index for index in self.vector_store_indexes if index.index_name != vector_store_index
+        ]
 
     def is_vector_store_index(self, vector_store_index_name: str) -> bool:
         """

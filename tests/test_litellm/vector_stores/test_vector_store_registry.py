@@ -267,9 +267,7 @@ def test_delete_vector_store_index_removes_by_name():
     Regression test: delete_vector_store_index compared each stored index object against the
     index-name string, which is never equal, so the delete was an unconditional no-op.
     """
-    registry = VectorStoreIndexRegistry(
-        [_managed_vector_store_index("idx_a"), _managed_vector_store_index("idx_b")]
-    )
+    registry = VectorStoreIndexRegistry([_managed_vector_store_index("idx_a"), _managed_vector_store_index("idx_b")])
 
     registry.delete_vector_store_index("idx_a")
 
