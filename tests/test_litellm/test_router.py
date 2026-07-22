@@ -5855,10 +5855,9 @@ class TestStrategyRegistryCleanupOnRemoval:
         router.upsert_deployment(self._complexity_deployment(simple_tier="gpt-4o"))
 
         assert "test-auto-latest" in router.get_model_names()
-        assert (
-            router.complexity_routers["test-auto-latest"].config.tiers["SIMPLE"]
-            == "gpt-4o"
-        )
+        registered = router.complexity_routers["test-auto-latest"]
+        assert len(registered) == 1, "upsert must replace the registration, not accumulate"
+        assert registered[0].strategy.config.tiers["SIMPLE"] == "gpt-4o"
 
     def test_delete_complexity_router_clears_registry_and_allows_re_add(self):
         router = self._make_router()
@@ -6089,7 +6088,7 @@ class TestStrategyRegistryCleanupGuards:
 
         baseline = self._count_adaptive_hooks()  # tolerate hooks leaked by other tests
         router = self._adaptive_router()
-        original = router.adaptive_routers["adaptive-test-router"]
+        original = router.adaptive_routers["adaptive-test-router"][0].strategy
         assert self._count_adaptive_hooks() == baseline + 1
 
         router.upsert_deployment(
@@ -6107,7 +6106,7 @@ class TestStrategyRegistryCleanupGuards:
         assert "adaptive-test-router" in router.adaptive_routers, (
             "upserted adaptive deployment must still have a registered router"
         )
-        assert router.adaptive_routers["adaptive-test-router"] is not original, (
+        assert router.adaptive_routers["adaptive-test-router"][0].strategy is not original, (
             "upsert must rebuild the adaptive router with the new config"
         )
         assert self._count_adaptive_hooks() == baseline + 1, (

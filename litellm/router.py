@@ -7847,7 +7847,12 @@ class Router:
             len(config.available_models),
         )
 
-    def _remove_deployment_from_strategy_registries(self, model_name: str, litellm_model: str | None) -> None:
+    def _remove_deployment_from_strategy_registries(
+        self,
+        model_name: str,
+        litellm_model: str | None,
+        tags: tuple[str, ...] | None = None,
+    ) -> None:
         """
         Drop a model_name's strategy-router registration (auto / complexity /
         adaptive / quality) when its deployment is removed from the router.
@@ -7869,32 +7874,55 @@ class Router:
         also removed from the global callback lists — otherwise every
         upsert/delete cycle leaks one hook (and a deleted router's hook keeps
         firing forever).
+
+        `tags` scopes the eviction to the removed deployment's own
+        `(model_name, tags)` registration — registries hold a LIST of
+        tag-scoped strategies per name, and a differently-tagged sibling
+        sharing the name must survive. Pass `None` to evict every entry under
+        the name (used when the removed row's tags cannot be recovered).
         """
         litellm_model = litellm_model or ""
         if not litellm_model.startswith("auto_router/"):
             return
 
-        # scope the pop to the removed deployment's OWN strategy registry —
-        # model_names are only unique per registry, so a complexity router and
-        # a quality router may legally share a name; deleting one must not
-        # evict the other.
+        # scope the eviction to the removed deployment's OWN strategy
+        # registry — model_names are only unique per registry, so a
+        # complexity router and a quality router may legally share a name;
+        # deleting one must not evict the other.
         if litellm_model.startswith("auto_router/complexity_router"):
-            self.complexity_routers.pop(model_name, None)
-            return
-        if litellm_model.startswith("auto_router/quality_router"):
-            self.quality_routers.pop(model_name, None)
-            return
-        if not litellm_model.startswith("auto_router/adaptive_router"):
+            registry: dict = self.complexity_routers
+        elif litellm_model.startswith("auto_router/quality_router"):
+            registry = self.quality_routers
+        elif litellm_model.startswith("auto_router/adaptive_router"):
+            registry = self.adaptive_routers
+        else:
             # plain auto_router/<name> (semantic router)
-            self.auto_routers.pop(model_name, None)
-            return
+            registry = self.auto_routers
 
-        adaptive_router = self.adaptive_routers.pop(model_name, None)
-        if adaptive_router is not None:
+        entries = registry.get(model_name)
+        if not entries:
+            return
+        if tags is None:
+            removed = list(entries)
+            remaining = []
+        else:
+            removed = [entry for entry in entries if entry.tags == tags]
+            remaining = [entry for entry in entries if entry.tags != tags]
+            if not removed:
+                # the removed deployment's (model_name, tags) pair isn't
+                # registered, so a re-add can't collide — leave siblings alone
+                return
+        if remaining:
+            registry[model_name] = remaining
+        else:
+            registry.pop(model_name, None)
+
+        if registry is self.adaptive_routers:
             from litellm.router_strategy.adaptive_router.hooks import (
                 AdaptiveRouterPostCallHook,
             )
 
+            removed_strategy_ids = {id(entry.strategy) for entry in removed}
             for _cb_list in (
                 litellm.callbacks,
                 litellm.success_callback,
@@ -7903,7 +7931,7 @@ class Router:
                 litellm._async_failure_callback,
             ):
                 for _cb in list(_cb_list):
-                    if isinstance(_cb, AdaptiveRouterPostCallHook) and _cb.adaptive_router is adaptive_router:
+                    if isinstance(_cb, AdaptiveRouterPostCallHook) and id(_cb.adaptive_router) in removed_strategy_ids:
                         litellm.logging_callback_manager.remove_callback_from_all_lists(_cb)
 
     def _is_quality_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
@@ -8455,6 +8483,7 @@ class Router:
                         self._remove_deployment_from_strategy_registries(
                             model_name=_deployment_on_router.model_name,
                             litellm_model=_deployment_on_router.litellm_params.model,
+                            tags=self._deployment_tags(_deployment_on_router),
                         )
 
             # if the model_id is not in router
@@ -8467,7 +8496,9 @@ class Router:
             if (
                 added is not None
                 and self._is_adaptive_router_deployment(litellm_params=deployment.litellm_params)
-                and deployment.model_name not in self.adaptive_routers
+                and not self._has_registered_strategy(
+                    self.adaptive_routers, deployment.model_name, self._deployment_tags(deployment)
+                )
             ):
                 self.init_adaptive_router_deployment(deployment=deployment)
             return deployment
@@ -8511,13 +8542,18 @@ class Router:
                         if isinstance(_removed_lp, dict)
                         else getattr(_removed_lp, "model", None)
                     )
+                    _removed_tags = (
+                        _removed_lp.get("tags") if isinstance(_removed_lp, dict) else getattr(_removed_lp, "tags", None)
+                    )
                 else:
                     _removed_model_name = getattr(item, "model_name", None)
                     _removed_litellm_model = getattr(getattr(item, "litellm_params", None), "model", None)
+                    _removed_tags = getattr(getattr(item, "litellm_params", None), "tags", None)
                 if _removed_model_name:
                     self._remove_deployment_from_strategy_registries(
                         model_name=_removed_model_name,
                         litellm_model=_removed_litellm_model,
+                        tags=tuple(_removed_tags or ()),
                     )
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
