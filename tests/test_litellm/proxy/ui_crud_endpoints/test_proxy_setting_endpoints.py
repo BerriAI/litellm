@@ -396,6 +396,146 @@ class TestProxySettingEndpoints:
         call_args = mock_prisma.db.litellm_ssoconfig.find_unique.call_args
         assert call_args.kwargs["where"]["id"] == "sso_config"
 
+    def _mock_sso_db_record(self, monkeypatch, sso_settings):
+        """Point /get/sso_settings at a stored SSO row (or None for no row)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        if sso_settings is None:
+            mock_db_record = None
+        else:
+            mock_db_record = MagicMock()
+            mock_db_record.sso_settings = sso_settings
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        # The resolver decrypts stored values via decrypt_value_helper; make it an
+        # identity so the plaintext fixtures round-trip.
+        monkeypatch.setattr(
+            "litellm.proxy.config_resolvers.sso.decrypt_value_helper",
+            lambda value, key, exception_type="error", return_original_value=False: value,
+        )
+
+    def test_get_sso_settings_falls_back_to_process_env(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """
+        Regression for LIT-4165.
+
+        SSO configured purely as process env vars (helm/terraform, no UI writes)
+        logs users in successfully, because ui_sso.py resolves every setting from
+        os.environ. /get/sso_settings read only the sso_config table though, so
+        the Admin UI showed "not configured" for a working SSO deployment and hid
+        the Edit/Delete controls behind an empty-state placeholder.
+        """
+        self._mock_sso_db_record(monkeypatch, None)
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "env-client-id")
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "env-client-secret-value")
+        monkeypatch.setenv("GENERIC_AUTHORIZATION_ENDPOINT", "https://idp.example.com/authorize")
+        monkeypatch.setenv("GENERIC_TOKEN_ENDPOINT", "https://idp.example.com/token")
+        monkeypatch.setenv("GENERIC_USERINFO_ENDPOINT", "https://idp.example.com/userinfo")
+        monkeypatch.setenv("GENERIC_SCOPE", "openid email profile groups")
+        monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+
+        # Every one of these was None before the fix, despite SSO working.
+        assert values["generic_client_id"] == "env-client-id"
+        assert values["generic_authorization_endpoint"] == "https://idp.example.com/authorize"
+        assert values["generic_token_endpoint"] == "https://idp.example.com/token"
+        assert values["generic_userinfo_endpoint"] == "https://idp.example.com/userinfo"
+        assert values["generic_scope"] == "openid email profile groups"
+        assert values["proxy_base_url"] == "https://gateway.example.com"
+
+        # An env-sourced secret is masked exactly like a stored one.
+        assert values["generic_client_secret"] not in (None, "env-client-secret-value")
+        assert "*" in values["generic_client_secret"]
+
+    def test_get_sso_settings_does_not_mutate_os_environ(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """A GET must not write os.environ. The legacy read path decrypted DB
+        values straight into the environment, so opening the settings page
+        repopulated env and masked any consumer that stopped reading it."""
+        self._mock_sso_db_record(monkeypatch, {"generic_client_id": "db-only-id"})
+        monkeypatch.delenv("GENERIC_CLIENT_ID", raising=False)
+
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["generic_client_id"] == "db-only-id"
+        # The DB value must NOT have leaked into the process environment.
+        assert "GENERIC_CLIENT_ID" not in os.environ
+
+    def test_get_sso_settings_prefers_stored_over_process_env(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """A stored value wins; only fields absent from the row fall back to env."""
+        self._mock_sso_db_record(monkeypatch, {"generic_client_id": "stored-client-id"})
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "env-client-id")
+        monkeypatch.setenv("GENERIC_TOKEN_ENDPOINT", "https://idp.example.com/token")
+
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+        assert values["generic_client_id"] == "stored-client-id"
+        assert values["generic_token_endpoint"] == "https://idp.example.com/token"
+
+    def test_get_sso_settings_blank_stored_value_falls_back_to_process_env(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """
+        Blank means absent. update_sso_settings clears the env var for a blank
+        field, so a blank row entry cannot describe a live setting; os.environ is
+        the effective config and is what the UI must report.
+        """
+        self._mock_sso_db_record(monkeypatch, {"generic_client_id": "   ", "generic_token_endpoint": ""})
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "env-client-id")
+        monkeypatch.setenv("GENERIC_TOKEN_ENDPOINT", "https://idp.example.com/token")
+
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+        assert values["generic_client_id"] == "env-client-id"
+        assert values["generic_token_endpoint"] == "https://idp.example.com/token"
+
+    def test_get_sso_settings_unset_everywhere_reports_source(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """A field set in neither source is unset (or its effective default),
+        and provenance reports which."""
+        self._mock_sso_db_record(monkeypatch, None)
+        for env_var in (
+            "GENERIC_CLIENT_ID",
+            "GENERIC_CLIENT_SECRET",
+            "GENERIC_TOKEN_ENDPOINT",
+            "GENERIC_SCOPE",
+            "GOOGLE_CLIENT_ID",
+            "MICROSOFT_CLIENT_ID",
+            "PROXY_BASE_URL",
+        ):
+            monkeypatch.delenv(env_var, raising=False)
+
+        response = client.get("/get/sso_settings")
+
+        assert response.status_code == 200
+        body = response.json()
+        values = body["values"]
+        provenance = body["provenance"]
+        assert values["generic_client_id"] is None
+        assert provenance["generic_client_id"] == "unset"
+        assert values["generic_client_secret"] is None
+        assert values["google_client_id"] is None
+        # generic_scope carries the same effective default the login path applies,
+        # so the settings page shows the scope logins would actually request.
+        assert values["generic_scope"] == "openid email profile"
+        assert provenance["generic_scope"] == "default"
+
     def test_update_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test updating the SSO settings to the dedicated database table"""
         import json
@@ -1463,19 +1603,20 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-        # Mock the decryption method to return decrypted values
-        def mock_decrypt_and_set(environment_variables):
-            return {
-                "google_client_id": "decrypted_google_id",
-                "google_client_secret": "decrypted_google_secret",
-                "microsoft_client_id": "decrypted_microsoft_id",
-                "proxy_base_url": "https://decrypted.example.com",
-            }
+        # The resolver decrypts each stored value via decrypt_value_helper; map
+        # the ciphertext fixtures to their plaintext.
+        decrypted_by_ciphertext = {
+            "encrypted_google_id": "decrypted_google_id",
+            "encrypted_google_secret": "decrypted_google_secret",
+            "encrypted_microsoft_id": "decrypted_microsoft_id",
+            "encrypted_proxy_url": "https://decrypted.example.com",
+        }
 
-        from litellm.proxy.proxy_server import proxy_config
+        def mock_decrypt(value, key, exception_type="error", return_original_value=False):
+            return decrypted_by_ciphertext.get(value, value)
 
         monkeypatch.setattr(
-            proxy_config, "_decrypt_and_set_db_env_variables", mock_decrypt_and_set
+            "litellm.proxy.config_resolvers.sso.decrypt_value_helper", mock_decrypt
         )
 
         response = client.get("/get/sso_settings")

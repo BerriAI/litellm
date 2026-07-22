@@ -15,6 +15,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers.sso import (
+    SSO_FIELD_ENV_VARS,
+    SSO_SECRET_FIELDS,
+    resolve_sso_config,
+)
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
@@ -26,16 +31,6 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 router = APIRouter()
-
-# SSO secret fields returned by /get/sso_settings. These are masked on read so
-# the UI can show "(set)" without ever transporting the plaintext OAuth secret
-# off the server, matching the write-once + masked-on-read contract used for
-# the HashiCorp Vault config override.
-_SSO_SENSITIVE_FIELDS: Set[str] = {
-    "google_client_secret",
-    "microsoft_client_secret",
-    "generic_client_secret",
-}
 
 # Maps each UIThemeConfig field to the env var the UI branding path reads it
 # from. /update/ui_theme_settings writes both the stored ui_theme_config and
@@ -109,7 +104,8 @@ class SettingsResponse(BaseModel):
 class SSOSettingsResponse(SettingsResponse):
     """Response model for SSO settings"""
 
-    pass
+    provenance: Dict[str, str] = Field(default_factory=dict)
+    """Per-field source of each value: 'db', 'env', 'default', or 'unset'."""
 
 
 class InternalUserSettingsResponse(SettingsResponse):
@@ -757,7 +753,7 @@ async def get_sso_settings():
     Returns a structured object with values and descriptions for UI display.
     """
 
-    from litellm.proxy.proxy_server import prisma_client, proxy_config
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(
@@ -765,59 +761,12 @@ async def get_sso_settings():
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    # Get SSO config from dedicated table
+    # Resolve the effective SSO config: the stored row wins, else the process
+    # environment, else each field's default. Unlike the legacy read path this
+    # does not write os.environ; a GET has no business mutating the environment.
     sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
-
-    # Initialize with defaults
-    sso_settings_dict = {}
-
-    if sso_db_record and sso_db_record.sso_settings:
-        # Load settings from database
-        sso_settings_dict = dict(sso_db_record.sso_settings)
-
-    role_mappings_data = sso_settings_dict.pop("role_mappings", None)
-    role_mappings = None
-    if role_mappings_data:
-        from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
-
-        if isinstance(role_mappings_data, dict):
-            role_mappings = RoleMappings(**role_mappings_data)
-        elif isinstance(role_mappings_data, RoleMappings):
-            role_mappings = role_mappings_data
-
-    team_mappings_data = sso_settings_dict.pop("team_mappings", None)
-    team_mappings = None
-    if team_mappings_data:
-        from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
-
-        if isinstance(team_mappings_data, dict):
-            team_mappings = TeamMappings(**team_mappings_data)
-        elif isinstance(team_mappings_data, TeamMappings):
-            team_mappings = team_mappings_data
-
-    decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(
-        environment_variables=sso_settings_dict
-    )
-
-    # Build SSO config with database values or environment fallback
-
-    sso_config = SSOConfig(
-        google_client_id=decrypted_sso_settings_dict.get("google_client_id", None),
-        google_client_secret=decrypted_sso_settings_dict.get("google_client_secret", None),
-        microsoft_client_id=decrypted_sso_settings_dict.get("microsoft_client_id", None),
-        microsoft_client_secret=decrypted_sso_settings_dict.get("microsoft_client_secret", None),
-        microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
-        generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
-        generic_client_secret=decrypted_sso_settings_dict.get("generic_client_secret", None),
-        generic_authorization_endpoint=decrypted_sso_settings_dict.get("generic_authorization_endpoint", None),
-        generic_token_endpoint=decrypted_sso_settings_dict.get("generic_token_endpoint", None),
-        generic_userinfo_endpoint=decrypted_sso_settings_dict.get("generic_userinfo_endpoint", None),
-        proxy_base_url=decrypted_sso_settings_dict.get("proxy_base_url", None),
-        user_email=decrypted_sso_settings_dict.get("user_email"),
-        ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
-        role_mappings=role_mappings,
-        team_mappings=team_mappings,
-    )
+    sso_db_settings = dict(sso_db_record.sso_settings) if sso_db_record and sso_db_record.sso_settings else None
+    resolved = resolve_sso_config(sso_db_settings, os.environ)
 
     # Get the schema for UI display
     from pydantic import TypeAdapter
@@ -826,11 +775,12 @@ async def get_sso_settings():
 
     # Convert to dict for response, masking OAuth client secrets so plaintext
     # is never sent to the UI.
-    sso_dict = mask_sensitive_keys(sso_config.model_dump(), _SSO_SENSITIVE_FIELDS)
+    sso_dict = mask_sensitive_keys(resolved.config.model_dump(), set(SSO_SECRET_FIELDS))
 
     # Add descriptions to the response
     result = {
         "values": sso_dict,
+        "provenance": resolved.provenance,
         "field_schema": {
             "description": schema.get("description", ""),
             "properties": {},
@@ -881,21 +831,6 @@ async def update_sso_settings(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
-    # Update environment variables
-    env_var_mapping = {
-        "google_client_id": "GOOGLE_CLIENT_ID",
-        "google_client_secret": "GOOGLE_CLIENT_SECRET",
-        "microsoft_client_id": "MICROSOFT_CLIENT_ID",
-        "microsoft_client_secret": "MICROSOFT_CLIENT_SECRET",
-        "microsoft_tenant": "MICROSOFT_TENANT",
-        "generic_client_id": "GENERIC_CLIENT_ID",
-        "generic_client_secret": "GENERIC_CLIENT_SECRET",
-        "generic_authorization_endpoint": "GENERIC_AUTHORIZATION_ENDPOINT",
-        "generic_token_endpoint": "GENERIC_TOKEN_ENDPOINT",
-        "generic_userinfo_endpoint": "GENERIC_USERINFO_ENDPOINT",
-        "proxy_base_url": "PROXY_BASE_URL",
-    }
-
     # Read the existing SSO row first so the audit log captures a real
     # before/after diff. Stored values are encrypted; decrypt them so the
     # before-snapshot has the same shape as after_value, and rely on
@@ -924,8 +859,8 @@ async def update_sso_settings(
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump()
     for field_name, value in sso_data.items():
-        if field_name in env_var_mapping:
-            env_var_name = env_var_mapping[field_name]
+        if field_name in SSO_FIELD_ENV_VARS:
+            env_var_name = SSO_FIELD_ENV_VARS[field_name]
             if value:
                 os.environ[env_var_name] = value
             else:
@@ -975,7 +910,7 @@ async def update_sso_settings(
             else:
                 environment_variables = {}
 
-            env_vars_to_remove = set(env_var_mapping.values())
+            env_vars_to_remove = set(SSO_FIELD_ENV_VARS.values())
             filtered_env_vars = {
                 key: value for key, value in environment_variables.items() if key not in env_vars_to_remove
             }
