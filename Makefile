@@ -300,3 +300,43 @@ test-llm-translation-single: install-test-deps
 
 test-llm-translation-flush-vcr-cache:
 	$(UV_RUN) python tests/_flush_vcr_cache.py
+
+# ---------------------------------------------------------------------------
+# E2E LLM translation loop targets. See tests/llm_translation/E2E_AGENT.md.
+#
+# Usage:
+#   make e2e-llm-coverage PROVIDER=anthropic FAIL_UNDER=90
+#   make e2e-llm-mutation PROVIDER=anthropic
+#   make e2e-llm-lock         # make litellm/ read-only (tests/ stays writable)
+#   make e2e-llm-unlock       # restore writable mode
+#   make e2e-llm-lock-status  # check current mode
+# ---------------------------------------------------------------------------
+FAIL_UNDER ?= 90
+
+.PHONY: e2e-llm-coverage e2e-llm-mutation e2e-llm-lock e2e-llm-unlock e2e-llm-lock-status e2e-llm-hook-install e2e-llm-hook-uninstall
+
+e2e-llm-coverage:
+	@if [ -z "$(PROVIDER)" ]; then echo "Usage: make e2e-llm-coverage PROVIDER=<name> [FAIL_UNDER=N]"; exit 2; fi
+	./scripts/e2e_llm_loop.sh coverage $(PROVIDER) --fail-under $(FAIL_UNDER)
+
+e2e-llm-mutation:
+	@if [ -z "$(PROVIDER)" ]; then echo "Usage: make e2e-llm-mutation PROVIDER=<name>"; exit 2; fi
+	./scripts/e2e_llm_loop.sh mutation $(PROVIDER)
+
+e2e-llm-lock:
+	./scripts/e2e_llm_lock.sh lock
+
+e2e-llm-unlock:
+	./scripts/e2e_llm_lock.sh unlock
+
+e2e-llm-lock-status:
+	./scripts/e2e_llm_lock.sh status
+
+e2e-llm-hook-install:
+	./scripts/e2e_llm_install_hook.sh install
+	@touch .e2e-llm-loop-active
+	@echo "Sentinel .e2e-llm-loop-active created. Commits to litellm/ now blocked."
+
+e2e-llm-hook-uninstall:
+	@rm -f .e2e-llm-loop-active
+	./scripts/e2e_llm_install_hook.sh uninstall

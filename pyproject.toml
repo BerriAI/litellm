@@ -356,3 +356,16 @@ pytest_add_cli_args = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
+branch = true
+
+[tool.coverage.report]
+# scripts/e2e_llm_loop.sh overrides `source` and `fail_under` per-provider
+# via CLI flags; this is the default for ad-hoc local runs.
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "pragma: no cover",
+    "@overload",
+]
