@@ -67,6 +67,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _cache_team_object,
+    _delete_cache_key_object,
     allowed_route_check_inside_route,
     can_org_access_model,
     get_org_object,
@@ -3198,6 +3199,33 @@ async def bulk_team_member_add(
         )
 
 
+async def _invalidate_caches_after_team_key_delete(
+    keys_to_delete: List[LiteLLM_VerificationToken],
+    team_rows: List[LiteLLM_TeamTable],
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    for key_row in keys_to_delete:
+        if key_row.token is None:
+            continue
+        await _delete_cache_key_object(
+            hashed_token=key_row.token,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    for team_row in team_rows:
+        team_cache_key = "team_id:{}".format(team_row.team_id)
+        user_api_key_cache.delete_cache(key=team_cache_key)
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=team_cache_key)
+        if team_row.team_alias:
+            alias_key = "team_alias:{}".format(team_row.team_alias)
+            user_api_key_cache.delete_cache(key=alias_key)
+            if proxy_logging_obj is not None:
+                await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
+
+
 @router.post("/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def delete_team(
@@ -3325,6 +3353,11 @@ async def delete_team(
         )
 
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
+
+    await _invalidate_caches_after_team_key_delete(
+        keys_to_delete=keys_to_delete,
+        team_rows=team_rows,
+    )
 
     ## DELETE ASSOCIATED BYOK MODELS
     # Runs before the team rows are deleted so a mid-flight failure never leaves
