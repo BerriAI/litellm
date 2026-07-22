@@ -2207,6 +2207,8 @@ async def ui_view_request_response_for_request_id(
     "/spend/logs",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    deprecated=True,
+    summary="Deprecated: use /spend/logs/ui for paginated spend logs",
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
@@ -2240,7 +2242,7 @@ async def view_spend_logs(
 ):
     """
     [DEPRECATED] This endpoint is not paginated and can cause performance issues.
-    Please use `/spend/logs/v2` instead for paginated access to spend logs.
+    Please use `/spend/logs/ui` instead for paginated access to spend logs.
 
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
 
@@ -2248,34 +2250,14 @@ async def view_spend_logs(
     - summarize=true (default): Returns aggregated spend data grouped by date (maintains backward compatibility)
     - summarize=false: Returns filtered individual log entries within the date range
 
-    Example Request for all logs
+    Recommended paginated UI spend logs request:
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs" \
--H "Authorization: Bearer sk-1234"
-    ```
-
-    Example Request for specific request_id
-    ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" \
--H "Authorization: Bearer sk-1234"
-    ```
-
-    Example Request for specific api_key
-    ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" \
--H "Authorization: Bearer sk-1234"
-    ```
-
-    Example Request for specific user_id
-    ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
--H "Authorization: Bearer sk-1234"
-    ```
-
-    Example Request for date range with individual logs (unsummarized)
-    ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
--H "Authorization: Bearer sk-1234"
+    curl -G "http://0.0.0.0:4000/spend/logs/ui" \
+      -H "Authorization: Bearer <proxy-api-key>" \
+      --data-urlencode "start_date=2024-01-01 00:00:00" \
+      --data-urlencode "end_date=2024-01-02 00:00:00" \
+      --data-urlencode "page=1" \
+      --data-urlencode "page_size=50"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
