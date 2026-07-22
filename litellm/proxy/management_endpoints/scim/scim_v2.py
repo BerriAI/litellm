@@ -98,14 +98,27 @@ class UserProvisionerHelpers:
         if not existing_user:
             return None
 
-        # Update the user
+        new_teams = list(dict.fromkeys(new_user_request.teams or []))
+
+        if new_user_request.user_id != existing_user.user_id:
+            await UserRepository(prisma_client).table.update(
+                where={"user_id": existing_user.user_id},
+                data={"user_id": new_user_request.user_id},
+            )
+
+        await _handle_team_membership_changes(
+            user_id=new_user_request.user_id,
+            existing_teams=existing_user.teams or [],
+            new_teams=new_teams,
+            raise_on_error=True,
+        )
+
         updated_user = await UserRepository(prisma_client).table.update(
-            where={"user_id": existing_user.user_id},
+            where={"user_id": new_user_request.user_id},
             data={
-                "user_id": new_user_request.user_id,
                 "user_email": new_user_request.user_email,
                 "user_alias": new_user_request.user_alias,
-                "teams": new_user_request.teams,
+                "teams": new_teams,
                 "metadata": safe_dumps(new_user_request.metadata),
                 **({"user_role": new_user_request.user_role} if admin_group is not None else {}),
             },
@@ -440,7 +453,12 @@ async def _get_team_members_display(member_ids: List[str]) -> List[SCIMMember]:
     return members
 
 
-async def _handle_team_membership_changes(user_id: str, existing_teams: List[str], new_teams: List[str]) -> None:
+async def _handle_team_membership_changes(
+    user_id: str,
+    existing_teams: List[str],
+    new_teams: List[str],
+    raise_on_error: bool = False,
+) -> None:
     """Handle adding/removing user from teams based on changes."""
     existing_teams_set = set(existing_teams)
     new_teams_set = set(new_teams)
@@ -453,6 +471,7 @@ async def _handle_team_membership_changes(user_id: str, existing_teams: List[str
             user_id=user_id,
             teams_ids_to_add_user_to=list(teams_to_add),
             teams_ids_to_remove_user_from=list(teams_to_remove),
+            raise_on_error=raise_on_error,
         )
 
 
@@ -1497,16 +1516,29 @@ def _apply_patch_ops(
     return update_data, final_team_set
 
 
+def _is_user_not_in_team_error(exc: HTTPException) -> bool:
+    """True when team_member_delete reports the user was already absent from the
+    team, which is the idempotent no-op case for a removal."""
+    detail = exc.detail
+    return isinstance(detail, dict) and detail.get("error") == "User not found in team"
+
+
 async def patch_team_membership(
     user_id: str,
     teams_ids_to_add_user_to: List[str],
     teams_ids_to_remove_user_from: List[str],
+    raise_on_error: bool = False,
 ) -> bool:
     """
     Add or remove user from teams
 
     Handles duplicate membership gracefully (idempotent operation).
-    If a user is already in a team, that's fine - we don't treat it as an error.
+    A user already being in a team (on add) or already absent from it (on
+    remove) is treated as a no-op, not an error.
+
+    When ``raise_on_error`` is True a genuine add or remove failure (anything
+    other than those idempotent no-ops) propagates instead of being swallowed,
+    so a caller can avoid persisting a teams array the roster never received.
     """
     for _team_id in teams_ids_to_add_user_to:
         try:
@@ -1521,9 +1553,13 @@ async def patch_team_membership(
             # Handle duplicate membership gracefully - this is idempotent
             if e.type == ProxyErrorTypes.team_member_already_in_team:
                 verbose_proxy_logger.debug(f"User {user_id} is already in team {_team_id}, skipping add")
+            elif raise_on_error:
+                raise
             else:
                 verbose_proxy_logger.exception(f"Error adding user to team {_team_id}: {e}")
         except Exception as e:
+            if raise_on_error:
+                raise
             verbose_proxy_logger.exception(f"Error adding user to team {_team_id}: {e}")
 
     for _team_id in teams_ids_to_remove_user_from:
@@ -1532,7 +1568,16 @@ async def patch_team_membership(
                 data=TeamMemberDeleteRequest(team_id=_team_id, user_id=user_id),
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
             )
+        except HTTPException as e:
+            if _is_user_not_in_team_error(e):
+                verbose_proxy_logger.debug(f"User {user_id} is not in team {_team_id}, skipping remove")
+            elif raise_on_error:
+                raise
+            else:
+                verbose_proxy_logger.exception(f"Error removing user from team {_team_id}: {e}")
         except Exception as e:
+            if raise_on_error:
+                raise
             verbose_proxy_logger.exception(f"Error removing user from team {_team_id}: {e}")
 
     return True
@@ -1654,8 +1699,11 @@ async def get_groups(
         # Convert to SCIM format
         scim_groups = []
         for team in teams:
-            # Get team members with display names
-            members = await _get_team_members_display(team.members or [])
+            # Get team members with display names. members_with_roles is the
+            # source of truth; the legacy `members` column is not populated by
+            # team creation, so reading it here would report an empty member
+            # list to the IdP and trigger repeated re-provisioning.
+            members = await _get_team_members_display(await _get_team_member_user_ids_from_team(team))
             verbose_proxy_logger.debug(f"SCIM GET GROUPS members: {members}")
             team_alias = getattr(team, "team_alias", team.team_id)
             team_created_at = team.created_at.isoformat() if team.created_at else None
@@ -1885,8 +1933,12 @@ async def _process_group_patch_operations(
     existing_metadata = existing_team.metadata or {}
     metadata = dict(existing_metadata) if existing_metadata else {}
 
-    # Track member changes
-    current_members = set(existing_team.members or [])
+    # Track member changes. members_with_roles is the source of truth for team
+    # membership; the legacy `members` column is not populated by team creation
+    # or the real team endpoints, so seeding from it would make an `add`/`remove`
+    # operation recompute the member set from an empty base and silently drop
+    # everyone already in the team.
+    current_members = set(await _get_team_member_user_ids_from_team(existing_team))
     final_members = current_members.copy()
 
     # Process each patch operation
@@ -1963,24 +2015,24 @@ async def _process_group_patch_operations(
     return update_data, final_members
 
 
-async def _apply_group_patch_updates(
-    group_id: str, update_data: Dict[str, Any], final_members: Set[str], prisma_client
-):
-    """Apply patch updates to the group in the database."""
-    # Serialize metadata if present
+async def _apply_group_patch_updates(group_id: str, update_data: Dict[str, Any], prisma_client):
+    """Apply the group's metadata/displayName patch updates to the database.
+
+    Membership itself is not written here; it is reconciled onto the source of
+    truth (members_with_roles and each member's user.teams) by
+    _handle_group_membership_changes via team_member_add/team_member_delete.
+    Writing the legacy `members` column here too would create a second, unread
+    copy of membership that could drift from the source of truth.
+    """
     if "metadata" in update_data and isinstance(update_data["metadata"], dict):
         update_data["metadata"] = safe_dumps(update_data["metadata"])
 
-    # Update members list
-    update_data["members"] = list(final_members)
-
-    # Update team in database
-    updated_team = await TeamRepository(prisma_client).table.update(
-        where={"team_id": group_id},
-        data=update_data,
-    )
-
-    return updated_team
+    if update_data:
+        return await TeamRepository(prisma_client).table.update(
+            where={"team_id": group_id},
+            data=update_data,
+        )
+    return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
 
 
 async def _handle_group_membership_changes(group_id: str, current_members: Set[str], final_members: Set[str]):
@@ -2036,8 +2088,8 @@ async def patch_group(
         # Track current members BEFORE update for comparison
         current_members = set(await _get_team_member_user_ids_from_team(existing_team))
 
-        # Apply updates to the database
-        updated_team = await _apply_group_patch_updates(group_id, update_data, final_members, prisma_client)
+        # Apply the metadata/displayName updates to the database
+        updated_team = await _apply_group_patch_updates(group_id, update_data, prisma_client)
 
         # Refresh team data from database to get the latest state after concurrent updates
         # This prevents race conditions when multiple PATCH requests come in simultaneously

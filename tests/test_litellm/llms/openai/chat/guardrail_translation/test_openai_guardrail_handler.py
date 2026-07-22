@@ -1137,3 +1137,95 @@ class TestGetStructuredMessages:
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+class TestIncrementalScanRespectsSkipFlags:
+    """PR #33278: skip_system_message_in_guardrail and skip_tool_message_in_guardrail
+    are enforced while this handler builds inputs["texts"] (_extract_inputs early
+    returns for system/tool roles), upstream of BedrockGuardrail's incremental path.
+    Bypassing _select_messages_for_apply_guardrail therefore cannot resurrect skipped
+    content on any turn, including a session's first turn where every segment is new.
+    Verified live against a real Bedrock ApplyGuardrail before being encoded here.
+    The flags are set as instance attributes, mirroring how guardrail_registry
+    applies litellm_params to the callback (they are not constructor kwargs).
+    """
+
+    def _bedrock_guardrail(self):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+
+        guardrail = BedrockGuardrail(
+            guardrail_name="bedrock-incremental-skip-flags",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+            only_scan_new_messages=True,
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        guardrail.skip_tool_message_in_guardrail = True
+        return guardrail
+
+    def _messages(self, followup=None):
+        base = [
+            {"role": "system", "content": "SYSTEM-PROMPT-must-not-be-scanned"},
+            {"role": "user", "content": "Search for the weather in Paris"},
+            {
+                "role": "assistant",
+                "content": "Let me look that up.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": '{"query": "weather"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT-must-not-be-scanned"},
+            {"role": "user", "content": "Thanks, summarize."},
+        ]
+        return base + (followup or [])
+
+    @pytest.mark.asyncio
+    async def test_first_turn_scans_no_system_or_tool_content(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        data = {"messages": self._messages(), "litellm_session_id": "skip-flags-turn1"}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == [
+                "Search for the weather in Paris",
+                "Let me look that up.",
+                "Thanks, summarize.",
+            ]
+            assert not any("SYSTEM-PROMPT" in text for text in scanned)
+            assert not any("TOOL-RESULT" in text for text in scanned)
+
+    @pytest.mark.asyncio
+    async def test_second_turn_scans_only_new_eligible_content(self):
+        from unittest.mock import AsyncMock, patch
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._bedrock_guardrail()
+        session = "skip-flags-turn2"
+        followup = [
+            {"role": "assistant", "content": "It is sunny in Paris."},
+            {"role": "user", "content": "And tomorrow?"},
+        ]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await handler.process_input_messages(
+                data={"messages": self._messages(), "litellm_session_id": session},
+                guardrail_to_apply=guardrail,
+            )
+            mock_api.reset_mock()
+            await handler.process_input_messages(
+                data={"messages": self._messages(followup), "litellm_session_id": session},
+                guardrail_to_apply=guardrail,
+            )
+            assert mock_api.call_count == 1
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["It is sunny in Paris.", "And tomorrow?"]
