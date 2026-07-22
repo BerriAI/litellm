@@ -1,12 +1,10 @@
 "use client";
 
 import { Tag } from "antd";
-import { Check, Copy } from "lucide-react";
-import * as React from "react";
 
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import CopyButton from "@/components/shared/CopyButton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
-import { copyToClipboard } from "@/utils/dataUtils";
 
 interface CopyableBadgeProps {
   value: string;
@@ -21,37 +19,15 @@ export function CopyableBadge({
   maxWidthClassName = "max-w-[220px]",
   dataTestId,
 }: CopyableBadgeProps) {
-  const [copied, setCopied] = React.useState(false);
-
-  const handleCopy = async () => {
-    const success = await copyToClipboard(value);
-    if (success) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
   return (
-    <TooltipProvider delay={300}>
+    <Tag color={color} className="m-0 inline-flex max-w-full items-center gap-1" data-testid={dataTestId}>
       <Tooltip>
-        <TooltipTrigger
-          aria-label={`Copy ${value}`}
-          data-testid={dataTestId}
-          onClick={handleCopy}
-          className="inline-flex max-w-full cursor-pointer border-0 bg-transparent p-0"
-        >
-          <Tag color={color} className="m-0 max-w-full">
-            <span className={cn("block truncate", maxWidthClassName)}>{value}</span>
-          </Tag>
+        <TooltipTrigger className="max-w-full cursor-default border-0 bg-transparent p-0">
+          <span className={cn("block truncate", maxWidthClassName)}>{value}</span>
         </TooltipTrigger>
-        <TooltipContent>
-          <span className="inline-flex items-center gap-1.5">
-            {copied ? <Check className="size-3 shrink-0" /> : <Copy className="size-3 shrink-0" />}
-            <span className="font-mono break-all">{value}</span>
-            <span className="opacity-70">{copied ? "Copied" : "Click to copy"}</span>
-          </span>
-        </TooltipContent>
+        <TooltipContent>{value}</TooltipContent>
       </Tooltip>
-    </TooltipProvider>
+      <CopyButton value={value} label={`Copy ${value}`} iconClassName="size-3" />
+    </Tag>
   );
 }

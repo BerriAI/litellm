@@ -1,15 +1,17 @@
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CopyableBadge } from "./copyable_badge";
 
-const { copyToClipboardMock } = vi.hoisted(() => ({ copyToClipboardMock: vi.fn() }));
+const writeText = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("@/utils/dataUtils", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/utils/dataUtils")>()),
-  copyToClipboard: copyToClipboardMock,
-}));
+beforeEach(() => {
+  writeText.mockClear();
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+});
 
 describe("CopyableBadge", () => {
   it("renders the value and truncates it", () => {
@@ -19,14 +21,12 @@ describe("CopyableBadge", () => {
     expect(label.className).toContain("max-w-[220px]");
   });
 
-  it("copies the full value when clicked", async () => {
-    copyToClipboardMock.mockResolvedValue(true);
-    const user = userEvent.setup();
-    render(<CopyableBadge value="team-alias-long-name" dataTestId="team-badge" />);
+  it("copies the full value when the copy button is clicked", async () => {
+    render(<CopyableBadge value="team-alias-long-name" />);
 
-    await user.click(screen.getByTestId("team-badge"));
+    fireEvent.click(screen.getByRole("button", { name: "Copy team-alias-long-name" }));
 
-    expect(copyToClipboardMock).toHaveBeenCalledWith("team-alias-long-name");
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("team-alias-long-name"));
   });
 
   it("exposes a copy affordance via accessible label", () => {
