@@ -58,6 +58,7 @@ def get_streaming_audio_upload(request: Request) -> "StreamingMultipartUpload | 
 
 async def _read_streaming_audio_body(request: Request, content_type: str) -> dict:
     from litellm.litellm_core_utils.audio_utils.streaming_multipart import (
+        FieldPartTooLarge,
         open_transcription_multipart,
     )
 
@@ -67,7 +68,15 @@ async def _read_streaming_audio_body(request: Request, content_type: str) -> dic
         raise ProxyException(
             message=str(e), type="invalid_request_error", param="request_body", code=status.HTTP_400_BAD_REQUEST
         )
-    upload = await open_transcription_multipart(request.stream(), boundary, max_file_bytes=None)
+    try:
+        upload = await open_transcription_multipart(request.stream(), boundary, max_file_bytes=None)
+    except FieldPartTooLarge as e:
+        raise ProxyException(
+            message=str(e),
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
     request.scope["streaming_audio_upload"] = upload
     parsed_body = {key: value for key, value in upload.fields.items()}
     if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
@@ -99,10 +108,10 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 
         if _is_form_content_type(content_type):
             if content_type.strip().startswith("multipart/form-data") and _is_streaming_audio_upload_path(request):
-                # For audio transcription/translation, parse the multipart incrementally so the file
-                # part is left as a resumable stream (see StreamingMultipartUpload) instead of being
-                # fully buffered by request.form(). This is the FIRST body read (auth pre-read), so the
-                # parsed upload is stashed on request.scope for the route handler to stream from.
+                # For audio transcription, parse the multipart incrementally so the file part is left
+                # as a resumable stream (see StreamingMultipartUpload) instead of being fully buffered
+                # by request.form(). This is the FIRST body read (auth pre-read), so the parsed upload
+                # is stashed on request.scope for the route handler to stream from.
                 parsed_body = await _read_streaming_audio_body(request=request, content_type=content_type)
             else:
                 try:

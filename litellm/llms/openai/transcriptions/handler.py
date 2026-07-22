@@ -266,7 +266,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
     ) -> TranscriptionResponse:
         """Stream the multipart upload straight to the provider (SDK bypass), teeing into a buffer."""
         complete_url = (api_base or "https://api.openai.com/v1").rstrip("/") + "/audio/transcriptions"
-        fields = {key: value for key, value in data.items() if key != "file"}
+        extra_headers = data.get("extra_headers") if isinstance(data.get("extra_headers"), dict) else {}
+        fields = {key: value for key, value in data.items() if key not in ("file", "extra_headers")}
         boundary = new_boundary()
         headers = {"Content-Type": multipart_content_type(boundary)}
         if api_key:
@@ -275,6 +276,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         organization = litellm.organization or get_secret_str("OPENAI_ORGANIZATION")
         if organization:
             headers["OpenAI-Organization"] = organization
+        # Forward any caller-configured headers, matching the SDK's default_headers behavior.
+        headers.update({str(key): str(value) for key, value in extra_headers.items()})
 
         logging_obj.pre_call(
             input=None,

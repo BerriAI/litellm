@@ -51,7 +51,9 @@ async def stream_multipart_body(
     file_content_type: str | None,
     upload: StreamingMultipartUpload,
 ) -> AsyncIterator[bytes]:
-    yield _field_parts(boundary, fields)
+    # The file part goes first so any form field that follows the file in the source body is still
+    # captured (multipart is order-independent per RFC 7578): the fields are emitted after the file
+    # streams, by which point `upload.fields` has parsed the whole body.
     yield (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{_escape_header_param(filename)}"\r\n'
@@ -59,7 +61,11 @@ async def stream_multipart_body(
     ).encode()
     async for chunk in upload.stream():
         yield chunk
-    yield f"\r\n--{boundary}--\r\n".encode()
+    yield b"\r\n"
+    # Merge in any field that only appeared after the file part in the source body.
+    merged = {**fields, **{name: value for name, value in upload.fields.items() if name not in fields}}
+    yield _field_parts(boundary, merged)
+    yield f"--{boundary}--\r\n".encode()
 
 
 def new_boundary() -> str:

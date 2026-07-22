@@ -7,21 +7,27 @@ non-file fields are collected eagerly; the (large) file part is exposed as a tee
 upstream as bytes arrive while keeping a copy so retries, router fallbacks, and duration-based
 cost still work.
 
-Assumes the file part is the last part (as OpenAI SDK / curl `-F` clients send it). A form field
-appearing after the file part raises MultipartOrderError so the caller can fall back to buffering
-rather than silently sending an incomplete upstream body.
+Field order in the source body is not assumed: the file part is streamed and non-file fields are
+collected wherever they appear, so callers can re-emit the fields after the file part (multipart is
+order-independent per RFC 7578). Non-file fields are size-capped because this is parsed during the
+auth pre-read, before the caller is authenticated.
 """
 
 from typing import AsyncIterator
 
 FieldValue = str | list[str]
 
+# Cap for a single non-file form field. This body is parsed during the auth pre-read (before the
+# caller is authenticated), so an unbounded field would be a pre-auth memory-exhaustion vector.
+# Matches Starlette's MultiPartParser.max_part_size default.
+_MAX_FIELD_BYTES = 1024 * 1024
+
 
 class FilePartTooLarge(Exception):
     pass
 
 
-class MultipartOrderError(Exception):
+class FieldPartTooLarge(Exception):
     pass
 
 
@@ -38,11 +44,12 @@ def _parse_content_disposition(value: bytes) -> tuple[str | None, str | None]:
 
 
 class StreamingMultipartUpload:
-    """A multipart upload parsed incrementally: eager non-file fields plus a teed file part.
+    """A multipart upload parsed incrementally: non-file fields plus a teed file part.
 
     Build with `open_transcription_multipart`. `stream()` yields the file part as it arrives while
-    buffering a copy; `getvalue()` returns the full bytes (draining any unread remainder), so a
-    retry after the stream is consumed still has the whole file.
+    buffering a copy and parsing the rest of the body (so `fields` is complete once the stream is
+    drained); `getvalue()` returns the full file bytes, so a retry after the stream is consumed still
+    has the whole file.
     """
 
     def __init__(self, body: AsyncIterator[bytes], boundary: bytes, max_file_bytes: int | None) -> None:
@@ -54,12 +61,11 @@ class StreamingMultipartUpload:
         self._body = body.__aiter__()
         self._buffer = bytearray()
         self._gen: AsyncIterator[bytes] | None = None
-        self._error: Exception | None = None
+        self._touched = False
+        self._size_error: FilePartTooLarge | None = None
         self._pending: list[bytes] = []  # mutable-ok: per-write file segments drained by the tee
         self._file_started = False
-        self._file_ended = False
         self._ended = False
-        self._trailing_field = False
         self._header_field = bytearray()
         self._header_value = bytearray()
         self._headers: dict[str, bytes] = {}
@@ -84,8 +90,6 @@ class StreamingMultipartUpload:
         )
 
     def _on_part_begin(self) -> None:
-        if self._file_ended:
-            self._trailing_field = True
         self._headers = {}
         self._cur_name = None
         self._cur_is_file = False
@@ -119,19 +123,20 @@ class StreamingMultipartUpload:
             self._pending.append(bytes(data[start:end]))
         else:
             self._cur_value += data[start:end]
+            if len(self._cur_value) > _MAX_FIELD_BYTES:
+                raise FieldPartTooLarge(f"A form field exceeds the maximum allowed size of {_MAX_FIELD_BYTES} bytes")
 
     def _on_part_end(self) -> None:
-        if self._cur_is_file:
-            self._file_ended = True
-        elif self._cur_name is not None:
-            value = bytes(self._cur_value).decode("latin-1")
-            if self._cur_name.endswith("[]"):
-                # OpenAI SDKs send repeated fields as `name[]`; collect into a list (mirrors get_form_data)
-                key = self._cur_name[:-2]
-                existing = self.fields.get(key)
-                self.fields[key] = [*existing, value] if isinstance(existing, list) else [value]
-            else:
-                self.fields[self._cur_name] = value
+        if self._cur_is_file or self._cur_name is None:
+            return
+        value = bytes(self._cur_value).decode("latin-1")
+        if self._cur_name.endswith("[]"):
+            # OpenAI SDKs send repeated fields as `name[]`; collect into a list (mirrors get_form_data)
+            key = self._cur_name[:-2]
+            existing = self.fields.get(key)
+            self.fields[key] = [*existing, value] if isinstance(existing, list) else [value]
+        else:
+            self.fields[self._cur_name] = value
 
     def _on_end(self) -> None:
         self._ended = True
@@ -142,6 +147,14 @@ class StreamingMultipartUpload:
         except StopAsyncIteration:
             return None
 
+    def _append_file(self, seg: bytes) -> None:
+        self._buffer += seg
+        if self.max_file_bytes is not None and len(self._buffer) > self.max_file_bytes:
+            self._size_error = FilePartTooLarge(
+                f"Uploaded file exceeds the maximum allowed size of {self.max_file_bytes} bytes"
+            )
+            raise self._size_error
+
     async def _open(self) -> None:
         while not self._file_started and not self._ended:
             chunk = await self._next()
@@ -151,8 +164,8 @@ class StreamingMultipartUpload:
 
     @property
     def started(self) -> bool:
-        """True once the file part has begun streaming (so a retry must use the buffer, not re-stream)."""
-        return self._gen is not None
+        """True once the body has begun being consumed (so a retry must use the buffer, not re-stream)."""
+        return self._touched
 
     @property
     def buffered(self) -> bytes:
@@ -160,39 +173,46 @@ class StreamingMultipartUpload:
         return bytes(self._buffer)
 
     def stream(self) -> AsyncIterator[bytes]:
+        self._touched = True
         if self._gen is None:
             self._gen = self._iter_file()
         return self._gen
 
     async def getvalue(self) -> bytes:
-        # If a prior stream() already failed, re-raise rather than returning a truncated prefix,
-        # so a router retry fails cleanly instead of sending partial audio.
-        if self._error is not None:
-            raise self._error
-        async for _ in self.stream():
-            pass
-        return bytes(self._buffer)
-
-    async def _iter_file(self) -> AsyncIterator[bytes]:
-        while True:
+        # A size-limit breach is a hard reject: re-raise rather than return a truncated prefix so a
+        # retry fails cleanly. Otherwise drain the rest of the body into the buffer (order-independent),
+        # so a retry after a streamed attempt still has the whole file.
+        self._touched = True
+        if self._size_error is not None:
+            raise self._size_error
+        while not self._ended:
             for seg in self._pending:
-                self._buffer += seg
-                if self.max_file_bytes is not None and len(self._buffer) > self.max_file_bytes:
-                    self._error = FilePartTooLarge(
-                        f"Uploaded file exceeds the maximum allowed size of {self.max_file_bytes} bytes"
-                    )
-                    raise self._error
-                yield seg
+                self._append_file(seg)
             self._pending = []
-            if self._trailing_field:
-                self._error = MultipartOrderError("A form field appeared after the file part; cannot stream")
-                raise self._error
-            if self._file_ended or self._ended:
-                break
             chunk = await self._next()
             if chunk is None:
                 break
             self._parser.write(chunk)
+        for seg in self._pending:
+            self._append_file(seg)
+        self._pending = []
+        self.exhausted = True
+        return bytes(self._buffer)
+
+    async def _iter_file(self) -> AsyncIterator[bytes]:
+        while not self._ended:
+            for seg in self._pending:
+                self._append_file(seg)
+                yield seg
+            self._pending = []
+            chunk = await self._next()
+            if chunk is None:
+                break
+            self._parser.write(chunk)
+        for seg in self._pending:
+            self._append_file(seg)
+            yield seg
+        self._pending = []
         self.exhausted = True
 
 

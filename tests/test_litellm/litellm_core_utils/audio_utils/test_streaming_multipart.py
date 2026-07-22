@@ -8,8 +8,8 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.litellm_core_utils.audio_utils.streaming_multipart import (
+    FieldPartTooLarge,
     FilePartTooLarge,
-    MultipartOrderError,
     open_transcription_multipart,
 )
 
@@ -99,14 +99,25 @@ async def test_size_limit_aborts_mid_stream():
 
 
 @pytest.mark.asyncio
-async def test_field_after_file_raises_order_error():
+async def test_field_after_file_is_captured_not_dropped():
+    # A field after the file part (non-standard ordering) must still be parsed and the full file
+    # streamed, so re-emitting fields after the file loses nothing (no regression vs request.form()).
     file_bytes = os.urandom(2000)
-    body = build_body({"model": "m"}, "a.wav", file_bytes, file_last=False)
+    body = build_body({"model": "m", "language": "en"}, "a.wav", file_bytes, file_last=False)
 
-    # file arrives first; opening streams the file, then a trailing field violates the assumption
     parsed = await open_transcription_multipart(chunked(body, 128), BOUNDARY, max_file_bytes=None)
-    with pytest.raises(MultipartOrderError):
-        await _drain(parsed.stream())
-    # sticky: a retry via getvalue() must re-raise, not return a truncated prefix
-    with pytest.raises(MultipartOrderError):
-        await parsed.getvalue()
+    streamed = b"".join(await _drain(parsed.stream()))
+
+    assert streamed == file_bytes
+    # the fields that followed the file are captured once the stream is drained
+    assert parsed.fields == {"model": "m", "language": "en"}
+    assert await parsed.getvalue() == file_bytes
+
+
+@pytest.mark.asyncio
+async def test_oversized_form_field_is_rejected():
+    # Non-file fields are parsed during the auth pre-read, so an unbounded field must be rejected.
+    huge = "x" * (2 * 1024 * 1024)
+    body = build_body({"model": huge}, "a.wav", os.urandom(64))
+    with pytest.raises(FieldPartTooLarge):
+        await open_transcription_multipart(chunked(body, 4096), BOUNDARY, max_file_bytes=None)
