@@ -20,6 +20,9 @@ from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
+from litellm.types.integrations.compression_interception import (
+    CompressionSavingsMetadata,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -2294,6 +2297,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
     )
+    proxy_config_reload_interval_seconds: int = Field(
+        30,
+        gt=0,
+        description="how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup",
+    )
     cancel_on_disconnect: Optional[bool] = Field(
         None,
         description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
@@ -3242,6 +3250,7 @@ class SpendLogsMetadata(TypedDict):
     attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    compression_savings: CompressionSavingsMetadata | None
 
 
 class SpendLogsPayload(TypedDict):
@@ -4043,6 +4052,7 @@ class JWTAuthBuilderResult(TypedDict):
     token: str
     team_id: Optional[str]
     user_id: Optional[str]
+    user_email: str | None
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]
@@ -4461,6 +4471,11 @@ class BaseDailySpendTransaction(TypedDict):
     completion_tokens: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    compression_saved_tokens: int
+
+    # cost-savings metrics (dollars, priced per request before aggregation)
+    compression_savings_spend: float
+    prompt_caching_savings_spend: float
 
     # request level metrics
     spend: float

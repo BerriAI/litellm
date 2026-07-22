@@ -38,6 +38,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "adaptive_weights",
   "tier_distance_penalty",
   "adaptive_eligible",
+  "return_raw_model_name",
 ]);
 
 const toRecord = (value: unknown): Record<string, unknown> => {
@@ -78,6 +79,7 @@ export const buildUpdatedComplexityRouterConfig = (
       }),
       adaptive_eligible: adaptiveEligible,
     }),
+    ...(value.return_raw_model_name && { return_raw_model_name: true }),
   };
 };
 
@@ -158,6 +160,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           adaptive_weights: parsedConfig.adaptive_weights,
           tier_distance_penalty: parsedConfig.tier_distance_penalty,
           adaptive_eligible: parsedConfig.adaptive_eligible || "all",
+          return_raw_model_name: parsedConfig.return_raw_model_name || false,
         });
         setCustomTechnicalKeywords(
           Array.isArray(parsedConfig.custom_technical_keywords) ? parsedConfig.custom_technical_keywords : [],

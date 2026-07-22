@@ -25,9 +25,9 @@ def merge_claude_settings_static_token(
     """Return a new settings dict wired to a local ephemeral proxy with a static token.
 
     Unlike up.py's merge_claude_settings (which sets apiKeyHelper for a long-lived, real
-    remote proxy needing refreshable SSO tokens), this proxy is ephemeral and its key was just
-    minted for this session, so a plain env var is simpler and correct. Any existing
-    apiKeyHelper is cleared so it can't fight with the static token.
+    remote proxy needing refreshable SSO tokens), this proxy is ephemeral and its key is the
+    locally persisted autoroute master key, so a plain env var is simpler and correct. Any
+    existing apiKeyHelper is cleared so it can't fight with the static token.
     """
     raw_env = settings.get(ENV_KEY, {})
     base_env = raw_env if isinstance(raw_env, dict) else {}

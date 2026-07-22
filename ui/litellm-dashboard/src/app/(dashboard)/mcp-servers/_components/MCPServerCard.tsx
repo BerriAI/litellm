@@ -1,4 +1,4 @@
-import { useState, type FC, type KeyboardEvent, type MouseEvent } from "react";
+import { type FC, type KeyboardEvent, type MouseEvent } from "react";
 import { Dropdown, Tooltip, Typography, Tag } from "antd";
 import type { MenuProps } from "antd";
 import {
@@ -9,6 +9,7 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { AUTH_TYPE, type MCPServer } from "@/components/mcp_tools/types";
+import { Logo } from "@/components/molecules/logo/Logo";
 import { getMaskedAndFullUrl } from "./utils";
 
 const { Text } = Typography;
@@ -52,8 +53,6 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   const name = server.server_name || alias || server.server_id;
   // Logo is sourced exclusively from the admin-set `mcp_info.logo_url`.
   const candidateLogo = server.mcp_info?.logo_url ?? undefined;
-  const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
-  const logoUrl = candidateLogo && failedLogoUrl !== candidateLogo ? candidateLogo : undefined;
   const transport = server.transport || "http";
   const displayTransport = server.spec_path && transport !== "stdio" ? "openapi" : transport;
   const authType = server.auth_type || "none";
@@ -148,13 +147,8 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
       className={`group relative flex h-full cursor-pointer flex-col gap-3 rounded-lg p-4 transition-all duration-150 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-400 ${cardClass}`}
     >
       <div className="flex items-start gap-3">
-        {logoUrl ? (
-          <img
-            src={logoUrl}
-            alt={`${name} logo`}
-            className="h-10 w-10 shrink-0 rounded-sm object-contain"
-            onError={() => setFailedLogoUrl(logoUrl)}
-          />
+        {candidateLogo ? (
+          <Logo src={candidateLogo} label={name} className="h-10 w-10 shrink-0 rounded-sm object-contain" />
         ) : (
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-gray-100 font-semibold text-gray-500">
             {(name || "?").slice(0, 2).toUpperCase()}

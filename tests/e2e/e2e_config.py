@@ -78,6 +78,40 @@ LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
 LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "355"))
 LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
 
+WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
+ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
+ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
+ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
+ANOMALY_MAX_ERROR_RATIO = float(os.environ.get("E2E_ANOMALY_MAX_ERROR_RATIO", "0.05"))
+ANOMALY_MIN_WARM_CACHE_READ_SHARE = float(
+    os.environ.get("E2E_ANOMALY_MIN_WARM_CACHE_READ_SHARE", "0.65")
+)
+ANOMALY_MAX_P95_TURN_SECONDS = float(
+    os.environ.get("E2E_ANOMALY_MAX_P95_TURN_SECONDS", "30")
+)
+ANOMALY_MAX_KEY_SPEND_USD = float(
+    os.environ.get("E2E_ANOMALY_MAX_KEY_SPEND_USD", "0.60")
+)
+ANOMALY_SPEND_SETTLE_SECONDS = float(
+    os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
+)
+
+
+def require_env(*names: str) -> tuple[str, ...]:
+    """Return the non-empty values for each env name, or hard-fail naming which are missing.
+
+    Live e2e never skips for missing credentials: a missing key is a red run so
+    ops knows the suite cannot prove the product path.
+    """
+    missing = tuple(name for name in names if not (os.environ.get(name) or "").strip())
+    if missing:
+        joined = ", ".join(missing)
+        raise AssertionError(
+            f"missing required env for e2e: {joined}. "
+            "Add them to tests/e2e/.env locally and to litellm ops for stage/CI."
+        )
+    return tuple((os.environ.get(name) or "").strip() for name in names)
+
 
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
     """Regional Datadog remote MCP endpoint for this process's DD_SITE.
