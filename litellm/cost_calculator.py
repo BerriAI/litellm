@@ -799,6 +799,36 @@ def _select_model_name_for_cost_calc(
     return return_model
 
 
+def _prices_only_via_capability_rule(model: str | None, custom_llm_provider: str | None) -> bool:
+    """Return True when ``model`` has no exact cost-map entry under any of its
+    name variants and resolves only through a capability generalization rule.
+
+    Rule-derived entries describe capabilities but carry no pricing, so
+    ``get_model_info`` synthesizes them with input/output cost 0. If the cost
+    ladder accepted such a candidate as a successful pricing lookup, the
+    request would be billed $0 even though a later candidate (e.g. the
+    deployment's real model name, when the response carries a router
+    model-group alias stamped on streaming chunks) has exact pricing. The
+    ladder therefore tries exactly-priced candidates first and rule-derived
+    ones last.
+    """
+    if model is None:
+        return False
+    from litellm.utils import (
+        _get_model_info_from_generalization,
+        _get_potential_model_names,
+    )
+
+    return (
+        _get_model_info_from_generalization(
+            model=model,
+            potential_model_names=_get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider),
+            custom_llm_provider=custom_llm_provider,
+        )
+        is not None
+    )
+
+
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _model_contains_known_llm_provider(model: str) -> bool:
     """
@@ -1218,12 +1248,16 @@ def completion_cost(
             router_model_id=router_model_id,
         )
 
-        potential_model_names = [
+        _candidate_model_names = (
             selected_model,
             _get_response_model(completion_response),
-        ]
-        if model is not None:
-            potential_model_names.append(model)
+        ) + ((model,) if model is not None else ())
+        potential_model_names = sorted(
+            _candidate_model_names,
+            key=lambda candidate: _prices_only_via_capability_rule(
+                model=candidate, custom_llm_provider=custom_llm_provider
+            ),
+        )
 
         for idx, model in enumerate(potential_model_names):
             try:
