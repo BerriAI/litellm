@@ -45906,6 +45906,144 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "unorouter/deepseek-v4-flash:free": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://unorouter.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "unorouter/kimi-k2.6": {
+        "input_cost_per_token": 0.00000126749,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 262100,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 0.000005336767,
+        "source": "https://unorouter.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "unorouter/claude-sonnet-5": {
+        "input_cost_per_token": 0.00000144,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0000072,
+        "source": "https://unorouter.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "unorouter/gpt-5.5": {
+        "input_cost_per_token": 1.875e-7,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1100000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.000001125,
+        "source": "https://unorouter.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "unorouter/glm-5.2": {
+        "input_cost_per_token": 0.00000160006,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 0.000005028829,
+        "source": "https://unorouter.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "unorouter/step-3.7-flash:free": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://unorouter.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "unorouter/minimax-m2.7:free": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://unorouter.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "unorouter/qwen3.5-397b-a17b:free": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 262100,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://unorouter.com/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
     "fallback_generalizations": {
         "rules": [
             {
