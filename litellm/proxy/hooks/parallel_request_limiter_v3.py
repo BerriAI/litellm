@@ -44,7 +44,7 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -505,13 +505,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         data: dict,
         model: Optional[str] = None,
         min_configured_tpm_limit: Optional[int] = None,
+        call_type: str | None = None,
     ) -> int:
         """
         Estimate total tokens this request will consume so we can reserve them
         upfront (input + output budget):
         estimated = input_tokens + max_tokens.
 
-        Supports chat (messages), completions (prompt), and embeddings (input).
+        Supports chat (messages), completions (prompt), embeddings (input),
+        and the Responses API (also `input`, disambiguated from embeddings
+        via ``call_type``).
 
         ``min_configured_tpm_limit`` is the smallest ``tokens_per_unit`` among
         the TPM-bearing descriptors this request will be charged against. When
@@ -522,6 +525,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         estimated_input_tokens, max_tokens_estimate = self._estimate_input_and_output_tokens(
             data=data,
             min_configured_tpm_limit=min_configured_tpm_limit,
+            call_type=call_type,
         )
         total_estimated = estimated_input_tokens + max_tokens_estimate
 
@@ -536,6 +540,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         data: dict,
         min_configured_tpm_limit: int | None = None,
+        call_type: str | None = None,
     ) -> tuple[int, int]:
         """
         Estimate input tokens and output (max_tokens) budget separately, so
@@ -547,10 +552,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         provided, the no-``max_tokens`` output-budget floor is capped at a
         fraction of that limit so small TPM caps remain usable. Omit to
         preserve the unconstrained floor.
+
+        ``call_type`` disambiguates embeddings from the Responses API: both
+        put their prompt in ``data["input"]``, but only embeddings have no
+        output tokens. Unset (the default) preserves the historical
+        "any `input` means zero output" behavior for callers that don't have
+        a call type to pass.
         """
         messages = data.get("messages")
         prompt = data.get("prompt")
-        input_text = data.get("input")  # embeddings
+        input_text = data.get("input")  # embeddings and Responses API
 
         match (messages, prompt, input_text):
             case (messages, _, _) if messages:
@@ -568,13 +579,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         estimated_input_tokens = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
 
-        explicit_max_tokens = data.get("max_tokens") or data.get("max_completion_tokens")
+        explicit_max_tokens = (
+            data.get("max_tokens") or data.get("max_completion_tokens") or data.get("max_output_tokens")
+        )
+        is_responses_call = call_type in ("aresponses", "responses")
 
         match (explicit_max_tokens, input_text):
             case (mt, _) if mt is not None:
                 max_tokens_estimate = int(mt)
-            case (_, embeddings_input) if embeddings_input:
-                # Embeddings have no output tokens
+            case (_, embeddings_input) if embeddings_input and not is_responses_call:
+                # Embeddings have no output tokens. The Responses API also
+                # puts its prompt in `input`, but it does have output tokens,
+                # so it's excluded here and falls through to the floor below.
                 max_tokens_estimate = 0
             case _ if total_chars == 0:
                 # Fully contentless request (no messages, prompt, or input).
@@ -2585,6 +2601,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         tpm_reservation_scopes: list[tuple[str, str]],
         tpm_reservation_amount: int,
+        call_type: str | None = None,
     ) -> None:
         """
         Reserve project-scoped ITPM/OTPM tokens (Bedrock Mantle-style
@@ -2613,6 +2630,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         _, estimated_output_tokens = self._estimate_input_and_output_tokens(
             data=data,
             min_configured_tpm_limit=min_configured_otpm_limit,
+            call_type=call_type,
         )
         estimated_input_tokens = self._estimate_precise_input_tokens(data=data, model=requested_model)
         estimated_input_tokens = max(estimated_input_tokens, 1)
@@ -2897,6 +2915,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         data=data,
                         model=requested_model,
                         min_configured_tpm_limit=min_configured_tpm_limit,
+                        call_type=call_type,
                     ),
                     1,
                 )
@@ -2972,6 +2991,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 user_api_key_dict=user_api_key_dict,
                 tpm_reservation_scopes=tpm_reservation_scopes,
                 tpm_reservation_amount=tpm_reservation_amount,
+                call_type=call_type,
             )
 
         # Defense-in-depth: scrub any stash key that escaped onto data
@@ -3373,6 +3393,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             cached_tokens = 0
             if usage.prompt_tokens_details is not None:
                 cached_tokens = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+        elif isinstance(usage, ResponseAPIUsage):
+            # Responses API usage uses input_tokens/output_tokens instead of
+            # prompt_tokens/completion_tokens.
+            prompt_tokens = usage.input_tokens or 0
+            completion_tokens = usage.output_tokens or 0
+            cached_tokens = 0
+            if usage.input_tokens_details is not None:
+                cached_tokens = usage.input_tokens_details.cached_tokens or 0
         elif isinstance(usage, dict):
             prompt_tokens = usage.get("prompt_tokens", 0) or 0
             completion_tokens = usage.get("completion_tokens", 0) or 0
