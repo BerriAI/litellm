@@ -131,14 +131,14 @@ ${formattedBody}
   };
 
   return (
-    <div className="m-2 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden p-2">
       <h1 className="text-lg font-medium text-foreground">Playground</h1>
       <p className="text-sm text-muted-foreground">
         See how LiteLLM transforms your request for the specified provider.
       </p>
-      <div className="mt-4 flex w-full min-w-0 gap-4 overflow-hidden">
+      <div className="mt-4 flex min-h-0 min-w-0 flex-1 gap-4 overflow-hidden">
         {/* Original Request Panel */}
-        <Card className="max-h-[600px] min-w-0 flex-1">
+        <Card className="min-h-0 min-w-0 flex-1">
           <CardHeader>
             <CardTitle className="text-2xl font-bold">Original Request</CardTitle>
             <CardDescription>The request you would send to LiteLLM /chat/completions endpoint.</CardDescription>
@@ -163,7 +163,7 @@ ${formattedBody}
         </Card>
 
         {/* Transformed Request Panel */}
-        <Card className="max-h-[800px] min-w-0 flex-1">
+        <Card className="min-h-0 min-w-0 flex-1">
           <CardHeader>
             <CardTitle className="text-2xl font-bold">Transformed Request</CardTitle>
             <CardDescription>How LiteLLM transforms your request for the specified provider.</CardDescription>
