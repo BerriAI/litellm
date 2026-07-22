@@ -457,6 +457,7 @@ def filter_internal_params(data: dict, additional_internal_params: Optional[set]
         "skip_mcp_handler",
         "mcp_handler_context",
         "_skip_mcp_handler",
+        "client_metadata",
     }
 
     # Add any additional internal params if provided
