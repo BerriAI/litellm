@@ -7,6 +7,7 @@ import redis.asyncio as async_redis
 
 from litellm._redis import (
     _get_credential_provider_from_connect_func,
+    _get_redis_client_logic,
     _get_redis_cluster_kwargs,
     create_azure_ad_redis_connect_func,
     get_redis_async_client,
@@ -434,6 +435,98 @@ def test_redis_connect_func_rejects_mixed_credential_markers():
 
 def test_redis_connect_func_without_markers_has_no_credential_provider():
     assert _get_credential_provider_from_connect_func(lambda _: None, {}) is None
+
+
+def test_redis_connect_func_conflict_precedes_tls_validation():
+    mock_connect_func = MagicMock()
+    mock_connect_func._gcp_service_account = "service-account"
+    mock_connect_func._azure_credential = MagicMock()
+
+    with pytest.raises(ValueError, match="both GCP and Azure"):
+        get_redis_client(
+            url="redis://plain-redis.example.com:6379",
+            redis_connect_func=mock_connect_func,
+        )
+
+
+@pytest.mark.parametrize(
+    "client_factory",
+    [get_redis_client, get_redis_async_client, get_redis_connection_pool],
+)
+@pytest.mark.parametrize(
+    "iam_kwargs",
+    [
+        {"gcp_service_account": "projects/-/serviceAccounts/test@example.com"},
+        {"azure_redis_ad_token": "true"},
+    ],
+)
+@pytest.mark.parametrize(
+    "target_kwargs",
+    [
+        {"url": "redis://plain-redis.example.com:6379"},
+        {"url": "ReDiSs://secure-redis.example.com:6380"},
+        {"url": "rediss://"},
+        {"host": "plain-redis.example.com", "port": 6379},
+        {"host": "plain-redis.example.com", "port": 6379, "ssl": False},
+    ],
+)
+def test_redis_iam_requires_tls(client_factory, iam_kwargs, target_kwargs):
+    with pytest.raises(ValueError, match="Redis IAM authentication requires TLS"):
+        client_factory(**target_kwargs, **iam_kwargs)
+
+
+@pytest.mark.parametrize(
+    "redis_kwargs",
+    [
+        {
+            "url": "rediss://secure-redis.example.com:6380",
+            "gcp_service_account": "projects/-/serviceAccounts/test@example.com",
+        },
+        {
+            "host": "secure-redis.example.com",
+            "port": 6380,
+            "ssl": True,
+            "gcp_service_account": "projects/-/serviceAccounts/test@example.com",
+        },
+        {
+            "url": "redis://plain-redis.example.com:6379",
+            "password": "password",
+        },
+    ],
+)
+def test_redis_tls_validation_accepts_valid_configuration(redis_kwargs):
+    _get_redis_client_logic(**redis_kwargs)
+
+
+@pytest.mark.parametrize("client_factory", [get_redis_client, get_redis_async_client])
+def test_redis_iam_cluster_requires_ssl_when_explicit_url_is_present(client_factory):
+    startup_nodes = [{"host": "cluster-node.example.com", "port": 6380}]
+
+    with pytest.raises(ValueError, match="Redis IAM authentication requires TLS"):
+        client_factory(
+            url="rediss://fallback.example.com:6380",
+            startup_nodes=startup_nodes,
+            gcp_service_account="projects/-/serviceAccounts/test@example.com",
+        )
+
+
+@pytest.mark.parametrize("client_factory", [get_redis_client, get_redis_async_client])
+def test_redis_iam_cluster_requires_ssl_when_url_and_nodes_are_from_environment(
+    client_factory, monkeypatch
+):
+    monkeypatch.setenv("REDIS_URL", "rediss://fallback.example.com:6380")
+    monkeypatch.setenv(
+        "REDIS_CLUSTER_NODES",
+        json.dumps([{"host": "cluster-node.example.com", "port": 6380}]),
+    )
+    monkeypatch.setenv(
+        "REDIS_GCP_SERVICE_ACCOUNT",
+        "projects/-/serviceAccounts/test@example.com",
+    )
+    monkeypatch.delenv("REDIS_SSL", raising=False)
+
+    with pytest.raises(ValueError, match="Redis IAM authentication requires TLS"):
+        client_factory()
 
 
 def test_azure_ad_connect_func_sends_username_auth_argument():

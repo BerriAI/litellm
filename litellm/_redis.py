@@ -13,6 +13,7 @@ import json
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
 from typing import Callable, List, Optional, Union
+from urllib.parse import urlparse
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
@@ -425,6 +426,24 @@ def _get_redis_client_logic(**env_overrides):
     _azure_redis_ad_token = redis_kwargs.get("azure_redis_ad_token") or get_secret("REDIS_AZURE_AD_TOKEN")
 
     _azure_ad_enabled = _azure_redis_ad_token is not None and str(_azure_redis_ad_token).lower() == "true"
+
+    _credential_provider = _get_credential_provider_from_connect_func(
+        redis_kwargs.get("redis_connect_func"), redis_kwargs
+    )
+    _redis_url = redis_kwargs.get("url")
+    _uses_url = "startup_nodes" not in redis_kwargs and _redis_url is not None
+    if _credential_provider is not None or _azure_ad_enabled:
+        if _uses_url:
+            _parsed_redis_url = urlparse(str(_redis_url))
+            _uses_tls = (
+                str(_redis_url).startswith("rediss://")
+                and _parsed_redis_url.scheme == "rediss"
+                and _parsed_redis_url.hostname is not None
+            )
+        else:
+            _uses_tls = redis_kwargs.get("ssl") is True
+        if not _uses_tls:
+            raise ValueError("Redis IAM authentication requires TLS")
 
     if _azure_ad_enabled and _gcp_service_account is not None:
         verbose_logger.warning(
