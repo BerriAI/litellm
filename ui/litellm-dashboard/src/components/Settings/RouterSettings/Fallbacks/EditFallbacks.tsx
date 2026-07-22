@@ -5,8 +5,9 @@
  */
 
 import { Button } from "antd";
+import { useQuery } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import NotificationManager from "../../../molecules/notifications_manager";
 import { AddFallbacksModal } from "./AddFallbacksModal";
@@ -41,21 +42,19 @@ export default function EditFallbacks({
   onClose,
   maxFallbacks = 10,
 }: EditFallbacksProps) {
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [group, setGroup] = useState<FallbackGroup>(() => toGroup(fallbackEntry));
   const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    const loadModels = async () => {
-      try {
-        const uniqueModels = await fetchAvailableModels(accessToken);
-        setAvailableModels(Array.from(new Set(uniqueModels.map((option) => option.model_group))).sort());
-      } catch (error) {
-        console.error("Error fetching model info for fallbacks:", error);
-      }
-    };
-    loadModels();
-  }, [accessToken]);
+  const { data: modelGroups = [] } = useQuery({
+    queryKey: ["availableModels", "fallbacks"],
+    queryFn: () => fetchAvailableModels(accessToken),
+    enabled: Boolean(accessToken),
+  });
+
+  const availableModels = useMemo(
+    () => Array.from(new Set(modelGroups.map((option) => option.model_group))).sort(),
+    [modelGroups],
+  );
 
   const handleSave = async () => {
     const primaryModel = group.primaryModel;

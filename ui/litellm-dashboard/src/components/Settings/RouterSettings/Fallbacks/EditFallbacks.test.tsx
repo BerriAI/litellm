@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +9,13 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
 
+const renderWithQueryClient = (ui: React.ReactElement) => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+};
+
 describe("EditFallbacks", () => {
   const accessToken = "test-token";
   const fallbackEntry = { "gpt-4": ["gpt-3.5-turbo", "claude-3-opus"] };
@@ -16,7 +24,7 @@ describe("EditFallbacks", () => {
   const setup = (overrides: Partial<React.ComponentProps<typeof EditFallbacks>> = {}) => {
     const onChange = overrides.onChange ?? vi.fn().mockResolvedValue(undefined);
     const onClose = overrides.onClose ?? vi.fn();
-    render(
+    renderWithQueryClient(
       <EditFallbacks
         accessToken={accessToken}
         fallbackEntry={fallbackEntry}
