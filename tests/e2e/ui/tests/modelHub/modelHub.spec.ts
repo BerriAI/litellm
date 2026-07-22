@@ -6,6 +6,18 @@ import { Page } from "../../fixtures/pages";
 test.describe("AI Hub (internal admin view)", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
+  // Reset public model groups so the run is idempotent against a persistent
+  // gateway: make_public replaces the whole list, and once a prior run made
+  // every group public the modal's Select All has zero rows left to pick.
+  test.beforeEach(async ({ page }) => {
+    const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
+    const res = await page.request.post("/model_group/make_public", {
+      headers: { Authorization: `Bearer ${masterKey}` },
+      data: { model_groups: [] },
+    });
+    expect(res.ok(), `resetting public model groups failed: ${res.status()}`).toBe(true);
+  });
+
   test("Make models public via the multi-step modal", async ({ page }) => {
     await navigateToPage(page, Page.ModelHubTable);
 

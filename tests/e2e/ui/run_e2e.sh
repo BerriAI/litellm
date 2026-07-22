@@ -2,15 +2,22 @@
 set -euo pipefail
 
 # ================================================================
-# UI E2E Test Runner (Consolidated)
-# Starts postgres, seeds DB, starts mock + proxy, runs Playwright.
-# All tests target the proxy on port 4000 (which serves both API
-# and UI from the built Next.js static export).
+# UI E2E Test Runner
+#
+# Two modes:
+#   1. LITELLM_PROXY_URL set: run Playwright against that live gateway
+#      (the same one the tests/e2e python suites target). globalSetup
+#      seeds all e2e-* users/teams/keys/models through the management
+#      API with LITELLM_MASTER_KEY, so the gateway only needs a master
+#      key and a database (store_model_in_db: true).
+#   2. LITELLM_PROXY_URL unset: provision a disposable gateway first
+#      (dockerized postgres, dashboard built from source, proxy on
+#      port 4000), then run the suite against it.
 #
 # Usage:
-#   ./run_e2e.sh                    # Run once
-#   ./run_e2e.sh --repeat-each=5    # Run each test 5 times
-#   ./run_e2e.sh --headed           # Run with browser visible
+#   ./run_e2e.sh                                   # provision + run
+#   LITELLM_PROXY_URL=http://localhost:4000 ./run_e2e.sh   # reuse a gateway
+#   ./run_e2e.sh --repeat-each=5                   # extra args go to playwright
 #
 # In CI (CI=true), expects:
 #   - PostgreSQL already running on 127.0.0.1:5432
@@ -24,7 +31,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 DASHBOARD_DIR="$REPO_ROOT/ui/litellm-dashboard"
 IS_CI="${CI:-false}"
 CONTAINER_NAME="litellm-e2e-postgres-$$"
-MOCK_PID=""
 PROXY_PID=""
 PROXY_LOG=""
 
@@ -36,10 +42,39 @@ if [ "$IS_CI" = "false" ]; then
   [ -s "$HOME/.nvm/nvm.sh" ] && source "$HOME/.nvm/nvm.sh"
 fi
 
-# --- Cleanup on exit ---
+# Provider keys for the real-model deployments globalSetup registers via
+# /model/new; the shared harness .env is the canonical place they live.
+if [ -f "$REPO_ROOT/tests/e2e/.env" ]; then
+  set -a
+  source "$REPO_ROOT/tests/e2e/.env"
+  set +a
+fi
+
+run_playwright() {
+  echo "=== Installing Playwright dependencies ==="
+  cd "$SCRIPT_DIR"
+  npm install --silent 2>/dev/null || true
+  npx playwright install chromium --with-deps 2>/dev/null || npx playwright install chromium
+
+  echo "=== Running Playwright tests ==="
+  npx playwright test --config playwright.config.ts "$@"
+}
+
+# --- Mode 1: reuse an already-running gateway ---
+if [ -n "${LITELLM_PROXY_URL:-}" ]; then
+  echo "=== Using existing gateway at $LITELLM_PROXY_URL ==="
+  export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-1234}"
+  curl -fs "$LITELLM_PROXY_URL/health/liveliness" >/dev/null || {
+    echo "Error: no live proxy at $LITELLM_PROXY_URL"
+    exit 1
+  }
+  run_playwright "$@"
+  exit $?
+fi
+
+# --- Mode 2: provision a disposable gateway ---
 cleanup() {
   echo "Cleaning up..."
-  [ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null || true
   [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
   [ -n "$PROXY_LOG" ] && rm -f "$PROXY_LOG" || true
   if [ "$IS_CI" = "false" ]; then
@@ -56,10 +91,10 @@ done
 
 # --- Database setup ---
 if [ "$IS_CI" = "false" ]; then
-  for cmd in docker psql; do
+  for cmd in docker; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "Error: $cmd not found."; exit 1; }
   done
-  for port in 4000 5432 8090; do
+  for port in 4000 5432; do
     if lsof -ti ":$port" >/dev/null 2>&1; then
       echo "Error: port $port is in use"
       exit 1
@@ -79,7 +114,7 @@ if [ "$IS_CI" = "false" ]; then
 
   echo "Waiting for PostgreSQL..."
   for i in $(seq 1 30); do
-    if PGPASSWORD="$POSTGRES_PASSWORD" pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+    if docker exec "$CONTAINER_NAME" pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
       break
     fi
     sleep 1
@@ -91,7 +126,6 @@ fi
 
 # --- Credentials ---
 export LITELLM_MASTER_KEY="sk-1234"
-export MOCK_LLM_URL="http://127.0.0.1:8090/v1"
 export DISABLE_SCHEMA_UPDATE="true"
 # Ensure the proxy serves UI at /ui (not behind a subpath)
 export SERVER_ROOT_PATH=""
@@ -133,16 +167,6 @@ uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
 echo "=== Pushing Prisma schema to database ==="
 uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
 
-# --- Mock LLM server ---
-echo "=== Starting mock LLM server ==="
-uv run --no-sync python "$SCRIPT_DIR/fixtures/mock_llm_server/server.py" &
-MOCK_PID=$!
-
-for i in $(seq 1 15); do
-  if curl -sf http://127.0.0.1:8090/health >/dev/null 2>&1; then break; fi
-  sleep 1
-done
-
 # --- LiteLLM proxy ---
 echo "=== Starting LiteLLM proxy ==="
 cd "$REPO_ROOT"
@@ -174,25 +198,5 @@ if [ "$PROXY_READY" -ne 1 ]; then
 fi
 echo "Proxy is ready."
 
-# --- Seed database ---
-echo "=== Seeding database ==="
-DB_USER=$(echo "$DATABASE_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
-DB_PASS=$(echo "$DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
-DB_HOST=$(echo "$DATABASE_URL" | sed -n 's|.*@\([^:]*\):.*|\1|p')
-DB_PORT=$(echo "$DATABASE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
-DB_NAME=$(echo "$DATABASE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
-
-PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-  -f "$SCRIPT_DIR/fixtures/seed.sql"
-
-# --- Playwright ---
-echo "=== Installing Playwright dependencies ==="
-cd "$SCRIPT_DIR"
-npm install --silent 2>/dev/null || true
-npx playwright install chromium --with-deps 2>/dev/null || npx playwright install chromium
-
-echo "=== Running Playwright tests ==="
-npx playwright test --config playwright.config.ts "$@"
-EXIT_CODE=$?
-
-exit $EXIT_CODE
+run_playwright "$@"
+exit $?

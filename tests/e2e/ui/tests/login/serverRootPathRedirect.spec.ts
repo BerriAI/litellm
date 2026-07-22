@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { PROXY_BASE_URL } from "../../constants";
 
 // Driven by the SERVER_ROOT_PATH env var injected by the workflow; the container
 // is booted with the same value, so the asset paths and the runtime config it
@@ -24,7 +25,7 @@ test("unauth redirect preserves SERVER_ROOT_PATH prefix", async ({ page }) => {
 
   await page.context().clearCookies();
 
-  await page.goto(`http://localhost:4000${ROOT_PATH}/ui/?page=virtual-keys`);
+  await page.goto(`${PROXY_BASE_URL}${ROOT_PATH}/ui/?page=virtual-keys`);
 
   await page.waitForURL((url) => url.pathname.includes("/ui/login"), { timeout: 15_000 });
 

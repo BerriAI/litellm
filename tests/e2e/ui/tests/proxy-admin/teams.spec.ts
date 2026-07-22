@@ -5,6 +5,9 @@ import {
   E2E_TEAM_DELETE_ALIAS,
   E2E_TEAM_NO_ADMIN_ID,
   E2E_TEAM_ORG_ID,
+  E2E_UI_ANTHROPIC_MODEL,
+  E2E_UI_OPENAI_MODEL,
+  PROXY_BASE_URL,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
@@ -127,12 +130,12 @@ test.describe("Proxy Admin - Teams", () => {
 
   test("Edit team model selection", async ({ page, request }) => {
     // Restore the seeded models via API in case a prior run (or a CI retry)
-    // left this team mutated — the assertion below requires fake-anthropic-claude
-    // to be present.
+    // left this team mutated — the assertion below requires the anthropic
+    // deployment to be present.
     const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
-    const seededModels = ["fake-openai-gpt-4", "fake-anthropic-claude"];
+    const seededModels = [E2E_UI_OPENAI_MODEL, E2E_UI_ANTHROPIC_MODEL];
     const restore = async () => {
-      const res = await request.post("http://localhost:4000/team/update", {
+      const res = await request.post(`${PROXY_BASE_URL}/team/update`, {
         headers: { Authorization: `Bearer ${masterKey}` },
         data: { team_id: E2E_TEAM_CRUD_ID, models: seededModels },
       });
@@ -156,7 +159,7 @@ test.describe("Proxy Admin - Teams", () => {
 
       const anthropicTag = modelsSelect
         .locator(".ant-select-selection-item")
-        .filter({ hasText: "fake-anthropic-claude" });
+        .filter({ hasText: E2E_UI_ANTHROPIC_MODEL });
       await expect(anthropicTag).toBeVisible({ timeout: 5_000 });
       await anthropicTag.locator(".ant-select-selection-item-remove").click();
 

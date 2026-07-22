@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { ADMIN_STORAGE_PATH } from "../../constants";
+import { ADMIN_STORAGE_PATH, E2E_UI_ANTHROPIC_MODEL, E2E_UI_OPENAI_MODEL, PROXY_BASE_URL } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { Role, users } from "../../fixtures/users";
@@ -12,8 +12,8 @@ import type { components } from "../../../../../ui/litellm-dashboard/src/lib/htt
 // echoes the whole settings object, so they must not run concurrently.
 test.describe.configure({ mode: "serial" });
 
-const PRIMARY = "fake-openai-gpt-4";
-const FALLBACK = "fake-anthropic-claude";
+const PRIMARY = E2E_UI_OPENAI_MODEL;
+const FALLBACK = E2E_UI_ANTHROPIC_MODEL;
 
 /**
  * Wipe any fallbacks for the primary model so the test is idempotent across
@@ -23,7 +23,7 @@ async function clearFallbackForPrimary(request: import("@playwright/test").APIRe
   const masterKey = users[Role.ProxyAdmin].password;
   const auth = { Authorization: `Bearer ${masterKey}` };
 
-  const current = await request.get("http://localhost:4000/get/config/callbacks", { headers: auth });
+  const current = await request.get(`${PROXY_BASE_URL}/get/config/callbacks`, { headers: auth });
   if (!current.ok()) return;
   const body = await current.json();
   const router = body?.router_settings ?? {};
@@ -31,7 +31,7 @@ async function clearFallbackForPrimary(request: import("@playwright/test").APIRe
   const next = existing.filter((entry) => !(entry && PRIMARY in entry));
   if (next.length === existing.length) return;
 
-  await request.post("http://localhost:4000/config/update", {
+  await request.post(`${PROXY_BASE_URL}/config/update`, {
     headers: auth,
     data: { router_settings: { ...router, fallbacks: next } },
   });
@@ -111,7 +111,7 @@ test.describe("Router Settings - Fallbacks", () => {
 type ConfigYAML = components["schemas"]["ConfigYAML"];
 type RouterSettingsResponse = components["schemas"]["RouterSettingsResponse"];
 
-const BASE_URL = "http://localhost:4000";
+const BASE_URL = PROXY_BASE_URL;
 const ADMIN_AUTH = { Authorization: `Bearer ${users[Role.ProxyAdmin].password}` };
 
 /**
