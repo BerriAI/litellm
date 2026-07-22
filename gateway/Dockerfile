@@ -59,6 +59,16 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra semantic-router \
         --python python3
 
+# `COPY . .` leaves a second copy of the litellm package at /app/litellm, and
+# the runtime puts /app ahead of site-packages on sys.path, so that copy shadows
+# the wheel uv just installed. The wheel is the complete package and the only
+# copy carrying the compiled Rust extension, so the shadow silently downgrades
+# `litellm.rust_bridge` to its Python implementation. Drop the redundant copy:
+# `import litellm` then resolves to the wheel, while /app stays importable for
+# `gateway`. The assertion fails the build if the extension was never built.
+RUN rm -rf /app/litellm && \
+    python3 -c "import litellm.rust_bridge as rb; assert rb.get_native_bridge() is not None"
+
 RUN mkdir -p /home/nonroot && \
     HOME=/home/nonroot prisma generate --schema=./schema.prisma && \
     chown -R nonroot:nonroot /home/nonroot/.cache
