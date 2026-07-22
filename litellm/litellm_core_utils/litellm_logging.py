@@ -80,9 +80,9 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponseFailedEvent,
-    SpeechStreamingResponse,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
+    SpeechStreamingResponse,
 )
 from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
