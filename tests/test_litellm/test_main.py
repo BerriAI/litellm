@@ -948,6 +948,56 @@ def test_responses_api_bridge_check_gpt_5_4_flat_function_tool_routes_to_respons
     assert model_info.get("mode") == "responses"
 
 
+def test_responses_api_bridge_check_dict_effort_none_stays_chat():
+    """The escape hatch must honor litellm's dict form: {"effort": "none"} means reasoning off."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "none"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_dict_effort_active_routes_to_responses():
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "low"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_dict_effort_none_with_summary_routes_to_responses():
+    """A summary inside the dict form is Responses-only even when effort is none."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "none", "summary": "concise"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check

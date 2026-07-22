@@ -1036,6 +1036,10 @@ def responses_api_bridge_check(
         (tool.get("type") == "function" if isinstance(tool, dict) else getattr(tool, "type", None) == "function")
         for tool in (tools or [])
     )
+    if isinstance(reasoning_effort, dict):
+        reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
+    else:
+        reasoning_active = reasoning_effort != "none"
     if (
         custom_llm_provider in ("openai", "azure")
         and model_info.get("mode") != "responses"
@@ -1043,9 +1047,7 @@ def responses_api_bridge_check(
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
         and (
             (reasoning_effort is not None and reasoning_summary is not None)
-            or (
-                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and has_function_tool and reasoning_effort != "none"
-            )
+            or (OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model) and has_function_tool and reasoning_active)
         )
     ):
         model_info["mode"] = "responses"
