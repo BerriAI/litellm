@@ -4,8 +4,8 @@ import type { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { CredentialItem } from "../networking";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Providers } from "../provider_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 
 const { Link } = Typography;
@@ -92,22 +92,7 @@ export default function CredentialModal({
             {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
               <AntdSelect.Option key={providerEnum} value={providerEnum}>
                 <div className="flex items-center space-x-2">
-                  <img
-                    src={resolveLogoSrc(providerLogoMap[providerDisplayName])}
-                    alt={`${providerEnum} logo`}
-                    className="w-5 h-5"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      const parent = target.parentElement;
-                      if (parent) {
-                        const fallbackDiv = document.createElement("div");
-                        fallbackDiv.className =
-                          "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                        fallbackDiv.textContent = providerDisplayName.charAt(0);
-                        parent.replaceChild(fallbackDiv, target);
-                      }
-                    }}
-                  />
+                  <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
                   <span>{providerDisplayName}</span>
                 </div>
               </AntdSelect.Option>

@@ -1780,7 +1780,10 @@ def test_update_key_budget_with_temp_budget_increase():
             "temp_budget_expiry": expiry_in_isoformat,
         },
     )
-    assert _update_key_budget_with_temp_budget_increase(valid_token).max_budget == 200
+    result = _update_key_budget_with_temp_budget_increase(valid_token)
+    assert result.max_budget == 200
+    assert result is not valid_token
+    assert valid_token.max_budget == 100
 
 
 @pytest.mark.asyncio

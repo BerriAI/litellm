@@ -1569,6 +1569,7 @@ class TestJWTOAuth2Coexistence:
             "token": jwt_token,
             "team_id": "jwt-team",
             "user_id": "jwt-human-user",
+            "user_email": None,
             "end_user_id": None,
             "org_id": None,
             "team_membership": None,
@@ -1643,6 +1644,7 @@ class TestJWTOAuth2Coexistence:
             "token": jwt_token,
             "team_id": "validated-team",
             "user_id": "validated-user",
+            "user_email": "validated@example.com",
             "end_user_id": "validated-end-user",
             "org_id": "validated-org",
             "team_membership": None,
@@ -1702,6 +1704,7 @@ class TestJWTOAuth2Coexistence:
             mock_auto_register.call_args.kwargs["end_user_id"] == "validated-end-user"
         )
         assert result.org_id == "validated-org"
+        assert result.user_email == "validated@example.com"
 
     @pytest.mark.asyncio
     async def test_routing_override_routes_matching_jwt_to_oauth2(self):
@@ -1788,6 +1791,7 @@ class TestJWTOAuth2Coexistence:
             "token": jwt_token,
             "team_id": "jwt-team",
             "user_id": "jwt-user-no-override",
+            "user_email": None,
             "end_user_id": None,
             "org_id": None,
             "team_membership": None,
@@ -1988,6 +1992,7 @@ class TestJWTOAuth2Coexistence:
             "token": jwt_token,
             "team_id": "jwt-team",
             "user_id": "jwt-user-scope-mismatch",
+            "user_email": None,
             "end_user_id": None,
             "org_id": None,
             "team_membership": None,
@@ -2296,6 +2301,7 @@ class TestJWTOAuth2Coexistence:
             "token": jwt_token,
             "team_id": None,
             "user_id": "jwt-admin-user",
+            "user_email": None,
             "end_user_id": None,
             "org_id": None,
             "team_membership": None,
@@ -4255,6 +4261,98 @@ async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
             setattr(_proxy_server_mod, k, v)
 
 
+class TestJWTAuthUserEmail:
+    """JWT auth must populate `UserAPIKeyAuth.user_email` (LIT-4238); it feeds
+    the Prometheus `user_email` label and `user_api_key_user_email` in
+    StandardLogging/SpendLogs metadata, which were always None for JWT traffic."""
+
+    def _jwt_request(self, jwt_token):
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+        return mock_request
+
+    async def _run_jwt_auth(self, mock_jwt_result, jwt_token):
+        with (
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"enable_jwt_auth": True},
+            ),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+                return_value=mock_jwt_result,
+            ),
+        ):
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(),
+            )
+            return await user_api_key_auth(
+                request=self._jwt_request(jwt_token),
+                api_key=f"Bearer {jwt_token}",
+            )
+
+    @pytest.mark.asyncio
+    async def test_jwt_auth_populates_user_email_on_valid_token(self):
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        mock_jwt_result = {
+            "is_proxy_admin": False,
+            "team_object": None,
+            "user_object": LiteLLM_UserTable(
+                user_id="jwt-human-user",
+                user_email="row@example.com",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+            ),
+            "end_user_object": None,
+            "org_object": None,
+            "token": jwt_token,
+            "team_id": None,
+            "user_id": "jwt-human-user",
+            "user_email": "resolved@example.com",
+            "end_user_id": None,
+            "org_id": None,
+            "team_membership": None,
+            "jwt_claims": {"sub": "user1"},
+        }
+
+        result = await self._run_jwt_auth(mock_jwt_result, jwt_token)
+
+        assert result.user_id == "jwt-human-user"
+        assert result.user_email == "resolved@example.com"
+
+    @pytest.mark.asyncio
+    async def test_jwt_auth_populates_user_email_on_proxy_admin(self):
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        mock_jwt_result = {
+            "is_proxy_admin": True,
+            "team_object": None,
+            "user_object": None,
+            "end_user_object": None,
+            "org_object": None,
+            "token": jwt_token,
+            "team_id": None,
+            "user_id": "jwt-admin-user",
+            "user_email": "admin@example.com",
+            "end_user_id": None,
+            "org_id": None,
+            "team_membership": None,
+            "jwt_claims": {"sub": "user1"},
+        }
+
+        result = await self._run_jwt_auth(mock_jwt_result, jwt_token)
+
+        assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+        assert result.user_id == "jwt-admin-user"
+        assert result.user_email == "admin@example.com"
+
+
 class TestCheckKeyModelBudgetWithFallback:
     """`_check_key_model_budget_with_fallback` must reroute a request to the
     first configured `budget_fallbacks` entry still within its own budget,
@@ -4529,6 +4627,9 @@ async def test_temp_budget_increase_applied_for_cached_key():
     Seed the auth cache with a key whose spend (5.0) exceeds its original
     max_budget (2.0) but is under the effective budget (2.0 + 100.0). The cache-hit
     request must not raise and the resolved token must carry max_budget == 102.0.
+
+    Resolving twice must yield 102.0 both times and leave the cached object at the
+    original 2.0: the increase is derived per request, never compounded or persisted.
     """
     from datetime import datetime, timedelta
 
@@ -4574,14 +4675,22 @@ async def test_temp_budget_increase_applied_for_cached_key():
             new_callable=AsyncMock,
         ),
     ):
-        result = await _user_api_key_auth_builder(
-            request=mock_request,
-            api_key=f"Bearer {api_key}",
-            azure_api_key_header="",
-            anthropic_api_key_header=None,
-            google_ai_studio_api_key_header=None,
-            azure_apim_header=None,
-            request_data={"model": "gpt-4o-mini"},
+        results = tuple(
+            [
+                await _user_api_key_auth_builder(
+                    request=mock_request,
+                    api_key=f"Bearer {api_key}",
+                    azure_api_key_header="",
+                    anthropic_api_key_header=None,
+                    google_ai_studio_api_key_header=None,
+                    azure_apim_header=None,
+                    request_data={"model": "gpt-4o-mini"},
+                )
+                for _ in range(2)
+            ]
         )
 
-    assert result.max_budget == 102.0
+    assert all(result.max_budget == 102.0 for result in results)
+
+    cached_after = await user_api_key_cache.async_get_cache(key=hashed_token)
+    assert cached_after.max_budget == 2.0

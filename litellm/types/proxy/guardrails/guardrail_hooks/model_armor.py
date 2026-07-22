@@ -20,6 +20,13 @@ class ModelArmorGuardrailConfigModel(GuardrailConfigModel):
         default=True,
         description="Whether to fail the request if Model Armor encounters an error",
     )
+    sanitize_error_detail: Optional[bool] = Field(
+        default=True,
+        description=(
+            "Omit the raw Model Armor response from caller-facing errors and logs "
+            "by default. Set False to restore verbose output."
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

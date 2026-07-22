@@ -50,3 +50,15 @@ pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
         .iter()
         .any(|(key, _)| key.eq_ignore_ascii_case(name))
 }
+
+pub(super) fn has_bearer_auth(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, value)| {
+        if !name.eq_ignore_ascii_case("authorization") {
+            return false;
+        }
+        let value = value.trim();
+        value.len() > 7
+            && value[..7].eq_ignore_ascii_case("bearer ")
+            && !value[7..].trim().is_empty()
+    })
+}

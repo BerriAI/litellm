@@ -591,7 +591,7 @@ class TestVertexAnthropicMidConversationSystem:
     Claude, and a *leading* system entry 400s on every model ("messages.0: use
     the top-level 'system' parameter"). These tests pin the model-aware hoist so
     Claude Code sessions neither collapse the prompt cache on 4.8+ nor hard-fail
-    on 4.7 and older (RCA: Kraken Tech high-spend)."""
+    on 4.7 and older (RCA: customer high-spend)."""
 
     def test_supported_model_keeps_mid_conversation_system_in_place(self, local_model_cost_map):
         messages = [

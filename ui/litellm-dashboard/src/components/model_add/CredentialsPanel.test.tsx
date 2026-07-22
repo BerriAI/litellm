@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { UploadProps } from "antd/es/upload";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CredentialItem, credentialCreateCall } from "@/components/networking";
+import { CredentialItem, credentialCreateCall, credentialUpdateCall } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
 import CredentialsPanel from "./CredentialsPanel";
@@ -51,11 +51,17 @@ vi.mock("./CredentialModal", () => ({
     if (!open) {
       return null;
     }
+    const values =
+      mode === "edit"
+        ? {
+            credential_name: "openai-key",
+            custom_llm_provider: "openai",
+            api_key: "sk-1****2345",
+            api_base: "https://proxy.e2e.example.com/v1",
+          }
+        : { credential_name: "new-cred", custom_llm_provider: "openai" };
     return (
-      <button
-        data-testid={`credential-modal-${mode}-submit`}
-        onClick={() => onSubmit({ credential_name: "new-cred", custom_llm_provider: "openai" })}
-      >
+      <button data-testid={`credential-modal-${mode}-submit`} onClick={() => onSubmit(values)}>
         submit {mode}
       </button>
     );
@@ -177,6 +183,26 @@ describe("CredentialsPanel", () => {
     // The modal stays open so the user can retry, and no success toast fired.
     expect(screen.getByTestId("credential-modal-add-submit")).toBeInTheDocument();
     expect(NotificationsManager.success).not.toHaveBeenCalled();
+  });
+
+  it("drops the masked api key from the update payload while keeping the edited api base", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
+    vi.mocked(credentialUpdateCall).mockResolvedValueOnce(undefined as never);
+
+    renderPanel();
+
+    await user.click(screen.getByTestId("credential-actions-openai-key"));
+    await user.click(await screen.findByTestId("credential-action-edit"));
+    await user.click(screen.getByTestId("credential-modal-edit-submit"));
+
+    await waitFor(() => {
+      expect(credentialUpdateCall).toHaveBeenCalled();
+    });
+    const [, updatedName, payload] = vi.mocked(credentialUpdateCall).mock.calls[0];
+    expect(updatedName).toBe("openai-key");
+    expect(payload.credential_values).toEqual({ api_base: "https://proxy.e2e.example.com/v1" });
   });
 
   describe("Admin Viewer write-action gating", () => {
