@@ -26,17 +26,7 @@ const getRequestTextarea = () => screen.getByPlaceholderText(/press cmd\/ctrl \+
 
 const getTransformButton = () => screen.getByRole("button", { name: /transform/i });
 
-/**
- * The copy control is icon-only in the antd version, so it has no accessible
- * name to select by. The panel renders exactly two buttons, so "the button that
- * is not Transform" identifies it on both sides of the migration.
- */
-const getCopyButton = () => {
-  const buttons = screen.getAllByRole("button");
-  const copy = buttons.find((button) => !/transform/i.test(button.textContent ?? ""));
-  if (!copy) throw new Error(`no copy button among ${buttons.length} buttons`);
-  return copy;
-};
+const getCopyButton = () => screen.getByRole("button", { name: /copy to clipboard/i });
 
 describe("TransformRequestPanel", () => {
   beforeEach(() => {
