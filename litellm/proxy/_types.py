@@ -2818,6 +2818,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     models: List[str] = []
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
+    model_itpm_limit: dict | None = None
+    model_otpm_limit: dict | None = None
     blocked: bool = False
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
@@ -2850,6 +2852,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     models: Optional[List[str]] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
+    model_itpm_limit: dict | None = None
+    model_otpm_limit: dict | None = None
     blocked: Optional[bool] = None
     budget_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
@@ -3978,6 +3982,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_itpm_limit",
+    "model_otpm_limit",
     "mcp_rpm_limit",
     "tag_rpm_limit",
     "rpm_limit_type",
