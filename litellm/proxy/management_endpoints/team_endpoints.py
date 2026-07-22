@@ -1719,6 +1719,21 @@ async def update_team(
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
 
+        if data.models is not None:
+            from litellm.proxy.proxy_server import llm_router
+            if llm_router is not None:
+                translated_models = []
+                for m in data.models:
+                    if m.startswith(f"model_name_{data.team_id}_"):
+                        model_info = llm_router.get_model_info(m)
+                        if model_info and isinstance(model_info, dict):
+                            team_public = model_info.get("team_public_model_name")
+                            if team_public:
+                                translated_models.append(team_public)
+                                continue
+                    translated_models.append(m)
+                data.models = list(dict.fromkeys(translated_models))
+
         if data.soft_budget is not None:
             max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
             if max_budget_to_check is not None:
@@ -3626,6 +3641,23 @@ async def team_info(
 
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
+
+        # TRANSLATE MODEL ROUTING KEYS TO PUBLIC NAMES
+        if _team_info.models is not None:
+            from litellm.proxy.proxy_server import llm_router
+            if llm_router is not None:
+                translated_models = []
+                for m in _team_info.models:
+                    if m.startswith(f"model_name_{team_id}_"):
+                        model_info = llm_router.get_model_info(m)
+                        if model_info and isinstance(model_info, dict):
+                            team_public = model_info.get("team_public_model_name")
+                            if team_public:
+                                translated_models.append(team_public)
+                                continue
+                    translated_models.append(m)
+                # Remove duplicates in case multiple internal keys map to the same public name
+                _team_info.models = list(dict.fromkeys(translated_models))
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,
