@@ -342,7 +342,11 @@ def _map_openai_exception(
             litellm_debug_info=extra_information,
             body=getattr(original_exception, "body", None),
         )
-    elif "invalid_request_error" in error_str and "Incorrect API key provided" not in error_str:
+    elif (
+        "invalid_request_error" in error_str
+        and "Incorrect API key provided" not in error_str
+        and getattr(original_exception, "status_code", None) in (None, 400)
+    ):
         raise BadRequestError(
             message=f"{exception_provider} - {message}",
             llm_provider=custom_llm_provider,

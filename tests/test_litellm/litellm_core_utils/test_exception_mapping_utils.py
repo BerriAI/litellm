@@ -680,3 +680,23 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
 
     assert excinfo.value.status_code == 404
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+@pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
+@pytest.mark.parametrize(
+    "status_code, message, expected_exception",
+    [
+        (401, "Invalid API key", litellm.AuthenticationError),
+        (404, "The model does not exist", litellm.NotFoundError),
+    ],
+)
+def test_openai_invalid_request_error_respects_status_code(provider, status_code, message, expected_exception):
+    error_message = '{"error":{"message":"' + message + '","type":"invalid_request_error"}}'
+    original_exception = OpenAIError(status_code=status_code, message=error_message, headers={})
+
+    with pytest.raises(expected_exception):
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider=provider,
+        )
