@@ -36,6 +36,7 @@ def _assert_top_n_scored(body: str) -> None:
 
 
 class TestRerank:
+    @pytest.mark.covers("llm.rerank.cohere.basic.nonstream.works")
     def test_rerank_scores_top_n(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:

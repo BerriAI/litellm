@@ -1197,29 +1197,10 @@
     }
   },
   "src/app/(dashboard)/users/_components/view_users.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/users/_components/view_users/columns.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/users/_components/view_users/table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1514,23 +1495,6 @@
   "src/components/ToolDetail.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 2
-    }
-  },
-  "src/components/ToolPolicies.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 7
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
     }
   },
   "src/components/UIAccessControlForm.tsx": {
@@ -1859,37 +1823,7 @@
       "count": 1
     }
   },
-  "src/components/model_dashboard/HealthCheckComponent.tsx": {
-    "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
   "src/components/model_dashboard/all_models_table.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_dashboard/health_check_columns.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/model_dashboard/table.tsx": {
     "no-nested-ternary": {
       "count": 1
     },

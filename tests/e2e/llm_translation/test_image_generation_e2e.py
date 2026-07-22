@@ -28,6 +28,7 @@ def _assert_image_returned(body: str) -> None:
 
 
 class TestImageGeneration:
+    @pytest.mark.covers("llm.images_generations.openai.basic.nonstream.works")
     def test_image_generation_returns_image(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
