@@ -54,14 +54,23 @@ class FakeBedrockStream:
         self.input_stream = input_stream if input_stream is not None else FakeInputStream()
 
 
+class FakeLogging:
+    def __init__(self, trace_id="trace-nova-sonic"):
+        self.litellm_trace_id = trace_id
+
+
 class DisconnectingClientWS:
     def __init__(self, messages):
         self._messages = list(messages)
+        self.sent_to_client = []
 
     async def receive_text(self):
         if self._messages:
             return self._messages.pop(0)
         raise RuntimeError("client disconnected")
+
+    async def send_text(self, message):
+        self.sent_to_client.append(message)
 
 
 class ClosableClientWS:
@@ -85,9 +94,13 @@ class EndedBedrockStream:
 class RealtimeClientWS:
     def __init__(self):
         self.closed = False
+        self.sent_to_client = []
 
     async def receive_text(self):
         raise RuntimeError("client disconnected")
+
+    async def send_text(self, message):
+        self.sent_to_client.append(message)
 
     async def close(self, code=None, reason=None):
         self.closed = True
@@ -277,6 +290,61 @@ class TestBedrockRealtimeHandler:
         assert client_ws.closed
 
 
+class TestBedrockRealtimeSessionLifecycle:
+    """Server must emit session.created on connect and session.updated on session.update (LIT-4655 regression)"""
+
+    @pytest.mark.asyncio
+    async def test_session_created_sent_on_connect_before_any_client_input(self, stub_aws_sdk_client):
+        handler = BedrockRealtime()
+        websocket = RealtimeClientWS()
+
+        await handler.async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=websocket,
+            logging_obj=FakeLogging(),
+            aws_region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+        )
+
+        assert websocket.sent_to_client, "server sent nothing on connect: spec-conformant clients deadlock"
+        first_event = json.loads(websocket.sent_to_client[0])
+        assert first_event["type"] == "session.created"
+        assert first_event["session"]["id"] == "trace-nova-sonic"
+        assert first_event["session"]["model"] == "amazon.nova-sonic-v1:0"
+
+    @pytest.mark.asyncio
+    async def test_session_update_is_acked_with_session_updated(self, stub_aws_models):
+        handler = BedrockRealtime()
+        config = BedrockRealtimeConfig()
+        stream = FakeBedrockStream()
+        client_ws = DisconnectingClientWS(
+            [json.dumps({"type": "session.update", "session": {"instructions": "hi", "modalities": ["text"]}})]
+        )
+
+        await handler._forward_client_to_bedrock(
+            client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging()
+        )
+
+        acked = [json.loads(message) for message in client_ws.sent_to_client]
+        updated = [event for event in acked if event["type"] == "session.updated"]
+        assert updated, "session.update was not acked"
+        assert updated[0]["session"]["modalities"] == ["text"], "ack must reflect the requested modalities"
+
+    @pytest.mark.asyncio
+    async def test_no_session_updated_without_logging_obj(self, stub_aws_models):
+        handler = BedrockRealtime()
+        config = BedrockRealtimeConfig()
+        stream = FakeBedrockStream()
+        client_ws = DisconnectingClientWS(
+            [json.dumps({"type": "session.update", "session": {"instructions": "hi"}})]
+        )
+
+        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+
+        assert client_ws.sent_to_client == []
+
+
 class TestBedrockRealtimeAwsAuth:
     """AWS auth params passed via litellm_params must reach the Smithy client config (LIT-3923 regression)"""
 
@@ -288,7 +356,7 @@ class TestBedrockRealtimeAwsAuth:
         await handler.async_realtime(
             model="amazon.nova-sonic-v1:0",
             websocket=websocket,
-            logging_obj=MagicMock(),
+            logging_obj=FakeLogging(),
             aws_region_name="us-east-1",
             aws_access_key_id="litellm-params-access-key",
             aws_secret_access_key="litellm-params-secret-key",
@@ -318,7 +386,7 @@ class TestBedrockRealtimeAwsAuth:
         await handler.async_realtime(
             model="amazon.nova-sonic-v1:0",
             websocket=RealtimeClientWS(),
-            logging_obj=MagicMock(),
+            logging_obj=FakeLogging(),
             aws_region_name="eu-west-1",
             aws_role_name="arn:aws:iam::123456789012:role/nova-sonic",
             aws_session_name="realtime-session",

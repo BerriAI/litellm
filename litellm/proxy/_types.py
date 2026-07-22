@@ -1856,6 +1856,17 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
 
 
+class PatchTeamRequest(UpdateTeamRequest):
+    """
+    Body of PATCH /team/{team_id}.
+
+    Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+    from the path. A team_id in the body is still accepted when it matches the path.
+    """
+
+    team_id: str | None = None
+
+
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
     """
     internal type used to reset the budget on a team

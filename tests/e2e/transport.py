@@ -16,7 +16,7 @@ import e2e_http
 from e2e_http import (
     URL,
     AuthHeaders,
-    FileUploadForm,
+    BinaryStream,
     ProbeResult,
     Result,
     StreamingResponse,
@@ -31,6 +31,15 @@ class Transport(Protocol):
     def stream(
         self, path: str, *, headers: BaseModel, json: BaseModel
     ) -> StreamingResponse: ...
+
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream: ...
 
     def send(
         self,
@@ -76,9 +85,10 @@ class Transport(Protocol):
         path: str,
         *,
         headers: BaseModel,
-        form: FileUploadForm,
+        form: BaseModel,
         filename: str,
         content: bytes,
+        file_content_type: str = "application/jsonl",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]: ...
@@ -181,6 +191,22 @@ class HttpTransport:
             self._url(path), headers=headers, json=json, timeout=self.request_timeout
         )
 
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream:
+        return e2e_http.stream_binary(
+            self._url(path),
+            headers=headers,
+            json=json,
+            chunk_size=chunk_size,
+            timeout=self.request_timeout,
+        )
+
     def send(
         self,
         path: str,
@@ -212,9 +238,10 @@ class HttpTransport:
         path: str,
         *,
         headers: BaseModel,
-        form: FileUploadForm,
+        form: BaseModel,
         filename: str,
         content: bytes,
+        file_content_type: str = "application/jsonl",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
@@ -224,6 +251,7 @@ class HttpTransport:
             form=form,
             filename=filename,
             content=content,
+            file_content_type=file_content_type,
             params=params,
             response_type=response_type,
             timeout=self.request_timeout,
@@ -346,6 +374,18 @@ class SplitTransport:
     ) -> StreamingResponse:
         return self._route(path).stream(path, headers=headers, json=json)
 
+    def stream_binary(
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        chunk_size: int = 8192,
+    ) -> BinaryStream:
+        return self._route(path).stream_binary(
+            path, headers=headers, json=json, chunk_size=chunk_size
+        )
+
     def send(
         self,
         path: str,
@@ -367,9 +407,10 @@ class SplitTransport:
         path: str,
         *,
         headers: BaseModel,
-        form: FileUploadForm,
+        form: BaseModel,
         filename: str,
         content: bytes,
+        file_content_type: str = "application/jsonl",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
@@ -379,6 +420,7 @@ class SplitTransport:
             form=form,
             filename=filename,
             content=content,
+            file_content_type=file_content_type,
             params=params,
             response_type=response_type,
         )
