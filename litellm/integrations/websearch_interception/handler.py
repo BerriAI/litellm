@@ -166,17 +166,6 @@ class WebSearchInterceptionLogger(CustomLogger):
             f"WebSearchInterception: Short-circuit search detected (provider={provider_str}, query='{query}')"
         )
 
-        # Native clients (Claude Desktop / Cowork / Anthropic SDK) make a
-        # standalone /v1/messages sub-request just for the search, and they
-        # expect the response in native shape with server_tool_use +
-        # web_search_tool_result content blocks so the citations panel can
-        # render. The agentic-loop post-hook never fires on this path because
-        # there is no model call — emit the native blocks here instead.
-        native_tool = next(
-            (t for t in tools if is_anthropic_native_web_search_tool(t)),
-            None,
-        )
-
         # Execute search — keep the structured SearchResponse so the native
         # block can carry per-result url/title/page_age.
         try:
@@ -188,27 +177,35 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.error(f"WebSearchInterception: Short-circuit search failed: {e}")
             search_result_text, structured = f"Search failed: {e}", None
 
-        content: List[Dict[str, Any]] = []
-        if native_tool is not None:
-            tool_use_id = f"srvtoolu_{uuid.uuid4().hex}"
-            tool_name = native_tool.get("name") or "web_search"
-            content.append(
-                {
-                    "type": "server_tool_use",
-                    "id": tool_use_id,
-                    "name": tool_name,
-                    "input": {"query": query},
-                }
-            )
-            content.append(
-                WebSearchTransformation.build_web_search_tool_result_block(
-                    tool_use_id=tool_use_id,
-                    search_response=structured,
-                )
-            )
-        # Keep the text block so non-native short-circuit callers (Claude Code,
-        # github_copilot, etc.) see the same payload they always have.
-        content.append({"type": "text", "text": search_result_text})
+        # Native clients (Claude Desktop / Cowork / Anthropic SDK) make a
+        # standalone /v1/messages sub-request just for the search, and expect
+        # the response in native shape: a server_tool_use block (which Claude
+        # Code counts to report "Did N searches") followed by a
+        # web_search_tool_result block carrying the sources (which citation
+        # panels render). The agentic-loop post-hook never fires on this path
+        # because there is no model call, so emit the native blocks here.
+        #
+        # These are emitted unconditionally: reaching this point means every
+        # tool is a web-search tool and we are short-circuiting for a provider
+        # that cannot run web_search natively. The pre-request hook has already
+        # renamed any native web_search_* tool to litellm_web_search, so we
+        # cannot re-detect the original Anthropic type here — the short-circuit
+        # contract itself is what tells us native blocks are expected.
+        tool_use_id = f"srvtoolu_{uuid.uuid4().hex}"
+        content: List[Dict[str, Any]] = [
+            {
+                "type": "server_tool_use",
+                "id": tool_use_id,
+                "name": "web_search",
+                "input": {"query": query},
+            },
+            WebSearchTransformation.build_web_search_tool_result_block(
+                tool_use_id=tool_use_id,
+                search_response=structured,
+            ),
+            # Keep the text block so non-native short-circuit callers still see it.
+            {"type": "text", "text": search_result_text},
+        ]
 
         response: Dict[str, Any] = {
             "id": f"msg_{str(uuid.uuid4())}",
@@ -218,13 +215,17 @@ class WebSearchInterceptionLogger(CustomLogger):
             "content": content,
             "stop_reason": "end_turn",
             "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "server_tool_use": {"web_search_requests": 1},
+            },
         }
 
         verbose_logger.debug(
             "WebSearchInterception: Short-circuit search completed, "
             f"returning synthetic response ({len(search_result_text)} chars, "
-            f"native_blocks={native_tool is not None})"
+            "native_blocks=True)"
         )
         return response
 
