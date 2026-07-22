@@ -787,7 +787,7 @@ describe("TeamInfoView", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText(/Soft Budget:/)).toBeInTheDocument();
+        expect(screen.getAllByText(/Soft Budget:/).length).toBeGreaterThan(0);
         expect(screen.getByText(/\$500\.75/)).toBeInTheDocument();
       });
     });
@@ -864,6 +864,49 @@ describe("TeamInfoView", () => {
             access_group_ids: accessGroupIds,
             team_id: "123",
           }),
+        );
+      });
+    });
+
+    it("should pass team_member_soft_budget to teamUpdateCall when saving team settings", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          models: ["gpt-4"],
+          team_member_budget_table: { soft_budget: 5 } as any,
+        }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        const teamNameElements = screen.queryAllByText("Test Team");
+        expect(teamNameElements.length).toBeGreaterThan(0);
+      });
+
+      const settingsTab = screen.getByRole("tab", { name: "Settings" });
+      await user.click(settingsTab);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+
+      // The team-member soft budget input lives inside the "Team Member Settings"
+      // accordion, which must be expanded for the field to mount and submit.
+      await user.click(screen.getAllByText("Team Member Settings")[0]);
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.objectContaining({ team_member_soft_budget: 5 }),
         );
       });
     });

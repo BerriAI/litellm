@@ -131,6 +131,7 @@ export interface TeamData {
     };
     team_member_budget_table: {
       max_budget: number;
+      soft_budget?: number | null;
       budget_duration: string;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -551,6 +552,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       if (values.team_member_budget !== undefined) {
         updateData.team_member_budget = Number(values.team_member_budget);
+      }
+
+      if (values.team_member_soft_budget !== undefined) {
+        updateData.team_member_soft_budget = sanitizeNumeric(values.team_member_soft_budget);
       }
 
       if (values.team_member_key_duration !== undefined) {
@@ -974,6 +979,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
                       team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
                       team_member_budget: info.team_member_budget_table?.max_budget,
+                      team_member_soft_budget: info.team_member_budget_table?.soft_budget,
                       team_member_budget_duration: info.team_member_budget_table?.budget_duration,
                       guardrails: effectiveGuardrails,
                       policies: info.policies || [],
@@ -1122,6 +1128,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           label="Default Budget (USD)"
                           name="team_member_budget"
                           tooltip="Default spend budget for each member in this team."
+                        >
+                          <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                        </Form.Item>
+                        <Form.Item
+                          label="Default Soft Budget (USD)"
+                          name="team_member_soft_budget"
+                          tooltip="Alert-only soft budget for each member in this team. Members are warned when it is crossed; requests are not blocked."
                         >
                           <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                         </Form.Item>
@@ -1621,6 +1634,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </Tooltip>
                       </Text>
                       <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
+                      <div>Soft Budget: {info.team_member_budget_table?.soft_budget || "No Limit"}</div>
                       <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                       <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
                       <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
