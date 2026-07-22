@@ -17502,6 +17502,66 @@
         },
         "web_search_billing_unit": "per_query"
     },
+    "gemini-3.1-flash-lite": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost_per_audio_token": 5e-08,
+        "input_cost_per_audio_token": 5e-07,
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "vertex_ai-language-models",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_pdf_size_mb": 30,
+        "max_tokens": 65536,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1.5e-06,
+        "output_cost_per_token": 1.5e-06,
+        "rpm": 15,
+        "source": "https://ai.google.dev/gemini-api/docs/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_code_execution": true,
+        "supports_file_search": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_native_streaming": true,
+        "tpm": 250000,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_service_tier": true
+    },
     "gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
         "input_cost_per_token": 5e-07,
@@ -17541,6 +17601,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-lite-preview": {
+        "deprecation_date": "2026-05-25",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_token": 2.5e-07,
@@ -19665,6 +19726,67 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-lite-preview": {
+        "deprecation_date": "2026-05-25",
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost_per_audio_token": 5e-08,
+        "input_cost_per_audio_token": 5e-07,
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "gemini",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_pdf_size_mb": 30,
+        "max_tokens": 65536,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1.5e-06,
+        "output_cost_per_token": 1.5e-06,
+        "rpm": 15,
+        "source": "https://ai.google.dev/gemini-api/docs/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_code_execution": true,
+        "supports_file_search": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_native_streaming": true,
+        "tpm": 250000,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_service_tier": true
+    },
+    "gemini/gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_token": 2.5e-07,
@@ -30611,6 +30733,7 @@
         "tpm": 800000
     },
     "openrouter/google/gemini-3.1-flash-lite-preview": {
+        "deprecation_date": "2026-05-25",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_token": 2.5e-07,
@@ -30682,6 +30805,58 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "tpm": 800000
+    },
+    "openrouter/google/gemini-3.1-flash-lite": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost_per_audio_token": 5e-08,
+        "input_cost_per_audio_token": 5e-07,
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "openrouter",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_pdf_size_mb": 30,
+        "max_tokens": 65536,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1.5e-06,
+        "output_cost_per_token": 1.5e-06,
+        "rpm": 2000,
+        "source": "https://openrouter.ai/google/gemini-3.1-flash-lite",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_code_execution": true,
+        "supports_file_search": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -37498,6 +37673,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
     },
     "vertex_ai/gemini-3.1-flash-lite-preview": {
+        "deprecation_date": "2026-05-25",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_audio_token": 5e-07,
         "input_cost_per_token": 2.5e-07,
@@ -37655,6 +37831,66 @@
             "search_context_size_high": 0.014
         },
         "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/gemini-3.1-flash-lite": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost_per_audio_token": 5e-08,
+        "input_cost_per_audio_token": 5e-07,
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "vertex_ai",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_pdf_size_mb": 30,
+        "max_tokens": 65536,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1.5e-06,
+        "output_cost_per_token": 1.5e-06,
+        "rpm": 15,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_code_execution": true,
+        "supports_file_search": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_native_streaming": true,
+        "tpm": 250000,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "web_search_billing_unit": "per_query",
+        "supports_service_tier": true
     },
     "vertex_ai/deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
