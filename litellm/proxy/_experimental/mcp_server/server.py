@@ -104,6 +104,10 @@ _MAX_STATEFUL_SESSIONS_PER_OWNER = 100
 # prevents an authenticated client from forcing the proxy to buffer an
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES = 4096
+# Upper bound on a response body the protocol-error send wrapper will parse to
+# detect a JSON-RPC rejection. Rejection envelopes are tiny; anything larger is
+# a permitted tool result and must not be re-deserialized after it was sent.
+_MCP_PROTOCOL_ERROR_PEEK_MAX_BYTES = 64 * 1024
 
 
 def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
@@ -3127,6 +3131,230 @@ if MCP_AVAILABLE:
                 mcp_session_id=session_id,
             )
 
+    def _jsonrpc_rejection_reason(error_code: Optional[int]) -> str:
+        """Map a JSON-RPC error code to a stable, low-cardinality reason string
+        for spend-log metadata. Unknown codes degrade to ``protocol_error``."""
+        return {
+            -32700: "parse_error",
+            -32600: "invalid_request",
+            -32601: "unknown_method",
+            -32602: "malformed_params",
+            -32603: "internal_error",
+        }.get(error_code, "protocol_error")
+
+    def _parse_jsonrpc_request_for_logging(
+        body: bytes,
+    ) -> tuple[Optional[str], dict[str, Any], Any]:
+        """Parse a peeked JSON-RPC request body into ``(method, params, id)`` for
+        protocol-rejection logging (#28929).
+
+        - A single request object yields its ``method`` (only when ``jsonrpc``
+          is ``"2.0"`` and ``method`` is a string), ``params`` (only if a dict),
+          and ``id``.
+        - A top-level array (JSON-RPC batch) yields the synthetic method
+          ``"batch"``: the MCP SDK validates the whole array as one message and,
+          if it can't, emits a single error response (it does NOT process
+          elements individually), so we record the one rejection without
+          attributing a tool name.
+        - A truncated/oversized peek or any non-request shape yields
+          ``(None, {}, None)`` so the caller installs no logging seam (a wrong
+          tool-name attribution is worse than no record).
+        """
+        method: Optional[str] = None
+        params: dict[str, Any] = {}
+        request_id: Any = None
+        try:
+            req = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return None, {}, None
+        if isinstance(req, dict):
+            method_val = req.get("method")
+            if req.get("jsonrpc") == "2.0" and isinstance(method_val, str):
+                method = method_val
+                request_id = req.get("id")
+                raw_params = req.get("params")
+                if isinstance(raw_params, dict):
+                    params = raw_params
+        elif isinstance(req, list):
+            method = "batch"
+        return method, params, request_id
+
+    async def _log_mcp_protocol_rejection(
+        request_method: Optional[str],
+        params: dict[str, Any],
+        jsonrpc_error: dict[str, Any],
+        request_id: Any,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        raw_headers: Optional[dict[str, str]],
+        start_time: datetime,
+    ) -> None:
+        """Emit a real ``standard_logging_object`` for a JSON-RPC request
+        rejected at the protocol layer by the MCP SDK (e.g. unknown method,
+        malformed params). Without this, such rejections produce no spend-log
+        record at all — see https://github.com/BerriAI/litellm/issues/28929.
+
+        This builds a genuine ``LiteLLMLoggingObj`` via ``function_setup`` and
+        calls its ``async_failure_handler`` — the same mechanism
+        ``list_mcp_tools`` / ``call_mcp_tool`` use — so the
+        ``standard_logging_object`` is actually synthesized and dispatched to
+        registered callbacks. (``proxy_logging_obj.post_call_failure_hook`` is
+        NOT used here: it only synthesizes a ``standard_logging_object`` for
+        proxy-only *LLM-API* errors and requires a pre-existing
+        ``litellm_logging_obj`` in ``request_data`` — neither holds for a
+        protocol-level MCP rejection, so it would deliver a raw dict and no
+        record. Driving ``async_failure_handler`` directly also means a
+        malformed *client* request never fires the ``llm_exceptions`` alert that
+        lives in ``post_call_failure_hook`` -- these are 4xx client errors, not
+        LLM API failures.)
+
+        Purely additive and best-effort: any failure here is swallowed so a
+        logging/serialization error can never alter or drop the client response.
+        """
+        try:
+            from litellm.proxy.guardrails.tool_name_extraction import (
+                _extract_mcp_tool_names,
+            )
+
+            if user_api_key_auth is None:
+                return
+
+            tool_names = _extract_mcp_tool_names(params or {})
+            error_code = jsonrpc_error.get("code")
+            error_message = jsonrpc_error.get("message") or "MCP JSON-RPC protocol error"
+
+            spend_logs_metadata: dict[str, Any] = {
+                "mcp_operation": request_method,
+                "rejection_reason": _jsonrpc_rejection_reason(error_code),
+                "jsonrpc_error_code": error_code,
+            }
+            if tool_names:
+                spend_logs_metadata["mcp_tool_name"] = tool_names[0]
+
+            request_data: dict[str, Any] = {
+                "model": "MCP: protocol_error",
+                "call_type": CallTypes.call_mcp_tool.value,
+                "litellm_call_id": str(uuid.uuid4()),
+                "litellm_trace_id": get_chain_id_from_headers(raw_headers),
+                "metadata": {
+                    "spend_logs_metadata": spend_logs_metadata,
+                },
+                "input": [
+                    {
+                        "role": "system",
+                        # Keep message content a string: the downstream
+                        # standard-logging builder may run token-counting /
+                        # serialization over messages, and a non-string content
+                        # can raise there (silently swallowed below -> the very
+                        # record this fix emits would be dropped). The structured
+                        # fields live in spend_logs_metadata above.
+                        "content": json.dumps(
+                            {
+                                "mcp_operation": request_method,
+                                "jsonrpc_id": request_id,
+                                "jsonrpc_error_code": error_code,
+                            }
+                        ),
+                    }
+                ],
+            }
+
+            LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+                data=request_data,
+                user_api_key_dict=user_api_key_auth,
+                _metadata_variable_name="metadata",
+            )
+
+            # Build a genuine logging object (mirrors list_mcp_tools at the
+            # ``function_setup`` call site) and drive its failure handler, which
+            # synthesizes ``model_call_details["standard_logging_object"]`` and
+            # dispatches it to every registered async failure callback. A
+            # function_setup failure is caught by the outer best-effort handler.
+            litellm_logging_obj, _ = function_setup(
+                original_function="call_mcp_tool",
+                rules_obj=Rules(),
+                start_time=start_time,
+                **request_data,
+            )
+
+            if litellm_logging_obj is None:
+                return
+
+            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+            litellm_logging_obj.model = "MCP: protocol_error"
+
+            await litellm_logging_obj.async_failure_handler(
+                Exception(error_message),
+                traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+                start_time,
+                datetime.now(),
+            )
+        except Exception as log_exc:  # noqa: BLE001  # best-effort: logging must never break the MCP response
+            verbose_logger.debug("MCP protocol-error logging failed (continuing): %s", log_exc)
+
+    def _wrap_send_for_protocol_error_logging(
+        inner_send: Send,
+        request_method: Optional[str],
+        params: dict[str, Any],
+        request_id: Any,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        raw_headers: Optional[dict[str, str]],
+        start_time: datetime,
+    ) -> Send:
+        """Wrap an ASGI ``send`` so a JSON-RPC error response emitted by the MCP
+        SDK (an ``error`` envelope with no ``result``) produces exactly one
+        ``standard_logging_object``. Only JSON-RPC *requests* (carrying a
+        ``method``) are loggable; everything else is forwarded untouched.
+
+        The wrapper always forwards the original message FIRST and never mutates
+        it, so the client response is byte-for-byte unchanged on every path.
+        """
+        if request_method is None:
+            return inner_send
+
+        already_logged = {"done": False}
+
+        async def _logging_send(message: Message) -> None:
+            await inner_send(message)
+            if already_logged["done"]:
+                return
+            try:
+                if message.get("type") != "http.response.body":
+                    return
+                raw_body = message.get("body") or b""
+                if not raw_body:
+                    return
+                # Bound the work: a JSON-RPC protocol-error envelope is tiny.
+                # Skip the full deserialization for anything larger than the cap
+                # (a permitted tool result) and only parse when the bytes look
+                # like an error envelope. This avoids re-deserializing every
+                # successful response body after it has already been sent.
+                if len(raw_body) > _MCP_PROTOCOL_ERROR_PEEK_MAX_BYTES:
+                    return
+                if b'"error"' not in raw_body or b'"result"' in raw_body:
+                    return
+                payload = json.loads(raw_body)
+                if isinstance(payload, dict) and "error" in payload and "result" not in payload:
+                    already_logged["done"] = True
+                    await _log_mcp_protocol_rejection(
+                        request_method=request_method,
+                        params=params,
+                        jsonrpc_error=payload.get("error") or {},
+                        request_id=request_id,
+                        user_api_key_auth=user_api_key_auth,
+                        raw_headers=raw_headers,
+                        start_time=start_time,
+                    )
+            except (json.JSONDecodeError, TypeError, ValueError):
+                # Non-JSON / streaming chunk — nothing to log here.
+                return
+            except Exception as wrap_exc:  # noqa: BLE001  # best-effort: never break the response on logging
+                verbose_logger.debug(
+                    "MCP protocol-error send wrapper failed (continuing): %s",
+                    wrap_exc,
+                )
+
+        return _logging_send
+
     async def _handle_managed_mcp_tool(
         server_name: str,
         name: str,
@@ -4194,6 +4422,22 @@ if MCP_AVAILABLE:
             ) -> None:
                 _increment_active_request_session(initialized_session_id)
 
+            # Parse the (already-peeked) JSON-RPC request so we can emit a
+            # standard_logging_object if the MCP SDK rejects it at the protocol
+            # layer (unknown method / malformed params). The SDK writes that
+            # error directly to ``send``, bypassing call_mcp_tool's logging, so
+            # we wrap ``send`` below. See issue #28929.
+            _protocol_log_method: Optional[str] = None
+            _protocol_log_params: dict[str, Any] = {}
+            _protocol_log_id: Any = None
+            if body and request_method == "POST" and not is_jsonrpc_response:
+                (
+                    _protocol_log_method,
+                    _protocol_log_params,
+                    _protocol_log_id,
+                ) = _parse_jsonrpc_request_for_logging(body)
+            _protocol_log_start_time = datetime.now()
+
             async def _dispatch() -> None:
                 auth_user = _set_or_update_auth_context(
                     user_api_key_auth=user_api_key_auth,
@@ -4208,6 +4452,18 @@ if MCP_AVAILABLE:
                     copy_existing_session_auth_context=is_initialize,
                 )
                 local_send = send
+                # Additively observe protocol-level JSON-RPC rejections (#28929)
+                # without touching the success path. Applied first so the
+                # stateful-session wrapper (below) still wraps the outermost send.
+                local_send = _wrap_send_for_protocol_error_logging(
+                    local_send,
+                    request_method=_protocol_log_method,
+                    params=_protocol_log_params,
+                    request_id=_protocol_log_id,
+                    user_api_key_auth=user_api_key_auth,
+                    raw_headers=raw_headers,
+                    start_time=_protocol_log_start_time,
+                )
                 if use_stateful and is_initialize:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
