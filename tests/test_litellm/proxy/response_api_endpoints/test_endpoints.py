@@ -1287,3 +1287,62 @@ class TestCursorInputArmFlattening:
             {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
         ]
         assert call_kwargs["tool_choice"] == {"type": "custom", "name": "ApplyPatch"}
+
+
+class TestChatCompletionsBodyDetection:
+    def test_routing_matrix(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _is_chat_completions_body
+
+        assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}]}) is True
+        assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}], "input": []}) is True
+        assert _is_chat_completions_body({"messages": None, "input": [{"role": "user", "content": "hi"}]}) is False
+        assert _is_chat_completions_body({"messages": [], "input": [{"role": "user", "content": "hi"}]}) is False
+        assert _is_chat_completions_body({"messages": None}) is True
+        assert _is_chat_completions_body({"messages": []}) is True
+        assert _is_chat_completions_body({"input": [{"role": "user", "content": "hi"}]}) is False
+        assert _is_chat_completions_body({}) is False
+
+    @pytest.mark.asyncio
+    async def test_null_messages_stub_with_input_reaches_responses_arm(self):
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_stub1",
+            created_at=1234567890,
+            model="gpt-5.6",
+            object="response",
+            output=[
+                ResponseOutputMessage(
+                    id="msg_stub1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(type="output_text", text="ok", annotations=[])],
+                )
+            ],
+        )
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                mock_router.aresponses = AsyncMock(return_value=mock_response)
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={
+                        "model": "gpt-5.6",
+                        "messages": None,
+                        "input": [{"role": "user", "content": "hello"}],
+                    },
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        assert mock_router.aresponses.call_args is not None
+        assert mock_router.aresponses.call_args.kwargs["input"] == [{"role": "user", "content": "hello"}]
