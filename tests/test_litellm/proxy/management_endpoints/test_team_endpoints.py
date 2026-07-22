@@ -4106,6 +4106,8 @@ async def test_new_team_max_budget_within_user_limit():
         }
         mock_prisma.db.litellm_usertable = MagicMock()
         mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
         # Mock team membership table
@@ -4247,6 +4249,8 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
         }
         mock_prisma.db.litellm_usertable = MagicMock()
         mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
         # Mock team membership table
@@ -4393,6 +4397,8 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
         }
         mock_prisma.db.litellm_usertable = MagicMock()
         mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
         # Mock team membership table
@@ -7245,6 +7251,8 @@ async def test_new_team_soft_budget_validation(
         }
         mock_prisma.db.litellm_usertable = MagicMock()
         mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
+        mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+        mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
 
         # Mock team membership table

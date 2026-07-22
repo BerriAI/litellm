@@ -14,10 +14,6 @@
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "e2e": "playwright test --config e2e_tests/playwright.config.ts",
-    "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts",
-    "e2e:migration": "playwright test e2e_tests/tests/migration/migratedPages.spec.ts --config e2e_tests/playwright.config.ts",
-    "e2e:migration:root": "playwright test --config e2e_tests/migration.serverRootPath.config.ts",
     "knip": "knip",
     "knip:ci": "knip --exclude exports,nsExports,types,nsTypes,enumMembers,classMembers,duplicates",
     "knip:fix": "knip --fix",
@@ -63,7 +59,6 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.2",
-    "@playwright/test": "1.58.1",
     "@tailwindcss/forms": "0.5.11",
     "@tailwindcss/postcss": "4.3.2",
     "@testing-library/dom": "10.4.1",

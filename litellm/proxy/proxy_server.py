@@ -226,6 +226,7 @@ from litellm.constants import (
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
+    CLI_SSO_SESSION_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -1970,6 +1971,7 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+cli_sso_session_cache = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=user_api_key_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: Optional[RedisCache] = None  # redis cache used for tracking spend, tpm/rpm limits
@@ -3696,12 +3698,21 @@ def _build_redis_usage_cache_from_environment() -> RedisCache | None:
 def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: bool) -> None:
     """
     Wires an established coordination Redis into the proxy-level caches that
-    consume it directly: the spend counter cache, the cluster-wide config
-    cache, and (only when opted in) the virtual-key auth cache.
+    consume it directly: the spend counter cache, the CLI SSO login-session
+    cache, the cluster-wide config cache, and (only when opted in) the
+    virtual-key auth cache.
+
+    The CLI SSO login-session cache is always backed by Redis when available so
+    that the browser SSO flow behind `lite login` survives landing on different
+    workers; it must not be gated behind enable_redis_auth_cache.
     """
     spend_counter_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=litellm.default_redis_ttl,
+    )
+    cli_sso_session_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(
@@ -4617,6 +4628,11 @@ class ProxyConfig:
                     polling_cache_ttl = background_mode.get("ttl", 3600)
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, native_background_mode={native_background_mode}, ttl={polling_cache_ttl}{reset_color_code}"
+                    )
+                elif key == "max_ui_session_budget":
+                    litellm.max_ui_session_budget = float(value) if value is not None else None
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.max_ui_session_budget={litellm.max_ui_session_budget}{reset_color_code}"
                     )
                 elif key == "default_team_settings":
                     for idx, team_setting in enumerate(value):  # run through pydantic validation
@@ -14914,10 +14930,11 @@ GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
 
 
 class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
-    type: Literal["Float", "Boolean", "Select"]
+    type: Literal["Float", "Dollar", "Boolean", "Select"]
     description: str
     options: NotRequired[tuple[str, ...]]
     tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
+    default: NotRequired[float]  # reset/clear restores this instead of None; fields whose None means fail-open set it
 
 
 _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec] = {
@@ -14943,21 +14960,32 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec
         "tab": "prompt_caching",
         "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
     },
+    "max_ui_session_budget": {
+        "type": "Dollar",
+        "default": 1.0,
+        "description": (
+            "USD spend cap for each dashboard login session; covers LLM calls made from the dashboard "
+            "such as the playground and auto router Test Connection. Each login starts a fresh session "
+            "with this budget. Clearing restores the $1 default."
+        ),
+    },
 }
 
 
 def _general_settings_ui_litellm_default(
-    field_type: Literal["Float", "Boolean", "Select"],
+    spec: GeneralSettingsUILiteLLMFieldSpec,
 ) -> GeneralSettingsUILiteLLMValue:
     """The value a field falls back to when it is cleared or reset."""
-    return False if field_type == "Boolean" else None
+    if "default" in spec:
+        return spec["default"]
+    return False if spec["type"] == "Boolean" else None
 
 
 def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
     spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
     field_type = spec["type"]
     if value is None or value == "":
-        return _general_settings_ui_litellm_default(field_type)
+        return _general_settings_ui_litellm_default(spec)
     match field_type:
         case "Boolean":
             if not isinstance(value, bool):
@@ -14979,6 +15007,13 @@ def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> 
                 raise HTTPException(
                     status_code=400,
                     detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
+                )
+            return float(value)
+        case "Dollar":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be a positive dollar amount or empty"},
                 )
             return float(value)
         case _:
@@ -15003,7 +15038,7 @@ async def _persist_general_settings_ui_litellm_field(
 async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
     config = await proxy_config.get_config()
     before_value = config.get("litellm_settings", {}).get(field_name)
-    default_value = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]["type"])
+    default_value = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name])
     setattr(litellm, field_name, default_value)
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
@@ -15178,7 +15213,7 @@ async def get_config_list(
     )
     for litellm_field_name, spec in _GENERAL_SETTINGS_UI_LITELLM_FIELDS.items():
         current_value: GeneralSettingsUILiteLLMValue = getattr(litellm, litellm_field_name, None)
-        default_value = _general_settings_ui_litellm_default(spec["type"])
+        default_value = _general_settings_ui_litellm_default(spec)
         stored_in_db_litellm: Optional[bool]
         if litellm_field_name in db_litellm_settings:
             stored_in_db_litellm = True
