@@ -13,7 +13,7 @@ Endpoints for /organization operations
 
 #### ORGANIZATION MANAGEMENT ####
 
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -104,7 +104,7 @@ async def _verify_org_access(
     )
 
 
-_STR_OBJECT_DICT_ADAPTER = TypeAdapter(Dict[str, object])
+_STR_OBJECT_DICT_ADAPTER = TypeAdapter(dict[str, object])
 _BUDGET_SETTABLE_FIELDS = frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"}
 _ORG_COLUMN_FIELDS = frozenset({"organization_alias", "models"})
 
@@ -588,7 +588,7 @@ async def handle_update_object_permission(
 async def update_organization_v2(
     organization_id: str,
     data: OrganizationUpdateRequestV2,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).

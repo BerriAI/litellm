@@ -2778,17 +2778,17 @@ class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
 
     model_config = ConfigDict(extra="forbid")
 
-    organization_alias: Optional[str] = None
-    models: Optional[List[str]] = None
-    metadata: Optional[dict] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    max_budget: Optional[float] = None
-    soft_budget: Optional[float] = None
-    max_parallel_requests: Optional[int] = None
-    model_max_budget: Optional[dict] = None
-    budget_duration: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    organization_alias: str | None = None
+    models: list[str] | None = None
+    metadata: dict | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    max_parallel_requests: int | None = None
+    model_max_budget: dict | None = None
+    budget_duration: str | None = None
+    object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
 from litellm.models.organization import (  # noqa: E402

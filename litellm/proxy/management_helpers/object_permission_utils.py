@@ -68,7 +68,7 @@ async def attach_object_permission_to_dict(
 @dataclass(frozen=True, slots=True)
 class ObjectPermissionUpsert:
     object_permission_id: str
-    record: Dict[str, object]
+    record: dict[str, object]
 
 
 async def prepare_object_permission_upsert(
@@ -95,17 +95,17 @@ async def prepare_object_permission_upsert(
     existing_object_permission = await ObjectPermissionRepository(prisma_client).table.find_unique(
         where={"object_permission_id": object_permission_id},
     )
-    existing_fields: Dict[str, object] = (
+    existing_fields: dict[str, object] = (
         existing_object_permission.model_dump(exclude_unset=True, exclude_none=True)
         if existing_object_permission is not None
         else {}
     )
-    merged: Dict[str, object] = {
+    merged: dict[str, object] = {
         **existing_fields,
         **new_object_permission,
         "object_permission_id": object_permission_id,
     }
-    record: Dict[str, object] = {
+    record: dict[str, object] = {
         **merged,
         **(
             {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
