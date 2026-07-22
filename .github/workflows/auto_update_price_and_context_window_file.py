@@ -85,11 +85,20 @@ def transform_openrouter_data(data):
 def transform_vercel_ai_gateway_data(data):
     transformed = {}
     for row in data:
+        pricing = row.get("pricing") or {}
+        # Skip rows missing required fields. Vercel's API omits input/output pricing
+        # for some models; a bare KeyError here aborts the whole run (including the
+        # already-fetched OpenRouter data), so skip the row instead of crashing.
+        if pricing.get("input") is None or pricing.get("output") is None \
+                or row.get("context_window") is None:
+            print(f"Skipping vercel_ai_gateway/{row.get('id')}: missing pricing/context_window")
+            continue
+
         obj = {
             "max_tokens": row["context_window"],
-            "input_cost_per_token": float(row["pricing"]["input"]),
-            "output_cost_per_token": float(row["pricing"]["output"]),
-            'max_output_tokens': row['max_tokens'],
+            "input_cost_per_token": float(pricing["input"]),
+            "output_cost_per_token": float(pricing["output"]),
+            'max_output_tokens': row.get('max_tokens'),
             'max_input_tokens': row["context_window"],
         }
 
