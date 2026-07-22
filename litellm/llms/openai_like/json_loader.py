@@ -21,6 +21,7 @@ class SimpleProviderConfig:
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
+        self.unsupported_params = data.get("unsupported_params", [])
         self.supported_endpoints = data.get("supported_endpoints", [])
 
 

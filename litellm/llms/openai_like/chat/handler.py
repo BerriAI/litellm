@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional, Union
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm import LlmProviders
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -20,6 +21,7 @@ from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 from litellm.utils import CustomStreamWrapper, ProviderConfigManager
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
+from ..json_loader import JSONProviderRegistry
 from .transformation import OpenAILikeChatConfig
 
 
@@ -99,6 +101,25 @@ def make_sync_call(
 class OpenAILikeChatHandler(OpenAILikeBase):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _drop_provider_unsupported_params(
+        custom_llm_provider: str, optional_params: dict, extra_body: dict
+    ) -> None:
+        provider = JSONProviderRegistry.get(custom_llm_provider)
+        if provider is None:
+            return
+
+        for param in provider.unsupported_params:
+            removed_optional_param = optional_params.pop(param, None)
+            removed_extra_body_param = extra_body.pop(param, None)
+            if (
+                removed_optional_param is not None
+                or removed_extra_body_param is not None
+            ):
+                verbose_logger.debug(
+                    f"Dropping unsupported param '{param}' for provider '{custom_llm_provider}'"
+                )
 
     async def acompletion_stream_function(
         self,
@@ -238,9 +259,14 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         )
 
         stream: bool = optional_params.pop("stream", None) or False
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", {}) or {}
         json_mode = optional_params.pop("json_mode", None)
         optional_params.pop("max_retries", None)
+        self._drop_provider_unsupported_params(
+            custom_llm_provider=custom_llm_provider,
+            optional_params=optional_params,
+            extra_body=extra_body,
+        )
         if not fake_stream:
             optional_params["stream"] = stream
 
