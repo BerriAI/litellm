@@ -9,9 +9,7 @@ from functools import partial
 from typing import (
     AsyncIterator,
     Callable,
-    Dict,
     Iterator,
-    List,
     Optional,
     Tuple,
     cast,
@@ -1288,8 +1286,8 @@ class AWSEventStreamDecoder:
         # Bedrock can stream multiple content blocks concurrently. Keep the
         # state keyed by contentBlockIndex so a later block start cannot change
         # how an earlier block's delta is interpreted.
-        self._content_blocks_by_content_block_index: Dict[int, List[ContentBlockDeltaEvent]] = {}
-        self._tool_names_by_content_block_index: Dict[int, str] = {}
+        self._content_blocks_by_content_block_index: dict[int, list[ContentBlockDeltaEvent]] = {}
+        self._tool_names_by_content_block_index: dict[int, str] = {}
         self.tool_calls_index: Optional[int] = None
         self.response_id: Optional[str] = None
         self.json_mode = json_mode
