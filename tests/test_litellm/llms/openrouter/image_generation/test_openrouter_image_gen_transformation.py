@@ -574,6 +574,68 @@ class TestOpenRouterImageGenerationTransformation:
             exc_info.value
         )
 
+    def test_transform_image_generation_response_float_token_counts(self):
+        """Test that float token counts from OpenRouter are cast to int.
+
+        Reproduces https://github.com/BerriAI/litellm/issues/28001 where
+        OpenRouter returns cost-weighted float token counts (e.g. 14417.92)
+        that fail Pydantic's int validation for ImageUsage fields.
+        """
+        response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Here is your image!",
+                        "role": "assistant",
+                        "images": [
+                            {
+                                "image_url": {
+                                    "url": "data:image/png;base64,abc123"
+                                },
+                                "index": 0,
+                                "type": "image_url",
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 57.0,
+                "completion_tokens": 14417.92,
+                "total_tokens": 14474.92,
+                "completion_tokens_details": {"image_tokens": 14417.92},
+                "cost": 0.0387243,
+            },
+            "model": "openai/gpt-image-1",
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = response_data
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        model_response = ImageResponse(data=[])
+
+        result = self.config.transform_image_generation_response(
+            model="openai/gpt-image-1",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=self.logging_obj,
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Token counts must be integers, not floats
+        assert result.usage is not None
+        assert isinstance(result.usage.input_tokens, int)
+        assert isinstance(result.usage.output_tokens, int)
+        assert isinstance(result.usage.total_tokens, int)
+        assert result.usage.input_tokens == 57
+        assert result.usage.output_tokens == 14417
+        assert result.usage.total_tokens == 14474
+
     def test_get_error_class(self):
         """Test that get_error_class returns OpenRouterException."""
         error = self.config.get_error_class(
