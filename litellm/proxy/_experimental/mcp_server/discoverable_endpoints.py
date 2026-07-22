@@ -499,6 +499,35 @@ def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
     )
 
 
+def _endpoint_not_configured_detail(
+    mcp_server: MCPServer,
+    endpoint_label: str,
+    manual_remedy: str,
+    issuer_remedy: str,
+) -> str:
+    """The 400 detail for an unresolved OAuth endpoint, naming the likely cause for this server's
+    shape (LIT-4658): an anchored issuer whose metadata fell short, a configured (possibly
+    misconfigured) server url whose discovery failed, or no discovery source at all. Kept free of
+    URLs and issuer values because these endpoints are reachable pre-auth."""
+    if mcp_server.issuer_is_anchored:
+        return (
+            f"MCP server {endpoint_label} is not configured. Endpoint discovery anchored on the configured "
+            f"Issuer (RFC 8414) failed or its metadata did not include this endpoint; check the proxy logs "
+            f"for 'MCP OAuth' warnings from server load, verify the Issuer, or {manual_remedy}."
+        )
+    if mcp_server.url:
+        return (
+            f"MCP server {endpoint_label} is not configured. OAuth endpoint discovery against the configured "
+            f"server url did not resolve it; the url may be misconfigured. Check the proxy logs for "
+            f"'MCP OAuth' warnings from server load, verify the server url, or {manual_remedy}, or "
+            f"{issuer_remedy}."
+        )
+    return (
+        f"MCP server {endpoint_label} is not configured. Servers with no url (OpenAPI spec or stdio) run no "
+        f"resource discovery, so {manual_remedy}, or {issuer_remedy}."
+    )
+
+
 def _raise_unless_oauth2_discovery_server(
     mcp_server: Optional[MCPServer],
     mcp_server_name: Optional[str],
@@ -599,10 +628,11 @@ async def authorize_with_server(
     if mcp_server.authorization_url is None:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "MCP server authorization url is not configured. Servers with no url (OpenAPI "
-                "spec or stdio) run no resource discovery, so set Authorization URL and Token URL "
-                "manually, or set Issuer to discover them from the identity provider (RFC 8414)."
+            detail=_endpoint_not_configured_detail(
+                mcp_server,
+                "authorization url",
+                "set Authorization URL and Token URL manually",
+                "set Issuer to discover them from the identity provider (RFC 8414)",
             ),
         )
 
@@ -711,10 +741,11 @@ async def exchange_token_with_server(
     if mcp_server.token_url is None:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "MCP server token url is not configured. Servers with no url (OpenAPI spec or "
-                "stdio) run no resource discovery, so set Token URL manually, or set Issuer to "
-                "discover it from the identity provider (RFC 8414)."
+            detail=_endpoint_not_configured_detail(
+                mcp_server,
+                "token url",
+                "set Token URL manually",
+                "set Issuer to discover it from the identity provider (RFC 8414)",
             ),
         )
 
@@ -1278,10 +1309,11 @@ async def register_client_with_server(
     if mcp_server.authorization_url is None:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "MCP server authorization url is not configured. Servers with no url (OpenAPI "
-                "spec or stdio) run no resource discovery, so set Authorization URL and Token URL "
-                "manually, or set Issuer to discover them from the identity provider (RFC 8414)."
+            detail=_endpoint_not_configured_detail(
+                mcp_server,
+                "authorization url",
+                "set Authorization URL and Token URL manually",
+                "set Issuer to discover them from the identity provider (RFC 8414)",
             ),
         )
 
