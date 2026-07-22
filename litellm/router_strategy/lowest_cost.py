@@ -248,10 +248,6 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
-            item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
-
-            # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
             item_output_cost = None
             if _deployment.get("litellm_params", {}).get("input_cost_per_token", None):
@@ -260,11 +256,20 @@ class LowestCostLoggingHandler(CustomLogger):
             if _deployment.get("litellm_params", {}).get("output_cost_per_token", None):
                 item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
 
+            # Fallback: check model_info (mirrors tpm/rpm fallback)
             if item_input_cost is None:
-                item_input_cost = item_litellm_model_cost_map.get("input_cost_per_token", 5.0)
-
+                item_input_cost = _deployment.get("model_info", {}).get("input_cost_per_token")
             if item_output_cost is None:
-                item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
+                item_output_cost = _deployment.get("model_info", {}).get("output_cost_per_token")
+
+            # Fallback: model_cost map (built-in pricing, default 5.0)
+            if item_input_cost is None or item_output_cost is None:
+                item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
+                _model_cost_entry = litellm.model_cost.get(item_litellm_model_name, {})
+                if item_input_cost is None:
+                    item_input_cost = _model_cost_entry.get("input_cost_per_token", 5.0)
+                if item_output_cost is None:
+                    item_output_cost = _model_cost_entry.get("output_cost_per_token", 5.0)
 
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
