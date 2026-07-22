@@ -111,6 +111,25 @@ def _assert_describes_cat(response: ChatResponse) -> None:
     )
 
 
+def _assert_says_pong(response: ChatResponse, provider: str) -> None:
+    assert response.model, f"{provider}: response carried no model name: {response}"
+    assert response.choices, f"{provider}: chat returned no choices: {response}"
+    message = response.choices[0].message
+    content = (message.content if message else None) or ""
+    assert "pong" in content.lower(), (
+        f"{provider}: expected the model to reply 'pong', got {content[:200]!r}"
+    )
+
+
+def _assert_costed(client: PassthroughClient, key: str, provider: str) -> None:
+    rows = client.proxy.poll_logs_for_key(
+        key, min_rows=1, predicate=lambda rs: any((r.spend or 0) > 0 for r in rs)
+    )
+    priced = [r for r in rows if (r.spend or 0) > 0]
+    assert priced, f"{provider} chat was not costed on key ...{key[-6:]}: {rows}"
+    assert priced[0].status == "success", f"{provider} chat spend status={priced[0].status!r}"
+
+
 def _streamed_text(events: list[str]) -> str:
     """Concatenate the delta content across streamed chunks. Parsing every event as
     JSON also fails loudly on a truncated or garbled chunk (the vertex/gemini image
@@ -274,9 +293,8 @@ class TestCohereChat:
                 ),
             )
         )
-        assert response.choices, f"cohere chat returned no choices: {response}"
-        content = response.choices[0].message.content if response.choices[0].message else None
-        assert content and content.strip(), f"cohere empty content: {response}"
+        _assert_says_pong(response, "cohere")
+        _assert_costed(client, key, "cohere")
 
 
 class TestGeminiChatCompletions:
@@ -375,9 +393,7 @@ class TestHostedVllmChat:
                 ),
             )
         )
-        assert response.choices, f"hosted_vllm chat returned no choices: {response}"
-        content = response.choices[0].message.content if response.choices[0].message else None
-        assert content and content.strip(), f"hosted_vllm empty content: {response}"
+        _assert_says_pong(response, "hosted_vllm")
 
 
 class TestOpenAIChatCompletions:
@@ -671,9 +687,8 @@ class TestBedrockConverseChatCompletions:
                 ),
             )
         )
-        assert response.choices, f"bedrock converse chat returned no choices: {response}"
-        content = response.choices[0].message.content if response.choices[0].message else None
-        assert content and content.strip(), f"bedrock converse returned empty content: {response}"
+        _assert_says_pong(response, "bedrock converse")
+        _assert_costed(client, key, "bedrock converse")
 
     @pytest.mark.covers(
         "llm.chat_completions.bedrock_converse.basic.stream.works",

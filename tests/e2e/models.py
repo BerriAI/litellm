@@ -117,10 +117,19 @@ class KeyInfoResponse(BaseModel):
 
 class CustomerNewBody(BaseModel):
     user_id: str
+    alias: str | None = None
+    max_budget: float | None = None
+
+
+class CustomerBudget(BaseModel):
+    max_budget: float | None = None
 
 
 class CustomerResponse(BaseModel):
     user_id: str | None = None
+    alias: str | None = None
+    spend: float | None = None
+    litellm_budget_table: CustomerBudget | None = None
 
 
 class CustomerInfoParams(BaseModel):

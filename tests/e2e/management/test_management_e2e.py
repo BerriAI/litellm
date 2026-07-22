@@ -618,10 +618,18 @@ class TestCustomer:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         customer = f"e2e-customer-{unique_marker()}"
-        client.create_customer(customer)
+        alias = f"alias-{unique_marker()}"
+        client.create_customer(customer, alias=alias, max_budget=12.5)
         resources.defer(lambda: client.delete_customer(customer))
 
         info = client.customer_info(customer)
         assert info.user_id == customer, (
             f"/customer/info did not report the created end-user; got {info.user_id!r}"
         )
+        assert info.alias == alias, (
+            f"/customer/info dropped the alias set on create; got {info.alias!r}"
+        )
+        assert info.litellm_budget_table is not None and info.litellm_budget_table.max_budget == 12.5, (
+            f"/customer/info did not persist the customer's max_budget; got {info.litellm_budget_table!r}"
+        )
+        assert (info.spend or 0) == 0, f"a freshly created customer must start at zero spend; got {info.spend!r}"

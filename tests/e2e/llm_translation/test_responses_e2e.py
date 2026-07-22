@@ -261,10 +261,19 @@ class TestResponses:
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
 
-        result = endpoints_client.responses(key, model, "reply with one word")
+        result = endpoints_client.responses(key, model, f"reply with one word {unique_marker()}")
         require_successful_call(result)
         parsed = ResponsesResult.model_validate_json(result.body)
         assert parsed.text.strip(), f"/responses over bedrock returned no output text: {result.body[:300]}"
+        assert parsed.id and parsed.model, f"/responses over bedrock missing identifiers: {result.body[:300]}"
+
+        rows = endpoints_client.proxy.poll_logs_for_request_id(
+            parsed.id,
+            predicate=lambda logged_rows: any((row.spend or 0) > 0 for row in logged_rows),
+        )
+        row = next((logged_row for logged_row in rows if (logged_row.spend or 0) > 0), None)
+        assert row is not None, f"no costed spend row for bedrock response id {parsed.id}"
+        assert "claude" in (row.model or "").lower(), f"unexpected bedrock spend row model: {row.model}"
 
     @pytest.mark.covers("llm.responses.bedrock_converse.tool_use.nonstream.works")
     def test_responses_bedrock_returns_function_call(

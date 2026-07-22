@@ -777,9 +777,10 @@ class TestGeminiFiles:
         resources.defer(lambda: client.delete_model(model_id))
         key = resources.key()
 
+        payload = render_jsonl(GEMINI_FILES_RAW_MODEL)
         file = unwrap(
             client.upload_file(
-                content=render_jsonl(GEMINI_FILES_RAW_MODEL),
+                content=payload,
                 form=FileUploadForm(purpose="batch", target_model_names=model_name),
                 key=key,
             )
@@ -787,6 +788,9 @@ class TestGeminiFiles:
         resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
         assert_file_object(file, provider="gemini")
         assert file.id, "gemini file upload returned no id"
+        assert file.bytes == len(payload), (
+            f"gemini stored {file.bytes} bytes for a {len(payload)}-byte upload; the file was truncated or misrecorded"
+        )
 
 
 def _vllm_params(api_base: str, api_key: str | None, model_id: str) -> LiteLLMParamsBody:
