@@ -2635,6 +2635,33 @@ class TestCacheControlPreservation:
         )
         assert messages == [{"role": "user", "content": "hello", "cache_control": {"type": "ephemeral"}}]
 
+    def test_none_cache_control_omitted_from_content_blocks(self):
+        from pydantic import BaseModel
+        from typing import Optional
+
+        class MockContentItem(BaseModel):
+            type: str = "text"
+            text: str = "hello world"
+            cache_control: Optional[dict] = None
+
+        item = MockContentItem()
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item])
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "cache_control" not in result[0]
+
+        dict_item = {"type": "text", "text": "hello", "cache_control": None}
+        result_dict = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([dict_item])
+        assert isinstance(result_dict, list)
+        assert len(result_dict) == 1
+        assert "cache_control" not in result_dict[0]
+
+        image_item = {"type": "input_image", "image_url": "https://example.com/a.png", "cache_control": None}
+        result_img = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([image_item])
+        assert isinstance(result_img, list)
+        assert len(result_img) == 1
+        assert "cache_control" not in result_img[0]
+
     def test_tool_call_output_as_custom_object(self):
         """Test _transform_responses_api_tool_call_output_to_chat_completion_message with a custom object."""
         class MockToolCallOutput:
