@@ -66,17 +66,13 @@ _GENERIC_MODEL = "meta.llama-3-70b-instruct"
 @patch("litellm.llms.oci.common_utils.load_private_key_from_str")
 @patch("litellm.llms.oci.common_utils.padding")
 @patch("litellm.llms.oci.common_utils.hashes")
-def test_sign_with_manual_credentials_inline_key(
-    mock_hashes, mock_padding, mock_load_key
-):
+def test_sign_with_manual_credentials_inline_key(mock_hashes, mock_padding, mock_load_key):
     """sign_with_manual_credentials succeeds with an inline oci_key string."""
     mock_key = MagicMock()
     mock_key.sign.return_value = b"fake_signature"
     mock_load_key.return_value = mock_key
 
-    result_headers, body = sign_with_manual_credentials(
-        {}, _MANUAL_CREDS, {"key": "val"}, _API_BASE
-    )
+    result_headers, body = sign_with_manual_credentials({}, _MANUAL_CREDS, {"key": "val"}, _API_BASE)
 
     assert "authorization" in result_headers
     assert result_headers["authorization"].startswith('Signature version="1"')
@@ -89,9 +85,7 @@ def test_sign_with_manual_credentials_inline_key(
 @patch("litellm.llms.oci.common_utils.load_private_key_from_file")
 @patch("litellm.llms.oci.common_utils.padding")
 @patch("litellm.llms.oci.common_utils.hashes")
-def test_sign_with_manual_credentials_key_file(
-    mock_hashes, mock_padding, mock_load_file
-):
+def test_sign_with_manual_credentials_key_file(mock_hashes, mock_padding, mock_load_file):
     """sign_with_manual_credentials falls back to oci_key_file when oci_key absent."""
     mock_key = MagicMock()
     mock_key.sign.return_value = b"sig_from_file"
@@ -100,9 +94,7 @@ def test_sign_with_manual_credentials_key_file(
     creds = {**_MANUAL_CREDS, "oci_key_file": "/tmp/key.pem"}
     creds_no_inline = {k: v for k, v in creds.items() if k != "oci_key"}
 
-    result_headers, body = sign_with_manual_credentials(
-        {}, creds_no_inline, {}, _API_BASE
-    )
+    result_headers, body = sign_with_manual_credentials({}, creds_no_inline, {}, _API_BASE)
 
     assert "authorization" in result_headers
     mock_load_file.assert_called_once_with("/tmp/key.pem")
@@ -112,9 +104,7 @@ def test_sign_with_manual_credentials_key_file(
 @patch("litellm.llms.oci.common_utils.load_private_key_from_str")
 @patch("litellm.llms.oci.common_utils.padding")
 @patch("litellm.llms.oci.common_utils.hashes")
-def test_sign_with_manual_credentials_authorization_contains_key_id(
-    mock_hashes, mock_padding, mock_load_key
-):
+def test_sign_with_manual_credentials_authorization_contains_key_id(mock_hashes, mock_padding, mock_load_key):
     """Authorization header encodes tenancy/user/fingerprint as key ID."""
     mock_key = MagicMock()
     mock_key.sign.return_value = b"sig"
@@ -153,9 +143,7 @@ def test_sign_oci_request_routes_to_signer_when_present():
 @patch("litellm.llms.oci.common_utils.load_private_key_from_str")
 @patch("litellm.llms.oci.common_utils.padding")
 @patch("litellm.llms.oci.common_utils.hashes")
-def test_sign_oci_request_routes_to_manual_when_no_signer(
-    mock_hashes, mock_padding, mock_load_key
-):
+def test_sign_oci_request_routes_to_manual_when_no_signer(mock_hashes, mock_padding, mock_load_key):
     """sign_oci_request delegates to sign_with_manual_credentials when oci_signer absent."""
     mock_key = MagicMock()
     mock_key.sign.return_value = b"sig"
@@ -270,9 +258,7 @@ def test_adapt_generic_multipart_content():
 
 
 def test_adapt_generic_tool_response_direct():
-    result = adapt_messages_to_generic_oci_standard_tool_response(
-        "tool", "call_999", "The answer is 42"
-    )
+    result = adapt_messages_to_generic_oci_standard_tool_response("tool", "call_999", "The answer is 42")
     assert result.role == "TOOL"
     assert result.toolCallId == "call_999"
     assert result.content[0].text == "The answer is 42"
@@ -485,8 +471,11 @@ def test_adapt_cohere_assistant_with_tool_calls_in_history():
     assert history[0].toolCalls[0].name == "calc"
 
 
-def test_adapt_cohere_tool_result_in_history():
+def test_adapt_cohere_tool_result_goes_to_tool_results_not_history():
+    from litellm.llms.oci.chat.cohere import extract_cohere_tool_results
+
     messages = [
+        {"role": "user", "content": "compute"},
         {
             "role": "assistant",
             "content": None,
@@ -498,17 +487,17 @@ def test_adapt_cohere_tool_result_in_history():
                 }
             ],
         },
-        {
-            "role": "tool",
-            "tool_call_id": "call_1",
-            "content": "result: 42",
-        },
-        {"role": "user", "content": "ok"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "result: 42"},
     ]
+    # Tool results never appear in chatHistory; they ride the top-level field.
     history = adapt_messages_to_cohere_standard(messages)
-    tool_msg = next(m for m in history if m.role == "TOOL")
-    assert tool_msg.toolResults[0].call.name == "calc"
-    assert tool_msg.toolResults[0].outputs[0]["output"] == "result: 42"
+    assert all(m.role != "TOOL" for m in history)
+
+    results = extract_cohere_tool_results(messages)
+    assert results is not None
+    assert results[0].call.name == "calc"
+    assert results[0].call.parameters == {"x": 1}
+    assert results[0].outputs[0]["output"] == "result: 42"
 
 
 # ===========================================================================
@@ -537,12 +526,34 @@ _COHERE_RAW_RESPONSE = httpx.Response(200, request=httpx.Request("POST", "https:
 
 def test_handle_cohere_response_complete():
     model_response = ModelResponse()
-    result = handle_cohere_response(
-        _COHERE_RESPONSE_JSON, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
-    )
+    result = handle_cohere_response(_COHERE_RESPONSE_JSON, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE)
     assert result.choices[0].finish_reason == "stop"
     assert result.choices[0].message["content"] == "Hello from Cohere!"
     assert result.usage.prompt_tokens == 10
+
+
+def test_handle_cohere_response_tool_grounded_citations():
+    """Tool-grounded answers carry citations with ``documentIds`` (camelCase) and
+    no ``document_ids``. Response parsing must not choke on them (they are never
+    surfaced). Regression for the MLflow {{trace}} agentic loop."""
+    resp = {
+        **_COHERE_RESPONSE_JSON,
+        "chatResponse": {
+            **_COHERE_RESPONSE_JSON["chatResponse"],
+            "text": "There are 47 spans.",
+            "citations": [
+                {
+                    "start": 10,
+                    "end": 18,
+                    "text": "47 spans",
+                    "documentIds": ["get_root_span:0:2:0"],
+                }
+            ],
+        },
+    }
+    model_response = ModelResponse()
+    result = handle_cohere_response(resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE)
+    assert result.choices[0].message["content"] == "There are 47 spans."
 
 
 def test_handle_cohere_response_max_tokens():
@@ -554,9 +565,7 @@ def test_handle_cohere_response_max_tokens():
         },
     }
     model_response = ModelResponse()
-    result = handle_cohere_response(
-        resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
-    )
+    result = handle_cohere_response(resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE)
     assert result.choices[0].finish_reason == "length"
 
 
@@ -570,9 +579,7 @@ def test_handle_cohere_response_tool_call():
         },
     }
     model_response = ModelResponse()
-    result = handle_cohere_response(
-        resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
-    )
+    result = handle_cohere_response(resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE)
     assert result.choices[0].finish_reason == "tool_calls"
     tool_calls = result.choices[0].message["tool_calls"]
     assert tool_calls is not None
@@ -582,16 +589,10 @@ def test_handle_cohere_response_tool_call():
 def test_handle_cohere_response_missing_usage():
     resp = {
         **_COHERE_RESPONSE_JSON,
-        "chatResponse": {
-            k: v
-            for k, v in _COHERE_RESPONSE_JSON["chatResponse"].items()
-            if k != "usage"
-        },
+        "chatResponse": {k: v for k, v in _COHERE_RESPONSE_JSON["chatResponse"].items() if k != "usage"},
     }
     model_response = ModelResponse()
-    result = handle_cohere_response(
-        resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE
-    )
+    result = handle_cohere_response(resp, _COHERE_MODEL, model_response, _COHERE_RAW_RESPONSE)
     assert result.usage.prompt_tokens == 0
     assert result.usage.completion_tokens == 0
     assert result.usage.total_tokens == 0
@@ -759,10 +760,7 @@ class TestOCIChatConfigGetCompleteUrl:
             optional_params={"oci_region": "eu-frankfurt-1"},
             litellm_params={},
         )
-        assert url == (
-            "https://inference.generativeai.eu-frankfurt-1.oci.oraclecloud.com"
-            "/20231130/actions/chat"
-        )
+        assert url == ("https://inference.generativeai.eu-frankfurt-1.oci.oraclecloud.com/20231130/actions/chat")
 
     def test_respects_explicit_api_base(self):
         config = OCIChatConfig()
@@ -777,10 +775,7 @@ class TestOCIChatConfigGetCompleteUrl:
 
     def test_full_chat_url_is_not_doubled(self):
         config = OCIChatConfig()
-        full_url = (
-            "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
-            "/20231130/actions/chat"
-        )
+        full_url = "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/20231130/actions/chat"
         url = config.get_complete_url(
             api_base=full_url,
             api_key=None,
@@ -864,23 +859,17 @@ class TestOCIChatConfigGetOptionalParams:
 
     def test_tool_choice_string_auto_converted_to_dict(self):
         config = self._config()
-        result = config._get_optional_params(
-            OCIVendors.GENERIC, {"tool_choice": "auto"}
-        )
+        result = config._get_optional_params(OCIVendors.GENERIC, {"tool_choice": "auto"})
         assert result["toolChoice"] == {"type": "AUTO"}
 
     def test_tool_choice_string_none_converted_to_dict(self):
         config = self._config()
-        result = config._get_optional_params(
-            OCIVendors.GENERIC, {"tool_choice": "none"}
-        )
+        result = config._get_optional_params(OCIVendors.GENERIC, {"tool_choice": "none"})
         assert result["toolChoice"] == {"type": "NONE"}
 
     def test_tool_choice_string_required_converted_to_dict(self):
         config = self._config()
-        result = config._get_optional_params(
-            OCIVendors.GENERIC, {"tool_choice": "required"}
-        )
+        result = config._get_optional_params(OCIVendors.GENERIC, {"tool_choice": "required"})
         assert result["toolChoice"] == {"type": "REQUIRED"}
 
     def test_tool_choice_openai_function_dict_converted_to_oci_form(self):
@@ -906,16 +895,12 @@ class TestOCIChatConfigGetOptionalParams:
 
     def test_tool_choice_dict_auto_uppercased(self):
         config = self._config()
-        result = config._get_optional_params(
-            OCIVendors.GENERIC, {"tool_choice": {"type": "auto"}}
-        )
+        result = config._get_optional_params(OCIVendors.GENERIC, {"tool_choice": {"type": "auto"}})
         assert result["toolChoice"] == {"type": "AUTO"}
 
     def test_response_format_json_generic(self):
         config = self._config()
-        result = config._get_optional_params(
-            OCIVendors.GENERIC, {"response_format": {"type": "json_object"}}
-        )
+        result = config._get_optional_params(OCIVendors.GENERIC, {"response_format": {"type": "json_object"}})
         assert result["responseFormat"]["type"] == "JSON_OBJECT"
 
     def test_tools_adapted_for_cohere(self):
@@ -1035,9 +1020,7 @@ class TestOCIStreamWrapperChunkCreator:
 
     def test_cohere_chunk_dispatched_correctly(self):
         wrapper = self._make_wrapper(_COHERE_MODEL)
-        payload = json.dumps(
-            {"apiFormat": "COHERE", "text": "hi", "finishReason": None}
-        )
+        payload = json.dumps({"apiFormat": "COHERE", "text": "hi", "finishReason": None})
         result = wrapper.chunk_creator(f"data:{payload}")
         assert result.choices[0].delta.content == "hi"
 
@@ -1068,9 +1051,7 @@ class TestOCIStreamWrapperChunkCreator:
         # consolidation chunk would have its real text suppressed as a
         # "duplicate" and the response would be lost.
         wrapper = self._make_wrapper(_COHERE_MODEL)
-        empty_payload = json.dumps(
-            {"apiFormat": "COHERE", "text": "", "finishReason": None}
-        )
+        empty_payload = json.dumps({"apiFormat": "COHERE", "text": "", "finishReason": None})
         wrapper.chunk_creator(f"data:{empty_payload}")
         assert wrapper._cohere_text_emitted is False
 
@@ -1098,9 +1079,7 @@ def test_get_sync_custom_stream_wrapper_returns_wrapper():
 
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.iter_text.return_value = iter(
-        ['data:{"finishReason":"COMPLETE","index":0}']
-    )
+    mock_response.iter_text.return_value = iter(['data:{"finishReason":"COMPLETE","index":0}'])
 
     mock_client = MagicMock()
     mock_client.post.return_value = mock_response

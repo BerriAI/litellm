@@ -409,14 +409,16 @@ def validate_oci_environment(
 # ---------------------------------------------------------------------------
 
 # Mapping from JSON Schema type names to Python type names, as expected by
-# the OCI Cohere API's CohereParameterDefinition.type field.
+# the OCI Cohere API's CohereParameterDefinition.type field. The collection
+# types must be the lowercase builtins: OCI's Cohere backend returns HTTP 500
+# on a bare ``List`` (it expects ``list`` / ``List[...]``).
 OCI_JSON_TO_PYTHON_TYPES: Dict[str, str] = {
     "string": "str",
     "number": "float",
     "boolean": "bool",
     "integer": "int",
-    "array": "List",
-    "object": "Dict",
+    "array": "list",
+    "object": "dict",
     "any": "any",
 }
 

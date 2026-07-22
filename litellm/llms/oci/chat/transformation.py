@@ -37,8 +37,10 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.oci.chat.cohere import (
     _extract_text_content,
+    _message_text,
     adapt_messages_to_cohere_standard,
     adapt_tool_definitions_to_cohere_standard,
+    extract_cohere_tool_results,
     handle_cohere_response,
     handle_cohere_stream_chunk,
 )
@@ -577,10 +579,24 @@ class OCIChatConfig(BaseConfig):
                 if preamble:
                     preamble_override = preamble
 
+            non_system_messages = [m for m in messages if m.get("role") != "system"]
+            tool_results = extract_cohere_tool_results(non_system_messages)
+            if not tool_results and not non_system_messages:
+                raise OCIError(
+                    status_code=400,
+                    message="No non-system messages found — Cohere models require at least one non-system message",
+                )
+            # OCI carries the current turn's tool results in the top-level
+            # ``toolResults`` field and rejects a populated ``message`` alongside
+            # them. After tool execution (the agentic continuation MLflow judges
+            # drive) there is no new user turn, so the message is empty.
+            message = "" if tool_results else _message_text(non_system_messages[-1])
+
             chat_request = CohereChatRequest(
                 apiFormat="COHERE",
-                message=_extract_text_content(user_messages[-1]["content"]),
-                chatHistory=adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"]),
+                message=message,
+                chatHistory=adapt_messages_to_cohere_standard(non_system_messages),
+                toolResults=tool_results,
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
             )
