@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import unique_marker
+from e2e_config import EXPECT_RUST, unique_marker
 from e2e_http import StreamingResponse, require_successful_call, unwrap
 from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
@@ -50,6 +50,13 @@ def _assert_streamed_ok(result: StreamingResponse) -> None:
     assert any("message_stop" in event for event in result.stream_events), (
         "stream never reached message_stop"
     )
+    if EXPECT_RUST:
+        assert result.headers.get("x-litellm-rust") == "true", (
+            "E2E_EXPECT_RUST is set, so this gateway must serve /v1/messages through the "
+            "Rust path, but the response carried no x-litellm-rust marker. The request "
+            "still succeeded, which is exactly the failure mode: a gateway whose native "
+            f"extension is unavailable falls back to Python silently. headers={result.headers}"
+        )
 
 
 class TestAzureFoundryMessages:
