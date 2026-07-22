@@ -137,6 +137,39 @@ class TestLangfuseOtelIntegration:
                     mock_span, "langfuse.environment", test_env
                 )
 
+    def test_explicit_trace_id_does_not_inherit_external_parent_context(self):
+        logger = object.__new__(LangfuseOtelLogger)
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"trace_id": "0123456789abcdef0123456789abcdef"},
+                "proxy_server_request": {
+                    "headers": {
+                        "traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+                    }
+                },
+            }
+        }
+
+        with patch(
+            "litellm.integrations.opentelemetry.OpenTelemetry._get_span_context"
+        ) as parent_context:
+            assert logger._get_span_context(kwargs) == (None, None)
+
+        parent_context.assert_not_called()
+
+    def test_request_without_trace_id_keeps_parent_context_propagation(self):
+        logger = object.__new__(LangfuseOtelLogger)
+        kwargs = {"litellm_params": {"metadata": {}}}
+        expected = (MagicMock(), MagicMock())
+
+        with patch(
+            "litellm.integrations.opentelemetry.OpenTelemetry._get_span_context",
+            return_value=expected,
+        ) as parent_context:
+            assert logger._get_span_context(kwargs) == expected
+
+        parent_context.assert_called_once_with(kwargs, None)
+
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
         metadata_in = {"generation_name": "my-gen", "custom": "data"}

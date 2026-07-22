@@ -409,6 +409,12 @@ class LangfuseOtelLogger(OpenTelemetry):
             langfuse_host=langfuse_host,
         )
 
+    def _get_span_context(self, kwargs, default_span: Optional[Span] = None):
+        metadata = self._extract_langfuse_metadata(kwargs)
+        if metadata.get("trace_id") is not None:
+            return None, None
+        return super()._get_span_context(kwargs, default_span)
+
     def create_litellm_proxy_request_started_span(
         self,
         start_time: datetime,
