@@ -2040,25 +2040,22 @@ async def patch_group(
         # Process patch operations
         update_data, final_members = await _process_group_patch_operations(patch_ops, existing_team, prisma_client)
 
-        # Track current members BEFORE update for comparison
-        current_members = set(await _get_team_member_user_ids_from_team(existing_team))
+        snapshot_members = set(await _get_team_member_user_ids_from_team(existing_team))
+        intended_add = final_members - snapshot_members
+        intended_remove = snapshot_members - final_members
 
-        # Apply the metadata/displayName updates to the database
         updated_team = await _apply_group_patch_updates(group_id, update_data, prisma_client)
 
-        # Refresh team data from database to get the latest state after concurrent updates
-        # This prevents race conditions when multiple PATCH requests come in simultaneously
         refreshed_team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
-        if refreshed_team:
-            # Re-read current members from refreshed team to account for concurrent updates
-            refreshed_current_members = set(
-                await _get_team_member_user_ids_from_team(LiteLLM_TeamTable(**refreshed_team.model_dump()))
-            )
-            # Use the refreshed members for comparison
-            current_members = refreshed_current_members
+        refreshed_current = (
+            set(await _get_team_member_user_ids_from_team(LiteLLM_TeamTable(**refreshed_team.model_dump())))
+            if refreshed_team
+            else snapshot_members
+        )
 
-        # Handle user-team relationship changes
-        await _handle_group_membership_changes(group_id, current_members, final_members)
+        effective_final = (refreshed_current | intended_add) - intended_remove
+
+        await _handle_group_membership_changes(group_id, refreshed_current, effective_final)
 
         # A rename can flip whether this group matches scim_admin_group by display
         # name, so retained members must be re-resolved too, not just the ones whose
@@ -2067,7 +2064,7 @@ async def patch_group(
         alias_changed = new_alias != existing_team.team_alias
         await _recompute_scim_member_roles(
             prisma_client,
-            (current_members | final_members if alias_changed else current_members ^ final_members),
+            (refreshed_current | effective_final if alias_changed else refreshed_current ^ effective_final),
         )
 
         # Refresh team one more time to get final state after membership changes
