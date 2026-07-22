@@ -22,6 +22,8 @@ from litellm.proxy.auth.auth_utils import (
     get_key_model_tpm_limit,
     get_key_tag_rpm_limit,
     get_model_from_request,
+    get_project_model_itpm_limit,
+    get_project_model_otpm_limit,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
     get_request_route_template,
@@ -1425,6 +1427,56 @@ class TestGetProjectModelTpmLimit:
             project_metadata={"other_key": "value"},
         )
         result = get_project_model_tpm_limit(user_api_key_dict)
+        assert result is None
+
+
+class TestGetProjectModelItpmLimit:
+    """Tests for get_project_model_itpm_limit function."""
+
+    def test_returns_project_metadata_itpm_limit(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"model_itpm_limit": {"bedrock_mantle/claude-opus": 20000000}},
+        )
+        result = get_project_model_itpm_limit(user_api_key_dict)
+        assert result == {"bedrock_mantle/claude-opus": 20000000}
+
+    def test_returns_none_when_no_project_metadata(self):
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        result = get_project_model_itpm_limit(user_api_key_dict)
+        assert result is None
+
+    def test_returns_none_when_project_metadata_missing_key(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"other_key": "value"},
+        )
+        result = get_project_model_itpm_limit(user_api_key_dict)
+        assert result is None
+
+
+class TestGetProjectModelOtpmLimit:
+    """Tests for get_project_model_otpm_limit function."""
+
+    def test_returns_project_metadata_otpm_limit(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"model_otpm_limit": {"bedrock_mantle/claude-opus": 4000000}},
+        )
+        result = get_project_model_otpm_limit(user_api_key_dict)
+        assert result == {"bedrock_mantle/claude-opus": 4000000}
+
+    def test_returns_none_when_no_project_metadata(self):
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-123")
+        result = get_project_model_otpm_limit(user_api_key_dict)
+        assert result is None
+
+    def test_returns_none_when_project_metadata_missing_key(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            project_metadata={"other_key": "value"},
+        )
+        result = get_project_model_otpm_limit(user_api_key_dict)
         assert result is None
 
 

@@ -23,6 +23,10 @@ import pytest
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    ITPM_RESERVED_SCOPES_KEY,
+    ITPM_RESERVED_TOKENS_KEY,
+    OTPM_RESERVED_SCOPES_KEY,
+    OTPM_RESERVED_TOKENS_KEY,
     RATE_LIMIT_DESCRIPTORS_KEY,
     TPM_RESERVATION_RELEASED_KEY,
     TPM_RESERVED_MODEL_KEY,
@@ -31,7 +35,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
 @pytest.fixture
@@ -1190,6 +1194,211 @@ async def test_small_tpm_cap_preserves_explicit_max_tokens(rate_limiter):
     )
 
     assert data["max_tokens"] == 500
+
+
+@pytest.mark.asyncio
+async def test_project_otpm_reservation_prevents_concurrent_bypass(rate_limiter):
+    """
+    Bedrock Mantle-style OTPM: with a 100 OTPM limit and 5 concurrent
+    requests each reserving 50+ output tokens, upfront reservation must
+    reject the late arrivals -- not let all 5 through. Exercises the
+    in-memory fallback in ``atomic_check_and_increment_by_n`` for the
+    project-scoped ITPM/OTPM descriptors specifically.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-otpm-bypass"),
+        project_id="proj-mantle-bypass",
+        project_metadata={
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 100},
+        },
+    )
+
+    request_data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 50,
+    }
+
+    async def make_request(request_id: int) -> Dict[str, Any]:
+        data = request_data.copy()
+        try:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type="",
+            )
+            return {"request_id": request_id, "success": True}
+        except Exception as e:
+            return {
+                "request_id": request_id,
+                "success": False,
+                "status_code": getattr(e, "status_code", None),
+            }
+
+    results = await asyncio.gather(*[make_request(i) for i in range(5)])
+
+    successful = [r for r in results if r["success"]]
+    rate_limited = [r for r in results if not r["success"] and r.get("status_code") == 429]
+
+    assert len(rate_limited) > 0, (
+        f"Expected some OTPM-rate-limited requests but all {len(successful)} succeeded."
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_otpm_over_limit_rolls_back_itpm_reservation(rate_limiter):
+    """
+    When ITPM reserves fine but OTPM is then over limit, the ITPM
+    reservation this same pre-call already made must be rolled back --
+    otherwise it leaks until the window's TTL, silently shrinking the ITPM
+    budget for every other request in that minute.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-otpm-rollback"),
+        project_id="proj-mantle-rollback",
+        project_metadata={
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 1000000},
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 10},
+        },
+    )
+
+    itpm_counter_key = handler.create_rate_limit_keys(
+        key="model_per_project_itpm",
+        value="proj-mantle-rollback:bedrock_mantle/claude-opus",
+        rate_limit_type="tokens",
+    )
+
+    data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 500,  # blows past the 10-token OTPM limit
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+    assert getattr(exc_info.value, "status_code", None) == 429
+
+    cached_value = await cache.async_get_cache(key=itpm_counter_key, local_only=True)
+    assert int(cached_value or 0) == 0, (
+        f"ITPM reservation leaked after OTPM rejection: counter={cached_value}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_itpm_reconciled_on_success_excludes_cached_tokens(rate_limiter):
+    """
+    On success, ITPM reconciles to billable input tokens (prompt_tokens
+    minus cached_tokens) -- not raw prompt_tokens. Cached prompt-read tokens
+    are free under Bedrock Mantle and must not count against the ITPM quota,
+    even though they still appear in usage/cost logging elsewhere.
+    """
+    handler, _cache = rate_limiter
+
+    itpm_scope = ("model_per_project_itpm", "proj-mantle:model")
+    otpm_scope = ("model_per_project_otpm", "proj-mantle:model")
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                ITPM_RESERVED_TOKENS_KEY: 100,
+                ITPM_RESERVED_SCOPES_KEY: [list(itpm_scope)],
+                OTPM_RESERVED_TOKENS_KEY: 60,
+                OTPM_RESERVED_SCOPES_KEY: [list(otpm_scope)],
+            }
+        },
+    }
+
+    mock_response = ModelResponse(
+        id="test",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="bedrock_mantle/claude-opus",
+        usage=Usage(
+            prompt_tokens=80,
+            completion_tokens=40,
+            total_tokens=120,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=30),
+        ),
+        choices=[],
+    )
+
+    increments = []
+
+    async def mock_increment(increment_list, **kwargs):
+        for op in increment_list:
+            increments.append({"key": op["key"], "increment": op["increment_value"]})
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
+
+    await handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    itpm_adjustments = [i for i in increments if "model_per_project_itpm" in i["key"]]
+    otpm_adjustments = [i for i in increments if "model_per_project_otpm" in i["key"]]
+
+    # billable_input = 80 - 30 cached = 50; delta = 50 - 100 reserved = -50
+    assert any(i["increment"] == -50 for i in itpm_adjustments), (
+        f"Expected a -50 ITPM adjustment (50 billable - 100 reserved), got: {itpm_adjustments}"
+    )
+    # delta = 40 actual completion - 60 reserved = -20
+    assert any(i["increment"] == -20 for i in otpm_adjustments), (
+        f"Expected a -20 OTPM adjustment (40 actual - 60 reserved), got: {otpm_adjustments}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_itpm_otpm_released_on_failure(rate_limiter):
+    """On failure, the full ITPM and OTPM reservations must be refunded."""
+    handler, _cache = rate_limiter
+
+    itpm_scope = ("model_per_project_itpm", "proj-mantle:model")
+    otpm_scope = ("model_per_project_otpm", "proj-mantle:model")
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                ITPM_RESERVED_TOKENS_KEY: 100,
+                ITPM_RESERVED_SCOPES_KEY: [list(itpm_scope)],
+                OTPM_RESERVED_TOKENS_KEY: 60,
+                OTPM_RESERVED_SCOPES_KEY: [list(otpm_scope)],
+            }
+        },
+    }
+
+    increments = []
+
+    async def mock_increment(increment_list, **kwargs):
+        for op in increment_list:
+            increments.append({"key": op["key"], "increment": op["increment_value"]})
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
+
+    await handler.async_log_failure_event(
+        kwargs=mock_kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    itpm_releases = [i for i in increments if "model_per_project_itpm" in i["key"]]
+    otpm_releases = [i for i in increments if "model_per_project_otpm" in i["key"]]
+
+    assert any(i["increment"] == -100 for i in itpm_releases), itpm_releases
+    assert any(i["increment"] == -60 for i in otpm_releases), otpm_releases
 
 
 if __name__ == "__main__":

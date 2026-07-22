@@ -307,6 +307,19 @@ TPM_RESERVED_SCOPES_KEY = "_litellm_tpm_reserved_scopes"
 # (e.g. async_log_failure_event firing after async_post_call_failure_hook)
 # does not double-refund.
 TPM_RESERVATION_RELEASED_KEY = "_litellm_tpm_reservation_released"
+# Project-scoped ITPM/OTPM reservation stash, mirroring the TPM_RESERVED_*
+# keys above but tracked separately since ITPM and OTPM are reserved from
+# different estimates (input tokens vs. max_tokens) and reconciled against
+# different actual-usage fields (prompt_tokens vs. completion_tokens).
+ITPM_RESERVED_TOKENS_KEY = "_litellm_itpm_reserved_tokens"
+ITPM_RESERVED_SCOPES_KEY = "_litellm_itpm_reserved_scopes"
+OTPM_RESERVED_TOKENS_KEY = "_litellm_otpm_reserved_tokens"
+OTPM_RESERVED_SCOPES_KEY = "_litellm_otpm_reserved_scopes"
+# Descriptor "key" values for project-scoped ITPM/OTPM. Distinct from
+# "model_per_project" (the combined-TPM descriptor) so both can be enforced
+# on the same project+model simultaneously without colliding on cache keys.
+PROJECT_ITPM_DESCRIPTOR_KEY = "model_per_project_itpm"
+PROJECT_OTPM_DESCRIPTOR_KEY = "model_per_project_otpm"
 RATE_LIMIT_DESCRIPTORS_KEY = "_litellm_rate_limit_descriptors"
 # Pre-call RateLimitResponse stashed here so streaming success logging can
 # mirror ``x-ratelimit-*`` headers into the SLP. Streaming exits
@@ -333,6 +346,10 @@ _LITELLM_STASH_KEYS: Tuple[str, ...] = (
     TPM_RESERVED_MODEL_KEY,
     TPM_RESERVED_SCOPES_KEY,
     TPM_RESERVATION_RELEASED_KEY,
+    ITPM_RESERVED_TOKENS_KEY,
+    ITPM_RESERVED_SCOPES_KEY,
+    OTPM_RESERVED_TOKENS_KEY,
+    OTPM_RESERVED_SCOPES_KEY,
     RATE_LIMIT_DESCRIPTORS_KEY,
     RATE_LIMIT_RESPONSE_KEY,
     MAX_PARALLEL_SLOT_ACQUIRED_KEY,
@@ -418,6 +435,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
+        # project_id:model pairs already warned about model_itpm_limit/model_otpm_limit
+        # configured alongside model_tpm_limit, so the warning is logged once per pair
+        # rather than per request.
+        self._project_io_token_conflict_warned: set[str] = set()
+
         # When disabled, TPM is enforced post-call from actual usage (pre-v1.82
         # behavior) instead of reserving an estimated budget upfront, shedding
         # the extra per-request Redis Lua round-trip and the global-lock
@@ -497,6 +519,35 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         fraction of that limit so small TPM caps remain usable. Omit to
         preserve the unconstrained floor.
         """
+        estimated_input_tokens, max_tokens_estimate = self._estimate_input_and_output_tokens(
+            data=data,
+            min_configured_tpm_limit=min_configured_tpm_limit,
+        )
+        total_estimated = estimated_input_tokens + max_tokens_estimate
+
+        verbose_proxy_logger.debug(
+            f"TPM reservation estimate: input={estimated_input_tokens}, "
+            f"max_tokens={max_tokens_estimate}, total={total_estimated}"
+        )
+
+        return total_estimated
+
+    def _estimate_input_and_output_tokens(
+        self,
+        data: dict,
+        min_configured_tpm_limit: int | None = None,
+    ) -> tuple[int, int]:
+        """
+        Estimate input tokens and output (max_tokens) budget separately, so
+        callers needing independent ITPM/OTPM reservations (rather than one
+        combined TPM reservation) can use each half on its own.
+
+        ``min_configured_tpm_limit`` is the smallest ``tokens_per_unit`` among
+        the TPM-bearing descriptors this request will be charged against. When
+        provided, the no-``max_tokens`` output-budget floor is capped at a
+        fraction of that limit so small TPM caps remain usable. Omit to
+        preserve the unconstrained floor.
+        """
         messages = data.get("messages")
         prompt = data.get("prompt")
         input_text = data.get("input")  # embeddings
@@ -542,15 +593,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 output_floor = self._no_max_tokens_output_floor(min_configured_tpm_limit)
                 max_tokens_estimate = max(estimated_input_tokens, output_floor)
 
-        total_estimated = estimated_input_tokens + max_tokens_estimate
-
-        verbose_proxy_logger.debug(
-            f"TPM reservation estimate: input={estimated_input_tokens}, "
-            f"max_tokens={max_tokens_estimate} (explicit={explicit_max_tokens is not None}), "
-            f"total={total_estimated}"
-        )
-
-        return total_estimated
+        return estimated_input_tokens, max_tokens_estimate
 
     def _is_redis_cluster(self) -> bool:
         """
@@ -1561,9 +1604,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         TPM-only descriptor/increment list and delegates the all-or-nothing
         atomicity (Lua on Redis, asyncio-locked DualCache otherwise) to the
         shared primitive.
+
+        Excludes project ITPM/OTPM descriptors -- those are reserved
+        separately (different estimate per bucket) via ``reserve_io_tokens``.
         """
         tpm_descriptors: List[RateLimitDescriptor] = [
-            d for d in descriptors if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+            d
+            for d in descriptors
+            if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+            and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
         ]
         if not tpm_descriptors:
             return RateLimitResponse(overall_code="OK", statuses=[])
@@ -1576,6 +1625,100 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             increments=increments,
             parent_otel_span=parent_otel_span,
         )
+
+    async def _refund_reserved_tokens(
+        self,
+        scopes: list[tuple[str, str]],
+        amount: int,
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        """
+        Directly decrement previously-reserved token counters for ``scopes``
+        by ``amount``. Used to roll back a reservation that already
+        succeeded once a *different* bucket in the same request turns out to
+        be over its limit (e.g. ITPM reserved fine, OTPM then hits its
+        limit -- the ITPM reservation must not be left inflated).
+        """
+        if amount <= 0 or not scopes:
+            return
+        pipeline_operations = [
+            RedisPipelineIncrementOperation(
+                key=self.create_rate_limit_keys(scope_key, scope_value, "tokens"),
+                increment_value=-amount,
+                ttl=self.window_size,
+            )
+            for scope_key, scope_value in scopes
+        ]
+        await self.async_increment_tokens_with_ttl_preservation(
+            pipeline_operations=pipeline_operations,
+            parent_otel_span=parent_otel_span,
+        )
+
+    async def reserve_io_tokens(
+        self,
+        descriptors: list[RateLimitDescriptor],
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+        parent_otel_span: Span | None = None,
+    ) -> tuple[RateLimitResponse, int, int]:
+        """
+        Reserve ``estimated_input_tokens`` against project ITPM descriptors
+        and ``estimated_output_tokens`` against project OTPM descriptors.
+
+        ITPM and OTPM are reserved from different-sized estimates, so unlike
+        same-size TPM descriptors they can't share a single
+        ``atomic_check_and_increment_by_n`` call -- each bucket gets its own
+        all-or-nothing atomic call. If the OTPM reservation is over limit
+        after ITPM already succeeded, the ITPM reservation this call made is
+        rolled back before returning, so a partial reservation never leaks.
+
+        Returns ``(response, itpm_reserved, otpm_reserved)`` -- the latter two
+        are the amounts actually reserved (0 if that bucket wasn't
+        configured, or if the reservation failed), for the caller to stash
+        for post-call reconciliation.
+        """
+        itpm_descriptors = [d for d in descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY]
+        otpm_descriptors = [d for d in descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY]
+
+        if not itpm_descriptors and not otpm_descriptors:
+            return RateLimitResponse(overall_code="OK", statuses=[]), 0, 0
+
+        statuses: list[RateLimitStatus] = []
+        itpm_reserved = 0
+
+        if itpm_descriptors:
+            itpm_response = await self.atomic_check_and_increment_by_n(
+                descriptors=itpm_descriptors,
+                increments=[{"tokens": estimated_input_tokens} for _ in itpm_descriptors],
+                parent_otel_span=parent_otel_span,
+            )
+            if itpm_response["overall_code"] == "OVER_LIMIT":
+                return itpm_response, 0, 0
+            itpm_reserved = estimated_input_tokens
+            statuses.extend(itpm_response["statuses"])
+
+        if otpm_descriptors:
+            otpm_response = await self.atomic_check_and_increment_by_n(
+                descriptors=otpm_descriptors,
+                increments=[{"tokens": estimated_output_tokens} for _ in otpm_descriptors],
+                parent_otel_span=parent_otel_span,
+            )
+            if otpm_response["overall_code"] == "OVER_LIMIT":
+                if itpm_reserved > 0:
+                    await self._refund_reserved_tokens(
+                        scopes=[(d["key"], d["value"]) for d in itpm_descriptors],
+                        amount=itpm_reserved,
+                        parent_otel_span=parent_otel_span,
+                    )
+                return otpm_response, 0, 0
+            statuses.extend(otpm_response["statuses"])
+            return (
+                RateLimitResponse(overall_code="OK", statuses=statuses),
+                itpm_reserved,
+                estimated_output_tokens,
+            )
+
+        return RateLimitResponse(overall_code="OK", statuses=statuses), itpm_reserved, 0
 
     def create_organization_rate_limit_descriptor(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: Optional[str] = None
@@ -2275,6 +2418,86 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 )
 
+    def _warn_project_io_token_and_tpm_coexist_once(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str,
+    ) -> None:
+        """Log once per project:model pair when model_itpm_limit/model_otpm_limit
+        is configured alongside model_tpm_limit. Both are enforced (mirrors the
+        deployment-level itpm/otpm + tpm/rpm coexistence behavior in
+        ``model_rate_limit_check.py``); this is purely a heads-up warning.
+        """
+        tpm_limit_for_project_model = (
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_tpm_limit") or {}
+        )
+        if requested_model not in tpm_limit_for_project_model:
+            return
+        warn_key = f"{user_api_key_dict.project_id}:{requested_model}"
+        if warn_key in self._project_io_token_conflict_warned:
+            return
+        self._project_io_token_conflict_warned.add(warn_key)
+        verbose_proxy_logger.warning(
+            f"Project '{user_api_key_dict.project_id}' configures model_itpm_limit/model_otpm_limit "
+            f"alongside model_tpm_limit for model '{requested_model}'; both limit types are enforced"
+        )
+
+    def _add_project_io_token_rate_limit_descriptors_from_metadata(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        descriptors: list[RateLimitDescriptor],
+    ) -> None:
+        """Add project-scoped ITPM/OTPM descriptors from project_metadata.
+
+        Enforced independently of, and alongside, the combined ``model_per_project``
+        TPM descriptor above -- these give Bedrock Mantle-style separate input/output
+        token quotas at the project level.
+        """
+        if requested_model is None or user_api_key_dict.project_id is None:
+            return
+
+        itpm_limit_for_project_model = (
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_itpm_limit") or {}
+        )
+        otpm_limit_for_project_model = (
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_otpm_limit") or {}
+        )
+
+        model_itpm_limit = itpm_limit_for_project_model.get(requested_model)
+        model_otpm_limit = otpm_limit_for_project_model.get(requested_model)
+
+        if model_itpm_limit is None and model_otpm_limit is None:
+            return
+
+        self._warn_project_io_token_and_tpm_coexist_once(user_api_key_dict, requested_model)
+
+        descriptor_value = f"{user_api_key_dict.project_id}:{requested_model}"
+        if model_itpm_limit is not None:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key=PROJECT_ITPM_DESCRIPTOR_KEY,
+                    value=descriptor_value,
+                    rate_limit={
+                        "requests_per_unit": None,
+                        "tokens_per_unit": model_itpm_limit,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
+        if model_otpm_limit is not None:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key=PROJECT_OTPM_DESCRIPTOR_KEY,
+                    value=descriptor_value,
+                    rate_limit={
+                        "requests_per_unit": None,
+                        "tokens_per_unit": model_otpm_limit,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
+
     def _handle_rate_limit_error(
         self,
         response: RateLimitResponse,
@@ -2318,6 +2541,125 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     model=resolved_model,
                     llm_provider=llm_provider,
                 )
+
+    async def _reserve_project_io_tokens_or_raise(
+        self,
+        descriptors: list[RateLimitDescriptor],
+        data: dict,
+        requested_model: str | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        tpm_reservation_scopes: list[tuple[str, str]],
+        tpm_reservation_amount: int,
+    ) -> None:
+        """
+        Reserve project-scoped ITPM/OTPM tokens (Bedrock Mantle-style
+        separate input/output token buckets), independently of -- and, when
+        both are configured, in addition to -- the combined-TPM reservation
+        the caller already made. Raises (via ``_handle_rate_limit_error``) on
+        an over-limit reservation, first rolling back the combined-TPM
+        reservation named by ``tpm_reservation_scopes``/``tpm_reservation_amount``
+        if one was made, so a partial reservation never leaks.
+        """
+        io_token_descriptors = [
+            d for d in descriptors if d["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+        ]
+        if not io_token_descriptors:
+            return
+
+        configured_otpm_limits = [
+            int(v)
+            for d in io_token_descriptors
+            if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+            for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
+            if v is not None
+        ]
+        min_configured_otpm_limit = min(configured_otpm_limits) if configured_otpm_limits else None
+
+        estimated_input_tokens, estimated_output_tokens = self._estimate_input_and_output_tokens(
+            data=data,
+            min_configured_tpm_limit=min_configured_otpm_limit,
+        )
+        estimated_input_tokens = max(estimated_input_tokens, 1)
+        estimated_output_tokens = max(estimated_output_tokens, 1)
+
+        # Hard-cap generation length so an unbounded response can't overshoot
+        # the OTPM budget before post-call reconciliation runs, mirroring the
+        # combined-TPM floor cap in the caller. Only tightens
+        # data["max_tokens"]; never loosens a cap already set.
+        capped_output_floor = self._no_max_tokens_output_floor(min_configured_otpm_limit)
+        baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+        has_explicit_max_tokens = data.get("max_tokens") is not None or data.get("max_completion_tokens") is not None
+        is_embedding = data.get("input") is not None
+        if capped_output_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
+            existing_cap = data.get("max_tokens")
+            if existing_cap is None or capped_output_floor < existing_cap:
+                data["max_tokens"] = capped_output_floor
+
+        io_response, itpm_reserved, otpm_reserved = await self.reserve_io_tokens(
+            descriptors=io_token_descriptors,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+
+        if io_response["overall_code"] == "OVER_LIMIT":
+            # A combined-TPM reservation may have already succeeded above for
+            # this same request; refund it too, or its counter stays inflated
+            # until the window's TTL expires.
+            await self._refund_reserved_tokens(
+                scopes=tpm_reservation_scopes,
+                amount=tpm_reservation_amount,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+            acquisition = self._get_parallel_slot_acquisition(kwargs=data)
+            if acquisition is not None:
+                await self._release_parallel_request_slots(
+                    acquisition=acquisition,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                self._clear_parallel_slot_marker(data)
+            self._handle_rate_limit_error(
+                response=io_response,
+                descriptors=descriptors,
+                requested_model=requested_model,
+            )
+            return
+
+        if itpm_reserved > 0:
+            itpm_scopes = [
+                (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
+            ]
+            self._stash_value_in_metadata_channels(data=data, key=ITPM_RESERVED_TOKENS_KEY, value=itpm_reserved)
+            self._stash_value_in_metadata_channels(
+                data=data,
+                key=ITPM_RESERVED_SCOPES_KEY,
+                value=[[k, v] for k, v in itpm_scopes],
+            )
+        if otpm_reserved > 0:
+            otpm_scopes = [
+                (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+            ]
+            self._stash_value_in_metadata_channels(data=data, key=OTPM_RESERVED_TOKENS_KEY, value=otpm_reserved)
+            self._stash_value_in_metadata_channels(
+                data=data,
+                key=OTPM_RESERVED_SCOPES_KEY,
+                value=[[k, v] for k, v in otpm_scopes],
+            )
+
+        stored_response = data.get("litellm_proxy_rate_limit_response")
+        if isinstance(stored_response, dict):
+            stored_response.setdefault("statuses", []).extend(io_response["statuses"])
+        elif io_response["statuses"]:
+            data["litellm_proxy_rate_limit_response"] = io_response
+            self._stash_value_in_metadata_channels(
+                data=data,
+                key=RATE_LIMIT_RESPONSE_KEY,
+                value=io_response,
+            )
+
+        verbose_proxy_logger.debug(
+            f"ITPM/OTPM tokens reserved: itpm={itpm_reserved}, otpm={otpm_reserved} for model {requested_model}"
+        )
 
     async def async_pre_call_hook(
         self,
@@ -2396,6 +2738,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model=requested_model,
             descriptors=descriptors,
         )
+        self._add_project_io_token_rate_limit_descriptors_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
 
         # Org Level Rate Limits
         descriptors.extend(self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model))
@@ -2464,10 +2811,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             configured_tpm_limits = [
                 int(v)
                 for d in descriptors
+                if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
                 if v is not None
             ]
             has_tpm_limits = bool(configured_tpm_limits)
+
+            # Populated on a successful combined-TPM reservation below, so the
+            # project ITPM/OTPM block further down can roll it back if a
+            # different bucket in the same request subsequently hits its
+            # limit. Stays empty/0 whenever no combined-TPM reservation was
+            # made (or it was over limit, in which case execution never
+            # reaches the ITPM/OTPM block -- `_handle_rate_limit_error` raises).
+            tpm_reservation_scopes: list[tuple[str, str]] = []
+            tpm_reservation_amount = 0
 
             if has_tpm_limits and self.tpm_reservation_enabled:
                 min_configured_tpm_limit = min(configured_tpm_limits)
@@ -2535,8 +2892,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     reserved_scopes: List[Tuple[str, str]] = [
                         (d["key"], d["value"])
                         for d in descriptors
-                        if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+                        if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+                        and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
                     ]
+                    tpm_reservation_scopes = reserved_scopes
+                    tpm_reservation_amount = estimated_tokens
                     self._stash_reservation_in_data(
                         data=data,
                         estimated_tokens=estimated_tokens,
@@ -2563,6 +2923,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         )
 
                     verbose_proxy_logger.debug(f"TPM tokens reserved: {estimated_tokens} for model {requested_model}")
+
+            await self._reserve_project_io_tokens_or_raise(
+                descriptors=descriptors,
+                data=data,
+                requested_model=requested_model,
+                user_api_key_dict=user_api_key_dict,
+                tpm_reservation_scopes=tpm_reservation_scopes,
+                tpm_reservation_amount=tpm_reservation_amount,
+            )
 
         # Defense-in-depth: scrub any stash key that escaped onto data
         # top-level (stale cache hit, router pass, test fixture) before the
@@ -2881,6 +3250,150 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return scopes
 
     @classmethod
+    def _get_reserved_itpm_tokens_from_kwargs(
+        cls,
+        kwargs: Any,
+        standard_logging_metadata: dict[str, Any] | None = None,
+    ) -> int:
+        candidate = cls._lookup_stashed_value(kwargs, standard_logging_metadata, ITPM_RESERVED_TOKENS_KEY)
+        try:
+            return int(candidate or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _get_reserved_otpm_tokens_from_kwargs(
+        cls,
+        kwargs: Any,
+        standard_logging_metadata: dict[str, Any] | None = None,
+    ) -> int:
+        candidate = cls._lookup_stashed_value(kwargs, standard_logging_metadata, OTPM_RESERVED_TOKENS_KEY)
+        try:
+            return int(candidate or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _get_reserved_itpm_scopes_from_kwargs(
+        cls,
+        kwargs: Any,
+        standard_logging_metadata: dict[str, Any] | None = None,
+    ) -> set[tuple[str, str]]:
+        return cls._narrow_reserved_scopes(
+            cls._lookup_stashed_value(kwargs, standard_logging_metadata, ITPM_RESERVED_SCOPES_KEY)
+        )
+
+    @classmethod
+    def _get_reserved_otpm_scopes_from_kwargs(
+        cls,
+        kwargs: Any,
+        standard_logging_metadata: dict[str, Any] | None = None,
+    ) -> set[tuple[str, str]]:
+        return cls._narrow_reserved_scopes(
+            cls._lookup_stashed_value(kwargs, standard_logging_metadata, OTPM_RESERVED_SCOPES_KEY)
+        )
+
+    @staticmethod
+    def _narrow_reserved_scopes(candidate: Any) -> set[tuple[str, str]]:
+        if not isinstance(candidate, list):
+            return set()
+        scopes: set[tuple[str, str]] = set()
+        for entry in candidate:
+            if (
+                isinstance(entry, (list, tuple))
+                and len(entry) == 2
+                and isinstance(entry[0], str)
+                and isinstance(entry[1], str)
+            ):
+                scopes.add((entry[0], entry[1]))
+        return scopes
+
+    def _resolve_io_token_reconcile_usage(
+        self,
+        response_obj: Any,
+    ) -> tuple[int, int, bool]:
+        """
+        Resolve ``(billable_input_tokens, completion_tokens, usage_resolved)``
+        for ITPM/OTPM reconciliation. Cache-read tokens are excluded from
+        billable input -- Bedrock Mantle doesn't count them toward ITPM --
+        but they're untouched everywhere else (cost/usage logging still sees
+        the full prompt token count).
+        """
+        usage: Any | None = None
+        if isinstance(
+            response_obj,
+            (ModelResponse, EmbeddingResponse, TextCompletionResponse, BaseLiteLLMOpenAIResponseObject),
+        ):
+            usage = getattr(response_obj, "usage", None)
+
+        if isinstance(usage, Usage):
+            prompt_tokens = usage.prompt_tokens or 0
+            completion_tokens = usage.completion_tokens or 0
+            cached_tokens = 0
+            if usage.prompt_tokens_details is not None:
+                cached_tokens = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+        elif isinstance(usage, dict):
+            prompt_tokens = usage.get("prompt_tokens", 0) or 0
+            completion_tokens = usage.get("completion_tokens", 0) or 0
+            prompt_details = usage.get("prompt_tokens_details") or {}
+            cached_tokens = (prompt_details.get("cached_tokens", 0) or 0) if isinstance(prompt_details, dict) else 0
+        else:
+            return 0, 0, False
+
+        return max(0, prompt_tokens - cached_tokens), completion_tokens, True
+
+    def _build_io_token_reservation_ops(
+        self,
+        kwargs: Any,
+        response_obj: Any,
+    ) -> list["RedisPipelineIncrementOperation"]:
+        """
+        Reconcile project ITPM/OTPM reservations to actual usage on success:
+        ITPM to billable input tokens, OTPM to actual completion tokens.
+        Reuses ``_build_reservation_aware_tpm_ops``'s delta pattern -- ITPM/OTPM
+        are stored in the same ":tokens" cache bucket as combined TPM, just
+        under distinct scope keys, so the reservation-aware increment math is
+        identical; only the usage fields being reconciled against differ.
+        """
+        standard_logging_object = kwargs.get("standard_logging_object") or {}
+        standard_logging_metadata = standard_logging_object.get("metadata") or {}
+
+        itpm_reserved = self._get_reserved_itpm_tokens_from_kwargs(kwargs, standard_logging_metadata)
+        otpm_reserved = self._get_reserved_otpm_tokens_from_kwargs(kwargs, standard_logging_metadata)
+        if itpm_reserved <= 0 and otpm_reserved <= 0:
+            return []
+
+        billable_input, completion_tokens, usage_resolved = self._resolve_io_token_reconcile_usage(response_obj)
+        if not usage_resolved:
+            # Usage missing (e.g. a response the SDK couldn't parse) -- keep
+            # the reservation rather than guess; it self-expires at the
+            # window TTL instead of drifting the counter on a bad guess.
+            return []
+
+        ops: list[RedisPipelineIncrementOperation] = []
+        if itpm_reserved > 0:
+            itpm_scopes = self._get_reserved_itpm_scopes_from_kwargs(kwargs, standard_logging_metadata)
+            ops.extend(
+                self._build_reservation_aware_tpm_ops(
+                    targets=list(itpm_scopes),
+                    reserved_scopes=itpm_scopes,
+                    actual_tokens=billable_input,
+                    reserved_tokens=itpm_reserved,
+                )
+            )
+        if otpm_reserved > 0:
+            otpm_scopes = self._get_reserved_otpm_scopes_from_kwargs(kwargs, standard_logging_metadata)
+            ops.extend(
+                self._build_reservation_aware_tpm_ops(
+                    targets=list(otpm_scopes),
+                    reserved_scopes=otpm_scopes,
+                    actual_tokens=completion_tokens,
+                    reserved_tokens=otpm_reserved,
+                )
+            )
+        return ops
+
+    @classmethod
     def _is_reservation_released(
         cls,
         kwargs: Any,
@@ -3175,6 +3688,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 response_obj=response_obj,
                 rate_limit_type=rate_limit_type,
             )
+            pipeline_operations.extend(self._build_io_token_reservation_ops(kwargs=kwargs, response_obj=response_obj))
 
             if pipeline_operations:
                 await self.async_increment_tokens_with_ttl_preservation(
@@ -3358,12 +3872,43 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 )
 
+            # Refund project ITPM/OTPM reservations the same way -- full
+            # refund, since a failed call has no billable usage to reconcile
+            # against.
+            itpm_reserved = (
+                0 if already_released else self._get_reserved_itpm_tokens_from_kwargs(kwargs, standard_logging_metadata)
+            )
+            if itpm_reserved > 0:
+                itpm_scopes = self._get_reserved_itpm_scopes_from_kwargs(kwargs, standard_logging_metadata)
+                pipeline_operations.extend(
+                    self._build_reservation_aware_tpm_ops(
+                        targets=list(itpm_scopes),
+                        reserved_scopes=itpm_scopes,
+                        actual_tokens=0,
+                        reserved_tokens=itpm_reserved,
+                    )
+                )
+
+            otpm_reserved = (
+                0 if already_released else self._get_reserved_otpm_tokens_from_kwargs(kwargs, standard_logging_metadata)
+            )
+            if otpm_reserved > 0:
+                otpm_scopes = self._get_reserved_otpm_scopes_from_kwargs(kwargs, standard_logging_metadata)
+                pipeline_operations.extend(
+                    self._build_reservation_aware_tpm_ops(
+                        targets=list(otpm_scopes),
+                        reserved_scopes=otpm_scopes,
+                        actual_tokens=0,
+                        reserved_tokens=otpm_reserved,
+                    )
+                )
+
             if pipeline_operations:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=pipeline_operations,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
-            if reserved_tokens > 0:
+            if reserved_tokens > 0 or itpm_reserved > 0 or otpm_reserved > 0:
                 self._mark_reservation_released(kwargs)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in rate limit failure event: {str(e)}")
