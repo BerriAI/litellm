@@ -4133,6 +4133,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
         raw_headers: Optional[dict[str, str]] = None,
+        litellm_logging_obj: "Any | None" = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -4193,6 +4194,18 @@ class MCPServerManager:
         # Convert to LLM format for existing guardrail compatibility
         synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
 
+        # Seed the real request logging object so the guardrail-recording bridge
+        # (custom_guardrail._sync_guardrail_info_to_logging_obj, run in the
+        # @log_guardrail_information finally) has a non-None logging_obj and can
+        # persist this pre_mcp_call evaluation into the spend log the Guardrails
+        # Monitor counts. Without it the synthetic dict carries no logging obj,
+        # the bridge no-ops, and Total Evaluations stays 0.
+        synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
+        if litellm_logging_obj is not None:
+            logging_metadata = litellm_logging_obj.litellm_params.get("metadata")
+            if isinstance(logging_metadata, dict):
+                synthetic_llm_data["metadata"] = logging_metadata
+
         hook_result: dict[str, Any] = {}
         try:
             # Use standard pre_call_hook
@@ -4228,6 +4241,7 @@ class MCPServerManager:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         proxy_logging_obj: ProxyLogging,
         start_time: datetime.datetime,
+        litellm_logging_obj: "Any | None" = None,
     ):
         """Create and return a during hook task for MCP tool calls."""
         from litellm.types.llms.base import HiddenParams
@@ -4249,6 +4263,16 @@ class MCPServerManager:
         }
 
         synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(request_obj, during_hook_kwargs)
+
+        # Keep the synthetic guardrail request and the real request logger on the
+        # same metadata dict, as in pre_call_tool_check. The during hook is joined
+        # before success logging, so its completed evaluation is serialized with
+        # the tool call.
+        synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
+        if litellm_logging_obj is not None:
+            logging_metadata = litellm_logging_obj.litellm_params.get("metadata")
+            if isinstance(logging_metadata, dict):
+                synthetic_llm_data["metadata"] = logging_metadata
 
         return asyncio.create_task(
             proxy_logging_obj.during_call_hook(
@@ -4730,6 +4754,7 @@ class MCPServerManager:
         oauth2_headers: Optional[dict[str, str]] = None,
         raw_headers: Optional[dict[str, str]] = None,
         host_progress_callback: Optional[Callable] = None,
+        litellm_logging_obj: "Any | None" = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -4774,6 +4799,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
                 raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
             )
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]
@@ -4788,6 +4814,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
+                litellm_logging_obj=litellm_logging_obj,
             )
             tasks.append(during_hook_task)
 

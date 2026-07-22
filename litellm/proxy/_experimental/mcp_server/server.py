@@ -982,6 +982,39 @@ if MCP_AVAILABLE:
                 else:
                     data = body_data
 
+                # Build a real logging object for this call_tool invocation. Unlike
+                # list_tools (which calls function_setup above), this raw MCP
+                # call_tool handler previously never constructed one, so
+                # kwargs["litellm_logging_obj"] was always None downstream in
+                # call_mcp_tool / pre_call_tool_check -- the @log_guardrail_information
+                # bridge had nothing to sync into and Total Evaluations stayed 0.
+                data["call_type"] = CallTypes.call_mcp_tool.value
+                data.setdefault("model", f"MCP: {name}")
+                data.setdefault("litellm_call_id", str(uuid.uuid4()))
+                tool_call_start_time = datetime.now()
+                litellm_logging_obj: LiteLLMLoggingObj | None = None
+                try:
+                    litellm_logging_obj, data = function_setup(
+                        original_function="call_mcp_tool",
+                        rules_obj=Rules(),
+                        start_time=tool_call_start_time,
+                        **data,
+                    )
+                    if litellm_logging_obj:
+                        litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+                        litellm_logging_obj.model = data.get("model", f"MCP: {name}")
+                        data["litellm_logging_obj"] = litellm_logging_obj
+                        # Keep the synthetic MCP guardrail request and the request
+                        # logging object on the same metadata dict. Guardrail hooks
+                        # append their evaluation to this dict; failure/success
+                        # logging then serializes that exact completed record.
+                        logging_metadata = litellm_logging_obj.litellm_params.get("metadata")
+                        if isinstance(logging_metadata, dict):
+                            data["metadata"] = logging_metadata
+                except Exception as logging_error:  # noqa: BLE001
+                    verbose_logger.debug("Failed to initialize logging for MCP call_tool: %s", logging_error)
+                    litellm_logging_obj = None
+
                 response = await call_mcp_tool(
                     user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=mcp_auth_header,
@@ -2739,6 +2772,7 @@ if MCP_AVAILABLE:
                 proxy_logging_obj=proxy_logging_obj,  # type: ignore[arg-type]
                 server=mcp_server,
                 raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -2960,6 +2994,23 @@ if MCP_AVAILABLE:
             traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             from litellm.proxy.proxy_server import proxy_logging_obj
 
+            # Build the status="failure" standard_logging_object BEFORE post_call_failure_hook.
+            # A pre-call guardrail block raises into this except, and the failure spend-log row is
+            # written by post_call_failure_hook -> get_logging_payload, which reads
+            # guardrail_information off the logging obj's standard_logging_object. That object is
+            # only populated once the failure handlers run, so without this the row persists with
+            # guardrail_information=None and the block is never counted on the Guardrails Monitor
+            # (totalBlocked stays 0). Mirrors the isError branch of _fire_mcp_tool_call_logging.
+            # has_run_logging(sync_success/async_success) first mirrors that branch and, together
+            # with should_run_logging dedup, keeps the @client wrapper's post-raise failure logging
+            # from double-firing on this same logging obj.
+            end_time = datetime.now()
+            if litellm_logging_obj is not None:
+                litellm_logging_obj.has_run_logging(event_type="sync_success")
+                litellm_logging_obj.has_run_logging(event_type="async_success")
+                litellm_logging_obj.failure_handler(e, traceback_str, start_time, end_time)
+                await litellm_logging_obj.async_failure_handler(e, traceback_str, start_time, end_time)
+
             if proxy_logging_obj and user_api_key_auth:
                 await proxy_logging_obj.post_call_failure_hook(
                     request_data=kwargs,
@@ -3137,6 +3188,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
+            litellm_logging_obj=litellm_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
