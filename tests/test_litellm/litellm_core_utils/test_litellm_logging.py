@@ -3936,3 +3936,67 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def _make_aspeech_logging_obj(model, text):
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    logging_obj = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": text}],
+        stream=False,
+        call_type="aspeech",
+        start_time=time.time(),
+        litellm_call_id="tts-stream-1",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model=model, user="", optional_params={}, litellm_params={"api_base": ""}
+    )
+    logging_obj.model_call_details["input"] = text
+    return logging_obj
+
+
+def test_streaming_tts_response_records_spend():
+    """Regression (streaming TTS budget bypass): a stream_format='sse' response
+    (SpeechStreamingResponse) must be recognized for cost logging so response_cost is
+    recorded, exactly like the non-streaming HttpxBinaryResponseContent path. Otherwise the
+    proxy releases the budget reservation without recording spend and clients exceed budget."""
+    import datetime
+
+    from litellm.types.llms.openai import SpeechStreamingResponse
+
+    model = "streaming-tts-regression"
+    text = "the quick brown fox"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "mode": "audio_speech",
+                "input_cost_per_character": 0.01,
+                "litellm_provider": "openai",
+            }
+        }
+    )
+
+    logging_obj = _make_aspeech_logging_obj(model, text)
+
+    consumed = {"count": 0}
+
+    async def _frames():
+        consumed["count"] += 1
+        yield b'data: {"type":"speech.audio.delta"}\n\n'
+
+    response = SpeechStreamingResponse(
+        stream_iterator=_frames(), headers={"content-type": "text/event-stream"}
+    )
+
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is True
+
+    now = datetime.datetime.now()
+    logging_obj._success_handler_helper_fn(result=response, start_time=now, end_time=now, cache_hit=False)
+
+    response_cost = logging_obj.model_call_details.get("response_cost")
+    assert response_cost is not None, "streaming TTS must record a response_cost (else budget bypass)"
+    assert response_cost > 0
+    assert response_cost == pytest.approx(0.01 * len(text), rel=0.25)
+    assert consumed["count"] == 0

@@ -278,6 +278,7 @@ from .types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAIModerationResponse,
     OpenAIWebSearchOptions,
+    SpeechStreamingResponse,
 )
 from .types.utils import (
     AdapterCompletionStreamWrapper,
@@ -7761,7 +7762,7 @@ def transcription(
 
 
 @client
-async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
+async def aspeech(*args, **kwargs) -> Union[HttpxBinaryResponseContent, SpeechStreamingResponse]:
     """
     Calls openai tts endpoints.
     """
@@ -7815,12 +7816,18 @@ def speech(
     response_format: Optional[str] = None,
     speed: Optional[int] = None,
     instructions: Optional[str] = None,
+    stream_format: str | None = None,
+    stream_audio: bool = False,
     client=None,
     headers: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
     aspeech: Optional[bool] = None,
     **kwargs,
-) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+) -> Union[
+    HttpxBinaryResponseContent,
+    SpeechStreamingResponse,
+    Coroutine[Any, Any, Union[HttpxBinaryResponseContent, SpeechStreamingResponse]],
+]:
     user = kwargs.get("user", None)
     litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -7839,6 +7846,8 @@ def speech(
         optional_params["speed"] = speed  # type: ignore
     if instructions is not None:
         optional_params["instructions"] = instructions
+    if stream_format is not None:
+        optional_params["stream_format"] = stream_format
 
     if timeout is None:
         timeout = litellm.request_timeout
@@ -7881,7 +7890,8 @@ def speech(
     )
     response: Union[
         HttpxBinaryResponseContent,
-        Coroutine[Any, Any, HttpxBinaryResponseContent],
+        SpeechStreamingResponse,
+        Coroutine[Any, Any, Union[HttpxBinaryResponseContent, SpeechStreamingResponse]],
         None,
     ] = None
     if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
@@ -7935,6 +7945,7 @@ def speech(
             timeout=timeout,
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
+            stream_audio=stream_audio,
             shared_session=shared_session,
         )
     elif custom_llm_provider == "azure":

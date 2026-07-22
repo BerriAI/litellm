@@ -1501,9 +1501,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
         aspeech: Optional[bool] = None,
+        stream_audio: bool = False,
         client=None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> HttpxBinaryResponseContent:
+    ) -> Union[HttpxBinaryResponseContent, "SpeechStreamingResponse"]:
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
                 model=model,
@@ -1516,23 +1517,36 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 project=project,
                 max_retries=max_retries,
                 timeout=timeout,
+                stream_audio=stream_audio,
                 client=client,
                 shared_session=shared_session,
             )  # type: ignore
 
-        openai_client = self._get_openai_client(
-            is_async=False,
-            api_key=api_key,
-            api_base=api_base,
-            timeout=timeout,
-            max_retries=max_retries,
-            client=client,
-            shared_session=shared_session,
+        openai_client = cast(
+            OpenAI,
+            self._get_openai_client(
+                is_async=False,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+                shared_session=shared_session,
+            ),
         )
 
-        response = cast(OpenAI, openai_client).audio.speech.create(
+        if stream_audio:
+            return self.audio_speech_streaming(
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                openai_client=openai_client,
+            )
+
+        response = openai_client.audio.speech.create(
             model=model,
-            voice=voice,  # type: ignore
+            voice=voice,  # pyright: ignore[reportArgumentType]  # provider voice id may be outside the SDK Literal
             input=input,
             **optional_params,
         )
@@ -1550,9 +1564,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         project: Optional[str],
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
+        stream_audio: bool = False,
         client=None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> HttpxBinaryResponseContent:
+    ) -> Union[HttpxBinaryResponseContent, "SpeechStreamingResponse"]:
         openai_client = cast(
             AsyncOpenAI,
             self._get_openai_client(
@@ -1566,14 +1581,96 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             ),
         )
 
+        if stream_audio:
+            return await self.async_audio_speech_streaming(
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                openai_client=openai_client,
+            )
+
         response = await openai_client.audio.speech.create(
             model=model,
-            voice=voice,  # type: ignore
+            voice=voice,  # pyright: ignore[reportArgumentType]  # provider voice id may be outside the SDK Literal
             input=input,
             **optional_params,
         )
 
         return HttpxBinaryResponseContent(response=response.response)
+
+    async def async_audio_speech_streaming(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        openai_client: AsyncOpenAI,
+    ) -> "SpeechStreamingResponse":
+        """Open the TTS request in streaming mode and forward the provider frames as they arrive.
+
+        Uses with_streaming_response so the httpx body is not read until iterated, so
+        time-to-first-audio reflects first-chunk latency rather than full generation. This is
+        how OpenAI's /v1/audio/speech behaves for every request (chunked transfer), so the
+        forwarded frames are raw audio bytes by default, or speech.audio.delta SSE frames when
+        the caller sets stream_format="sse". The content-type is carried in ``headers``.
+        """
+        response_cm = openai_client.audio.speech.with_streaming_response.create(
+            model=model,
+            voice=voice,  # pyright: ignore[reportArgumentType]  # provider voice id may be outside the SDK Literal
+            input=input,
+            **optional_params,
+        )
+        response = await response_cm.__aenter__()
+        headers = dict(response.headers)
+
+        async def _stream() -> AsyncIterator[bytes]:
+            exc: BaseException | None = None
+            try:
+                async for chunk in response.iter_bytes():
+                    yield chunk
+            except BaseException as e:
+                exc = e
+                raise
+            finally:
+                if exc is None:
+                    await response_cm.__aexit__(None, None, None)
+                else:
+                    await response_cm.__aexit__(type(exc), exc, exc.__traceback__)
+
+        return SpeechStreamingResponse(stream_iterator=_stream(), headers=headers)
+
+    def audio_speech_streaming(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        openai_client: OpenAI,
+    ) -> "SpeechStreamingResponse":
+        response_cm = openai_client.audio.speech.with_streaming_response.create(
+            model=model,
+            voice=voice,  # pyright: ignore[reportArgumentType]  # provider voice id may be outside the SDK Literal
+            input=input,
+            **optional_params,
+        )
+        response = response_cm.__enter__()
+        headers = dict(response.headers)
+
+        def _stream() -> Iterator[bytes]:
+            exc: BaseException | None = None
+            try:
+                yield from response.iter_bytes()
+            except BaseException as e:
+                exc = e
+                raise
+            finally:
+                if exc is None:
+                    response_cm.__exit__(None, None, None)
+                else:
+                    response_cm.__exit__(type(exc), exc, exc.__traceback__)
+
+        return SpeechStreamingResponse(stream_iterator=_stream(), headers=headers)
 
 
 class OpenAIFilesAPI(BaseLLM):
