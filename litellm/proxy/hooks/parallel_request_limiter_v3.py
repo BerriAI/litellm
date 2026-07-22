@@ -290,6 +290,14 @@ DEFAULT_CHARS_PER_TOKEN = 4
 # (baseline floor) and to the smallest configured TPM limit (capped floor for
 # small per-tenant TPM caps).
 _TPM_FLOOR_FRACTION = 4
+# litellm.token_counter has no per-type handling for "input_audio" content
+# blocks (unlike images, which use use_default_image_token_count) -- it
+# silently contributes 0 tokens for them. This is a conservative flat
+# estimate added per audio block on top of token_counter's result for the
+# project ITPM reservation, so an audio-heavy burst can't reserve close to
+# nothing. Not a billing-accurate count, just enough to avoid grossly
+# under-reserving.
+DEFAULT_AUDIO_TOKEN_ESTIMATE = int(os.getenv("LITELLM_DEFAULT_AUDIO_TOKEN_ESTIMATE", 300))
 # Stash for the reserved-token count on the request data dict so success/
 # failure callbacks can reconcile against the upfront reservation.
 TPM_RESERVED_TOKENS_KEY = "_litellm_tpm_reserved_tokens"
@@ -2558,6 +2566,53 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     llm_provider=llm_provider,
                 )
 
+    @staticmethod
+    def _count_audio_content_blocks(messages: Any) -> int:
+        """
+        Number of ``input_audio`` content blocks across ``messages``.
+        ``litellm.token_counter`` has no per-type handling for these (unlike
+        images) -- it raises ``ValueError`` on them -- so
+        ``_estimate_precise_input_tokens`` strips them before counting and
+        adds a flat estimate per block back on top; see
+        ``DEFAULT_AUDIO_TOKEN_ESTIMATE``.
+        """
+        if not isinstance(messages, list):
+            return 0
+        count = 0
+        for message in messages:
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            count += sum(1 for block in content if isinstance(block, dict) and block.get("type") == "input_audio")
+        return count
+
+    @staticmethod
+    def _strip_audio_content_blocks(messages: Any) -> Any:
+        """
+        Drop ``input_audio`` content blocks before passing ``messages`` to
+        ``token_counter``, which raises ``ValueError`` on them (no per-type
+        handling, unlike images). The audio contribution is added back
+        separately via ``DEFAULT_AUDIO_TOKEN_ESTIMATE`` so the rest of the
+        message (text/images/tools) still gets counted accurately instead of
+        the whole call falling back to the cheap char-count estimate.
+        """
+        if not isinstance(messages, list):
+            return messages
+        sanitized = []
+        for message in messages:
+            if not isinstance(message, dict):
+                sanitized.append(message)
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                sanitized.append(message)
+                continue
+            filtered_content = [
+                block for block in content if not (isinstance(block, dict) and block.get("type") == "input_audio")
+            ]
+            sanitized.append({**message, "content": filtered_content})
+        return sanitized
+
     def _estimate_precise_input_tokens(self, data: dict, model: str | None) -> int:
         """
         Model-aware input token estimate for the project ITPM reservation,
@@ -2565,23 +2620,31 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         deployment-level itpm/otpm check uses in
         ``io_token_rate_limit_check.py``. Unlike the cheap char-count
         estimate the combined-TPM path uses, this accounts for image/tool
-        content so a burst of multimodal or tool-heavy requests can't each
-        reserve only the one-token floor and blow past ITPM before post-call
-        reconciliation catches up.
+        content (plus a conservative flat add-on per audio block, which
+        ``token_counter`` can't count at all) so a burst of multimodal,
+        tool-heavy, or audio-heavy requests can't each reserve only the
+        one-token floor and blow past ITPM before post-call reconciliation
+        catches up.
 
         Falls back to the cheap char-count estimate if ``token_counter``
         can't resolve a tokenizer for this model (e.g. an unrecognized
-        custom model name) or otherwise raises.
+        custom model name) or otherwise raises -- the audio add-on still
+        applies on top of the fallback.
         """
         from litellm import token_counter
 
+        messages = data.get("messages")
+        audio_blocks = self._count_audio_content_blocks(messages)
+        audio_token_estimate = audio_blocks * DEFAULT_AUDIO_TOKEN_ESTIMATE
+        countable_messages = self._strip_audio_content_blocks(messages) if audio_blocks else messages
+
         try:
-            return max(
+            estimate = max(
                 0,
                 int(
                     token_counter(
                         model=model or "",
-                        messages=data.get("messages"),
+                        messages=countable_messages,
                         text=data.get("prompt") or data.get("input"),
                         tools=data.get("tools"),
                         tool_choice=data.get("tool_choice"),
@@ -2589,9 +2652,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 ),
             )
+            return estimate + audio_token_estimate
         except Exception:  # noqa: BLE001 - any tokenizer/model-resolution failure degrades to the cheap estimate, never a 500
             estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data)
-            return estimated_input_tokens
+            return estimated_input_tokens + audio_token_estimate
 
     async def _reserve_project_io_tokens_or_raise(
         self,
