@@ -353,7 +353,16 @@ class LiveSsoAssertionSource:
             refreshed = await self._refresh(user_id, rechecked)
             if refreshed is None:
                 return ExpiredSsoAssertion()
-            return UsableSsoAssertion(assertion=refreshed)
+            return self._guarded_lookup(refreshed)
+
+    def _guarded_lookup(self, assertion: SSOIdentityAssertion) -> SsoAssertionLookup:
+        """The ONE construction gate for ``Usable``: every assertion, stored or freshly
+        refreshed, passes the same expiry predicate. An IdP handing back an already-expired
+        id_token therefore reads Expired (the 401 re-login challenge) instead of being sent
+        to an exchange that will reject it."""
+        if _assertion_is_expired(assertion, self._now()):
+            return ExpiredSsoAssertion()
+        return UsableSsoAssertion(assertion=assertion)
 
     def _memoized(self, user_id: str) -> UsableSsoAssertion | None:
         entry = self._usable_memo.get(user_id)
@@ -401,7 +410,16 @@ class LiveSsoAssertionSource:
                 "SSO assertion refresh for user_id=%s returned no usable id_token; treating as expired.", user_id
             )
             return None
-        await self._persist(user_id, refreshed)
+        try:
+            await self._persist(user_id, refreshed)
+        except Exception as exc:  # noqa: BLE001  # a write-back failure must not discard the in-hand token
+            verbose_proxy_logger.warning(
+                "SSO assertion refresh for user_id=%s succeeded but the write-back failed; serving the "
+                "in-hand assertion (a possibly rotated refresh token was not stored, so the next "
+                "refresh may require a re-login): %s",
+                user_id,
+                exc,
+            )
         return refreshed
 
     def _lock(self, user_id: str) -> asyncio.Lock:

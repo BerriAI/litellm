@@ -594,3 +594,52 @@ async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
     assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
     clock["now"] = clock["now"] + timedelta(seconds=61)
     assert isinstance(await source.fetch_usable("alice"), NoSsoAssertion)
+
+
+@pytest.mark.asyncio
+async def test_source_persist_failure_after_refresh_still_serves_the_in_hand_token():
+    """A write-back failure is not a read failure: the freshly refreshed assertion is valid
+    and in hand, and discarding it would also strand a one-time rotated refresh token."""
+    new_id_token = _make_id_token(exp_offset=7200)
+    posts: list[tuple[str, dict]] = []
+
+    async def fetch(user_id: str):
+        return _stored(-100)
+
+    async def failing_persist(user_id, assertion):
+        raise RuntimeError("db write down")
+
+    async def post(url, form):
+        posts.append((url, dict(form)))
+        return {"id_token": new_id_token, "refresh_token": "rt_rotated"}
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=failing_persist, post=post, getenv=_SSO_ENV.get)
+    lookup = await source.fetch_usable("alice")
+    assert isinstance(lookup, UsableSsoAssertion)
+    assert lookup.assertion.id_token.get_secret_value() == new_id_token
+    assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_returning_expired_token_reads_expired_but_persists_rotation():
+    """Usable has ONE construction gate: a refreshed assertion passes the same expiry
+    predicate as a stored one, so an IdP handing back a dead token reads Expired instead of
+    being sent to an exchange; the rotated refresh token is still persisted."""
+    expired_new = _make_id_token(exp_offset=-10)
+    persisted: list[tuple[str, SSOIdentityAssertion]] = []
+
+    async def fetch(user_id: str):
+        return _stored(-100)
+
+    async def persist(user_id, assertion):
+        persisted.append((user_id, assertion))
+
+    async def post(url, form):
+        return {"id_token": expired_new, "refresh_token": "rt_rotated"}
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    assert len(persisted) == 1
+    stored_assertion = persisted[0][1]
+    assert stored_assertion.refresh_token is not None
+    assert stored_assertion.refresh_token.get_secret_value() == "rt_rotated"

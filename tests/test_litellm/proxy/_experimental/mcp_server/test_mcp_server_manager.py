@@ -9268,3 +9268,70 @@ def test_obo_retry_requires_an_authenticated_caller_for_stored_assertion_retry()
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _obo_retry_covers_caller
 
     assert _obo_retry_covers_caller(MCPAuth.oauth2_id_jag, None, None) is False
+
+
+class TestSubjectBearerTokenSymmetry:
+    """One rule decides whether the caller's bearer becomes exchange subject material, and every
+    egress surface (tools call, tools list, prompts, resources) resolves through it; an id_jag
+    caller presenting a fresh IdP JWT must see identical sourcing on list and call."""
+
+    def _server(self, auth_type):
+        server = MagicMock()
+        server.auth_type = auth_type
+        return server
+
+    @pytest.mark.parametrize(
+        "auth_type,expected",
+        [
+            (MCPAuth.oauth2_token_exchange, "hdr.jwt.sig"),
+            (MCPAuth.oauth2_id_jag, "hdr.jwt.sig"),
+            (MCPAuth.oauth2, None),
+            (MCPAuth.api_key, None),
+            (None, None),
+        ],
+    )
+    def test_subject_bearer_mode_matrix(self, auth_type, expected):
+        manager = MCPServerManager()
+        raw_headers = {"authorization": "Bearer hdr.jwt.sig"}
+        assert manager._subject_bearer_token(self._server(auth_type), raw_headers) == expected
+
+    def test_oauth2_headers_win_over_raw(self):
+        manager = MCPServerManager()
+        token = manager._subject_bearer_token(
+            self._server(MCPAuth.oauth2_id_jag),
+            {"authorization": "Bearer raw.jwt.sig"},
+            oauth2_headers={"Authorization": "Bearer oauth2.jwt.sig"},
+        )
+        assert token == "oauth2.jwt.sig"
+
+    @pytest.mark.asyncio
+    async def test_list_path_threads_the_id_jag_subject_token(self):
+        manager = MCPServerManager()
+        server = MagicMock()
+        server.auth_type = MCPAuth.oauth2_id_jag
+        server.server_id = "idjag-1"
+        server.name = "idjag_srv"
+        server.alias = "idjag_srv"
+        server.transport = MCPTransport.http
+        server.spec_path = None
+
+        captured: dict[str, object] = {}
+
+        async def fake_create_client(**kwargs):
+            captured.update(kwargs)
+            raise RuntimeError("stop after capture")
+
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError
+
+        manager._create_mcp_client = fake_create_client
+        with patch.object(manager, "_build_stdio_env", return_value=None):
+            with pytest.raises(MCPServerListError):
+                await manager._get_tools_from_server(
+                    server,
+                    mcp_auth_header=None,
+                    oauth2_headers={"Authorization": "Bearer caller.idp.jwt"},
+                    raw_headers={"authorization": "Bearer caller.idp.jwt"},
+                    user_api_key_auth=None,
+                )
+
+        assert captured.get("subject_token") == "caller.idp.jwt"
