@@ -19,6 +19,7 @@ export const pageDescriptions: Record<string, string> = {
   "tool-policies": "Configure tool use policies and permissions",
   "vector-stores": "Manage vector databases for embeddings",
   new_usage: "View usage analytics and metrics",
+  "cost-optimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
   logs: "Access request and response logs",
   "guardrails-monitor": "Monitor guardrail performance and view logs",
   users: "Manage internal user accounts and permissions",

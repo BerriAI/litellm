@@ -1,4 +1,7 @@
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { getProviderLogoAndName, Providers, providerLogoMap } from "@/components/provider_info_helpers";
+import milvusLogo from "../../public/assets/logos/milvus.svg";
+import postgresqlLogo from "../../public/assets/logos/postgresql.svg";
+import s3VectorLogo from "../../public/assets/logos/s3_vector.png";
 
 export enum VectorStoreProviders {
   Bedrock = "Amazon Bedrock",
@@ -22,17 +25,15 @@ export const vectorStoreProviderMap: Record<string, string> = {
   S3Vectors: "s3_vectors",
 };
 
-const asset_logos_folder = "/ui/assets/logos/";
-
 export const vectorStoreProviderLogoMap: Record<string, string> = {
-  [VectorStoreProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
-  [VectorStoreProviders.PgVector]: `${asset_logos_folder}postgresql.svg`, // Fallback to a generic database icon if needed
-  [VectorStoreProviders.VertexRagEngine]: `${asset_logos_folder}google.svg`,
-  [VectorStoreProviders.VertexAiSearch]: `${asset_logos_folder}google.svg`,
-  [VectorStoreProviders.OpenAI]: `${asset_logos_folder}openai_small.svg`,
-  [VectorStoreProviders.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
-  [VectorStoreProviders.Milvus]: `${asset_logos_folder}milvus.svg`,
-  [VectorStoreProviders.S3Vectors]: `${asset_logos_folder}s3_vector.png`,
+  [VectorStoreProviders.Bedrock]: providerLogoMap[Providers.Bedrock] ?? "",
+  [VectorStoreProviders.PgVector]: postgresqlLogo.src,
+  [VectorStoreProviders.VertexRagEngine]: providerLogoMap[Providers.Vertex_AI] ?? "",
+  [VectorStoreProviders.VertexAiSearch]: providerLogoMap[Providers.Vertex_AI] ?? "",
+  [VectorStoreProviders.OpenAI]: providerLogoMap[Providers.OpenAI] ?? "",
+  [VectorStoreProviders.Azure]: providerLogoMap[Providers.Azure] ?? "",
+  [VectorStoreProviders.Milvus]: milvusLogo.src,
+  [VectorStoreProviders.S3Vectors]: s3VectorLogo.src,
 };
 
 // Define field types for provider-specific configurations
@@ -201,24 +202,14 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
 };
 
 export const getVectorStoreProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
-  if (!providerValue) {
-    return { logo: "", displayName: "-" };
-  }
-
-  // Find the enum key by matching vectorStoreProviderMap values
   const enumKey = Object.keys(vectorStoreProviderMap).find(
     (key) => vectorStoreProviderMap[key].toLowerCase() === providerValue.toLowerCase(),
   );
-
   if (!enumKey) {
-    return { logo: "", displayName: providerValue };
+    return getProviderLogoAndName(providerValue);
   }
-
-  // Get the display name from VectorStoreProviders enum and logo from map
   const displayName = VectorStoreProviders[enumKey as keyof typeof VectorStoreProviders];
-  const logo = resolveLogoSrc(vectorStoreProviderLogoMap[displayName as keyof typeof vectorStoreProviderLogoMap]) ?? "";
-
-  return { logo, displayName };
+  return { logo: vectorStoreProviderLogoMap[displayName], displayName };
 };
 
 export const getProviderSpecificFields = (providerValue: string): VectorStoreFieldConfig[] => {

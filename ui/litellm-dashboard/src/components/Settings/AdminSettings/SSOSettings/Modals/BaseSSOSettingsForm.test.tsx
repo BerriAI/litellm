@@ -293,4 +293,40 @@ describe("renderProviderFields", () => {
     expect(result).not.toBeNull();
     expect(result?.length).toBe(5);
   });
+
+  it("renders provider logos in the dropdown and falls back to a letter avatar on load error", async () => {
+    const TestWrapper = () => {
+      const [form] = Form.useForm();
+      return <BaseSSOSettingsForm form={form} onFormSubmit={vi.fn()} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByLabelText("SSO Provider"));
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByAltText("Google SSO logo").length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getAllByAltText("Google SSO logo")[0]).toHaveAttribute("src", expect.stringContaining("google.svg"));
+    expect(screen.getAllByAltText("Microsoft SSO logo")[0]).toHaveAttribute(
+      "src",
+      expect.stringContaining("microsoft_azure.svg"),
+    );
+    expect(screen.queryByAltText("Generic SSO logo")).not.toBeInTheDocument();
+
+    const oktaLogo = screen.getAllByAltText("Okta / Auth0 SSO logo")[0];
+    expect(oktaLogo).toHaveAttribute("src", expect.stringContaining("https://www.okta.com/"));
+
+    await act(async () => {
+      fireEvent.error(oktaLogo);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByAltText("Okta / Auth0 SSO logo")).not.toBeInTheDocument();
+      expect(screen.getByText("O")).toBeInTheDocument();
+    });
+  });
 });

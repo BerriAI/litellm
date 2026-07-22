@@ -53,6 +53,7 @@ def mock_proxy_config(monkeypatch):
 
     # Add a counter to track save_config calls
     save_config_call_count = 0
+    saved_env_updates: list = []
 
     async def mock_save_config(new_config=None):
         nonlocal mock_config, save_config_call_count
@@ -61,13 +62,22 @@ def mock_proxy_config(monkeypatch):
             mock_config = new_config
         return mock_config
 
+    async def mock_save_environment_variables(updates):
+        saved_env_updates.append(updates)
+
     from litellm.proxy.proxy_server import proxy_config
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr(proxy_config, "save_config", mock_save_config)
+    monkeypatch.setattr(proxy_config, "save_environment_variables", mock_save_environment_variables)
 
-    # Return both the config and the call counter
-    return {"config": mock_config, "save_call_count": lambda: save_config_call_count}
+    # Return the config, the save_config call counter, and any env-var updates
+    # the endpoint routed through the dedicated save_environment_variables path
+    return {
+        "config": mock_config,
+        "save_call_count": lambda: save_config_call_count,
+        "env_updates": lambda: saved_env_updates,
+    }
 
 
 @pytest.fixture
@@ -840,10 +850,17 @@ class TestProxySettingEndpoints:
         assert data["status"] == "success"
         assert data["theme_config"]["logo_url"] == "https://example.com/new-logo.png"
 
-        # Verify config was updated
-        updated_config = mock_proxy_config["config"]
-        assert "UI_LOGO_PATH" in updated_config["environment_variables"]
+        # The logo path is applied to the live process immediately
+        assert os.environ["UI_LOGO_PATH"] == "https://example.com/new-logo.png"
         assert mock_proxy_config["save_call_count"]() == 1
+
+        # env vars are persisted through the dedicated per-key path, and ONLY
+        # the two keys this endpoint owns are touched. The unrelated SSO env
+        # vars in the merged config are never snapshotted.
+        env_updates = mock_proxy_config["env_updates"]()
+        assert env_updates == [
+            {"UI_LOGO_PATH": "https://example.com/new-logo.png", "LITELLM_FAVICON_URL": None}
+        ]
 
     def test_update_ui_theme_settings_with_favicon(
         self, mock_proxy_config, mock_auth, monkeypatch
@@ -869,13 +886,15 @@ class TestProxySettingEndpoints:
             == "https://example.com/custom-favicon.ico"
         )
 
-        updated_config = mock_proxy_config["config"]
-        assert "UI_LOGO_PATH" in updated_config["environment_variables"]
-        assert "LITELLM_FAVICON_URL" in updated_config["environment_variables"]
-        assert (
-            updated_config["environment_variables"]["LITELLM_FAVICON_URL"]
-            == "https://example.com/custom-favicon.ico"
-        )
+        assert os.environ["UI_LOGO_PATH"] == "https://example.com/new-logo.png"
+        assert os.environ["LITELLM_FAVICON_URL"] == "https://example.com/custom-favicon.ico"
+        # Only the two owned keys are persisted, both with their new values
+        assert mock_proxy_config["env_updates"]() == [
+            {
+                "UI_LOGO_PATH": "https://example.com/new-logo.png",
+                "LITELLM_FAVICON_URL": "https://example.com/custom-favicon.ico",
+            }
+        ]
 
     def test_update_ui_theme_settings_clear_favicon(
         self, mock_proxy_config, mock_auth, monkeypatch
@@ -924,6 +943,88 @@ class TestProxySettingEndpoints:
 
         assert data["values"]["logo_url"] == "https://example.com/logo.png"
         assert data["values"]["favicon_url"] == "https://example.com/favicon.ico"
+
+    def test_get_ui_theme_settings_falls_back_to_process_env(
+        self, mock_proxy_config, monkeypatch
+    ):
+        """Branding supplied only as process env vars must surface in the read.
+
+        A deployment that sets UI_LOGO_PATH / LITELLM_FAVICON_URL via IaC and
+        never touches the UI has no stored ui_theme_config, yet the branding is
+        live, so the settings page must reflect it rather than reading blank.
+        """
+        monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+        monkeypatch.delenv("LITELLM_FAVICON_URL", raising=False)
+        monkeypatch.setenv("UI_LOGO_PATH", "https://cdn.example.com/logo.png")
+        monkeypatch.setenv("LITELLM_FAVICON_URL", "https://cdn.example.com/favicon.ico")
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+        assert values["logo_url"] == "https://cdn.example.com/logo.png"
+        assert values["favicon_url"] == "https://cdn.example.com/favicon.ico"
+
+    def test_get_ui_theme_settings_stored_value_wins_over_env(
+        self, mock_auth, monkeypatch
+    ):
+        """A stored ui_theme_config field outranks the env var for that field.
+
+        The env fallback only fills fields the stored config leaves blank, so the
+        UI-driven flow is unchanged while an unstored field still resolves.
+        """
+        from litellm.proxy.proxy_server import proxy_config
+
+        stored_config = {
+            "litellm_settings": {
+                "ui_theme_config": {"logo_url": "https://db.example.com/logo.png"}
+            }
+        }
+
+        async def mock_get_config():
+            return stored_config
+
+        monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+        monkeypatch.setenv("UI_LOGO_PATH", "https://env.example.com/logo.png")
+        monkeypatch.setenv("LITELLM_FAVICON_URL", "https://env.example.com/favicon.ico")
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+        assert values["logo_url"] == "https://db.example.com/logo.png"
+        assert values["favicon_url"] == "https://env.example.com/favicon.ico"
+
+    def test_get_ui_theme_settings_reports_unset_when_absent_everywhere(
+        self, mock_proxy_config, monkeypatch
+    ):
+        """A field set in neither the stored config nor the env stays null."""
+        monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+        monkeypatch.delenv("LITELLM_FAVICON_URL", raising=False)
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+        assert values["logo_url"] is None
+        assert values["favicon_url"] is None
+
+    def test_get_ui_theme_settings_does_not_disclose_local_path_env_value(
+        self, mock_proxy_config, monkeypatch
+    ):
+        """This endpoint is public, so an env-configured local filesystem branding
+        path must never be surfaced to anonymous callers; only public http(s) URLs.
+        """
+        monkeypatch.setenv("UI_LOGO_PATH", "/mnt/secret/internal/logo.png")
+        monkeypatch.setenv("LITELLM_FAVICON_URL", "file:///etc/favicon.ico")
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+        # the local path / file scheme is withheld rather than disclosed
+        assert values["logo_url"] is None
+        assert values["favicon_url"] is None
 
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""

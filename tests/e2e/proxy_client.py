@@ -31,6 +31,8 @@ from models import (
     ChatResponse,
     CountTokensBody,
     CountTokensResponse,
+    CredentialCreateBody,
+    CredentialCreateResponse,
     CustomerDeleteBody,
     EmbedBody,
     EmbedResponse,
@@ -52,6 +54,7 @@ from models import (
     ModelNewBody,
     ModelNewResponse,
     ModelsListResponse,
+    ModelUpdateBody,
     OcrBody,
     OcrResponse,
     SpendLogRow,
@@ -209,6 +212,23 @@ class ProxyClient:
             f"propagation or STORE_MODEL_IN_DB reload issue){last_error}"
         )
 
+    def update_model(self, model_id: str, litellm_params: LiteLLMParamsBody) -> None:
+        """Merge `litellm_params` over the deployment `model_id`'s stored params via
+        POST /model/update. The proxy overlays only the non-null fields and clears
+        its model cache, so a later /model/info read reflects the change (eventually,
+        after the reload)."""
+        unwrap(
+            self.transport.post(
+                "/model/update",
+                headers=self.transport.master,
+                json=ModelUpdateBody(
+                    litellm_params=litellm_params,
+                    model_info=ModelInfoBody(id=model_id),
+                ),
+                response_type=NoBody,
+            )
+        )
+
     def delete_model(self, model_id: str) -> None:
         result = self.transport.post(
             "/model/delete",
@@ -218,6 +238,26 @@ class ProxyClient:
         )
         if not is_ok(result):
             warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
+
+    def create_credential(self, body: CredentialCreateBody) -> None:
+        unwrap(
+            self.transport.post(
+                "/credentials",
+                headers=self.transport.master,
+                json=body,
+                response_type=CredentialCreateResponse,
+            )
+        )
+
+    def delete_credential(self, credential_name: str) -> None:
+        result = self.transport.delete(
+            f"/credentials/{credential_name}",
+            headers=self.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+        if not is_ok(result):
+            warnings.warn(f"delete_credential({credential_name!r}) failed: {result}", stacklevel=2)
 
     # ---- LLM calls ------------------------------------------------------
 

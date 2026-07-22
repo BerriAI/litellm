@@ -2634,3 +2634,134 @@ def test_get_logging_payload_hashes_bearer_prefixed_api_key():
     assert not metadata_dict["user_api_key"].startswith("sk-"), (
         f"metadata user_api_key contains unhashed key: {metadata_dict['user_api_key']}"
     )
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_preserves_headroom_compression_token_stats(
+    mock_should_store,
+):
+    """
+    Headroom's compression stats live in guardrail_response, which is redacted
+    by default. Purely numeric token stats carry no prompt content and must
+    survive so daily spend aggregation can count compression_saved_tokens;
+    everything else in guardrail_response stays redacted.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "headroom-compressor",
+            "guardrail_provider": "headroom",
+            "guardrail_status": "success",
+            "guardrail_response": {
+                "tokens_before": 1000,
+                "tokens_after": 400,
+                "tokens_saved": 600,
+                "compression_ratio": 0.4,
+                "transforms_applied": ["dedupe_messages"],
+            },
+        },
+        {
+            "guardrail_name": "echo-guard",
+            "guardrail_status": "success",
+            "guardrail_response": {
+                "evaluated_input": "secret prompt",
+                "tokens_saved": "prompt text hiding in a stat key",
+            },
+        },
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    assert result[0]["guardrail_response"] == {
+        "tokens_before": 1000,
+        "tokens_after": 400,
+        "tokens_saved": 600,
+        "compression_ratio": 0.4,
+    }
+    assert result[1]["guardrail_response"] == REDACTED_BY_LITELM_STRING
+
+
+@pytest.mark.asyncio
+async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeypatch):
+    """
+    End-to-end seam test for the native compression write path on
+    /v1/messages: the pre-call deployment hook records savings into the call
+    kwargs' litellm_metadata, the logging object captures it via
+    update_from_kwargs (exactly as llm_http_handler does for
+    anthropic_messages), and get_logging_payload lands it in
+    SpendLogsPayload.metadata JSON under ``compression_savings``.
+    """
+    from litellm.integrations.compression_interception.handler import (
+        CompressionInterceptionLogger,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CallTypes
+
+    monkeypatch.setattr(
+        "litellm.integrations.compression_interception.handler.compress",
+        lambda **kwargs: {
+            "messages": [{"role": "user", "content": "compressed"}],
+            "original_tokens": 12000,
+            "compressed_tokens": 5000,
+            "cache": {"auth.py": "content"},
+            "tools": [],
+        },
+    )
+    logger = CompressionInterceptionLogger()
+
+    call_kwargs = {
+        "model": "claude-sonnet-5",
+        "messages": [{"role": "user", "content": "big context"}],
+        "max_tokens": 512,
+        "litellm_call_id": "test-compression-call-id",
+        "litellm_metadata": {
+            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key_user_id": "u1",
+            "user_api_key_team_id": "t1",
+        },
+    }
+    hooked = await logger.async_pre_call_deployment_hook(kwargs=call_kwargs, call_type=CallTypes.anthropic_messages)
+    assert hooked is not None
+
+    start_time = datetime.datetime.now(timezone.utc)
+    logging_obj = Logging(
+        model="claude-sonnet-5",
+        messages=hooked["messages"],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=start_time,
+        litellm_call_id="test-compression-call-id",
+        function_id="test",
+    )
+    logging_obj.update_from_kwargs(
+        kwargs=hooked,
+        model="claude-sonnet-5",
+        optional_params={"max_tokens": 512},
+        litellm_params={
+            "preset_cache_key": None,
+            "stream_response": {},
+            "model_info": hooked.get("model_info"),
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    end_time = datetime.datetime.now(timezone.utc)
+    logging_obj.model_call_details["completion_start_time"] = end_time
+    payload = get_logging_payload(
+        kwargs=logging_obj.model_call_details,
+        response_obj={
+            "id": "msg_test",
+            "usage": {"prompt_tokens": 5000, "completion_tokens": 10, "total_tokens": 5010},
+        },
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    payload_metadata = json.loads(payload["metadata"])
+    assert payload_metadata["compression_savings"] == {
+        "tokens_before": 12000,
+        "tokens_after": 5000,
+        "tokens_saved": 7000,
+        "source": "compression_interception",
+    }

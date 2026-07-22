@@ -103,7 +103,8 @@ test.describe("Proxy Admin - Keys", () => {
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
-    await page.getByRole("button", { name: "Delete Key" }).click();
+    await page.getByRole("button", { name: "More key actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete Key" }).click();
 
     const modal = page.locator(".ant-modal:visible");
     await expect(modal).toBeVisible({ timeout: 5_000 });

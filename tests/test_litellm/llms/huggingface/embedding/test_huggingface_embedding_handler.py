@@ -121,6 +121,20 @@ class TestHuggingFaceEmbedding:
         assert response.usage.prompt_tokens > 0
         assert response.usage.total_tokens == response.usage.prompt_tokens
 
+    def test_model_name_with_https_substring_uses_api_base(self):
+        api_base = "https://legit.example/embed"
+
+        litellm.embedding(
+            model="huggingface/my-https-endpoint",
+            input=["hello world"],
+            input_type="embed",
+            api_base=api_base,
+        )
+
+        self.mock_http.assert_called_once()
+        called_url = self.mock_http.call_args[0][0]
+        assert called_url == api_base
+
     def test_embedding_with_sentence_similarity_task(self):
         """Test embedding when task type is sentence-similarity (requires 2+ sentences)"""
 

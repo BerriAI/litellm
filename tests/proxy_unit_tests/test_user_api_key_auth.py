@@ -1115,6 +1115,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
         "team_id": None,
         "team_object": None,
         "user_id": None,
+        "user_email": None,
         "user_object": None,
         "org_id": None,
         "org_object": None,

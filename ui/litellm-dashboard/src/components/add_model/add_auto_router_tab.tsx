@@ -100,6 +100,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       adaptive_weights: adaptiveWeights = DEFAULT_ADAPTIVE_WEIGHTS,
       tier_distance_penalty: tierDistancePenalty = DEFAULT_TIER_DISTANCE_PENALTY,
       adaptive_eligible: adaptiveEligible = "all",
+      return_raw_model_name: returnRawModelName = false,
     } = complexityRouterConfig;
 
     const missingTiersError = getMissingTiersError(tiers);
@@ -148,6 +149,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
           adaptiveWeights,
           tierDistancePenalty,
           adaptiveEligible,
+          returnRawModelName,
         };
 
         const submitValues = {

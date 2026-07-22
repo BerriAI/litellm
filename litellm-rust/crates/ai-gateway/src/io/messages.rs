@@ -1,1 +1,1 @@
-pub use crate::messages::{messages, MessagesRequest};
+pub use crate::messages::{MessagesRequest, messages};

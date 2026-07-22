@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
@@ -197,6 +197,123 @@ class TestStandardizedResetTime(unittest.TestCase):
         expected = datetime(2023, 3, 13, 0, 0, 0, tzinfo=eastern)
         result = get_next_standardized_reset_time("1d", pre_spring, "US/Eastern")
         self.assertEqual(result, expected)
+
+
+class TestResetTimeOfDay(unittest.TestCase):
+    """A configurable reset_time_of_day shifts day/week/month resets off midnight."""
+
+    def test_daily_reset_before_offset_is_today(self):
+        now = datetime(2023, 5, 15, 8, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "1d", now, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 5, 15, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_daily_reset_after_offset_is_tomorrow(self):
+        now = datetime(2023, 5, 15, 14, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "1d", now, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 5, 16, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_daily_reset_exactly_at_offset_rolls_forward(self):
+        now = datetime(2023, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "1d", now, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 5, 16, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_daily_reset_with_seconds_offset(self):
+        now = datetime(2023, 5, 15, 8, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "1d", now, "UTC", reset_time_of_day=time(9, 30, 15)
+        )
+        self.assertEqual(result, datetime(2023, 5, 15, 9, 30, 15, tzinfo=timezone.utc))
+
+    def test_offset_applies_in_configured_timezone(self):
+        # 2023-05-15 22:30 UTC == 2023-05-16 01:30 in Jerusalem (IDT, UTC+3),
+        # so the next noon-Jerusalem reset is 2023-05-16 12:00 IDT.
+        now = datetime(2023, 5, 15, 22, 30, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "1d", now, "Asia/Jerusalem", reset_time_of_day=time(12, 0)
+        )
+        jerusalem = result.astimezone(ZoneInfo("Asia/Jerusalem"))
+        self.assertEqual(
+            (jerusalem.year, jerusalem.month, jerusalem.day), (2023, 5, 16)
+        )
+        self.assertEqual(jerusalem.hour, 12)
+        self.assertEqual(jerusalem.minute, 0)
+
+    def test_weekly_reset_lands_on_monday_at_offset(self):
+        wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "7d", wednesday, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 5, 22, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_weekly_reset_today_is_monday_before_offset_is_today(self):
+        monday_morning = datetime(2023, 5, 22, 9, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "7d", monday_morning, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 5, 22, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_weekly_reset_today_is_monday_after_offset_is_next_week(self):
+        monday_afternoon = datetime(2023, 5, 22, 15, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "7d", monday_afternoon, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 5, 29, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_monthly_30d_lands_on_first_at_offset(self):
+        now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "30d", now, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 6, 1, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_monthly_1mo_today_is_first_before_offset_is_today(self):
+        now = datetime(2023, 5, 1, 9, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "1mo", now, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 5, 1, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_monthly_year_rollover_at_offset(self):
+        now = datetime(2023, 12, 15, 9, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "1mo", now, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_custom_day_reset_applies_offset(self):
+        now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time(
+            "3d", now, "UTC", reset_time_of_day=time(12, 0)
+        )
+        self.assertEqual(result, datetime(2023, 5, 18, 12, 0, 0, tzinfo=timezone.utc))
+
+    def test_sub_day_durations_ignore_offset(self):
+        base = datetime(2023, 5, 15, 15, 20, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time(
+                "2h", base, "UTC", reset_time_of_day=time(12, 0)
+            ),
+            datetime(2023, 5, 15, 16, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            get_next_standardized_reset_time(
+                "30m", base, "UTC", reset_time_of_day=time(12, 0)
+            ),
+            datetime(2023, 5, 15, 15, 30, 0, tzinfo=timezone.utc),
+        )
+
+    def test_default_offset_is_midnight(self):
+        now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("1d", now, "UTC"),
+            datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc),
+        )
 
 
 if __name__ == "__main__":

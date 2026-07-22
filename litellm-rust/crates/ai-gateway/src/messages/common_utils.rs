@@ -1,7 +1,8 @@
-use litellm_core::error::{json_type_name, CoreError};
-use litellm_core::messages::transformation::AnthropicMessagesProviderConfig;
-use litellm_core::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
 use litellm_core::CoreResult;
+use litellm_core::error::{CoreError, json_type_name};
+use litellm_core::messages::transformation::AnthropicMessagesProviderConfig;
+use litellm_core::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
+use litellm_core::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
 use serde_json::{Map, Value};
 
 use crate::constants::MESSAGES_ERROR_BODY_MAX_CHARS;
@@ -18,6 +19,7 @@ pub(super) fn messages_provider_config(
     provider: &str,
 ) -> Option<&'static dyn AnthropicMessagesProviderConfig> {
     match provider {
+        "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
         "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
         _ => None,
     }
@@ -47,4 +49,16 @@ pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
     headers
         .iter()
         .any(|(key, _)| key.eq_ignore_ascii_case(name))
+}
+
+pub(super) fn has_bearer_auth(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, value)| {
+        if !name.eq_ignore_ascii_case("authorization") {
+            return false;
+        }
+        let value = value.trim();
+        value.len() > 7
+            && value[..7].eq_ignore_ascii_case("bearer ")
+            && !value[7..].trim().is_empty()
+    })
 }

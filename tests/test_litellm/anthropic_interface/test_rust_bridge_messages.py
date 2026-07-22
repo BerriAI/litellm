@@ -219,8 +219,7 @@ def _gate(**overrides):
     kwargs = {
         "custom_llm_provider": "azure_ai",
         "litellm_params": GenericLiteLLMParams(api_key="sk-azure", rust=True),
-        "stream": False,
-        "rust_stream_eligible": False,
+        "has_agentic_hook": False,
         "model": "claude-sonnet-4-5",
         "api_key": "sk-azure",
         "api_base": "https://resource.services.ai.azure.com/anthropic",
@@ -285,22 +284,71 @@ async def test_gate_skips_rust_when_flag_false():
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_for_non_azure_provider():
-    bridge = ExplodingAsyncMessages()
+async def test_gate_invokes_rust_for_native_anthropic_provider():
+    bridge = RecordingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
 
-    response = await _gate(custom_llm_provider="anthropic")
+    response = await _gate(
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(api_key="sk-ant", rust=True),
+        api_key="sk-ant",
+        api_base="https://api.anthropic.com",
+        headers={"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
+    )
+
+    assert response is not None
+    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
+    assert bridge.calls[0]["custom_llm_provider"] == "anthropic"
+    assert bridge.calls[0]["api_key"] == "sk-ant"
+
+
+@pytest.mark.asyncio
+async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
+    bridge = RecordingAsyncMessages()
+    litellm.use_litellm_rust(True, amessages=bridge)
+    monkeypatch.setenv("LITELLM_RUST", "1")
+
+    response = await _gate(
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
+    )
+
+    assert response is not None
+    assert bridge.calls[0]["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
+    bridge = ExplodingAsyncMessages()
+    litellm.use_litellm_rust(True, amessages=bridge)
+    monkeypatch.setenv("LITELLM_RUST", "0")
+
+    response = await _gate(
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
+    )
 
     assert response is None
     assert bridge.calls == 0
 
 
 @pytest.mark.asyncio
-async def test_gate_skips_rust_when_streaming_but_not_eligible():
+async def test_gate_skips_rust_for_unsupported_provider():
     bridge = ExplodingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
 
-    response = await _gate(stream=True, rust_stream_eligible=False)
+    response = await _gate(custom_llm_provider="openai")
+
+    assert response is None
+    assert bridge.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_gate_skips_rust_for_agentic_hook():
+    bridge = ExplodingAsyncMessages()
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    response = await _gate(has_agentic_hook=True)
 
     assert response is None
     assert bridge.calls == 0
@@ -313,8 +361,7 @@ async def test_gate_streams_through_rust_when_eligible_and_strips_stream_flag():
 
     streaming_body = {**REQUEST_BODY, "stream": True}
     response = await _gate(
-        stream=True,
-        rust_stream_eligible=True,
+        has_agentic_hook=False,
         request_body=streaming_body,
     )
 

@@ -23,12 +23,16 @@ from access_control_client import (
     ROUTE_NOT_ALLOWED_MARKER,
 )
 from e2e_config import unique_marker
+from e2e_http import Success, UnauthorizedError, UnknownApiError, unwrap
 from lifecycle import ResourceManager
+from models import ChatBody, ChatMessage, LiteLLMParamsBody
+from proxy_client import ProxyClient
 
 pytestmark = pytest.mark.e2e
 
 ALLOWED_MODEL = "gemini-2.5-flash"
 DISALLOWED_MODEL = "gpt-5.5"
+VIRTUAL_KEY_BACKEND = "anthropic/claude-haiku-4-5-20251001"
 
 
 def _is_json(body: str) -> bool:
@@ -37,6 +41,7 @@ def _is_json(body: str) -> bool:
         return True
     except ValueError:
         return False
+
 
 
 class TestAccessControl:
@@ -81,3 +86,59 @@ class TestAccessControl:
             f"{result.status_code}: {result.body[:300]}"
         )
         assert _is_json(result.body), f"400 body must be valid JSON: {result.body[:300]}"
+
+
+class TestVirtualKeyAuth:
+    """Virtual-key auth the way OpenAI-compatible clients send it: a real key
+    must reach chat, a forged bearer must be rejected before the provider."""
+
+    @pytest.mark.covers(
+        "mgmt.virtual_key.valid_allows",
+        "mgmt.virtual_key.invalid_denied",
+        exercised_on=[],
+    )
+    def test_valid_key_allows_and_invalid_key_denied(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-auth-chat-{unique_marker()}"
+        model_id = proxy.create_model(
+            model,
+            LiteLLMParamsBody(model=VIRTUAL_KEY_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
+        )
+        resources.defer(lambda: proxy.delete_model(model_id))
+        key = resources.key()
+
+        ok = unwrap(
+            proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=f"Reply with one word. {unique_marker()}",
+                        )
+                    ],
+                    max_tokens=16,
+                ),
+            )
+        )
+        assert ok.choices, f"valid key must complete chat: {ok}"
+
+        bad = proxy.chat(
+            "sk-e2e-forged-not-a-real-key",
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content="should not run")],
+                max_tokens=8,
+            ),
+        )
+        match bad:
+            case UnauthorizedError():
+                return
+            case UnknownApiError(status_code=status) if status in (401, 403):
+                return
+            case Success():
+                pytest.fail("forged bearer must not reach a successful completion")
+            case _:
+                pytest.fail(f"forged bearer must be auth-denied, got {bad}")

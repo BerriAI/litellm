@@ -43,6 +43,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     get_request_base_url,
     validate_trusted_redirect_uri,
+    well_known_root_suffix,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -50,7 +51,6 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.utils import get_server_root_path
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -597,7 +597,14 @@ async def authorize_with_server(
 ):
     _raise_if_not_oauth2(mcp_server)
     if mcp_server.authorization_url is None:
-        raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server authorization url is not configured. Servers with no url (OpenAPI "
+                "spec or stdio) run no resource discovery, so set Authorization URL and Token URL "
+                "manually, or set Issuer to discover them from the identity provider (RFC 8414)."
+            ),
+        )
 
     if mcp_server.is_dcr_bridge:
         # Enforce S256 PKCE on both bridge arms. The relay arm forwards the validated,
@@ -702,7 +709,14 @@ async def exchange_token_with_server(
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
     if mcp_server.token_url is None:
-        raise HTTPException(status_code=400, detail="MCP server token url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server token url is not configured. Servers with no url (OpenAPI spec or "
+                "stdio) run no resource discovery, so set Token URL manually, or set Issuer to "
+                "discover it from the identity provider (RFC 8414)."
+            ),
+        )
 
     # The id and secret must come from the same source. When the server-side client_id wins,
     # falling back to the caller's secret pairs the persisted client with a foreign secret; the
@@ -1215,6 +1229,18 @@ async def _persist_dcr_client_registration(
         return "failed"
 
 
+def _client_supplied_redirect_uris(value: object) -> list[str] | None:
+    """RFC 7591 redirect_uris must be a non-empty array of URI strings. Any other shape (not a list,
+    an empty list, or a list holding a non-string or empty-string element) yields None so every
+    register arm falls back to the gateway callback instead of echoing a malformed value back to the
+    client as its redirect_uris. The redirect actually used is trust-validated later at /authorize by
+    validate_trusted_redirect_uri; this guard only keeps the client-facing echo well-typed."""
+    if not isinstance(value, list) or not value:
+        return None
+    uris = [uri for uri in value if isinstance(uri, str) and uri]
+    return uris if len(uris) == len(value) else None
+
+
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1224,15 +1250,16 @@ async def register_client_with_server(
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
     persist_credentials: bool = False,
-    client_redirect_uris: Optional[list] = None,
+    client_redirect_uris: list[str] | None = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
     current_redirect_uri = f"{request_base_url}/callback"
+    client_facing_redirect_uris = client_redirect_uris or [current_redirect_uri]
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
         "client_secret": "dummy",
-        "redirect_uris": [current_redirect_uri],
+        "redirect_uris": client_facing_redirect_uris,
     }
 
     if mcp_server.client_id and not (
@@ -1249,7 +1276,14 @@ async def register_client_with_server(
         return dummy_return
 
     if mcp_server.authorization_url is None:
-        raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server authorization url is not configured. Servers with no url (OpenAPI "
+                "spec or stdio) run no resource discovery, so set Authorization URL and Token URL "
+                "manually, or set Issuer to discover them from the identity provider (RFC 8414)."
+            ),
+        )
 
     if mcp_server.registration_url is None:
         return dummy_return
@@ -1299,6 +1333,9 @@ async def register_client_with_server(
         persistence_result = await _persist_dcr_client_registration(mcp_server, token_response, current_redirect_uri)
         if persistence_result == "reused":
             return dummy_return
+
+    if client_redirect_uris and not bridge_relay and isinstance(token_response, dict):
+        token_response = {**token_response, "redirect_uris": client_facing_redirect_uris}
 
     return JSONResponse(token_response)
 
@@ -1838,11 +1875,88 @@ def _jwt_auth_issuers() -> list:
     return issuers
 
 
+def _build_aggregate_protected_resource_response(request: Request) -> dict:
+    """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
+    the authorization server. No per-server names or scopes leak here; access
+    is resolved after sign-in from the authenticated user's grants.
+
+    The advertised authorization server is ``{base}/mcp`` (not the bare
+    origin) so RFC 8414 path-insertion resolves its metadata at
+    ``/.well-known/oauth-authorization-server/mcp``, a route this module
+    owns. The bare-origin well-known is registered first by the BYOK OAuth
+    feature and describes the BYOK flow, so it must not be the aggregate
+    discovery entry point (same pattern as the per-server documents, which
+    advertise ``{base}/{server_name}``)."""
+    request_base_url = get_request_base_url(request)
+    return {
+        "authorization_servers": [f"{request_base_url}/mcp"],
+        "resource": f"{request_base_url}/mcp",
+        "scopes_supported": [],
+    }
+
+
+def _build_aggregate_authorization_server_response(request: Request) -> dict:
+    """RFC 8414 metadata for the gateway as the aggregate authorization server.
+
+    The issuer is ``{base}/mcp`` and must stay equal to the value the
+    aggregate protected-resource document advertises: spec clients verify the
+    issuer in the metadata matches the one that derived the well-known URL.
+    Advertises the root /authorize, /token, and /register endpoints and
+    ``token_endpoint_auth_methods_supported: ["none", ...]`` because DCR
+    clients (Claude Desktop, MCP Inspector) register as public clients; PKCE
+    S256 is mandatory in the gateway's authorize flow."""
+    request_base_url = get_request_base_url(request)
+    return {
+        "issuer": f"{request_base_url}/mcp",
+        "authorization_endpoint": f"{request_base_url}/authorize",
+        "token_endpoint": f"{request_base_url}/token",
+        "registration_endpoint": f"{request_base_url}/register",
+        "response_types_supported": ["code"],
+        "scopes_supported": [],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+    }
+
+
+# RFC 9728 path-appended discovery for the aggregate /mcp endpoint. A client
+# pointed at {base}/mcp inserts the well-known segment before the resource
+# path, so this exact route must exist for aggregate discovery to work at all.
+# Declared before the parameterized well-known routes below: Starlette matches
+# in registration order, and /.well-known/oauth-authorization-server/{name}
+# would otherwise capture the "/mcp" suffix as a server name.
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp")
+async def oauth_protected_resource_aggregate(request: Request):
+    """
+    OAuth protected resource discovery for the aggregate /mcp endpoint.
+
+    The single-segment ``/mcp`` path does not collide with any per-server PRM pattern
+    (those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously
+    describes the aggregate resource.
+    """
+    return _build_aggregate_protected_resource_response(request)
+
+
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp")
+async def oauth_authorization_server_aggregate(request: Request):
+    """
+    OAuth authorization server discovery for the aggregate /mcp endpoint, the RFC 8414
+    path-inserted form for a client that treats {base}/mcp as its authorization base URL.
+
+    The single-segment /mcp is reserved for the aggregate so the discovery chain stays
+    consistent: the aggregate protected-resource document advertises {base}/mcp as its
+    authorization server, so the document served here must have issuer {base}/mcp. A server
+    literally named ``mcp`` therefore does not take this route; it keeps its standard
+    two-segment discovery at /.well-known/oauth-authorization-server/mcp/mcp. Letting the
+    per-server row win here instead would serve an issuer of {base} against a resource that
+    advertised {base}/mcp, which fails the RFC 8414 issuer check and breaks the front door.
+    """
+    return _build_aggregate_authorization_server_response(request)
+
+
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
 # This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
-@router.get(
-    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
 async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth protected resource discovery endpoint using standard MCP URL pattern.
@@ -1862,9 +1976,7 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
 
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
-@router.get(
-    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp"
-)
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
 @router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_mcp(request: Request, mcp_server_name: Optional[str] = None):
     """
@@ -1934,9 +2046,7 @@ def _build_oauth_authorization_server_response(
 
 
 # Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
-@router.get(
-    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
 async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery endpoint using standard MCP URL pattern.
@@ -1951,9 +2061,7 @@ async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_n
 
 
 # LiteLLM legacy pattern and root endpoint
-@router.get(
-    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}")
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_authorization_server_mcp(request: Request, mcp_server_name: Optional[str] = None):
     """
@@ -2050,11 +2158,12 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
 
     request_data = await _read_request_body(request=request)
     data: dict = {**request_data}
+    client_redirect_uris = _client_supplied_redirect_uris(data.get("redirect_uris"))
 
     dummy_return = {
         "client_id": mcp_server_name or "dummy_client",
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": client_redirect_uris or [f"{request_base_url}/callback"],
     }
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:
@@ -2068,7 +2177,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=resolved.server_name or resolved.name,
-                client_redirect_uris=data.get("redirect_uris"),
+                client_redirect_uris=client_redirect_uris,
             )
         return dummy_return
 
@@ -2083,5 +2192,5 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         response_types=data.get("response_types", []),
         token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
         fallback_client_id=mcp_server_name,
-        client_redirect_uris=data.get("redirect_uris"),
+        client_redirect_uris=client_redirect_uris,
     )

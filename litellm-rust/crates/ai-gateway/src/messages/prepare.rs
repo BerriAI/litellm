@@ -1,9 +1,9 @@
-use litellm_core::messages::transformation::MessagesAuthStrategy;
-use litellm_core::routing_utils::provider::{get_custom_llm_provider, CustomLlmProvider};
 use litellm_core::CoreError;
 use litellm_core::CoreResult;
+use litellm_core::messages::transformation::MessagesAuthStrategy;
+use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
-use super::common_utils::{has_header, messages_provider_config, string_headers};
+use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
 use super::types::{MessagesRequest, ProviderMessagesRequest};
 
 pub(super) fn prepare_messages_call(
@@ -33,7 +33,9 @@ pub(super) fn prepare_messages_call(
     let mut headers = string_headers(request.extra_headers)?;
 
     let auth_strategy = config.auth_strategy();
-    if !has_header(&headers, auth_strategy.header_name()) {
+    let already_authorized = has_header(&headers, auth_strategy.header_name())
+        || (config.accepts_bearer_auth() && has_bearer_auth(&headers));
+    if !already_authorized {
         let api_key = config.resolve_api_key(request.api_key, &env_lookup)?;
         let auth_header = match auth_strategy {
             MessagesAuthStrategy::Bearer => {
@@ -62,6 +64,7 @@ pub(super) fn prepare_messages_call(
     })?;
 
     Ok(ProviderMessagesRequest {
+        provider: provider.to_string(),
         model,
         config,
         url,
