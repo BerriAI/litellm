@@ -3333,27 +3333,37 @@ class ModelResponseIterator:
 
         return self.chunk_parser(chunk=json_chunk)
 
-    def handle_accumulated_json_chunk(self, chunk: str) -> Optional["ModelResponseStream"]:
-        chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-        message = chunk.replace("\n\n", "")
+    def handle_accumulated_json_chunk(self, chunk: str, is_final: bool = False) -> Optional["ModelResponseStream"]:
+        message = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+        self.accumulated_json = (self.accumulated_json + message.replace("\n\n", "")).strip()
 
-        self.accumulated_json += message
-
-        # json.loads on the whole buffer after every fragment is O(n^2) and
-        # holds the GIL, freezing the event loop for seconds on large responses
-        # (https://github.com/BerriAI/litellm/issues/26181). A complete Gemini
-        # chunk is a JSON object/array, so only attempt the parse once the
-        # buffer's last non-whitespace byte can close one.
-        stripped = self.accumulated_json.rstrip()
-        if not stripped or stripped[-1] not in "}]":
+        # Mid-stream, defer parsing until the buffer's last byte can close a value:
+        # attempting a parse after every fragment of one large object is O(n^2) and
+        # holds the GIL, freezing the event loop. At end of stream (is_final) no more
+        # data is coming, so drain whatever complete values remain regardless of the
+        # trailing byte, otherwise a complete leading value sitting behind a truncated
+        # trailing one would be silently dropped.
+        if not is_final and (not self.accumulated_json or self.accumulated_json[-1] not in "}]"):
             return None
 
-        try:
-            _data = json.loads(self.accumulated_json)
-            self.accumulated_json = ""  # reset after successful parsing
-            return self.chunk_parser(chunk=_data)
-        except json.JSONDecodeError:
-            return None
+        # Peel one complete JSON value from the front of the buffer and keep the
+        # unconsumed tail. Running json.loads over the whole buffer would fail
+        # forever once it held more than one concatenated value ("Extra data") while
+        # never resetting the buffer, so the buffer grew without bound and pinned the
+        # core. raw_decode reports where the value ended, so concatenated values drain
+        # one call at a time. A leading non-dict value (never emitted by Gemini in
+        # practice) is consumed and skipped so it cannot block the dict values behind it.
+        decoder = json.JSONDecoder()
+        while self.accumulated_json:
+            try:
+                raw_value = decoder.raw_decode(self.accumulated_json)
+            except json.JSONDecodeError:
+                return None
+            decoded, end_index = cast("tuple[object, int]", raw_value)  # cast-ok: raw_decode -> tuple[Any,int]
+            self.accumulated_json = self.accumulated_json[end_index:].strip()
+            if isinstance(decoded, dict):
+                return self.chunk_parser(chunk=decoded)
+        return None
 
     def _common_chunk_parsing_logic(self, chunk: str) -> Optional["ModelResponseStream"]:
         try:
@@ -3378,7 +3388,9 @@ class ModelResponseIterator:
             chunk = self.response_iterator.__next__()
         except StopIteration:
             if self.chunk_type == "accumulated_json" and self.accumulated_json:
-                return self.handle_accumulated_json_chunk(chunk="")
+                result = self.handle_accumulated_json_chunk(chunk="", is_final=True)
+                if result is not None:
+                    return result
             raise StopIteration
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
@@ -3400,7 +3412,9 @@ class ModelResponseIterator:
             chunk = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
             if self.chunk_type == "accumulated_json" and self.accumulated_json:
-                return self.handle_accumulated_json_chunk(chunk="")
+                result = self.handle_accumulated_json_chunk(chunk="", is_final=True)
+                if result is not None:
+                    return result
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
