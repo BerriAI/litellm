@@ -13,6 +13,7 @@ interface MCPSemanticFilterTestPanelProps {
   onTest: () => void;
   filterEnabled: boolean;
   testResult: TestResult | null;
+  testError: string | null;
   curlCommand: string;
 }
 
@@ -26,6 +27,7 @@ export default function MCPSemanticFilterTestPanel({
   onTest,
   filterEnabled,
   testResult,
+  testError,
   curlCommand,
 }: MCPSemanticFilterTestPanelProps) {
   return (
@@ -82,13 +84,23 @@ export default function MCPSemanticFilterTestPanel({
                   />
                 )}
 
+                {testError && (
+                  <Alert
+                    type="error"
+                    message="Semantic filtering did not run"
+                    description={testError}
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                  />
+                )}
+
                 {testResult && (
                   <div>
                     <Typography.Title level={5}>Results</Typography.Title>
                     <Alert
-                      type="success"
-                      message={`${testResult.selectedTools} tools selected`}
-                      description={`Filtered from ${testResult.totalTools} available tools`}
+                      type={testResult.totalTools - testResult.selectedTools > 0 ? "success" : "warning"}
+                      message={`${testResult.selectedTools} of ${testResult.totalTools} tools selected`}
+                      description={`${testResult.totalTools - testResult.selectedTools} tools filtered out`}
                       showIcon
                       style={{ marginBottom: 16 }}
                     />
@@ -103,6 +115,11 @@ export default function MCPSemanticFilterTestPanel({
                           </li>
                         ))}
                       </ul>
+                      {testResult.selectedTools > testResult.tools.length && (
+                        <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+                          +{testResult.selectedTools - testResult.tools.length} more selected tools not shown
+                        </Typography.Text>
+                      )}
                     </div>
                   </div>
                 )}

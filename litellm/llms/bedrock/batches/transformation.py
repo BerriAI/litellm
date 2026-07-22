@@ -4,7 +4,11 @@ import time
 from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.cloud_storage_security import (
+    BEDROCK_MANAGED_S3_BATCH_PREFIX,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -16,6 +20,7 @@ from litellm.types.llms.bedrock import (
     BedrockOutputDataConfig,
     BedrockS3InputDataConfig,
     BedrockS3OutputDataConfig,
+    BedrockTag,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -25,6 +30,27 @@ from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import CommonBatchFilesUtils
+
+# Bedrock batch input files are uploaded as
+# s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
+# BedrockFilesTransformation._get_s3_object_name). A uuid4 is always 36 hex/dash
+# characters, so it can be stripped off the end unambiguously even though the
+# model name itself may contain dashes.
+_S3_BATCH_FILE_UUID_SUFFIX_PATTERN = re.compile(
+    r"-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.jsonl$"
+)
+
+_BEDROCK_TAGS_ADAPTER: TypeAdapter[list[BedrockTag]] = TypeAdapter(list[BedrockTag])
+
+
+def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
+    try:
+        return _BEDROCK_TAGS_ADAPTER.validate_python(raw_tags, strict=True)
+    except ValidationError as e:
+        raise ValueError(
+            "Invalid 'bedrock_tags' value. Expected a list of {'key': <str>, 'value': <str>} dicts, "
+            f"e.g. [{{'key': 'team', 'value': 'genai'}}]. Got: {raw_tags!r}"
+        ) from e
 
 
 class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
@@ -39,6 +65,41 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK
+
+    @classmethod
+    def _get_bare_model_name_from_s3_key(cls, object_key: str) -> Optional[str]:
+        if not object_key.startswith(BEDROCK_MANAGED_S3_BATCH_PREFIX):
+            return None
+        model_part = object_key[len(BEDROCK_MANAGED_S3_BATCH_PREFIX) :]
+        match = _S3_BATCH_FILE_UUID_SUFFIX_PATTERN.search(model_part)
+        if not match or match.start() == 0:
+            return None
+        return model_part[: match.start()]
+
+    @classmethod
+    def is_unmanaged_s3_batch_input_file_id(cls, input_file_id: Optional[str]) -> bool:
+        """
+        Returns True if `input_file_id` is a raw s3:// Bedrock batch input file (i.e. not a
+        LiteLLM-managed unified file id) whose object key embeds the model name in the
+        `litellm-bedrock-files-{model}-{uuid}.jsonl` layout.
+        """
+        if input_file_id is None or not input_file_id.startswith("s3://"):
+            return False
+        object_key = input_file_id.rsplit("/", 1)[-1]
+        return cls._get_bare_model_name_from_s3_key(object_key) is not None
+
+    @classmethod
+    def get_bare_model_name_from_s3_file(cls, input_file_id: str) -> str:
+        """
+        Extracts the bare model name (e.g. "us.anthropic.claude-sonnet-4-20250514-v1-0") from
+        an unmanaged batch's s3:// input file id. Note any ":" in the original model id was
+        replaced with "-" at upload time, so callers must fuzzy-match against configured
+        deployments rather than expect an exact string match.
+        """
+        object_key = input_file_id.rsplit("/", 1)[-1]
+        bare_model_name = cls._get_bare_model_name_from_s3_key(object_key)
+        assert bare_model_name is not None  # narrowed by is_unmanaged_s3_batch_input_file_id
+        return bare_model_name
 
     def validate_environment(
         self,
@@ -153,6 +214,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "outputDataConfig": output_data_config,
             "roleArn": role_arn,
         }
+
+        config_bedrock_tags = litellm_params.get("bedrock_tags")
+        bedrock_tags = config_bedrock_tags if config_bedrock_tags is not None else optional_params.get("bedrock_tags")
+        if bedrock_tags is not None:
+            bedrock_request["tags"] = _validate_bedrock_tags(bedrock_tags)
 
         # Add optional parameters if provided
         completion_window = create_batch_data.get("completion_window")

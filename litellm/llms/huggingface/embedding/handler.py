@@ -322,7 +322,7 @@ class HuggingFaceEmbedding(BaseLLM):
         task = get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
         # print_verbose(f"{model}, {task}")
         embed_url = ""
-        if "https" in model:
+        if model.startswith(("http://", "https://")):
             embed_url = model
         elif api_base:
             embed_url = api_base

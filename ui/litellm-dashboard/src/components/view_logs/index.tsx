@@ -8,7 +8,7 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import FilterComponent from "../molecules/filter";
 import { keyInfoV1Call } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-import AuditLogs from "./audit_logs";
+import AuditLogsPanel from "./AuditLogsPanel";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { getLogFilterOptions } from "./filter_options";
@@ -287,6 +287,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   <DataTable
                     columns={columns}
                     data={deferredData}
+                    getRowId={(row) => row.request_id}
                     onRowClick={handleRowClick}
                     isLoading={isLogsLoading}
                   />
@@ -295,7 +296,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
             )}
           </TabPanel>
           <TabPanel>
-            <AuditLogs
+            <AuditLogsPanel
               userID={userID}
               userRole={userRole}
               token={token}

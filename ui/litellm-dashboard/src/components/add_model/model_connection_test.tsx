@@ -42,18 +42,14 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     try {
-      console.log("Testing connection with form values:", formValues);
       const result = await prepareModelAddRequest(formValues, accessToken, null);
 
       if (!result) {
-        console.log("No result from prepareModelAddRequest");
         setError("Failed to prepare model data. Please check your form inputs.");
         setIsSuccess(false);
         setIsLoading(false);
         return;
       }
-
-      console.log("Result from prepareModelAddRequest:", result);
 
       const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result[0];
 

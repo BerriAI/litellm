@@ -11,10 +11,20 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import iter_request_fallback_targets
 from litellm.proxy.auth.user_api_key_auth import (
     _enforce_key_and_fallback_model_access,
-    iter_router_fallback_model_names,
+    _fallback_target_model_name,
 )
+
+
+def _fallback_model_names(fallbacks):
+    """Model names the auth check validates for a top-level ``fallbacks`` value."""
+    return [
+        name
+        for target in iter_request_fallback_targets({"fallbacks": fallbacks})
+        if (name := _fallback_target_model_name(target)) is not None
+    ]
 
 
 def _key_with_models(models: List[str]) -> UserAPIKeyAuth:
@@ -26,37 +36,40 @@ def _key_with_models(models: List[str]) -> UserAPIKeyAuth:
     )
 
 
-# ── iter_router_fallback_model_names ─────────────────────────────────────────
+# ── fallback model-name extraction ───────────────────────────────────────────
 
 
-def testiter_router_fallback_model_names_router_config_shape():
+def test_fallback_model_names_router_config_shape():
     """Router-config shape: ``[{primary: [fallback_list]}]``."""
-    assert list(
-        iter_router_fallback_model_names(
-            [{"gpt-3.5-turbo": ["gpt-4", "claude-3"]}, {"gpt-4o": ["o1"]}]
-        )
+    assert _fallback_model_names(
+        [{"gpt-3.5-turbo": ["gpt-4", "claude-3"]}, {"gpt-4o": ["o1"]}]
     ) == ["gpt-4", "claude-3", "o1"]
 
 
-def testiter_router_fallback_model_names_simple_string_shape():
+def test_fallback_model_names_simple_string_shape():
     """Simple top-level shape: list of strings."""
-    assert list(iter_router_fallback_model_names(["gpt-4", "claude-3"])) == [
+    assert _fallback_model_names(["gpt-4", "claude-3"]) == ["gpt-4", "claude-3"]
+
+
+def test_fallback_model_names_client_side_shape():
+    """ClientSideFallbackModel shape: ``[{"model": "..."}]``."""
+    assert _fallback_model_names([{"model": "gpt-4"}, {"model": "claude-3"}]) == [
         "gpt-4",
         "claude-3",
     ]
 
 
-def testiter_router_fallback_model_names_client_side_shape():
-    """ClientSideFallbackModel shape: ``[{"model": "..."}]``."""
-    assert list(
-        iter_router_fallback_model_names([{"model": "gpt-4"}, {"model": "claude-3"}])
-    ) == ["gpt-4", "claude-3"]
+def test_fallback_model_names_nested_deployment_fallbacks():
+    """A deployment target's own nested fallback field is unrolled too."""
+    assert _fallback_model_names(
+        [{"primary": [{"model": "gpt-4", "fallbacks": [{"gpt-4": ["deepseek-chat"]}]}]}]
+    ) == ["gpt-4", "deepseek-chat"]
 
 
-def testiter_router_fallback_model_names_empty_or_none():
-    assert list(iter_router_fallback_model_names(None)) == []
-    assert list(iter_router_fallback_model_names([])) == []
-    assert list(iter_router_fallback_model_names("not a list")) == []
+def test_fallback_model_names_empty_or_none():
+    assert _fallback_model_names(None) == []
+    assert _fallback_model_names([]) == []
+    assert _fallback_model_names("not a list") == []
 
 
 # ── _enforce_key_and_fallback_model_access ────────────────────────────────────
@@ -198,6 +211,98 @@ async def test_top_level_fallback_fields_validated(fallback_field):
         )
 
     assert "top-level-smuggled" in seen
+
+
+@pytest.mark.asyncio
+async def test_nested_deployment_fallback_inner_model_validated():
+    """A model name nested several fallback rounds deep, inside a deployment
+    target's own ``fallbacks``, is extracted and passed to can_key_call_model."""
+    valid_token = _key_with_models(["gpt-3.5-turbo"])
+    request_data = {
+        "model": "gpt-3.5-turbo",
+        "fallbacks": [
+            {
+                "gpt-3.5-turbo": [
+                    {
+                        "model": "gpt-3.5-turbo",
+                        "fallbacks": [{"gpt-3.5-turbo": ["deep-smuggled-model"]}],
+                    }
+                ]
+            }
+        ],
+    }
+
+    seen: List[str] = []
+
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+        seen.append(model)
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            side_effect=fake_can_key_call_model,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
+            new=AsyncMock(),
+        ),
+    ):
+        await _enforce_key_and_fallback_model_access(
+            valid_token=valid_token,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            request=None,
+            llm_model_list=None,
+            llm_router=None,
+        )
+
+    assert "deep-smuggled-model" in seen
+
+
+@pytest.mark.asyncio
+async def test_model_less_fallback_dict_is_skipped_never_passed_as_none():
+    """A fallback target dict without a ``model`` key is skipped, never passed
+    as ``None`` into can_key_call_model / is_valid_fallback_model."""
+    valid_token = _key_with_models(["gpt-3.5-turbo"])
+    request_data = {
+        "model": "gpt-3.5-turbo",
+        "fallbacks": [
+            {
+                "gpt-3.5-turbo": [
+                    {"model": "real-fallback"},
+                    {"api_base": "http://attacker"},
+                    "string-fallback",
+                ]
+            }
+        ],
+    }
+
+    seen: List[str] = []
+
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+        seen.append(model)
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            side_effect=fake_can_key_call_model,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
+            new=AsyncMock(),
+        ),
+    ):
+        await _enforce_key_and_fallback_model_access(
+            valid_token=valid_token,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            request=None,
+            llm_model_list=None,
+            llm_router=None,
+        )
+
+    assert None not in seen
+    assert seen == ["gpt-3.5-turbo", "real-fallback", "string-fallback"]
 
 
 @pytest.mark.asyncio

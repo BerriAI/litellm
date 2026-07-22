@@ -1,8 +1,9 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { modelAvailableCall } from "../networking";
 import { KeyEditView } from "./key_edit_view";
 
 vi.mock("../networking", async () => {
@@ -335,6 +336,36 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should initialize and submit throttle_on_budget_exceeded from key metadata", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithThrottle = {
+      ...MOCK_KEY_DATA,
+      metadata: { ...MOCK_KEY_DATA.metadata, throttle_on_budget_exceeded: true },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithThrottle}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Throttle on budget exceeded")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ throttle_on_budget_exceeded: true }));
+    });
+  });
+
   it("should disable models field when management routes are selected", async () => {
     const keyDataWithManagementRoutes = {
       ...MOCK_KEY_DATA,
@@ -631,11 +662,14 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should resend existing budget windows on submit when they are left untouched", async () => {
+  it("should omit budget_limits when existing windows are left untouched (issue #33246)", async () => {
+    // The backend treats any budget_limits in the payload as an admin-only
+    // budget change, so re-sending untouched windows 403s a non-admin owner.
+    // Leaving the field off keeps the stored windows and passes the gate.
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const keyDataWithWindow = {
       ...MOCK_KEY_DATA,
-      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+      budget_limits: [{ budget_duration: "30d", max_budget: 100, reset_at: "2026-08-01T00:00:00" }],
     };
     renderWithProviders(
       <KeyEditView
@@ -655,7 +689,66 @@ describe("KeyEditView", () => {
     await waitFor(() => {
       expect(onSubmitMock).toHaveBeenCalled();
       const callArgs = onSubmitMock.mock.calls[0][0];
-      expect(callArgs.budget_limits).toEqual([{ budget_duration: "30d", max_budget: 100 }]);
+      expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
+  it("should omit budget_limits on a key that has no windows (issue #33246 repro)", async () => {
+    // Core repro: a non-admin owner edits a non-budget field on a key with no
+    // budget windows. The form previously always sent budget_limits: [], which
+    // the backend read as a budget change and rejected.
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA} // no budget_limits
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
+  it("should send budget_limits when a window's cap is changed", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithWindow = {
+      ...MOCK_KEY_DATA,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithWindow}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const maxBudgetInput = await screen.findByPlaceholderText("Max spend ($)");
+    await userEvent.clear(maxBudgetInput);
+    await userEvent.type(maxBudgetInput, "200");
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toEqual([{ budget_duration: "30d", max_budget: 200 }]);
     });
   });
 
@@ -862,6 +955,222 @@ describe("KeyEditView", () => {
 
       await waitFor(() => {
         expect(screen.getByText("Engineering")).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe("models dropdown team gating", () => {
+    const openModelsDropdown = () => {
+      const modelsFormItem = screen.getByText("Models", { selector: "label" }).closest(".ant-form-item");
+      const selector = modelsFormItem?.querySelector(".ant-select-selector");
+      expect(selector).toBeTruthy();
+      fireEvent.mouseDown(selector as Element);
+    };
+
+    it("should offer all-proxy-models but not all-team-models for a teamless key", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      await waitFor(() => {
+        expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      });
+
+      expect(screen.getAllByText("All Proxy Models").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
+    });
+
+    it("should offer all-team-models but hide all-proxy-models for a team key", async () => {
+      const teamKeyData = { ...MOCK_KEY_DATA, team_id: "team-1" };
+      const teams = [{ team_id: "team-1", models: ["all-proxy-models", "team-model-1"] }];
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={teamKeyData}
+          teams={teams}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      await waitFor(() => {
+        expect(screen.getAllByText("team-model-1").length).toBeGreaterThan(0);
+      });
+
+      expect(screen.getAllByText("All Team Models").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
+      expect(screen.queryAllByText("all-proxy-models")).toHaveLength(0);
+    });
+
+    it("should not offer all-team-models for a team key whose team has not loaded yet", async () => {
+      const teamKeyData = { ...MOCK_KEY_DATA, team_id: "team-1" };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={teamKeyData}
+          teams={[]}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
+      expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
+    });
+
+    it("should not duplicate the all-proxy-models option when the teamless model list already carries the sentinel", async () => {
+      vi.mocked(modelAvailableCall).mockResolvedValueOnce({
+        data: [{ id: "all-proxy-models" }, { id: "gpt-4" }],
+      });
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const proxyOptionLabels = () =>
+        Array.from(document.querySelectorAll('[role="option"]')).map((option) => option.getAttribute("aria-label"));
+
+      await waitFor(() => {
+        expect(proxyOptionLabels()).toContain("gpt-4");
+      });
+
+      const labels = proxyOptionLabels();
+      expect(labels.filter((label) => label === "All Proxy Models")).toHaveLength(1);
+      expect(labels).not.toContain("all-proxy-models");
+    });
+
+    it("should collapse the selection to all-proxy-models when the sentinel is picked alongside a model", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const clickOption = async (label: string) => {
+        const option = await waitFor(() => {
+          const match = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
+            (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
+          );
+          expect(match).toBeTruthy();
+          return match as HTMLElement;
+        });
+        fireEvent.click(option);
+      };
+
+      await clickOption("gpt-4");
+      await clickOption("All Proxy Models");
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].models).toEqual(["all-proxy-models"]);
+    });
+
+    it("should disable the individual model options once all-proxy-models is selected", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const findOption = (label: string) =>
+        Array.from(document.querySelectorAll(".ant-select-item-option")).find(
+          (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
+        ) as HTMLElement | undefined;
+
+      const gpt4Before = await waitFor(() => {
+        const match = findOption("gpt-4");
+        expect(match).toBeTruthy();
+        return match!;
+      });
+      expect(gpt4Before.classList.contains("ant-select-item-option-disabled")).toBe(false);
+
+      fireEvent.click(
+        await waitFor(() => {
+          const match = findOption("All Proxy Models");
+          expect(match).toBeTruthy();
+          return match!;
+        }),
+      );
+
+      await waitFor(() => {
+        expect(findOption("gpt-4")?.classList.contains("ant-select-item-option-disabled")).toBe(true);
       });
     });
   });

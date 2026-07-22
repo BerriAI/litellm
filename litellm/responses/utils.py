@@ -65,6 +65,7 @@ class ResponsesAPIRequestUtils:
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: Optional[List[str]] = None,
+        drop_params: bool | None = None,
     ) -> Dict:
         """
         Get optional parameters for the responses API.
@@ -83,12 +84,14 @@ class ResponsesAPIRequestUtils:
         # Get supported parameters for the model
         supported_params = responses_api_provider_config.get_supported_openai_params(model)
 
+        should_drop_params = litellm.drop_params or drop_params is True
+
         non_default_params = cast(Dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
             supported_params=supported_params + (allowed_openai_params or []),
             non_default_params=non_default_params,
-            drop_params=litellm.drop_params,
+            drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
             model=model,
         )
@@ -97,7 +100,7 @@ class ResponsesAPIRequestUtils:
         mapped_params = responses_api_provider_config.map_openai_params(
             response_api_optional_params=response_api_optional_params,
             model=model,
-            drop_params=litellm.drop_params,
+            drop_params=should_drop_params,
         )
 
         # add any allowed_openai_params to the mapped_params
@@ -202,6 +205,9 @@ class ResponsesAPIRequestUtils:
 
         # If no response_id, return the response as-is (likely an error response)
         if response_id is None:
+            return responses_api_response
+
+        if ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):
             return responses_api_response
 
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
@@ -469,6 +475,14 @@ class ResponsesAPIRequestUtils:
                 model_id=None,
                 response_id=response_id,
             )
+
+    @staticmethod
+    def _is_litellm_encoded_response_id(response_id: str) -> bool:
+        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        return (
+            decoded_response_id.get("model_id") is not None
+            or decoded_response_id.get("custom_llm_provider") is not None
+        )
 
     @staticmethod
     def get_model_id_from_response_id(response_id: Optional[str]) -> Optional[str]:

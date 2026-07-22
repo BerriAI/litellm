@@ -39,6 +39,46 @@ class TestRejectUrlValuedDestinations:
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail["param"] == "model"
 
+    def test_provider_prefixed_url_rejected(self):
+        with pytest.raises(HTTPException) as exc_info:
+            _reject_url_valued_destinations(
+                {"model": "huggingface/https://attacker.example/v1"}
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["param"] == "model"
+
+    def test_comma_batch_smuggled_url_rejected(self):
+        with pytest.raises(HTTPException) as exc_info:
+            _reject_url_valued_destinations(
+                {"model": "gpt-4,huggingface/https://attacker.example/v1"}
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["param"] == "model"
+
+    def test_provider_prefixed_uppercase_scheme_url_rejected(self):
+        with pytest.raises(HTTPException) as exc_info:
+            _reject_url_valued_destinations(
+                {"model": "huggingface/HTTPS://evil.example/v1"}
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["param"] == "model"
+
+    def test_provider_prefixed_plain_model_passes(self):
+        _reject_url_valued_destinations({"model": "huggingface/BAAI/bge-small-en"})
+
+    def test_comma_batch_plain_models_pass(self):
+        _reject_url_valued_destinations({"model": "gpt-4,huggingface/BAAI/bge-small-en"})
+
+    def test_provider_prefixed_url_respects_allowlist(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "provider_url_destination_allowed_hosts",
+            ["trusted.example"],
+        )
+        _reject_url_valued_destinations(
+            {"model": "huggingface/https://trusted.example/v1"}
+        )
+
     def test_url_valued_file_id_rejected(self):
         with pytest.raises(HTTPException) as exc_info:
             _reject_url_valued_destinations(

@@ -7,7 +7,7 @@ import traceback
 from base64 import b64encode
 from datetime import datetime
 from itertools import groupby
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
+from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -68,6 +68,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
@@ -389,18 +390,24 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         forward_multipart: bool = False,
     ) -> httpx.Response:
         """
-        Handle non-streaming HTTP requests
+        Handle non-SSE HTTP requests
 
-        Handles special cases when GET requests, multipart/form-data requests, and generic httpx requests
+        Handles special cases when GET requests, multipart/form-data requests, and generic httpx requests.
+
+        GET and generic requests are sent with httpx stream semantics so the caller can
+        decide from the response headers whether to buffer the body (JSON, inspected for
+        logging/guardrails) or relay it to the client without materializing it in memory
+        (LIT-4009: large batch results files must not be buffered in proxy RSS).
         """
         if request.method == "GET":
-            response = await async_client.request(
-                method=request.method,
-                url=url,
+            get_request = async_client.build_request(
+                request.method,
+                url,
                 headers=headers,
                 params=requested_query_params,
             )
-        elif HttpPassThroughEndpointHelpers.is_multipart(request) is True and forward_multipart:
+            return await async_client.send(get_request, stream=True)
+        if HttpPassThroughEndpointHelpers.is_multipart(request) is True and forward_multipart:
             # Forward multipart via make_multipart_http_request even when _parsed_body is
             # non-empty (pass_through_request always injects litellm_logging_obj, etc.).
             # forward_multipart is False when custom_body was supplied (JSON body despite
@@ -412,16 +419,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 headers=headers,
                 requested_query_params=requested_query_params,
             )
-        else:
-            # Generic httpx method
-            response = await async_client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                params=requested_query_params,
-                json=_parsed_body,
-            )
-        return response
+        generic_request = async_client.build_request(
+            request.method,
+            url,
+            headers=headers,
+            params=requested_query_params,
+            json=_parsed_body,
+        )
+        return await async_client.send(generic_request, stream=True)
 
     @staticmethod
     def is_multipart(request: Request) -> bool:
@@ -676,6 +681,75 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: Optional[d
     metadata.setdefault("standard_logging_guardrail_information", list(entries))
 
 
+def _build_passthrough_failure_request_payload(
+    parsed_body: Optional[dict],
+    kwargs: Optional[dict],
+    logging_obj: Optional[LiteLLMLoggingObj],
+    custom_llm_provider: Optional[str],
+) -> dict:
+    """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
+
+    Shared by the outer exception handler (LiteLLM-internal failures) and
+    upstream HTTP error logging, so both failure paths report the same shape
+    of request data (model, custom_llm_provider, litellm_logging_obj, ...).
+    """
+    request_payload: dict = dict(parsed_body or {})
+    if kwargs:
+        request_payload.update(kwargs)
+    if logging_obj is not None:
+        request_payload["litellm_logging_obj"] = logging_obj
+    if "model" not in request_payload and parsed_body and isinstance(parsed_body, dict):
+        request_payload["model"] = parsed_body.get("model", "")
+    if "custom_llm_provider" not in request_payload and custom_llm_provider:
+        request_payload["custom_llm_provider"] = custom_llm_provider
+    return request_payload
+
+
+async def _log_passthrough_upstream_failure(
+    response: httpx.Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_payload: dict,
+) -> None:
+    """Fire LiteLLM-side failure hooks (spend tracking, alerting callbacks) for
+    an upstream 4xx/5xx passthrough response.
+
+    Passthrough must return the upstream status/body/headers to the client
+    unchanged, so this never raises or transforms the response - it only
+    mirrors the monitoring side effect that ``post_call_failure_hook`` would
+    have received had the error originated inside LiteLLM.
+    """
+    if response.status_code < 400:
+        return
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        # Reported as an HTTPException, not the raw httpx error: ProxyLogging's
+        # alerting path only excludes HTTPException/ProxyException from its
+        # "High" severity llm_exceptions alert, treating everything else as an
+        # operational LLM-API failure. An upstream 4xx/5xx returned unchanged
+        # to the client is a user-facing error like any other, not something
+        # ops needs paged for, so it must be excluded the same way auth and
+        # rate-limit errors already are.
+        synthetic_exception = HTTPException(
+            status_code=response.status_code,
+            detail=f"Upstream passthrough request failed with status {response.status_code}",
+        )
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=synthetic_exception,
+                request_data=request_payload,
+                traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+            )
+        except Exception:  # noqa: BLE001 - a failing logging callback must never break the passthrough response
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: post_call_failure_hook raised for upstream error",
+                exc_info=True,
+            )
+
+
 from litellm.passthrough.timeout_utils import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,  # noqa: F401 - re-exported for backward compat
     resolve_llm_passthrough_timeout,  # noqa: F401 - re-exported for backward compat
@@ -751,21 +825,7 @@ async def pass_through_request(
             forward_headers=forward_headers,
         )
 
-        # Apply default query parameters if provided, regardless of merge_query_params setting
-        if default_query_params or merge_query_params:
-            # Determine what to merge based on settings
-            request_params = dict(request.query_params) if merge_query_params else {}
-
-            # Create a new URL with the merged query params
-            url = url.copy_with(
-                query=urlencode(
-                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
-                        existing_url=url,
-                        request_query_params=request_params,
-                        default_query_params=default_query_params,
-                    )
-                ).encode("ascii")
-            )
+        requested_query_params: Optional[dict] = query_params or dict(request.query_params)
 
         endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
@@ -883,9 +943,6 @@ async def pass_through_request(
         )
         logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
 
-        # combine url with query params for logging
-        requested_query_params: Optional[dict] = query_params or dict(request.query_params)
-
         ## PASSTHROUGH MANAGED ID RESOLUTION (INPUT) ##
         # Resolve managed IDs in path, query params, and body back to raw
         # provider IDs before forwarding upstream.  Gated by feature flag and
@@ -954,6 +1011,20 @@ async def pass_through_request(
                     request.url.path,
                     request.method,
                 )
+
+        # Apply default query parameters if provided, regardless of merge_query_params setting
+        if default_query_params or merge_query_params:
+            # Create a new URL with the merged query params
+            url = url.copy_with(
+                query=urlencode(
+                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
+                        existing_url=url,
+                        request_query_params=requested_query_params,
+                        default_query_params=default_query_params,
+                    )
+                ).encode("ascii")
+            )
+            requested_query_params = None
 
         ## PASSTHROUGH MANAGED LIST (DB-only response) ##
         # For GET /v1/files and GET /v1/batches passthrough routes, serve the
@@ -1053,10 +1124,16 @@ async def pass_through_request(
 
                 response = await async_client.send(req, stream=stream)
 
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=await e.response.aread())
+            await _log_passthrough_upstream_failure(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_payload=_build_passthrough_failure_request_payload(
+                    parsed_body=_parsed_body,
+                    kwargs=kwargs,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                ),
+            )
 
             # Call response headers hook for streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
@@ -1089,13 +1166,14 @@ async def pass_through_request(
         if state_raw_body is not None:
             # SigV4-signed callers (Bedrock) require the exact pre-signed bytes
             # to be forwarded so the signature/Content-Length stay valid.
-            response = await async_client.request(
-                method=request.method,
-                url=url,
+            raw_body_request = async_client.build_request(
+                request.method,
+                url,
                 headers=headers,
                 params=requested_query_params,
                 content=state_raw_body,
             )
+            response = await async_client.send(raw_body_request, stream=True)
         else:
             response = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
                 request=request,
@@ -1112,10 +1190,16 @@ async def pass_through_request(
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
 
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=await e.response.aread())
+            await _log_passthrough_upstream_failure(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_payload=_build_passthrough_failure_request_payload(
+                    parsed_body=_parsed_body,
+                    kwargs=kwargs,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                ),
+            )
 
             # Call response headers hook for detected streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
@@ -1145,20 +1229,63 @@ async def pass_through_request(
                 status_code=response.status_code,
             )
 
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        if not _should_buffer_passthrough_response(response):
+            relay_custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                call_id=litellm_call_id,
+                model_id=None,
+                cache_key=None,
+                api_base=str(url._uri_reference),
+            )
+            relay_callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=_parsed_body or {},
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if relay_callback_headers:
+                relay_custom_headers.update(relay_callback_headers)
 
-        if response.status_code >= 300:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
+            return StreamingResponse(
+                _relay_passthrough_response_bytes(
+                    response=response,
+                    request_body=_parsed_body or {},
+                    url_route=str(url),
+                    start_time=start_time,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                    success_handler_kwargs=kwargs,
+                ),
+                status_code=response.status_code,
+                headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=response.headers,
+                    custom_headers=relay_custom_headers,
+                ),
+            )
 
         content = await response.aread()
 
         ## POST-CALL GUARDRAILS ##
+        # Guardrails and managed-id rewriting only apply to successful upstream
+        # responses; response_body itself is parsed unconditionally so the
+        # failure-hook log payload below still reflects upstream error bodies.
         _content_modified = False
         response_body: Optional[dict] = get_response_body(response)
-        if response_body is not None and guardrails_to_run:
+
+        failure_request_payload = _build_passthrough_failure_request_payload(
+            parsed_body=_parsed_body,
+            kwargs=kwargs,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+        )
+        failure_request_payload["response_body"] = response_body
+        await _log_passthrough_upstream_failure(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            request_payload=failure_request_payload,
+        )
+
+        if response.status_code < 400 and response_body is not None and guardrails_to_run:
             # Build an enriched data dict: _parsed_body has been stripped of
             # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
             # so we re-attach the configured guardrails here so should_run_guardrail
@@ -1249,23 +1376,28 @@ async def pass_through_request(
                 )
 
         ## LOG SUCCESS
+        # Upstream errors are already logged via _log_passthrough_upstream_failure
+        # above; the success handler has no status-code awareness of its own; so
+        # calling it here for a 4xx/5xx would double-log the same request as both
+        # a failure and a success (corrupting spend tracking).
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                httpx_response=response,
-                response_body=response_body,
-                url_route=str(url),
-                result="",
-                start_time=start_time,
-                end_time=end_time,
-                logging_obj=logging_obj,
-                cache_hit=False,
-                request_body=_parsed_body or {},
-                custom_llm_provider=custom_llm_provider,
-                **kwargs,
+        if response.status_code < 400:
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
+                    httpx_response=response,
+                    response_body=response_body,
+                    url_route=str(url),
+                    result="",
+                    start_time=start_time,
+                    end_time=end_time,
+                    logging_obj=logging_obj,
+                    cache_hit=False,
+                    request_body=_parsed_body or {},
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
             )
-        )
 
         ## CUSTOM HEADERS - `x-litellm-*`
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -1640,6 +1772,7 @@ def create_pass_through_route(
                 if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
                     delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
 
+    setattr(endpoint_func, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
     return endpoint_func
 
 
@@ -2117,6 +2250,70 @@ def _is_streaming_response(response: httpx.Response) -> bool:
     if _content_type is not None and "text/event-stream" in _content_type:
         return True
     return False
+
+
+def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
+    """
+    Decide from the response headers whether the body must be read into memory.
+
+    JSON bodies (and upstream errors) stay buffered: spend logging, guardrails and
+    managed-id rewriting inspect them, and they are small in practice. Everything
+    else (jsonl batch results, octet-stream files, ...) is relayed to the client
+    chunk by chunk so a large body is never resident in full (LIT-4009). A missing
+    content-type is buffered because the body cannot be classified.
+    """
+    if response.status_code >= 400:
+        return True
+    media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    return media_type in ("", "application/json") or media_type.endswith("+json")
+
+
+async def _relay_passthrough_response_bytes(
+    response: httpx.Response,
+    request_body: dict,
+    url_route: str,
+    start_time: datetime,
+    logging_obj: LiteLLMLoggingObj,
+    custom_llm_provider: Optional[str],
+    success_handler_kwargs: dict,
+) -> AsyncGenerator[bytes, None]:
+    """
+    Yield upstream bytes to the client without accumulating them, then fire the
+    passthrough success handler with response_body=None (uninspected body). The
+    finally block also runs on client disconnect (GeneratorExit) so partial
+    downloads still produce a spend-log row, mirroring chunk_processor; a
+    disconnect additionally logs a warning with the number of bytes relayed so
+    partial deliveries are distinguishable from complete ones in proxy logs.
+    """
+    bytes_relayed = 0
+    upstream_fully_relayed = False
+    try:
+        async for chunk in response.aiter_bytes():
+            bytes_relayed += len(chunk)
+            yield chunk
+        upstream_fully_relayed = True
+    finally:
+        if not upstream_fully_relayed:
+            verbose_proxy_logger.warning(
+                f"Passthrough stream for {url_route} ended before upstream body was fully relayed; "
+                f"{bytes_relayed} bytes were sent to the client"
+            )
+        await response.aclose()
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
+                httpx_response=response,
+                response_body=None,
+                url_route=url_route,
+                result="",
+                start_time=start_time,
+                end_time=datetime.now(),
+                logging_obj=logging_obj,
+                cache_hit=False,
+                request_body=request_body,
+                custom_llm_provider=custom_llm_provider,
+                **success_handler_kwargs,
+            )
+        )
 
 
 def _extract_model_from_vertex_ai_setup(setup_response: dict) -> Optional[str]:

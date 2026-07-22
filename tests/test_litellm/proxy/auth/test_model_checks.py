@@ -620,6 +620,29 @@ def test_get_team_models_all_team_models_expands_with_access_groups():
     assert "group-2" in result
 
 
+def test_get_key_models_teamless_all_team_models_returns_unrestricted():
+    """Teamless key with all-team-models must resolve the same as leaving the
+    models field empty ([] = unrestricted). The sentinel must not leak into
+    the returned list. Fails if someone adds a team_id guard to the sentinel
+    expansion in get_key_models."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    user_api_key_dict = type(
+        "obj",
+        (object,),
+        {
+            "models": [SpecialModelNames.all_team_models.value],
+            "team_id": None,
+            "team_models": [],
+        },
+    )()
+    proxy_model_list = ["gpt-4o", "claude-sonnet-4-20250514"]
+    result = get_key_models(user_api_key_dict, proxy_model_list, {})
+    assert SpecialModelNames.all_team_models.value not in result
+    assert result == [], "should return [] (unrestricted), same as an unscoped key"
+
+
 def test_expand_wildcard_deployments_non_wildcard_passthrough():
     """Non-wildcard deployments must be returned unchanged."""
     from litellm.proxy.auth.model_checks import (

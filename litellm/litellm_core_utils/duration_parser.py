@@ -7,8 +7,8 @@ duration_in_seconds is used in diff parts of the code base, example
 """
 
 import re
-import time
-from datetime import datetime, timedelta, timezone, tzinfo
+import time as time_module
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -61,7 +61,7 @@ def duration_in_seconds(duration: str) -> int:
     elif unit == "w":
         return value * 604800
     elif unit == "mo":
-        now = time.time()
+        now = time_module.time()
         current_time = datetime.fromtimestamp(now)
 
         # Calculate target month and year, handling overflow past December
@@ -94,12 +94,17 @@ def duration_in_seconds(duration: str) -> int:
         raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
 
 
-def get_next_standardized_reset_time(duration: str, current_time: datetime, timezone_str: str = "UTC") -> datetime:
+def get_next_standardized_reset_time(
+    duration: str,
+    current_time: datetime,
+    timezone_str: str = "UTC",
+    reset_time_of_day: time = time(0, 0),
+) -> datetime:
     """
     Get the next standardized reset time based on the duration.
 
     All durations will reset at predictable intervals, aligned from the current time:
-    - Nd: If N=1, reset at next midnight; if N>1, reset every N days from now
+    - Nd: If N=1, reset at the next `reset_time_of_day`; if N>1, reset every N days from now
     - Nh: Every N hours, aligned to hour boundaries (e.g., 1:00, 2:00)
     - Nm: Every N minutes, aligned to minute boundaries (e.g., 1:05, 1:10)
     - Ns: Every N seconds, aligned to second boundaries
@@ -108,12 +113,15 @@ def get_next_standardized_reset_time(duration: str, current_time: datetime, time
     - duration: Duration string (e.g. "30s", "30m", "30h", "30d")
     - current_time: Current datetime
     - timezone_str: Timezone string (e.g. "UTC", "US/Eastern", "Asia/Kolkata")
+    - reset_time_of_day: Wall-clock time the reset lands on for day/week/month
+      durations (defaults to midnight). Ignored for sub-day durations, where a
+      time-of-day is meaningless.
 
     Returns:
     - Next reset time at a standardized interval in the specified timezone
     """
     # Set up timezone and normalize current time
-    current_time, tz = _setup_timezone(current_time, timezone_str)
+    current_time, _ = _setup_timezone(current_time, timezone_str)
 
     # Parse duration
     value, unit = _parse_duration(duration)
@@ -126,9 +134,9 @@ def get_next_standardized_reset_time(duration: str, current_time: datetime, time
 
     # Handle different time units
     if unit == "d":
-        return _handle_day_reset(current_time, base_midnight, value, tz)
+        return _handle_day_reset(current_time, base_midnight, value, reset_time_of_day)
     elif unit == "w":
-        return _handle_day_reset(current_time, base_midnight, value * 7, tz)
+        return _handle_day_reset(current_time, base_midnight, value * 7, reset_time_of_day)
     elif unit == "h":
         return _handle_hour_reset(current_time, base_midnight, value)
     elif unit == "m":
@@ -136,7 +144,7 @@ def get_next_standardized_reset_time(duration: str, current_time: datetime, time
     elif unit == "s":
         return _handle_second_reset(current_time, base_midnight, value)
     elif unit == "mo":
-        return _handle_month_reset(current_time, base_midnight, value)
+        return _handle_month_reset(current_time, base_midnight, value, reset_time_of_day)
     else:
         # Unrecognized unit, default to next midnight
         return base_midnight + timedelta(days=1)
@@ -175,46 +183,58 @@ def _parse_duration(duration: str) -> Tuple[Optional[int], Optional[str]]:
     return int(value), unit
 
 
-def _handle_day_reset(current_time: datetime, base_midnight: datetime, value: int, tz: tzinfo) -> datetime:
+def _apply_time_of_day(dt: datetime, reset_time_of_day: time) -> datetime:
+    """Set the wall-clock time of `dt` to `reset_time_of_day`, keeping its date and tzinfo."""
+    return dt.replace(
+        hour=reset_time_of_day.hour,
+        minute=reset_time_of_day.minute,
+        second=reset_time_of_day.second,
+        microsecond=reset_time_of_day.microsecond,
+    )
+
+
+def _next_occurrence(
+    boundary_midnight: datetime,
+    reset_time_of_day: time,
+    current_time: datetime,
+    period: timedelta,
+) -> datetime:
+    """Place the reset at `reset_time_of_day` on the boundary day, rolling forward one
+    `period` if that instant has already passed (or is exactly now)."""
+    candidate = _apply_time_of_day(boundary_midnight, reset_time_of_day)
+    if candidate <= current_time:
+        return candidate + period
+    return candidate
+
+
+def _first_of_next_month(first_of_month: datetime) -> datetime:
+    """Given the 1st of some month, return the 1st of the following month."""
+    if first_of_month.month == 12:
+        return first_of_month.replace(year=first_of_month.year + 1, month=1)
+    return first_of_month.replace(month=first_of_month.month + 1)
+
+
+def _handle_day_reset(
+    current_time: datetime,
+    base_midnight: datetime,
+    value: int,
+    reset_time_of_day: time,
+) -> datetime:
     """Handle day-based reset times."""
     # Handle zero value - immediate expiration
     if value == 0:
         return current_time
 
-    if value == 1:  # Daily reset at midnight
-        return base_midnight + timedelta(days=1)
-    elif value == 7:  # Weekly reset on Monday at midnight
+    if value == 1:  # Daily reset at the configured time of day
+        return _next_occurrence(base_midnight, reset_time_of_day, current_time, timedelta(days=1))
+    elif value == 7:  # Weekly reset on Monday at the configured time of day
         days_until_monday = (7 - current_time.weekday()) % 7
-        if days_until_monday == 0:  # If today is Monday
-            days_until_monday = 7
-        return base_midnight + timedelta(days=days_until_monday)
-    elif value == 30:  # Monthly reset on 1st at midnight
-        # Get 1st of next month at midnight
-        if current_time.month == 12:
-            next_reset = datetime(
-                year=current_time.year + 1,
-                month=1,
-                day=1,
-                hour=0,
-                minute=0,
-                second=0,
-                microsecond=0,
-                tzinfo=tz,
-            )
-        else:
-            next_reset = datetime(
-                year=current_time.year,
-                month=current_time.month + 1,
-                day=1,
-                hour=0,
-                minute=0,
-                second=0,
-                microsecond=0,
-                tzinfo=tz,
-            )
-        return next_reset
-    else:  # Custom day value - next interval is value days from current
-        return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=value)
+        upcoming_monday = base_midnight + timedelta(days=days_until_monday)
+        return _next_occurrence(upcoming_monday, reset_time_of_day, current_time, timedelta(days=7))
+    elif value == 30:  # Monthly reset on 1st at the configured time of day
+        return _handle_month_reset(current_time, base_midnight, 1, reset_time_of_day)
+    else:  # Custom day value - next interval is value days from the start of today
+        return _apply_time_of_day(base_midnight + timedelta(days=value), reset_time_of_day)
 
 
 def _handle_hour_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
@@ -316,36 +336,30 @@ def _handle_second_reset(current_time: datetime, base_midnight: datetime, value:
     return current_time.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
 
 
-def _handle_month_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
+def _handle_month_reset(
+    current_time: datetime,
+    base_midnight: datetime,
+    value: int,
+    reset_time_of_day: time,
+) -> datetime:
     """
-    Handle monthly reset times. For monthly resets, we always reset at the start of the next month.
+    Handle monthly reset times. Resets land on the 1st at `reset_time_of_day`; if the
+    1st of the current month at that time has already passed, roll to the 1st of next month.
 
     Args:
         current_time: Current datetime
         base_midnight: Midnight of current day
         value: Number of months (currently only supports 1 month resets)
+        reset_time_of_day: Wall-clock time the reset lands on
 
     Returns:
-        datetime: First day of next month at midnight
+        datetime: First day of the next reset month at `reset_time_of_day`
     """
     if value != 1:
         raise ValueError("Monthly resets currently only support 1 month intervals")
 
-    # Get the first day of next month
-    if current_time.month == 12:
-        next_month = 1
-        next_year = current_time.year + 1
-    else:
-        next_month = current_time.month + 1
-        next_year = current_time.year
-
-    return datetime(
-        year=next_year,
-        month=next_month,
-        day=1,
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-        tzinfo=current_time.tzinfo,
-    )
+    first_of_this_month = base_midnight.replace(day=1)
+    candidate = _apply_time_of_day(first_of_this_month, reset_time_of_day)
+    if candidate <= current_time:
+        return _apply_time_of_day(_first_of_next_month(first_of_this_month), reset_time_of_day)
+    return candidate

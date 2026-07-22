@@ -1,0 +1,71 @@
+# Management/UI endpoint features. Grounded in litellm/proxy/management_endpoints/.
+- {id: mgmt.key.generate.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:1444", rationale: "API key survives DB roundtrip"}
+- {id: mgmt.key.generate.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "key_management_endpoints.py:1444", rationale: "Only master/team-admin creates keys"}
+- {id: mgmt.key.generate.happy_path, module: mgmt, tier: P0, surface: ui, assertions: [happy_path], source: "ui_sso.py:420", rationale: "SSO-driven key gen (UI path)"}
+- {id: mgmt.key.update.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:2462", rationale: "Budget/model changes persist"}
+- {id: mgmt.key.update.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "key_management_endpoints.py:2462", rationale: "Non-admin cannot escalate perms"}
+- {id: mgmt.key.update.happy_path, module: mgmt, tier: P1, surface: ui, assertions: [happy_path], source: "key_management_endpoints.py:2462", rationale: "Key edit through the dashboard"}
+- {id: mgmt.key.delete.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:3122", rationale: "Deletion revokes future calls"}
+- {id: mgmt.key.delete.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "key_management_endpoints.py:3122", rationale: "Non-owner cannot delete"}
+- {id: mgmt.key.info.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:3380", rationale: "Info reflects all writes"}
+- {id: mgmt.virtual_key.valid_allows, module: mgmt, tier: P0, surface: api, assertions: [valid_allows], source: "user_api_key_auth.py", rationale: "Virtual key authenticates chat the way production OpenAI clients do"}
+- {id: mgmt.virtual_key.invalid_denied, module: mgmt, tier: P0, surface: api, assertions: [invalid_denied], source: "user_api_key_auth.py", rationale: "Bogus bearer is rejected before provider call"}
+- {id: mgmt.team.new.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "team_endpoints.py:897", rationale: "team_id/alias/budgets stored"}
+- {id: mgmt.team.new.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "team_endpoints.py:897", rationale: "Only org-admin/master creates teams"}
+- {id: mgmt.team.member_add.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "team_endpoints.py:2424", rationale: "Membership + per-member budget persist"}
+- {id: mgmt.team.member_add.member_forbidden, module: mgmt, tier: P0, surface: api, assertions: [member_forbidden], source: "team_endpoints.py:2424", rationale: "Non-admin forbidden to add"}
+- {id: mgmt.team.member_delete.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "team_endpoints.py:2800", rationale: "Removal revokes team key access"}
+- {id: mgmt.team.member_delete.member_forbidden, module: mgmt, tier: P0, surface: api, assertions: [member_forbidden], source: "team_endpoints.py:2800", rationale: "Non-admin forbidden to remove"}
+- {id: mgmt.budget.new.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "budget_management_endpoints.py:40", rationale: "max/soft/reset windows persist"}
+- {id: mgmt.budget.new.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "budget_management_endpoints.py:40", rationale: "Requires master/admin"}
+- {id: mgmt.model.add.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "model_management_endpoints.py:1201", rationale: "Registration persists for routing"}
+- {id: mgmt.model.add.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "model_management_endpoints.py:1201", rationale: "Non-admin cannot inject model config"}
+- {id: mgmt.user.new.happy_path, module: mgmt, tier: P0, surface: api, assertions: [happy_path], source: "internal_user_endpoints.py:360", rationale: "User creation full cycle"}
+- {id: mgmt.key.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "key_management_endpoints.py:5119", rationale: "Key inventory pagination"}
+- {id: mgmt.key.block.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "key_management_endpoints.py:5849", rationale: "Blocked stays blocked on restart"}
+- {id: mgmt.key.unblock.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "key_management_endpoints.py:5960", rationale: "Unblock restores access"}
+- {id: mgmt.key.regenerate.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "key_management_endpoints.py:6071", rationale: "Rotation: new works, old invalid"}
+- {id: mgmt.key.health.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "key_management_endpoints.py:4292", rationale: "Key health endpoint"}
+- {id: mgmt.key.bulk_update.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "key_management_endpoints.py:2677", rationale: "Batch key updates"}
+- {id: mgmt.team.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py:1582", rationale: "Metadata/budget updates persist"}
+- {id: mgmt.team.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py:1750", rationale: "Deletion prevents key access"}
+- {id: mgmt.team.block.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py", rationale: "Block suspends all members"}
+- {id: mgmt.team.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "team_endpoints.py:2244", rationale: "Metadata+members+budgets"}
+- {id: mgmt.team.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "team_endpoints.py:3645", rationale: "Pagination/filtering"}
+- {id: mgmt.team.member_update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py:2768", rationale: "Member budget/role updates persist"}
+- {id: mgmt.user.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "internal_user_endpoints.py:555", rationale: "Metadata/perm updates persist"}
+- {id: mgmt.user.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "internal_user_endpoints.py:640", rationale: "Deletion revokes keys+teams"}
+- {id: mgmt.user.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "internal_user_endpoints.py:475", rationale: "Admin view all users"}
+- {id: mgmt.user.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "internal_user_endpoints.py:440", rationale: "Roles/perms/team membership"}
+- {id: mgmt.organization.new.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "organization_endpoints.py:403", rationale: "Org for multi-tenant isolation"}
+- {id: mgmt.organization.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "organization_endpoints.py:545", rationale: "Org metadata updates persist"}
+- {id: mgmt.organization.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "organization_endpoints.py:710", rationale: "Cascades to teams/keys"}
+- {id: mgmt.organization.member_add.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "organization_endpoints.py:835", rationale: "Org member onboarding"}
+- {id: mgmt.customer.new.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "customer_endpoints.py:372", rationale: "End-user for spend tracking"}
+- {id: mgmt.customer.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "customer_endpoints.py:480", rationale: "Removes from spend tracking"}
+- {id: mgmt.end_user.new.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "customer_endpoints.py:730", rationale: "End-user create (synonym)"}
+- {id: mgmt.tag.new.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "tag_management_endpoints.py:160", rationale: "Tag for spend categorization"}
+- {id: mgmt.tag.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "tag_management_endpoints.py:315", rationale: "Tag enumeration"}
+- {id: mgmt.tag.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "tag_management_endpoints.py:390", rationale: "Stops future tagging"}
+- {id: mgmt.model.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "model_management_endpoints.py:1358", rationale: "Pricing/concurrency persist"}
+- {id: mgmt.model.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "model_management_endpoints.py:1045", rationale: "Removes from registry"}
+- {id: mgmt.model.block.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "model_management_endpoints.py", rationale: "Blocked model stays blocked"}
+- {id: mgmt.access_group.new.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "model_access_group_management_endpoints.py:450", rationale: "Model permissioning group"}
+- {id: mgmt.access_group.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "model_access_group_management_endpoints.py:600", rationale: "Access group membership query"}
+- {id: mgmt.mcp_server.register.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "mcp_management_endpoints.py:880", rationale: "MCP server registration"}
+- {id: mgmt.mcp_server.approve.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "mcp_management_endpoints.py:1200", rationale: "Admin approval persists"}
+- {id: mgmt.budget.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "budget_management_endpoints.py:155", rationale: "Limit changes apply"}
+- {id: mgmt.budget.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "budget_management_endpoints.py:280", rationale: "Clears limits"}
+- {id: mgmt.budget.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "budget_management_endpoints.py:215", rationale: "Budget enumeration"}
+- {id: mgmt.callback.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "callback_management_endpoints.py", rationale: "Callback config (smoke)"}
+- {id: mgmt.cache_settings.update.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "cache_settings_endpoints.py", rationale: "Cache config (smoke)"}
+- {id: mgmt.cost_tracking.estimate.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "cost_tracking_settings.py", rationale: "Cost estimate (smoke)"}
+- {id: mgmt.router_settings.update.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "router_settings_endpoints.py", rationale: "Router config (smoke)"}
+- {id: mgmt.jwt_key_mapping.new.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "jwt_key_mapping_endpoints.py", rationale: "JWT->key mapping (smoke)"}
+- {id: mgmt.compliance.gdpr.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "compliance_endpoints.py", rationale: "GDPR ops (smoke)"}
+- {id: mgmt.tool_management.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "tool_management_endpoints.py", rationale: "Tool inventory (smoke)"}
+- {id: mgmt.fallback_management.update.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "fallback_management_endpoints.py", rationale: "Fallback config (smoke)"}
+- {id: mgmt.config_override.hashicorp_vault.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "config_override_endpoints.py", rationale: "Vault integration (smoke)"}
+- {id: mgmt.workflow.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "workflow_management_endpoints.py", rationale: "Workflow tracking (smoke)"}
+- {id: mgmt.credential_migration.check.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "key_management_endpoints.py:4252", rationale: "Encryption migration (smoke)"}
+- {id: mgmt.credential.new.serves_request, module: mgmt, tier: P1, surface: api, assertions: [serves_request], source: "credential_endpoints/endpoints.py:42", rationale: "Stored credential resolves into a deployment and serves a live /messages request"}

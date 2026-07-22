@@ -182,7 +182,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                           {inputCacheFormula}
                           {(costBreakdown?.cache_read_cost ?? 0) > 0 && (
                             <div className="flex text-sm">
-                              <span className="text-gray-600 font-medium w-1/3">Cache Read Cost:</span>
+                              <span className="text-gray-600 font-medium w-1/3">Prompt Cache Read Cost:</span>
                               <span className="text-gray-900">
                                 {formatCost(isCached ? 0 : costBreakdown?.cache_read_cost)}
                                 {(cacheReadTokens ?? 0) > 0 && (
@@ -195,7 +195,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                           )}
                           {(costBreakdown?.cache_creation_cost ?? 0) > 0 && (
                             <div className="flex text-sm">
-                              <span className="text-gray-600 font-medium w-1/3">Cache Write Cost:</span>
+                              <span className="text-gray-600 font-medium w-1/3">Prompt Cache Write Cost:</span>
                               <span className="text-gray-900">
                                 {formatCost(isCached ? 0 : costBreakdown?.cache_creation_cost)}
                                 {(cacheCreationTokens ?? 0) > 0 && (
