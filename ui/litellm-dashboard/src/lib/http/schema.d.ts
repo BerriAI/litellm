@@ -24616,7 +24616,7 @@ export interface components {
          * KeyManagementSystem
          * @enum {string}
          */
-        KeyManagementSystem: "google_kms" | "azure_key_vault" | "aws_secret_manager" | "google_secret_manager" | "hashicorp_vault" | "cyberark" | "local" | "aws_kms" | "custom";
+        KeyManagementSystem: "google_kms" | "azure_key_vault" | "aws_secret_manager" | "google_secret_manager" | "hashicorp_vault" | "cyberark" | "keeper" | "local" | "aws_kms" | "custom";
         /**
          * KeyMetadata
          * @description Metadata for a key

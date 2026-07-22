@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-19T00:00:06.091071Z"
+exclude-newer = "2026-07-19T18:53:57.627392561Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3687,6 +3687,20 @@ wheels = [
 ]
 
 [[package]]
+name = "keeper-secrets-manager-core"
+version = "17.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d6/55/fbf9b0952cc53ae473697302b71f00fbc60ee7486a28aaf91c14dcd8bf58/keeper_secrets_manager_core-17.3.0.tar.gz", hash = "sha256:dbd3c2b2160a92aed46c2f5355cbd793492f43ba260379d78957e7ad75a96acf", size = 59643, upload-time = "2026-06-15T19:57:30.961Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/e8/b82a950ef31c3d53d7a0377de1f9819ae79470d3d766992fba6fe752fc93/keeper_secrets_manager_core-17.3.0-py3-none-any.whl", hash = "sha256:80327afaa06a04925acfc2d61f405a0831ef00e6c6fb2fff841a0704d9617221", size = 59813, upload-time = "2026-06-15T19:57:29.76Z" },
+]
+
+[[package]]
 name = "kiwisolver"
 version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4152,6 +4166,7 @@ extra-proxy = [
     { name = "azure-keyvault-secrets" },
     { name = "google-cloud-iam" },
     { name = "google-cloud-kms" },
+    { name = "keeper-secrets-manager-core" },
     { name = "prisma" },
     { name = "redisvl" },
     { name = "resend" },
@@ -4361,6 +4376,7 @@ requires-dist = [
     { name = "inquirerpy", marker = "extra == 'proxy'", specifier = ">=0.3.4,<1.0" },
     { name = "jinja2", specifier = ">=3.1.6,<4.0" },
     { name = "jsonschema", specifier = ">=4.0.0,<5.0" },
+    { name = "keeper-secrets-manager-core", marker = "extra == 'extra-proxy'", specifier = ">=17.3.0,<18.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = ">=2.59.7,<3.0" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
