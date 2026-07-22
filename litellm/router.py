@@ -8714,9 +8714,29 @@ class Router:
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
         if custom_llm_provider == "azure" and base_model is None:
-            verbose_router_logger.error(
-                f"Could not identify azure model '{_model}'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models"
+            # the `if model is None` fallback below resolves the deployment's
+            # model name against the model cost map — when the name is a known
+            # azure key (e.g. deployment model "azure/gpt-4o"), that resolution
+            # gives correct max tokens / costs and there is nothing for the
+            # operator to fix, so don't spam an ERROR on every request.
+            # membership alone isn't enough: Router init auto-registers every
+            # deployment name into litellm.model_cost as a zeroed stub, so
+            # require the entry to carry usable limits/costs.
+            _azure_fallback_key = _model if _model.startswith("azure/") else "azure/{}".format(_model)
+            _fallback_entry = litellm.model_cost.get(_azure_fallback_key) or {}
+            _fallback_resolves = (
+                (_fallback_entry.get("max_input_tokens") or 0) > 0
+                or (_fallback_entry.get("max_tokens") or 0) > 0
+                or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
+            if _fallback_resolves:
+                verbose_router_logger.debug(
+                    f"Azure deployment '{_model}' has no base_model set; using '{_azure_fallback_key}' from the model cost map for max tokens, cost tracking, etc."
+                )
+            else:
+                verbose_router_logger.error(
+                    f"Could not identify azure model '{_model}'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models"
+                )
         elif custom_llm_provider != "azure":
             model = _model
 
