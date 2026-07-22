@@ -4,6 +4,7 @@ Unit tests for CooldownCache exception masking functionality
 
 import os
 import sys
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -255,3 +256,66 @@ class TestCooldownCacheExceptionMasking:
         # Should show first 50 characters, then all asterisks
         expected = "A" * 50 + "*" * 50
         assert masked == expected
+
+
+class TestCorrectedActiveCooldown:
+    def _make_cooldown_cache(self) -> CooldownCache:
+        in_memory = InMemoryCache()
+        dual_cache = DualCache(in_memory_cache=in_memory)
+        return CooldownCache(cache=dual_cache, default_cooldown_time=60.0)
+
+    def _entry(self, timestamp: float, cooldown_time: float) -> CooldownCacheValue:
+        return CooldownCacheValue(
+            exception_received="Rate limit",
+            status_code="429",
+            timestamp=timestamp,
+            cooldown_time=cooldown_time,
+        )
+
+    def test_expired_entry_returns_none_and_evicts(self):
+        cc = self._make_cooldown_cache()
+        key = "deployment:expired-dep:cooldown"
+        entry = self._entry(timestamp=time.time() - 120.0, cooldown_time=60.0)
+        cc.cache.in_memory_cache.set_cache(key, dict(entry), ttl=600)
+
+        result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
+
+        assert result is None
+        assert cc.cache.in_memory_cache.get_cache(key) is None
+
+    def test_active_entry_within_window_returns_value(self):
+        cc = self._make_cooldown_cache()
+        key = "deployment:active-dep:cooldown"
+        entry = self._entry(timestamp=time.time(), cooldown_time=60.0)
+        cc.cache.in_memory_cache.set_cache(key, dict(entry), ttl=60)
+
+        result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
+
+        assert result is not None
+        assert result["status_code"] == "429"
+
+    def test_inflated_ttl_is_corrected(self):
+        cc = self._make_cooldown_cache()
+        key = "deployment:backfilled-dep:cooldown"
+        remaining = 30.0
+        entry = self._entry(timestamp=time.time() - (60.0 - remaining), cooldown_time=60.0)
+        cc.cache.in_memory_cache.set_cache(key, dict(entry), ttl=600)
+
+        result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
+
+        assert result is not None
+        corrected_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        assert corrected_expiry is not None
+        assert corrected_expiry - time.time() <= 60.0
+
+    def test_normal_ttl_not_modified(self):
+        cc = self._make_cooldown_cache()
+        key = "deployment:normal-dep:cooldown"
+        entry = self._entry(timestamp=time.time(), cooldown_time=60.0)
+        cc.cache.in_memory_cache.set_cache(key, dict(entry), ttl=60)
+        original_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+
+        cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
+
+        after_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        assert after_expiry == original_expiry

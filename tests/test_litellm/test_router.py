@@ -5866,3 +5866,44 @@ async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
             bedrock_tags=request_tags,
         )
         assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags
+
+
+class TestGetAllowedFailsFromPolicy:
+    def _make_router(self, **policy_kwargs) -> litellm.Router:
+        from litellm.types.router import AllowedFailsPolicy
+
+        return litellm.Router(
+            model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "fake"}}],
+            allowed_fails_policy=AllowedFailsPolicy(**policy_kwargs),
+        )
+
+    def test_no_policy_returns_none(self):
+        router = litellm.Router(
+            model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "fake"}}],
+        )
+        assert router.get_allowed_fails_from_policy(litellm.RateLimitError("429", "openai", "gpt-4")) is None
+
+    def test_internal_server_error_allowed_fails(self):
+        router = self._make_router(InternalServerErrorAllowedFails=7)
+        exc = litellm.InternalServerError("500", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 7
+
+    def test_service_unavailable_error_allowed_fails(self):
+        router = self._make_router(ServiceUnavailableErrorAllowedFails=4)
+        exc = litellm.ServiceUnavailableError("503", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 4
+
+    def test_bad_gateway_error_allowed_fails(self):
+        router = self._make_router(BadGatewayErrorAllowedFails=2)
+        exc = litellm.BadGatewayError("502", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 2
+
+    def test_not_found_error_allowed_fails(self):
+        router = self._make_router(NotFoundErrorAllowedFails=1)
+        exc = litellm.NotFoundError("404", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) == 1
+
+    def test_unmatched_exception_returns_none(self):
+        router = self._make_router(InternalServerErrorAllowedFails=5)
+        exc = litellm.RateLimitError("429", "openai", "gpt-4")
+        assert router.get_allowed_fails_from_policy(exc) is None
