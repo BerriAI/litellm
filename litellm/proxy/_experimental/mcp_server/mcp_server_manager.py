@@ -1247,14 +1247,15 @@ class MCPServerManager:
             name_for_prefix = get_server_prefix(temp_server)
 
             server_url = server_config.get("url", None) or ""
-            # Generate stable server ID based on parameters
-            server_id = self._generate_stable_server_id(
-                server_name=server_name,
-                url=server_url,
-                transport=server_config.get("transport", MCPTransport.http),
-                auth_type=server_config.get("auth_type", None),
-                alias=alias,
-            )
+            explicit_server_id = server_config.get("server_id", None)
+            if explicit_server_id is not None and (
+                not isinstance(explicit_server_id, str) or not explicit_server_id.strip()
+            ):
+                raise ValueError(
+                    f"Invalid config for MCP server '{server_name}': server_id must be a "
+                    f"non-empty string when set (got {explicit_server_id!r})."
+                )
+            server_id = explicit_server_id or self._generate_stable_server_id(server_name=server_name)
 
             _warn_on_server_name_fields(
                 server_id=server_id,
@@ -5352,40 +5353,26 @@ class MCPServerManager:
             return registry
         return {k: v for k, v in registry.items() if self._is_server_accessible_from_ip(v, client_ip)}
 
-    def _generate_stable_server_id(
-        self,
-        server_name: str,
-        url: str,
-        transport: str,
-        auth_type: Optional[str] = None,
-        alias: Optional[str] = None,
-    ) -> str:
+    def _generate_stable_server_id(self, server_name: str) -> str:
         """
-        Generate a stable server ID based on server parameters using a hash function.
+        Generate a stable server ID for a config-defined MCP server by hashing
+        only its ``server_name`` (the config key, which is the server's real
+        identity).
 
-        This is critical to ensure the server_id is stable across server restarts.
-        Some users store MCPs on the config.yaml and permission management is based on server_ids.
-
-        Eg a key might have mcp_servers = ["1234"], if the server_id changes across restarts, the key will no longer have access to the MCP.
+        This is critical because permission management is based on server_ids.
+        A key might have mcp_servers = ["1234"]; if the server_id changes, the
+        key silently loses access to the MCP. The id must therefore stay stable
+        across restarts and across edits to mutable connection fields (url,
+        transport, auth_type, alias). Only renaming the config key, which is a
+        genuinely different server, changes the id.
 
         Args:
-            server_name: Name of the server
-            url: Server URL
-            transport: Transport type (sse, http, etc.)
-            auth_type: Authentication type (optional)
-            alias: Server alias (optional)
+            server_name: Name of the server (the config key)
 
         Returns:
             A deterministic server ID string
         """
-        # Create a string from all the identifying parameters
-        params_string = f"{server_name}|{url}|{transport}|{auth_type or ''}|{alias or ''}"
-
-        # Generate SHA-256 hash
-        hash_object = hashlib.sha256(params_string.encode("utf-8"))
-        hash_hex = hash_object.hexdigest()
-
-        # Take first 32 characters and format as UUID-like string
+        hash_hex = hashlib.sha256(server_name.encode("utf-8")).hexdigest()
         return hash_hex[:32]
 
     async def health_check_server(

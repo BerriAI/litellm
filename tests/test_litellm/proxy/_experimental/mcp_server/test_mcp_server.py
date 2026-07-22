@@ -4951,6 +4951,86 @@ class TestEnsureUpstreamInitializeInstructionsCached:
             global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop("reload-target", None)
 
 
+class TestConfigServerIdStability:
+    """Regression tests for issue #33431 - editing a config MCP server's mutable
+    connection fields must not change its server_id (which would silently orphan
+    every existing permission grant keyed on the old id)."""
+
+    @pytest.mark.asyncio
+    async def test_server_id_stable_across_auth_type_edit(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        before = MCPServerManager()
+        await before.load_servers_from_config(
+            {"internal_docs": {"url": "http://localhost:3000/mcp", "transport": "http"}}
+        )
+        id_before = before.get_mcp_server_by_name("internal_docs").server_id
+
+        after = MCPServerManager()
+        await after.load_servers_from_config(
+            {
+                "internal_docs": {
+                    "url": "https://docs.internal/mcp",
+                    "transport": "sse",
+                    "auth_type": "bearer_token",
+                    "alias": "docs",
+                }
+            }
+        )
+        id_after = after.get_mcp_server_by_name("internal_docs").server_id
+
+        assert id_before == id_after
+
+    @pytest.mark.asyncio
+    async def test_server_id_changes_with_server_name(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "server_a": {"url": "http://localhost/mcp", "transport": "http"},
+                "server_b": {"url": "http://localhost/mcp", "transport": "http"},
+            }
+        )
+        id_a = manager.get_mcp_server_by_name("server_a").server_id
+        id_b = manager.get_mcp_server_by_name("server_b").server_id
+        assert id_a != id_b
+
+    @pytest.mark.asyncio
+    async def test_explicit_server_id_pins_the_id(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "legacy": {
+                    "server_id": "pinned-legacy-id",
+                    "url": "http://localhost/mcp",
+                    "transport": "http",
+                }
+            }
+        )
+        assert manager.get_mcp_server_by_name("legacy").server_id == "pinned-legacy-id"
+
+    @pytest.mark.asyncio
+    async def test_blank_explicit_server_id_rejected(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        with pytest.raises(ValueError, match="server_id must be a non-empty string"):
+            await manager.load_servers_from_config(
+                {"legacy": {"server_id": "   ", "url": "http://localhost/mcp", "transport": "http"}}
+            )
+
+
 class TestGatewayCreateInitializationOptions:
     """Tests for the patched server.create_initialization_options via ContextVar."""
 
