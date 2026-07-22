@@ -112,6 +112,8 @@ class PrometheusLogger(CustomLogger):
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
 
+            self.exclude_metrics, self.exclude_labels = self._parse_exclude_config()
+
             # Cache resolved label sets per metric. Several entries in
             # ``PrometheusMetricLabels.get_labels`` read module-level toggles
             # (e.g. ``litellm.prometheus_emit_stream_label``,
@@ -686,6 +688,44 @@ class PrometheusLogger(CustomLogger):
         self._pretty_print_prometheus_config(label_filters)
         return label_filters
 
+    def _parse_exclude_config(self) -> tuple[frozenset[str], frozenset[str]]:
+        """Parse and validate the global ``exclude_metrics`` / ``exclude_labels`` settings."""
+        from typing import get_args
+
+        import litellm
+
+        exclude_metrics = frozenset(litellm.prometheus_exclude_metrics or [])
+        exclude_labels = frozenset(litellm.prometheus_exclude_labels or [])
+
+        valid_metrics = frozenset(get_args(DEFINED_PROMETHEUS_METRICS))
+        invalid_metrics = sorted(exclude_metrics - valid_metrics)
+
+        valid_labels = self._all_defined_labels()
+        invalid_labels = sorted(exclude_labels - valid_labels)
+
+        errors = [
+            *(f"Invalid metric name in prometheus_exclude_metrics: {metric}" for metric in invalid_metrics),
+            *(f"Invalid label name in prometheus_exclude_labels: {label}" for label in invalid_labels),
+        ]
+        if errors:
+            raise ValueError("Prometheus exclude configuration validation failed:\n" + "\n".join(errors))
+
+        return exclude_metrics, exclude_labels
+
+    @staticmethod
+    def _all_defined_labels() -> frozenset[str]:
+        """Every label name a metric can emit: built-in labels plus configured custom labels / tags."""
+        import litellm
+
+        builtin_labels = frozenset(label.value for label in UserAPIKeyLabelNames)
+        custom_metadata_labels = frozenset(
+            _sanitize_prometheus_label_name(label) for label in litellm.custom_prometheus_metadata_labels
+        )
+        custom_tag_labels = frozenset(
+            _sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags
+        )
+        return builtin_labels | custom_metadata_labels | custom_tag_labels
+
     def _validate_all_configurations(self, parsed_configs: List) -> ValidationResults:
         """Validate all metric configurations and return collected errors"""
         metric_errors = []
@@ -1005,6 +1045,9 @@ class PrometheusLogger(CustomLogger):
 
     def _is_metric_enabled(self, metric_name: str) -> bool:
         """Check if a metric is enabled based on configuration"""
+        if metric_name in self.exclude_metrics:
+            return False
+
         # If no specific configuration is provided, enable all metrics (default behavior)
         if not hasattr(self, "enabled_metrics"):
             return True
@@ -1049,19 +1092,14 @@ class PrometheusLogger(CustomLogger):
         # Get default labels for this metric from PrometheusMetricLabels
         default_labels = PrometheusMetricLabels.get_labels(metric_name)
 
-        # If no label filtering is configured for this metric, use default labels
-        if metric_name not in self.label_filters:
-            self._cached_metric_labels[metric_name] = default_labels
-            return default_labels
+        if metric_name in self.label_filters:
+            configured_labels = self.label_filters[metric_name]
+            default_labels = [label for label in default_labels if label in configured_labels]
 
-        # Get configured labels for this metric
-        configured_labels = self.label_filters[metric_name]
+        resolved_labels = [label for label in default_labels if label not in self.exclude_labels]
 
-        # Return intersection of configured and default labels to ensure we only use valid labels
-        filtered_labels = [label for label in default_labels if label in configured_labels]
-
-        self._cached_metric_labels[metric_name] = filtered_labels
-        return filtered_labels
+        self._cached_metric_labels[metric_name] = resolved_labels
+        return resolved_labels
 
     @staticmethod
     def _guardrail_is_additive(info: StandardLoggingGuardrailInformation) -> bool:
