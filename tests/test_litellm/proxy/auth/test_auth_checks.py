@@ -4172,7 +4172,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     team_table = LiteLLM_TeamTableCachedObj(**base_team_row)
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
-    cache.delete_cache = MagicMock()
+    cache.async_delete_cache = AsyncMock()
     logging_obj = MagicMock()
     logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -4201,7 +4201,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
 
     # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache
     # and the Redis dual cache (mirrors _delete_cache_key_object pattern).
-    cache.delete_cache.assert_called_once_with(key="team_alias:H-Capacity")
+    cache.async_delete_cache.assert_awaited_once_with(key="team_alias:H-Capacity")
     logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
         key="team_alias:H-Capacity"
     )
@@ -4210,7 +4210,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     aliasless = LiteLLM_TeamTableCachedObj(**{**base_team_row, "team_alias": None})
     cache2 = MagicMock()
     cache2.async_set_cache = AsyncMock()
-    cache2.delete_cache = MagicMock()
+    cache2.async_delete_cache = AsyncMock()
     logging_obj2 = MagicMock()
     logging_obj2.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -4221,7 +4221,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
         proxy_logging_obj=logging_obj2,
     )
 
-    cache2.delete_cache.assert_not_called()
+    cache2.async_delete_cache.assert_not_awaited()
     logging_obj2.internal_usage_cache.dual_cache.async_delete_cache.assert_not_awaited()
     written_keys_aliasless = [
         (c.kwargs.get("key") or c.args[0])
