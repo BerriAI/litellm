@@ -1047,7 +1047,10 @@ def responses_api_bridge_check(
         reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
     else:
         reasoning_active = reasoning_effort != "none"
-    on_constraint_enforcing_endpoint = custom_llm_provider == "azure" or api_base is None
+    # A blank api_base (None, "", or whitespace) is not a custom endpoint: it resolves
+    # to the default OpenAI base downstream, which does enforce the reasoning+tools
+    # constraint. Azure always targets an OpenAI-constraint endpoint regardless.
+    on_constraint_enforcing_endpoint = custom_llm_provider == "azure" or not (api_base and api_base.strip())
     if (
         custom_llm_provider in ("openai", "azure")
         and model_info.get("mode") != "responses"
