@@ -2197,6 +2197,65 @@ def test_token_type_cost_breakdown_zero_without_special_tokens():
     )
 
 
+@pytest.mark.parametrize(
+    "raw_usage, expect_read, expect_write",
+    [
+        (
+            {
+                "input_tokens": 5000,
+                "output_tokens": 10,
+                "total_tokens": 5010,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 4012},
+            },
+            False,
+            True,
+        ),
+        (
+            {
+                "input_tokens": 5000,
+                "output_tokens": 10,
+                "total_tokens": 5010,
+                "input_tokens_details": {"cached_tokens": 4012, "cache_write_tokens": 0},
+            },
+            True,
+            False,
+        ),
+    ],
+)
+def test_token_type_cost_breakdown_openai_responses_api_cache_write_read(
+    raw_usage, expect_read, expect_write
+):
+    """Regression for #34309: OpenAI Responses API reports cache tokens under
+    input_tokens_details.{cached_tokens, cache_write_tokens}, not the Anthropic-style
+    top-level cache_creation_input_tokens. The itemized breakdown must still populate
+    cache_read_cost / cache_creation_cost from the transformed usage."""
+    from litellm.responses.utils import ResponseAPILoggingUtils
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gpt-5.6"
+    usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
+
+    breakdown = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider="openai", usage=usage
+    )
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    if expect_write:
+        assert breakdown.cache_creation_cost == pytest.approx(
+            4012 * info["cache_creation_input_token_cost"]
+        )
+        assert breakdown.cache_creation_cost > 0
+        assert breakdown.cache_read_cost == 0.0
+    if expect_read:
+        assert breakdown.cache_read_cost == pytest.approx(
+            4012 * info["cache_read_input_token_cost"]
+        )
+        assert breakdown.cache_read_cost > 0
+        assert breakdown.cache_creation_cost == 0.0
+
+
 def test_token_type_cost_breakdown_handles_unknown_model_gracefully():
     """A model with no pricing must yield zeros, never raise."""
     breakdown = get_token_type_cost_breakdown(
