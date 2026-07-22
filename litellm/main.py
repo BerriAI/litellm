@@ -463,7 +463,7 @@ async def acompletion(
         OPTIONAL PARAMS
         functions (List, optional): A list of functions to apply to the conversation messages (default is an empty list).
         function_call (str, optional): The name of the function to call within the conversation (default is an empty string).
-        temperature (float, optional): The temperature parameter for controlling the randomness of the output (default is 1.0).
+        temperature (float, optional): The sampling temperature, between 0 and 2. When None (default), the parameter is omitted from the request and the provider applies its own default.
         top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
         n (int, optional): The number of completions to generate (default is 1).
         stream (bool, optional): If True, return a streaming response (default is False).
@@ -4869,7 +4869,7 @@ def completion(  # type: ignore
         OPTIONAL PARAMS
         functions (List, optional): A list of functions to apply to the conversation messages (default is an empty list).
         function_call (str, optional): The name of the function to call within the conversation (default is an empty string).
-        temperature (float, optional): The temperature parameter for controlling the randomness of the output (default is 1.0).
+        temperature (float, optional): The sampling temperature, between 0 and 2. When None (default), the parameter is omitted from the request and the provider applies its own default.
         top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
         n (int, optional): The number of completions to generate (default is 1).
         stream (bool, optional): If True, return a streaming response (default is False).
