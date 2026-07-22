@@ -4475,7 +4475,7 @@ def test_streaming_filters_json_tool_call_with_real_tools():
             "name": "json_tool_call",
         }
     )
-    tool_use_1, _, _ = decoder._handle_converse_start_event(json_start)
+    tool_use_1, _, _ = decoder._handle_converse_start_event(json_start, 0)
     # json_tool_call start should be suppressed (return None tool_use)
     assert tool_use_1 is None
     # tool_calls_index should NOT have been incremented
@@ -4492,8 +4492,7 @@ def test_streaming_filters_json_tool_call_with_real_tools():
     # Chunk 3: json_tool_call stop
     stop_tool = decoder._handle_converse_stop_event(index=0)
     assert stop_tool is None
-    # _current_tool_name should be reset
-    assert decoder._current_tool_name is None
+    assert decoder._tool_names_by_content_block_index == {}
 
     # Chunk 4: real tool start
     real_start = ContentBlockStartEvent(
@@ -4502,7 +4501,7 @@ def test_streaming_filters_json_tool_call_with_real_tools():
             "name": "get_weather",
         }
     )
-    tool_use_4, _, _ = decoder._handle_converse_start_event(real_start)
+    tool_use_4, _, _ = decoder._handle_converse_start_event(real_start, 1)
     assert tool_use_4 is not None
     assert tool_use_4["function"]["name"] == "get_weather"
     assert decoder.tool_calls_index == 0
@@ -4515,6 +4514,51 @@ def test_streaming_filters_json_tool_call_with_real_tools():
     assert text_5 == ""
     assert tool_use_5 is not None
     assert tool_use_5["function"]["arguments"] == '{"location": "SF"}'
+
+
+def test_streaming_interleaved_json_tool_call_does_not_hide_real_tool_delta():
+    """Keep each Bedrock content block's tool state separate while streaming."""
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    decoder = AWSEventStreamDecoder(model="test-model", json_mode=True)
+
+    real_start = decoder.converse_chunk_parser(
+        {
+            "contentBlockIndex": 0,
+            "start": {
+                "toolUse": {
+                    "toolUseId": "tooluse_metrics_001",
+                    "name": "query_metrics",
+                }
+            },
+        }
+    )
+    assert (
+        real_start.choices[0].delta.tool_calls[0]["function"]["name"]
+        == "query_metrics"
+    )
+
+    decoder.converse_chunk_parser(
+        {
+            "contentBlockIndex": 1,
+            "start": {
+                "toolUse": {
+                    "toolUseId": "tooluse_json_001",
+                    "name": "json_tool_call",
+                }
+            },
+        }
+    )
+
+    real_delta = decoder.converse_chunk_parser(
+        {
+            "contentBlockIndex": 0,
+            "delta": {"toolUse": {"input": '{"prefix":"trace.grpc.server"}'}},
+        }
+    )
+    delta = real_delta.choices[0].delta
+    assert delta.content == ""
+    assert delta.tool_calls[0]["function"]["arguments"] == '{"prefix":"trace.grpc.server"}'
 
 
 def test_streaming_without_json_mode_passes_all_tools():
