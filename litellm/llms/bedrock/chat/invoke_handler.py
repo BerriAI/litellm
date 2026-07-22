@@ -1753,10 +1753,38 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         if self.json_mode is True and tool_calls is not None:
-            message = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
-            if message is not None:
-                text = message.content or ""
-                tool_use = None
+            # ``json_mode`` is also set when response_format is emulated with the
+            # internal ``json_tool_call``. A fake stream can still contain a real
+            # user tool call, so converting the first tool unconditionally loses
+            # the protocol signal needed by streaming SDK clients to execute it.
+            json_mode_tool_calls = [
+                tool_call
+                for tool_call in tool_calls
+                if tool_call["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
+            ]
+            regular_tool_calls = [
+                tool_call
+                for tool_call in tool_calls
+                if tool_call["function"].get("name") != RESPONSE_FORMAT_TOOL_NAME
+            ]
+
+            if json_mode_tool_calls:
+                message = litellm.AnthropicConfig()._convert_tool_response_to_message(
+                    tool_calls=json_mode_tool_calls
+                )
+                if message is not None:
+                    text = message.content or ""
+            if regular_tool_calls:
+                regular_tool_call = regular_tool_calls[0]
+                tool_use = ChatCompletionToolCallChunk(
+                    id=regular_tool_call.id,
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=regular_tool_call.function.name,
+                        arguments=regular_tool_call.function.arguments,
+                    ),
+                    index=0,
+                )
         elif tool_calls is not None and len(tool_calls) > 0:
             tool_use = tool_calls[0]
         return text, tool_use
