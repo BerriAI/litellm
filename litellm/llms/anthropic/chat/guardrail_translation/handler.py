@@ -380,6 +380,30 @@ class AnthropicMessagesHandler(BaseTranslation):
                         block.pop("cache_control", None)
         data["messages"] = converted
 
+    @staticmethod
+    def _extract_midturn_system_text(
+        message: Dict[str, Any],
+        msg_idx: int,
+        texts_to_check: List[str],
+        task_mappings: List[Tuple[int, int | None]],
+    ) -> None:
+        content = message.get("content")
+        normalized_content = normalize_anthropic_system_message_content(content)
+        if normalized_content is None:
+            return
+        if isinstance(normalized_content, str):
+            texts_to_check.append(normalized_content)
+            task_mappings.append((msg_idx, None))
+            return
+        if isinstance(content, list):
+            for content_idx, content_item in enumerate(content):
+                if not isinstance(content_item, dict) or content_item.get("type") != "text":
+                    continue
+                text_str = content_item.get("text")
+                if isinstance(text_str, str):
+                    texts_to_check.append(text_str)
+                    task_mappings.append((msg_idx, content_idx))
+
     def extract_request_tool_names(self, data: dict) -> List[str]:
         """Extract tool names from Anthropic messages request (tools[].name)."""
         names: List[str] = []
@@ -405,21 +429,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         """
         role = str(message.get("role") or "").lower()
         if role == "system":
-            content = message.get("content")
-            normalized_content = normalize_anthropic_system_message_content(content)
-            if normalized_content is None:
-                return
-            if isinstance(normalized_content, str):
-                texts_to_check.append(normalized_content)
-                task_mappings.append((msg_idx, None))
-            elif isinstance(content, list):
-                for content_idx, content_item in enumerate(content):
-                    if not isinstance(content_item, dict) or content_item.get("type") != "text":
-                        continue
-                    text_str = content_item.get("text")
-                    if isinstance(text_str, str):
-                        texts_to_check.append(text_str)
-                        task_mappings.append((msg_idx, content_idx))
+            self._extract_midturn_system_text(
+                message=message,
+                msg_idx=msg_idx,
+                texts_to_check=texts_to_check,
+                task_mappings=task_mappings,
+            )
             return
         if skip_tool_message and role == "tool":
             return

@@ -176,6 +176,24 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert data["messages"][0]["content"] == "[MASKED]"
 
     @pytest.mark.asyncio
+    async def test_unsupported_midturn_system_content_is_not_guardrailed(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "image", "source": {"type": "url"}}],
+                }
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is None
+
+    @pytest.mark.asyncio
     async def test_process_output_streaming_response_empty_choices(self):
         """Test that streaming response with empty choices doesn't raise IndexError
 

@@ -207,6 +207,30 @@ def test_normalize_anthropic_system_message_content_filters_non_text_blocks_with
     assert content == original_content
 
 
+@pytest.mark.parametrize(
+    "content",
+    [None, [], [42], [{1: "invalid key"}], b"invalid sequence"],
+)
+def test_normalize_anthropic_system_message_content_rejects_malformed_content(
+    content: object,
+):
+    assert normalize_anthropic_system_message_content(content) is None
+
+
+def test_normalize_anthropic_system_message_content_discards_invalid_cache_control():
+    content = [
+        {
+            "type": "text",
+            "text": "Use the corrected result.",
+            "cache_control": {1: "invalid key"},
+        }
+    ]
+
+    assert normalize_anthropic_system_message_content(content) == (
+        {"type": "text", "text": "Use the corrected result."},
+    )
+
+
 class TestTranslateMessagesToResponsesInput:
     """Anthropic messages list -> OpenAI Responses API input items."""
 
