@@ -279,3 +279,25 @@ def test_delete_vector_store_index_removes_by_name():
 
     registry.delete_vector_store_index("idx_does_not_exist")
     assert [index.index_name for index in registry.vector_store_indexes] == ["idx_b"]
+
+
+def test_get_vector_store_ids_from_tool_calls_does_not_share_or_mutate():
+    """
+    Regression test: _get_vector_store_ids_from_tool_calls took `vector_store_ids: List[str] = []`
+    and extended it in place, so the def-time default accumulated ids across every call that
+    omitted the argument, and a caller-supplied list was mutated behind the caller's back.
+    """
+    registry = VectorStoreRegistry()
+    tools = [{"vector_store_ids": ["vs_a"]}]
+
+    first = registry._get_vector_store_ids_from_tool_calls(tools=tools)
+    second = registry._get_vector_store_ids_from_tool_calls(tools=tools)
+
+    assert first == ["vs_a"]
+    assert second == ["vs_a"]
+
+    caller_ids = ["vs_seed"]
+    result = registry._get_vector_store_ids_from_tool_calls(tools=tools, vector_store_ids=caller_ids)
+
+    assert result == ["vs_seed", "vs_a"]
+    assert caller_ids == ["vs_seed"]

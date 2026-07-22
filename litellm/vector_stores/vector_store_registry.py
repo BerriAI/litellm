@@ -376,16 +376,15 @@ class VectorStoreRegistry:
         return vector_stores_to_run
 
     def _get_vector_store_ids_from_tool_calls(
-        self, tools: Optional[List[Dict]] = None, vector_store_ids: List[str] = []
+        self, tools: Optional[List[Dict]] = None, vector_store_ids: Optional[List[str]] = None
     ) -> List[str]:
         """
         Returns the vector store ids from the tool calls
         """
-        if tools:
-            for tool in tools:
-                if "vector_store_ids" in tool:
-                    vector_store_ids.extend(tool["vector_store_ids"])
-        return vector_store_ids
+        return [
+            *(vector_store_ids or ()),
+            *(vs_id for tool in (tools or ()) if "vector_store_ids" in tool for vs_id in tool["vector_store_ids"]),
+        ]
 
     def load_vector_stores_from_config(self, vector_stores_config: List[Dict]):
         """
