@@ -4662,13 +4662,14 @@ class Router:
     def embedding(
         self,
         model: str,
-        input: Union[str, List],
+        input: Optional[Union[str, List]] = None,
         is_async: Optional[bool] = False,
         **kwargs,
     ) -> EmbeddingResponse:
         try:
             kwargs["model"] = model
-            kwargs["input"] = input
+            if input is not None:
+                kwargs["input"] = input
             kwargs["original_function"] = self._embedding
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = self.function_with_fallbacks(**kwargs)
@@ -4676,7 +4677,9 @@ class Router:
         except Exception as e:
             raise e
 
-    def _embedding(self, input: Union[str, List], model: str, **kwargs):
+    def _embedding(
+        self, model: str, input: Optional[Union[str, List]] = None, **kwargs
+    ):
         model_name = None
         try:
             verbose_router_logger.debug(f"Inside embedding()- model: {model}; kwargs: {kwargs}")
@@ -4709,10 +4712,10 @@ class Router:
             response = litellm.embedding(
                 **{
                     **data,
-                    "input": input,
                     "caching": self.cache_responses,
                     "client": model_client,
                     **kwargs,
+                    **({"input": input} if input is not None else {}),
                 }
             )
             self.success_calls[model_name] += 1
@@ -4727,13 +4730,14 @@ class Router:
     async def aembedding(
         self,
         model: str,
-        input: Union[str, List],
+        input: Optional[Union[str, List]] = None,
         is_async: Optional[bool] = True,
         **kwargs,
     ) -> EmbeddingResponse:
         try:
             kwargs["model"] = model
-            kwargs["input"] = input
+            if input is not None:
+                kwargs["input"] = input
             kwargs["original_function"] = self._aembedding
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
@@ -4749,7 +4753,9 @@ class Router:
             )
             raise e
 
-    async def _aembedding(self, input: Union[str, List], model: str, **kwargs):
+    async def _aembedding(
+        self, model: str, input: Optional[Union[str, List]] = None, **kwargs
+    ):
         model_name = None
         try:
             verbose_router_logger.debug(f"Inside _aembedding()- model: {model}; kwargs: {kwargs}")
@@ -4772,10 +4778,10 @@ class Router:
             response = litellm.aembedding(
                 **{
                     **data,
-                    "input": input,
                     "caching": self.cache_responses,
                     "client": model_client,
                     **kwargs,
+                    **({"input": input} if input is not None else {}),
                 }
             )
 

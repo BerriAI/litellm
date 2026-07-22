@@ -10,7 +10,10 @@ Docs: https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm._logging import verbose_logger
+from litellm.exceptions import BadRequestError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -24,6 +27,54 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _ImageUrlField(BaseModel):
+    url: str | None = None
+
+
+class _ContentPart(BaseModel):
+    image_url: str | _ImageUrlField | None = None
+
+
+class _MessageWithImages(BaseModel):
+    content: str | list[_ContentPart] | None = None
+
+
+_MESSAGES_ADAPTER: TypeAdapter[list[_MessageWithImages]] = TypeAdapter(
+    list[_MessageWithImages]
+)
+
+
+def _reject_non_data_image_urls(messages: object, model: str) -> None:
+    """Reject any image URL vLLM would fetch server-side, to prevent SSRF.
+
+    Only base64 `data:` URLs are allowed; vLLM never makes an outbound request for
+    those. A remote `image_url` (http(s) or any other scheme) would let an
+    authenticated caller make the vLLM host fetch arbitrary internal endpoints, so
+    it is rejected before forwarding.
+    """
+    try:
+        parsed = _MESSAGES_ADAPTER.validate_python(messages)
+    except ValidationError:
+        return
+    for message in parsed:
+        if not isinstance(message.content, list):
+            continue
+        for part in message.content:
+            image_url = part.image_url
+            url = image_url.url if isinstance(image_url, _ImageUrlField) else image_url
+            if url is None or url.startswith("data:"):
+                continue
+            raise BadRequestError(
+                message=(
+                    "hosted_vllm embeddings: only base64 `data:` image URLs are "
+                    "supported in `messages`. A remote image URL was rejected to "
+                    "prevent server-side request forgery from the vLLM host."
+                ),
+                model=model,
+                llm_provider="hosted_vllm",
+            )
 
 
 class HostedVLLMEmbeddingError(BaseLLMException):
@@ -102,13 +153,32 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         """
         Transform embedding request to Hosted VLLM format (OpenAI-compatible).
         """
-        # Ensure input is a list
-        if isinstance(input, str):
-            input = [input]
-
         # Strip 'hosted_vllm/' prefix if present
         if model.startswith("hosted_vllm/"):
             model = model.replace("hosted_vllm/", "", 1)
+
+        # vLLM's embeddings endpoint accepts a chat-style `messages` body for multimodal
+        # (image) embeddings; forward it instead of `input` when present
+        if "messages" in optional_params:
+            messages = optional_params["messages"]
+            _reject_non_data_image_urls(messages, model)
+            if input:
+                verbose_logger.debug(
+                    "hosted_vllm embeddings: both `messages` and `input` provided; "
+                    "forwarding `messages` and ignoring `input`"
+                )
+            remaining_params = {
+                k: v for k, v in optional_params.items() if k != "messages"
+            }
+            return {
+                "model": model,
+                "messages": messages,
+                **remaining_params,
+            }
+
+        # Ensure input is a list
+        if isinstance(input, str):
+            input = [input]
 
         return {
             "model": model,
@@ -150,6 +220,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
             "dimensions",
             "encoding_format",
             "user",
+            "messages",
         ]
 
     def map_openai_params(
