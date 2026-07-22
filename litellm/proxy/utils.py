@@ -172,6 +172,7 @@ from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -2921,6 +2922,14 @@ class PrismaClient:
         if isinstance(self.db, RoutingPrismaWrapper):
             return self.db.writer
         return self.db
+
+    def tx(self) -> "TransactionManager":
+        """Open an interactive transaction on the writer.
+
+        Callers go through this instead of reaching into ``self.db`` so writer
+        selection and read-replica routing stay encapsulated in the wrapper.
+        """
+        return cast("TransactionManager", self.db.tx())  # cast-ok: wrappers delegate tx via __getattr__ (untyped)
 
     def get_request_status(self, payload: Union[dict, SpendLogsPayload]) -> Literal["success", "failure"]:
         """
