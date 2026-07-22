@@ -7426,6 +7426,122 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
     return new_tools
 
 
+def filter_tools_by_allowed_types(
+    tools: List[dict] | None, allowed_tool_types: List[str]
+) -> List[dict] | None:
+    """
+    Keep only tools whose ``type`` is in ``allowed_tool_types``; drop the rest.
+
+    Some OpenAI-compatible providers validate tool types strictly and reject
+    the whole request with a 400 when they see a tool type they do not know:
+    Moonshot ("unknown tool type: namespace, currently only function and plugin
+    are supported"), Zhipu ("tools[N].type:type is illegal") and DeepSeek all
+    reject the Codex-private ``namespace``/``custom``/``local_shell`` tool
+    types. Dropping the unsupported tool definitions keeps the request usable
+    instead of failing it outright.
+
+    Enabled per-deployment via the ``allowed_tool_types`` litellm_param::
+
+        litellm_params:
+          model: openai/kimi-k3
+          allowed_tool_types: ["function"]
+
+    A tool without a ``type`` key is treated as ``function`` (matching OpenAI
+    defaults). Returns None when no tools survive — including when the incoming
+    list is already empty — so an empty ``tools: []`` array is never sent
+    upstream (some providers reject that too).
+    """
+    if not tools:
+        return None
+    filtered = [
+        t
+        for t in tools
+        if not isinstance(t, dict)
+        or (t.get("type") or "function") in allowed_tool_types
+    ]
+    return filtered or None
+
+
+def relocate_input_additional_tools(
+    input, tools: List[dict] | None
+):
+    """
+    Move tools delivered via ``input`` items of type ``additional_tools`` into
+    the regular ``tools`` param.
+
+    Codex Desktop (0.145 alpha) sends its tools as an input item
+    ``{"type": "additional_tools", "role": "developer", "tools": [...]}`` with
+    an EMPTY ``tools`` param. Strict Responses-API providers reject the whole
+    request on the unknown input variant (e.g. "invalid request body: Invalid
+    'input': value did not match any expected variant") — while accepting the
+    very same tools when they arrive in the ``tools`` param. Relocating keeps
+    the request valid AND lets filter_tools_by_allowed_types apply the
+    deployment's allowlist to the merged list.
+
+    Follow-up Codex turns re-send the item with an EMPTY tools list (tools
+    were established earlier in the thread); the empty item is still a
+    non-standard variant strict providers reject, so it is dropped even when
+    it carries nothing to merge (Codex >= 26.707 "Responses Lite"
+    serialization; see Codex issue #32086).
+
+    Returns ``(input, tools)``; both unchanged when no additional_tools item
+    is present.
+    """
+    if not isinstance(input, list):
+        return input, tools
+    found = False
+    relocated: List[dict] = []
+    kept_items = []
+    for item in input:
+        if isinstance(item, dict) and item.get("type") == "additional_tools":
+            found = True
+            relocated.extend(item.get("tools") or [])
+        else:
+            kept_items.append(item)
+    if not found:
+        return input, tools
+    if not relocated:
+        return kept_items, tools
+    merged = list(tools) if tools is not None else []
+    merged.extend(relocated)
+    return kept_items, merged
+
+
+def reconcile_tool_choice_after_tool_filtering(
+    tool_choice, tools: List[dict] | None
+):
+    """
+    Reset ``tool_choice`` when filter_tools_by_allowed_types dropped the tool
+    it referenced — otherwise the provider 400s on a tool_choice pointing at a
+    tool that is no longer in the request.
+
+    Handles both the Chat Completions shape ({"type": "function", "function":
+    {"name": ...}}) and the Responses shape ({"type": "function", "name": ...}).
+    Returns None when no tools survived (a bare tool_choice without tools is
+    itself invalid), "auto" when the named function was dropped, and the
+    original value otherwise.
+    """
+    if not isinstance(tool_choice, dict):
+        return tool_choice
+    if tools is None:
+        return None
+    _fn = tool_choice.get("function")
+    name = (_fn or {}).get("name") if isinstance(_fn, dict) else tool_choice.get("name")
+    if not name:
+        return tool_choice
+    surviving_names = set()
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        t_fn = t.get("function")
+        t_name = (t_fn or {}).get("name") if isinstance(t_fn, dict) else t.get("name")
+        if t_name:
+            surviving_names.add(t_name)
+    if name in surviving_names:
+        return tool_choice
+    return "auto"
+
+
 def validate_and_fix_thinking_param(
     thinking: Optional["AnthropicThinkingParam"],
 ) -> Optional["AnthropicThinkingParam"]:

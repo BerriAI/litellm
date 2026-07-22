@@ -4863,3 +4863,127 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
         is False
     )
+
+
+def test_filter_tools_by_allowed_types_drops_unknown_types() -> None:
+    """Providers like Moonshot/Zhipu/DeepSeek 400 on Codex-private tool types
+    (namespace/custom/local_shell); with allowed_tool_types=["function"] only
+    function tools survive. A tool without a type key counts as function."""
+    from litellm.utils import filter_tools_by_allowed_types
+
+    tools = [
+        {"type": "namespace", "name": "codex_ns", "description": "ns"},
+        {"type": "custom", "name": "freeform", "description": "ff"},
+        {"type": "local_shell"},
+        {"type": "function", "function": {"name": "get_weather"}},
+        {"name": "untyped_tool"},
+    ]
+    out = filter_tools_by_allowed_types(tools=tools, allowed_tool_types=["function"])
+    assert out == [
+        {"type": "function", "function": {"name": "get_weather"}},
+        {"name": "untyped_tool"},
+    ]
+
+
+def test_filter_tools_by_allowed_types_wider_allowlist_and_empty_result() -> None:
+    """A wider allowlist keeps the listed types (Bedrock's OpenAI-compatible
+    endpoint accepts namespace/custom but rejects local_shell). When nothing
+    survives, None is returned so no empty tools array reaches the provider."""
+    from litellm.utils import filter_tools_by_allowed_types
+
+    tools = [
+        {"type": "namespace", "name": "ns", "description": "d", "tools": []},
+        {"type": "local_shell"},
+    ]
+    out = filter_tools_by_allowed_types(
+        tools=tools, allowed_tool_types=["function", "custom", "namespace"]
+    )
+    assert out == [{"type": "namespace", "name": "ns", "description": "d", "tools": []}]
+
+    assert (
+        filter_tools_by_allowed_types(
+            tools=[{"type": "local_shell"}], allowed_tool_types=["function"]
+        )
+        is None
+    )
+
+    assert filter_tools_by_allowed_types(tools=None, allowed_tool_types=["function"]) is None
+    # an already-empty list is normalized to None too — some providers reject tools: []
+    assert filter_tools_by_allowed_types(tools=[], allowed_tool_types=["function"]) is None
+
+
+def test_reconcile_tool_choice_after_tool_filtering() -> None:
+    """tool_choice pointing at a dropped tool must not reach the provider (it
+    400s on an unknown tool reference). Dropped -> "auto"; kept -> unchanged;
+    no surviving tools -> None; string/None tool_choice passes through."""
+    from litellm.utils import reconcile_tool_choice_after_tool_filtering
+
+    surviving = [{"type": "function", "function": {"name": "kept_fn"}}]
+
+    # chat-completions shape, referenced tool was dropped
+    assert (
+        reconcile_tool_choice_after_tool_filtering(
+            tool_choice={"type": "function", "function": {"name": "dropped_fn"}},
+            tools=surviving,
+        )
+        == "auto"
+    )
+    # responses shape, referenced tool survived
+    kept = {"type": "function", "name": "kept_fn"}
+    assert (
+        reconcile_tool_choice_after_tool_filtering(tool_choice=kept, tools=surviving)
+        == kept
+    )
+    # nothing survived -> tool_choice must go away entirely
+    assert (
+        reconcile_tool_choice_after_tool_filtering(
+            tool_choice={"type": "function", "function": {"name": "x"}}, tools=None
+        )
+        is None
+    )
+    # non-dict values pass through untouched
+    assert reconcile_tool_choice_after_tool_filtering(tool_choice="auto", tools=surviving) == "auto"
+    assert reconcile_tool_choice_after_tool_filtering(tool_choice=None, tools=surviving) is None
+
+
+def test_relocate_input_additional_tools() -> None:
+    """Codex Desktop delivers tools via an input item {type: "additional_tools",
+    tools: [...]} with an empty tools param; strict providers 400 on the unknown
+    input variant but accept the same tools in the tools param. Relocation must
+    move them over (merging with any existing tools) and leave other input
+    items untouched; non-list input and tool-free input pass through."""
+    from litellm.utils import relocate_input_additional_tools
+
+    codex_input = [
+        {
+            "role": "developer",
+            "type": "additional_tools",
+            "tools": [{"name": "exec", "type": "custom", "format": {"type": "grammar"}}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+    new_input, new_tools = relocate_input_additional_tools(
+        input=list(codex_input), tools=[{"type": "function", "name": "f"}]
+    )
+    assert [i.get("type") for i in new_input] == ["message"]
+    assert [t.get("name") or t.get("type") for t in new_tools] == ["f", "exec"]
+
+    # nothing to move -> both returned unchanged
+    plain_input = [{"type": "message", "role": "user", "content": []}]
+    same_input, same_tools = relocate_input_additional_tools(input=plain_input, tools=None)
+    assert same_input == plain_input and same_tools is None
+
+    # string input passes through
+    s_input, s_tools = relocate_input_additional_tools(input="hello", tools=None)
+    assert s_input == "hello" and s_tools is None
+
+    # follow-up Codex turns re-send the item with an EMPTY tools list — the
+    # non-standard item must STILL be dropped (strict providers reject it),
+    # with the tools param left untouched
+    turn2_input = [
+        {"role": "developer", "type": "additional_tools", "tools": []},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "next"}]},
+    ]
+    t2_input, t2_tools = relocate_input_additional_tools(input=turn2_input, tools=None)
+    assert [i.get("type") for i in t2_input] == ["message"]
+    assert t2_tools is None
