@@ -256,6 +256,38 @@ def test_audio_speech_streaming_honors_provider_content_type(
     assert response.content == b"ID3\x04mp3-bytes"
 
 
+@pytest.fixture
+def patched_speech_no_content_type(monkeypatch):
+    _patch_speech_streaming(
+        monkeypatch,
+        frames=[b"\x00\x01raw-audio-bytes"],
+        content_type=None,
+    )
+    yield
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_audio_speech_streaming_fallback_content_type_is_octet_stream(
+    client, auth_as, patched_speech_no_content_type, path
+):
+    """When a streaming provider omits Content-Type, the proxy must fall back to
+    application/octet-stream, never text/event-stream, so raw audio bytes are not
+    mislabeled as SSE frames (Greptile review of #33976)."""
+    payload = {
+        "model": "gpt-4o-mini-tts",
+        "input": "Hi",
+        "voice": "alloy",
+        "stream_format": "sse",
+    }
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 200
+    content_type = response.headers.get("content-type", "")
+    assert content_type.startswith("application/octet-stream")
+    assert not content_type.startswith("text/event-stream")
+    assert response.content == b"\x00\x01raw-audio-bytes"
+
+
 def test_audio_speech_requests_upstream_streaming(client, auth_as, monkeypatch):
     """The proxy must ask the handler to stream the upstream (stream_audio=True) even for a plain
     request with no stream_format, so it matches OpenAI's always-chunked /v1/audio/speech and does
