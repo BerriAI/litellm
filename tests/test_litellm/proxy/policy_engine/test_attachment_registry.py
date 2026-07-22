@@ -362,23 +362,15 @@ class TestMatchAttribution:
         )
         assert registry.get_attached_policies(context_no_tag) == []
 
-    def test_attachment_with_no_scope_matches_everything(self):
-        """Test that an attachment with no scope/teams/keys/models/tags
-        matches everything because teams/keys/models default to ['*']."""
+    def test_attachment_with_no_scope_is_rejected(self):
+        """Test that empty config attachments must use explicit global scope."""
         registry = AttachmentRegistry()
-        registry.load_attachments(
-            [
-                {"policy": "catch-all"},
-            ]
-        )
-
-        context = PolicyMatchContext(
-            team_alias="any-team",
-            key_alias="any-key",
-            model="gpt-4",
-        )
-        attached = registry.get_attached_policies(context)
-        assert "catch-all" in attached
+        with pytest.raises(ValueError, match="at least one non-empty selector"):
+            registry.load_attachments(
+                [
+                    {"policy": "catch-all"},
+                ]
+            )
 
 
 class TestAttachmentRegistrySingleton:
