@@ -151,6 +151,10 @@
       "force_store_false": true
     }
   },
+  "greenpt": {
+    "base_url": "https://api.greenpt.ai/v1",
+    "api_key_env": "GREENPT_API_KEY"
+  },
   "libertai": {
     "base_url": "https://api.libertai.io/v1",
     "api_key_env": "LIBERTAI_API_KEY",

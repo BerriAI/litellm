@@ -560,6 +560,7 @@ LITELLM_CHAT_PROVIDERS = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "greenpt"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -722,6 +723,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://api.greenpt.ai/v1",
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
@@ -791,8 +793,10 @@ openai_compatible_providers: List = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
-    "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
+    "meta",
+    "greenpt",
 ]
+
 openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
@@ -800,6 +804,7 @@ openai_text_completion_compatible_providers: List = [  # providers that support 
     "meta_llama",
     "llamafile",
     "featherless_ai",
+    "greenpt",
     "nebius",
     "dashscope",
     "modelscope",
@@ -1021,6 +1026,47 @@ dashscope_models: set = set(
         "qwen3-235b-a22b",
         "qwen3-32b",
         "qwen3-30b-a3b",
+    ]
+)
+
+# curl https://api.greenpt.ai/v1/models -H "Authorization: Bearer $GREENPT_KEY" | jq '[.data[].id]'
+greenpt_models: set = set(
+    [
+        "pixtral-12b-2409",
+        "holo2-30b-a3b",
+        "qwen3.6-35b-a3b",
+        "mistral-medium-3.5-128b",
+        "devstral-small-2505",
+        "green-l-raw",
+        "green-r-raw",
+        "llama-3.3-70b-instruct",
+        "deepseek-r1-distill-llama-70b",
+        "mistral-nemo-instruct-2407",
+        "llama-3.1-8b-instruct",
+        "gemma-3-27b-it",
+        "gemma4",
+        "devstral-2-123b-instruct-2512",
+        "qwen3-235b-a22b-instruct-2507",
+        "mistral-small-3.2-24b-instruct-2506",
+        "qwen3-coder-30b-a3b-instruct",
+        "gpt-oss-120b",
+        "voxtral-small-24b-2507",
+        "qwen3.5-397b-a17b",
+        "green-embeddings",
+        "kimi-k2.6-fast",
+        "kimi-k2.7-code",
+        "green-s",
+        "glm-5.2",
+        "bge-multilingual-gemma2",
+        "qwen3-embedding-8b",
+        "glm-5.1",
+        "minimax-m2.5",
+        "kimi-k2.6",
+        "green-l",
+        "green-r",
+        "green-embedding",
+        "green-s-pro",
+        "green-rerank"
     ]
 )
 

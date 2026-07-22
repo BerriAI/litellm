@@ -1208,6 +1208,35 @@
         "interactions": true
       }
     },
+    "greenpt": {
+      "display_name": "GreenPT (`greenpt`)",
+      "url": "https://docs.greenpt.ai/get-started",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": true,
+        "ocr": false,
+        "search": false,
+        "skills": false,
+        "interactions": false,
+        "a2a_(Agent Gateway)": false,
+        "container": false,
+        "container_file": false,
+        "compact": false,
+        "files": false,
+        "image_edits": false,
+        "vector_stores_create": false,
+        "vector_stores_search": false,
+        "video_generations": false
+      }
+    },
     "groq": {
       "display_name": "Groq AI (`groq`)",
       "url": "https://docs.litellm.ai/docs/providers/groq",
