@@ -183,14 +183,21 @@ export const modelHubColumns = (
         const model = row.original;
         const capabilities = getModelCapabilities(model);
         const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
+        const capabilityColor = (cap: string) => {
+          let hash = 0;
+          for (let i = 0; i < cap.length; i++) {
+            hash = ((hash << 5) - hash + cap.charCodeAt(i)) | 0;
+          }
+          return colors[Math.abs(hash) % colors.length];
+        };
 
         return (
           <div className="flex flex-wrap gap-1">
             {capabilities.length === 0 ? (
               <Text className="text-gray-500 text-xs">-</Text>
             ) : (
-              capabilities.map((capability, index) => (
-                <Badge key={capability} color={colors[index % colors.length]} size="xs">
+              capabilities.map((capability) => (
+                <Badge key={capability} color={capabilityColor(capability)} size="xs">
                   {formatCapabilityName(capability)}
                 </Badge>
               ))
