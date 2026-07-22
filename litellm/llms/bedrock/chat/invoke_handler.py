@@ -1288,9 +1288,7 @@ class AWSEventStreamDecoder:
         # Bedrock can stream multiple content blocks concurrently. Keep the
         # state keyed by contentBlockIndex so a later block start cannot change
         # how an earlier block's delta is interpreted.
-        self._content_blocks_by_content_block_index: Dict[
-            int, List[ContentBlockDeltaEvent]
-        ] = {}
+        self._content_blocks_by_content_block_index: Dict[int, List[ContentBlockDeltaEvent]] = {}
         self._tool_names_by_content_block_index: Dict[int, str] = {}
         self.tool_calls_index: Optional[int] = None
         self.response_id: Optional[str] = None
@@ -1302,9 +1300,7 @@ class AWSEventStreamDecoder:
         """
         args = ""
         # if text content block -> skip
-        content_blocks = self._content_blocks_by_content_block_index.get(
-            content_block_index, []
-        )
+        content_blocks = self._content_blocks_by_content_block_index.get(content_block_index, [])
         if len(content_blocks) == 0:
             return False
 
@@ -1384,9 +1380,7 @@ class AWSEventStreamDecoder:
                 ## check tool name was formatted by litellm
                 _response_tool_name = start_obj["toolUse"]["name"]
                 response_tool_name = get_bedrock_tool_name(response_tool_name=_response_tool_name)
-                self._tool_names_by_content_block_index[content_block_index] = (
-                    response_tool_name
-                )
+                self._tool_names_by_content_block_index[content_block_index] = response_tool_name
 
                 # When json_mode is True, suppress the internal json_tool_call
                 # and convert its content to text in delta events instead
@@ -1438,8 +1432,7 @@ class AWSEventStreamDecoder:
             # convert tool input to text content instead of tool call arguments
             if (
                 self.json_mode is True
-                and self._tool_names_by_content_block_index.get(index)
-                == RESPONSE_FORMAT_TOOL_NAME
+                and self._tool_names_by_content_block_index.get(index) == RESPONSE_FORMAT_TOOL_NAME
             ):
                 text = delta_obj["toolUse"]["input"]
             else:
@@ -1758,20 +1751,14 @@ class MockResponseIterator:  # for returning ai21 streaming responses
             # user tool call, so converting the first tool unconditionally loses
             # the protocol signal needed by streaming SDK clients to execute it.
             json_mode_tool_calls = [
-                tool_call
-                for tool_call in tool_calls
-                if tool_call["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
+                tool_call for tool_call in tool_calls if tool_call["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
             ]
             regular_tool_calls = [
-                tool_call
-                for tool_call in tool_calls
-                if tool_call["function"].get("name") != RESPONSE_FORMAT_TOOL_NAME
+                tool_call for tool_call in tool_calls if tool_call["function"].get("name") != RESPONSE_FORMAT_TOOL_NAME
             ]
 
             if json_mode_tool_calls:
-                message = litellm.AnthropicConfig()._convert_tool_response_to_message(
-                    tool_calls=json_mode_tool_calls
-                )
+                message = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=json_mode_tool_calls)
                 if message is not None:
                     text = message.content or ""
             if regular_tool_calls:
