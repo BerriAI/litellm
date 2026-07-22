@@ -59,6 +59,23 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra semantic-router \
         --python python3
 
+# The runtime sets PYTHONPATH=/app, so `import litellm` resolves to the source
+# tree copied above, not the wheel uv installed into /app/.venv. The Rust
+# extension only exists as a compiled artifact of that wheel build, so the
+# shadowing source tree wins at import time and `litellm.rust_bridge` degrades
+# to the Python implementation without raising. Place the extension alongside
+# the source it is imported from, and fail the build when it is missing rather
+# than shipping an image that silently never runs Rust.
+RUN set -eu; \
+    so="$(find /app/.venv -path '*/litellm/rust_bridge/_native*.so' | head -n 1)"; \
+    if [ -z "$so" ]; then \
+      echo "litellm.rust_bridge native extension not found under /app/.venv" >&2; \
+      exit 1; \
+    fi; \
+    cp "$so" /app/litellm/rust_bridge/; \
+    cd /app && python3 -c "import litellm.rust_bridge as rb, sys; sys.exit(0 if rb.get_native_bridge() is not None else 1)" \
+      || { echo "litellm.rust_bridge resolved without its native extension" >&2; exit 1; }
+
 RUN mkdir -p /home/nonroot && \
     HOME=/home/nonroot prisma generate --schema=./schema.prisma && \
     chown -R nonroot:nonroot /home/nonroot/.cache
