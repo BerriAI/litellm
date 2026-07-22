@@ -4343,6 +4343,45 @@ async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
     )
 
 
+@pytest.mark.asyncio
+async def test_cache_team_object_tolerates_cache_invalidation_failures():
+    """
+    Greptile review on the LIT-4391 fix: `_cache_team_object` runs after a
+    successful DB fetch (inside `get_team_object`) and after every team
+    mutation's DB write. A cache-backend error during the best-effort
+    invalidations must NOT fail those operations — otherwise a Redis blip
+    turns a healthy team lookup into a 404 and a committed /team/update into
+    a 500. The authoritative team_id-keyed write must still happen.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import _cache_team_object
+
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock()
+    cache.delete_cache = MagicMock(side_effect=Exception("redis down"))
+    logging_obj = MagicMock()
+    logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
+        side_effect=Exception("redis down")
+    )
+
+    await _cache_team_object(
+        team_id="team-cache-outage",
+        team_table=LiteLLM_TeamTableCachedObj(
+            team_id="team-cache-outage",
+            team_alias="cache-outage-alias",
+            models=["model-a"],
+        ),
+        user_api_key_cache=cache,
+        proxy_logging_obj=logging_obj,
+    )
+
+    written_keys = [
+        (c.kwargs.get("key") or c.args[0])
+        for c in cache.async_set_cache.await_args_list
+    ]
+    assert written_keys == ["team_id:team-cache-outage"]
+
+
 MODEL_DISCOVERY_ROUTES = [
     "/v1/models",
     "/models",
