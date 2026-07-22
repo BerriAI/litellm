@@ -1155,6 +1155,7 @@ class JWTAuthManager:
         org_id: Optional[str],
         api_key: str,
         jwt_valid_token: Optional[dict] = None,
+        user_email: str | None = None,
     ) -> Optional[JWTAuthBuilderResult]:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -1179,6 +1180,7 @@ class JWTAuthManager:
             token=api_key,
             team_id=None,
             user_id=user_id,
+            user_email=user_email,
             end_user_id=None,
             org_id=org_id,
             team_membership=None,
@@ -2068,7 +2070,7 @@ class JWTAuthManager:
 
         # Check admin access
         admin_result = await JWTAuthManager.check_admin_access(
-            jwt_handler, scopes, route, user_id, org_id, api_key, jwt_valid_token
+            jwt_handler, scopes, route, user_id, org_id, api_key, jwt_valid_token, user_email=user_email
         )
         if admin_result:
             await JWTAuthManager._attach_team_from_header_for_admin(
@@ -2303,6 +2305,7 @@ class JWTAuthManager:
             team_id=team_id,
             team_object=team_object,
             user_id=user_id,
+            user_email=(user_object.user_email if user_object is not None and user_object.user_email else user_email),
             user_object=user_object,
             org_id=resolved_org_id,  # Use resolved org_id (from alias lookup if applicable)
             org_object=org_object,

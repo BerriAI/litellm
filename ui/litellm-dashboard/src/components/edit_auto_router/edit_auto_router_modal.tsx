@@ -38,6 +38,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "adaptive_weights",
   "tier_distance_penalty",
   "adaptive_eligible",
+  "return_raw_model_name",
 ]);
 
 const toRecord = (value: unknown): Record<string, unknown> => {
@@ -78,6 +79,7 @@ export const buildUpdatedComplexityRouterConfig = (
       }),
       adaptive_eligible: adaptiveEligible,
     }),
+    ...(value.return_raw_model_name && { return_raw_model_name: true }),
   };
 };
 
@@ -158,6 +160,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           adaptive_weights: parsedConfig.adaptive_weights,
           tier_distance_penalty: parsedConfig.tier_distance_penalty,
           adaptive_eligible: parsedConfig.adaptive_eligible || "all",
+          return_raw_model_name: parsedConfig.return_raw_model_name || false,
         });
         setCustomTechnicalKeywords(
           Array.isArray(parsedConfig.custom_technical_keywords) ? parsedConfig.custom_technical_keywords : [],
@@ -367,15 +370,18 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               </Form.Item>
 
               {/* Embedding Model */}
-              <Form.Item label="Embedding Model" name="auto_router_embedding_model">
+              <Form.Item
+                label="Embedding Model"
+                name="auto_router_embedding_model"
+                rules={[{ required: true, message: "Embedding model is required" }]}
+              >
                 <AntdSelect
-                  placeholder="Select an embedding model (optional)"
+                  placeholder="Select an embedding model"
                   onChange={(value) => {
                     setShowCustomEmbeddingModel(value === "custom");
                   }}
                   options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
                   showSearch={true}
-                  allowClear
                 />
               </Form.Item>
             </>

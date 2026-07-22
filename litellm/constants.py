@@ -2,7 +2,7 @@ import os
 import sys
 from typing import List, Literal, Optional
 
-from litellm.litellm_core_utils.env_utils import get_env_int
+from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
 
 DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
@@ -269,9 +269,18 @@ TOOL_POLICY_CACHE_TTL_SECONDS = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 6
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8)))
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000))
 ###############################################################################################
-MINIMUM_PROMPT_CACHE_TOKEN_COUNT = int(
-    os.getenv("MINIMUM_PROMPT_CACHE_TOKEN_COUNT", 1024)
-)  # minimum number of tokens to cache a prompt by Anthropic
+# Providers will not cache a prefix below a minimum size. That minimum is per-model, not global:
+# Anthropic's ranges from 512 to 4096 depending on the model, and can differ per platform for the
+# same model. The real minimum is resolved from `prompt_cache_min_tokens` in the model cost map;
+# this value is only the fallback for models the cost map has no entry for, and doubles as a global
+# escape hatch when `MINIMUM_PROMPT_CACHE_TOKEN_COUNT` is explicitly set.
+MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE: int | None = get_env_int_or_none("MINIMUM_PROMPT_CACHE_TOKEN_COUNT")
+DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT = 1024
+MINIMUM_PROMPT_CACHE_TOKEN_COUNT = (
+    MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE
+    if MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE is not None
+    else DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+)
 DEFAULT_TRIM_RATIO = float(
     os.getenv("DEFAULT_TRIM_RATIO", 0.75)
 )  # default ratio of tokens to trim from the end of a prompt
@@ -1283,6 +1292,7 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
+RETURN_RAW_MODEL_NAME_METADATA_KEY = "_complexity_router_return_raw_model_name"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE = (
     "Truncation is a DB storage safeguard. "
@@ -1459,6 +1469,7 @@ _batch_polling_env = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
 PROXY_BATCH_POLLING_ENABLED = _batch_polling_env == "true"
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605))
 PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
+PROXY_CONFIG_RELOAD_INTERVAL_SECONDS = get_env_int("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS", 30)
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
@@ -1496,6 +1507,7 @@ MAX_TEAM_LIST_LIMIT = int(os.getenv("MAX_TEAM_LIST_LIMIT", 20))
 MAX_POLICY_ESTIMATE_IMPACT_ROWS = int(os.getenv("MAX_POLICY_ESTIMATE_IMPACT_ROWS", 1000))
 DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7))
 LENGTH_OF_LITELLM_GENERATED_KEY = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
+MINIMUM_CUSTOM_KEY_LENGTH = int(os.getenv("MINIMUM_CUSTOM_KEY_LENGTH", 16))
 SECRET_MANAGER_REFRESH_INTERVAL = int(os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400))
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
@@ -1507,6 +1519,12 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "cost_discount_config",
     "cost_margin_config",
     "budget_exceeded_throttle_percentage",
+    # Every field editable from the Admin UI (proxy_server._GENERAL_SETTINGS_UI_LITELLM_FIELDS)
+    # must be listed here so a DB write from one worker overrides the live litellm attribute on
+    # the others when config reloads; otherwise peer workers stay on their startup value.
+    # test_general_settings_ui_fields_are_db_overridable enforces that pairing.
+    "enable_anthropic_prompt_caching",
+    "anthropic_prompt_caching_ttl",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

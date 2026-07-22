@@ -14,7 +14,7 @@ import {
   teamMemberUpdateCall,
   teamUpdateCall,
 } from "@/components/networking";
-import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
+import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -679,6 +679,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     ? nonGlobalOptIns
     : [...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)), ...nonGlobalOptIns];
 
+  const allGuardrails: GuardrailListItem[] = guardrailsData?.guardrails ?? [];
+  const globalGuardrails = allGuardrails.filter((g) => g.litellm_params?.default_on);
+  const otherGuardrails = allGuardrails.filter((g) => !g.litellm_params?.default_on);
+
+  const renderGuardrailOption = (g: GuardrailListItem, disabled: boolean) => (
+    <Select.Option key={g.guardrail_name} value={g.guardrail_name} label={g.guardrail_name} disabled={disabled}>
+      {g.guardrail_name}
+    </Select.Option>
+  );
+
   const preventTagMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1270,36 +1280,28 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         optionLabelProp="label"
                         tagRender={renderGuardrailTag}
                       >
-                        <Select.OptGroup
-                          label={
-                            <>
-                              <GlobalOutlined style={{ marginInlineEnd: 4 }} />
-                              Global
-                            </>
-                          }
-                        >
-                          {(guardrailsData?.guardrails ?? [])
-                            .filter((g) => g.litellm_params?.default_on)
-                            .map((g) => (
-                              <Select.Option
-                                key={g.guardrail_name}
-                                value={g.guardrail_name}
-                                label={g.guardrail_name}
-                                disabled={killSwitchOn}
-                              >
-                                {g.guardrail_name}
-                              </Select.Option>
-                            ))}
-                        </Select.OptGroup>
-                        <Select.OptGroup label="Other">
-                          {(guardrailsData?.guardrails ?? [])
-                            .filter((g) => !g.litellm_params?.default_on)
-                            .map((g) => (
-                              <Select.Option key={g.guardrail_name} value={g.guardrail_name} label={g.guardrail_name}>
-                                {g.guardrail_name}
-                              </Select.Option>
-                            ))}
-                        </Select.OptGroup>
+                        {globalGuardrails.length > 0 && otherGuardrails.length > 0 ? (
+                          <>
+                            <Select.OptGroup
+                              label={
+                                <>
+                                  <GlobalOutlined style={{ marginInlineEnd: 4 }} />
+                                  Global
+                                </>
+                              }
+                            >
+                              {globalGuardrails.map((g) => renderGuardrailOption(g, Boolean(killSwitchOn)))}
+                            </Select.OptGroup>
+                            <Select.OptGroup label="Other">
+                              {otherGuardrails.map((g) => renderGuardrailOption(g, false))}
+                            </Select.OptGroup>
+                          </>
+                        ) : (
+                          [
+                            ...globalGuardrails.map((g) => renderGuardrailOption(g, Boolean(killSwitchOn))),
+                            ...otherGuardrails.map((g) => renderGuardrailOption(g, false)),
+                          ]
+                        )}
                       </Select>
                     </Form.Item>
 

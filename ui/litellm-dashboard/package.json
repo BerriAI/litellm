@@ -30,6 +30,7 @@
     "@base-ui/react": "^1.6.0",
     "@headlessui/tailwindcss": "0.2.2",
     "@heroicons/react": "1.0.6",
+    "@hookform/resolvers": "5.4.0",
     "@tanstack/react-pacer": "0.22.1",
     "@tanstack/react-query": "5.100.7",
     "@tanstack/react-table": "8.21.3",
@@ -50,13 +51,15 @@
     "react": "18.3.1",
     "react-copy-to-clipboard": "5.1.1",
     "react-dom": "18.3.1",
+    "react-hook-form": "7.82.0",
     "react-json-view-lite": "2.5.0",
     "react-markdown": "9.1.0",
     "react-syntax-highlighter": "15.6.6",
     "recharts": "3.9.2",
     "remark-gfm": "4.0.1",
     "tailwind-merge": "3.4.0",
-    "uuid": "14.0.0"
+    "uuid": "14.0.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@eslint/js": "9.39.2",
@@ -91,7 +94,8 @@
   },
   "overrides": {
     "prismjs": "1.30.0",
-    "js-yaml": "4.2.0",
+    "js-yaml": "4.3.0",
+    "brace-expansion": "5.0.7",
     "glob": "13.0.0",
     "minimatch": "10.2.4",
     "ws": "8.21.0",
@@ -99,7 +103,8 @@
     "axios": "1.13.6",
     "postcss": "8.5.13",
     "esbuild": "0.28.1",
-    "date-fns": "^4.4.0"
+    "date-fns": "^4.4.0",
+    "sharp": "^0.35.0"
   },
   "engines": {
     "node": ">=20.9.0",
