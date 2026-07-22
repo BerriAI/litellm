@@ -182,16 +182,20 @@ class GroundingModuleConfig(BaseModel):
 
 
 class Template(BaseModel):
+    model_config = ConfigDict(extra="allow")  # preserves tool_choice and future prompt-level fields
     template: list[ChatMessage]
     defaults: Optional[dict[str, str]] = None
     response_format: Optional[Union[ResponseFormat, ResponseFormatJSONSchema]] = None
     tools: Optional[list[ChatCompletionTool]] = None
+    tool_choice: Optional[Union[str, dict]] = None
 
 
 class LLMModelDetails(BaseModel):
     name: str
     version: str = "latest"
     params: Optional[dict] = None
+    timeout: Optional[int] = None
+    max_retries: Optional[int] = Field(default=None, ge=0, le=5)
 
 
 class PromptTemplatingModuleConfig(BaseModel):

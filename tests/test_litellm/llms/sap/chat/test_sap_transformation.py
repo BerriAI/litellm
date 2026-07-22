@@ -862,3 +862,185 @@ class TestCacheControl:
         content = self._template(body)[0]["content"]
         assert content[0].get("cache_control") == {"type": "ephemeral"}
         assert "cache_control" not in content[1]
+
+class TestModelVersionAdvertisement:
+    """model_version is advertised in get_supported_openai_params and lands in
+    model.version (not model.params) in the serialised request body.
+    """
+
+    def _cfg(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        cfg = GenAIHubOrchestrationConfig()
+        return cfg
+
+    def _transform(self, model: str, **kwargs) -> dict:
+        cfg = self._cfg()
+        return cfg.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params=dict(kwargs),
+            litellm_params={},
+            headers={},
+        )
+
+    def test_model_version_advertised_for_all_models(self):
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet", "gemini-1.5-pro"):
+            params = self._cfg().get_supported_openai_params(model)
+            assert "model_version" in params, f"model_version missing for {model}"
+
+    def test_model_version_lands_in_model_version_field(self):
+        body = self._transform("gpt-4o", model_version="1.2.3")
+        pt = body["config"]["modules"]["prompt_templating"]
+        assert pt["model"]["version"] == "1.2.3"
+
+    def test_model_version_absent_from_model_params(self):
+        body = self._transform("gpt-4o", model_version="1.2.3")
+        pt = body["config"]["modules"]["prompt_templating"]
+        assert "model_version" not in pt["model"]["params"]
+
+    def test_model_version_defaults_to_latest(self):
+        body = self._transform("gpt-4o")
+        pt = body["config"]["modules"]["prompt_templating"]
+        assert pt["model"]["version"] == "latest"
+
+
+class TestToolChoiceForwarding:
+    """tool_choice is no longer silently dropped.
+
+    When tools are present it must appear in the prompt template dict.
+    Without tools it is omitted (there is nothing to choose from).
+    """
+
+    _TOOL = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Return weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    }
+
+    def _transform(self, model: str, **kwargs) -> dict:
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        cfg = GenAIHubOrchestrationConfig()
+        return cfg.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather?"}],
+            optional_params=dict(kwargs),
+            litellm_params={},
+            headers={},
+        )
+
+    def _prompt(self, body: dict) -> dict:
+        return body["config"]["modules"]["prompt_templating"]["prompt"]
+
+    def test_tool_choice_required_forwarded_with_tools(self):
+        body = self._transform("gpt-4o", tools=[self._TOOL], tool_choice="required")
+        prompt = self._prompt(body)
+        assert prompt.get("tool_choice") == "required"
+
+    def test_tool_choice_auto_forwarded_with_tools(self):
+        body = self._transform("gpt-4o", tools=[self._TOOL], tool_choice="auto")
+        assert self._prompt(body).get("tool_choice") == "auto"
+
+    def test_tool_choice_dict_forwarded_with_tools(self):
+        tc = {"type": "function", "function": {"name": "get_weather"}}
+        body = self._transform("gpt-4o", tools=[self._TOOL], tool_choice=tc)
+        assert self._prompt(body).get("tool_choice") == tc
+
+    def test_tool_choice_absent_without_tools(self):
+        """tool_choice without tools must not appear in the payload."""
+        body = self._transform("gpt-4o", tool_choice="required")
+        assert "tool_choice" not in self._prompt(body)
+
+    def test_tool_choice_not_in_model_params(self):
+        """tool_choice must never bleed into model.params."""
+        body = self._transform("gpt-4o", tools=[self._TOOL], tool_choice="required")
+        pt = body["config"]["modules"]["prompt_templating"]
+        assert "tool_choice" not in pt["model"]["params"]
+
+
+class TestTimeoutAndMaxRetries:
+    """timeout and max_retries land in model-level sibling fields,
+    not inside model.params.
+    """
+
+    def _transform(self, model: str, **kwargs) -> dict:
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        cfg = GenAIHubOrchestrationConfig()
+        return cfg.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params=dict(kwargs),
+            litellm_params={},
+            headers={},
+        )
+
+    def _model(self, body: dict) -> dict:
+        return body["config"]["modules"]["prompt_templating"]["model"]
+
+    def test_timeout_and_max_retries_advertised(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        cfg = GenAIHubOrchestrationConfig()
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet"):
+            params = cfg.get_supported_openai_params(model)
+            assert "timeout" in params, f"timeout missing for {model}"
+            assert "max_retries" in params, f"max_retries missing for {model}"
+
+    def test_timeout_lands_at_model_level(self):
+        body = self._transform("gpt-4o", timeout=120)
+        model = self._model(body)
+        assert model.get("timeout") == 120
+        assert "timeout" not in model.get("params", {})
+
+    def test_max_retries_lands_at_model_level(self):
+        body = self._transform("gpt-4o", max_retries=3)
+        model = self._model(body)
+        assert model.get("max_retries") == 3
+        assert "max_retries" not in model.get("params", {})
+
+    def test_timeout_and_max_retries_together(self):
+        body = self._transform("gpt-4o", timeout=60, max_retries=2)
+        model = self._model(body)
+        assert model.get("timeout") == 60
+        assert model.get("max_retries") == 2
+        assert "timeout" not in model.get("params", {})
+        assert "max_retries" not in model.get("params", {})
+
+    def test_absent_when_not_passed(self):
+        """Neither key appears in the serialised body when not supplied."""
+        body = self._transform("gpt-4o", temperature=0.7)
+        model = self._model(body)
+        assert "timeout" not in model
+        assert "max_retries" not in model
+
+
+class TestUserForwarding:
+    """user param is advertised and lands in model.params (correct per SDK v2)."""
+
+    def _cfg(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        return GenAIHubOrchestrationConfig()
+
+    def _transform(self, **kwargs) -> dict:
+        cfg = self._cfg()
+        return cfg.transform_request(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params=dict(kwargs),
+            litellm_params={},
+            headers={},
+        )
+
+    def test_user_advertised(self):
+        params = self._cfg().get_supported_openai_params("gpt-4o")
+        assert "user" in params
+
+    def test_user_lands_in_model_params(self):
+        body = self._transform(user="uid-abc123")
+        pt = body["config"]["modules"]["prompt_templating"]
+        assert pt["model"]["params"].get("user") == "uid-abc123"

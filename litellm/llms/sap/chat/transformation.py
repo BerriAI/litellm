@@ -44,7 +44,9 @@ from .handler import (
     SAPStreamIterator,
 )
 
-# Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
+# Keys routed outside SAP orchestration `model.params`.
+# Each of these is either popped and forwarded to a sibling field on `model`,
+# placed directly in the prompt template, or handled at a higher level.
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {
         "tools",
@@ -53,6 +55,8 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: frozenset[str] = frozenset(
         "fallback_sap_modules",
         "placeholder_values",
         "model_version",
+        "timeout",
+        "max_retries",
     }
 )
 
@@ -232,6 +236,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
             "response_format",
             "timeout",
+            "max_retries",
+            "model_version",
+            "user",
         ]
         # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
@@ -292,10 +299,15 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             params.pop("thinking", None)
 
         model_version = params.pop("model_version", "latest")
+        timeout = params.pop("timeout", None)
+        max_retries = params.pop("max_retries", None)
 
         tools_ = params.pop("tools", [])
         tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
         tools = {"tools": tools_} if tools_ else {}
+
+        tool_choice = params.pop("tool_choice", None)
+        tool_choice_payload: dict = {"tool_choice": tool_choice} if tool_choice is not None and tools else {}
 
         response_format = params.pop("response_format", {})
         resp_type = response_format.get("type", None)
@@ -317,19 +329,26 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             if params.get(module, None) is not None:
                 optional_modules[module] = params.pop(module)
 
+        model_details: dict = {
+            "name": model_name,
+            "params": params,
+            "version": model_version,
+        }
+        if timeout is not None:
+            model_details["timeout"] = timeout
+        if max_retries is not None:
+            model_details["max_retries"] = max_retries
+
         return {
             "prompt_templating": {
                 "prompt": {
                     "template": template_messages,
                     **placeholder_defaults,
                     **tools,
+                    **tool_choice_payload,
                     **response_format,
                 },
-                "model": {
-                    "name": model_name,
-                    "params": params,
-                    "version": model_version,
-                },
+                "model": model_details,
             },
             **optional_modules,
         }
@@ -358,8 +377,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 stream_config["chunk_size"] = stream_options["chunk_size"]
             if "delimiters" in stream_options:
                 stream_config["delimiters"] = stream_options["delimiters"]
-
-        optional_params.pop("tool_choice", None)
 
         modules = [
             self._build_prompt_module(
