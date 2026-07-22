@@ -14,9 +14,12 @@ function getUiCookiePath(): string {
   if (typeof window === "undefined") return "/ui";
   // Match "/ui" only as a full path segment (followed by "/" or end of string)
   // to avoid false matches like "/my-ui-tool/login" → "/my-ui".
-  const match = window.location.pathname.match(/\/ui(?=\/|$)/);
-  if (match && match.index !== undefined) {
-    return window.location.pathname.substring(0, match.index + 3);
+  // The UI mounts at the last "/ui" segment (SERVER_ROOT_PATH + "/ui"), so use the
+  // last match to stay correct when the root path itself contains a "/ui" segment.
+  const matches = [...window.location.pathname.matchAll(/\/ui(?=\/|$)/g)];
+  const lastMatch = matches[matches.length - 1];
+  if (lastMatch && lastMatch.index !== undefined) {
+    return window.location.pathname.substring(0, lastMatch.index + 3);
   }
   return "/ui";
 }
@@ -37,6 +40,13 @@ export function clearTokenCookies() {
   const currentPath = window.location.pathname;
   const uiCookiePath = getUiCookiePath();
   const paths = ["/", uiCookiePath];
+
+  // Clear at the server root path (e.g. "/litellm") too, since the server-set
+  // auth cookie is scoped there when SERVER_ROOT_PATH is configured.
+  const serverRootPath = uiCookiePath.replace(/\/ui$/, "");
+  if (serverRootPath && !paths.includes(serverRootPath)) {
+    paths.push(serverRootPath);
+  }
 
   // Add the current path directory if it's different from root and /ui
   if (currentPath && currentPath !== "/" && !currentPath.startsWith("/ui")) {

@@ -5946,6 +5946,20 @@ def get_server_root_path() -> str:
     return os.getenv("SERVER_ROOT_PATH", "")
 
 
+def get_cookie_path_from_server_root_path() -> str:
+    """
+    Cookie `path` scoped to SERVER_ROOT_PATH.
+
+    Ensures auth cookies for deployments served under different root paths
+    (e.g. `a.com` vs `a.com/prefix`) do not overwrite each other. Defaults to
+    "/" when SERVER_ROOT_PATH is unset.
+    """
+    root_path = get_server_root_path()
+    if not root_path or root_path == "/":
+        return "/"
+    return "/" + root_path.strip("/")
+
+
 def normalize_route_for_root_path(route: str) -> Optional[str]:
     """Strip SERVER_ROOT_PATH prefix. Returns de-prefixed route, or None if route is not under root path."""
     root_path = get_server_root_path()

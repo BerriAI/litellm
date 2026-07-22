@@ -126,6 +126,34 @@ describe("cookieUtils", () => {
       vi.restoreAllMocks();
     });
 
+    it("should clear token cookie at the server root path when deployed under SERVER_ROOT_PATH", () => {
+      const originalLocation = window.location;
+      vi.stubGlobal("location", { ...originalLocation, pathname: "/litellm/ui/" });
+
+      const cookieSpy = vi.spyOn(document, "cookie", "set");
+
+      clearTokenCookies();
+
+      expect(cookieSpy).toHaveBeenCalledWith(expect.stringContaining("path=/litellm;"));
+
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it("should clear token cookie at the server root path when the root path contains a /ui segment", () => {
+      const originalLocation = window.location;
+      vi.stubGlobal("location", { ...originalLocation, pathname: "/foo/ui/bar/ui/" });
+
+      const cookieSpy = vi.spyOn(document, "cookie", "set");
+
+      clearTokenCookies();
+
+      expect(cookieSpy).toHaveBeenCalledWith(expect.stringContaining("path=/foo/ui/bar;"));
+
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
     it("should clear sessionStorage token", () => {
       sessionStorage.setItem("token", "stored-token");
       clearTokenCookies();
