@@ -19,6 +19,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     NamedTuple,
     Optional,
     Tuple,
@@ -127,6 +128,28 @@ class GuardrailMessageFilterResult(NamedTuple):
     payload_messages: Optional[List[AllMessageValues]]
     original_messages: Optional[List[AllMessageValues]]
     target_indices: Optional[List[int]]
+
+
+def _tool_result_texts(tool_result_content: object) -> list[str]:
+    """Ordered scannable text carried by an Anthropic ``tool_result`` block.
+
+    A ``tool_result`` stores its text one level deeper than an ordinary content
+    block: under ``content``, which is either a string or a list of blocks whose
+    ``text`` field holds the string (images/documents carry no text). Returning
+    the strings in document order lets the scan payload and the masking write-back
+    agree on how many text units the block contributes and in what sequence.
+    """
+    if isinstance(tool_result_content, str):
+        return [tool_result_content]
+    if isinstance(tool_result_content, list):
+        return [
+            text
+            for block in tool_result_content
+            if isinstance(block, dict)
+            for text in (block.get("text"),)
+            if isinstance(text, str)
+        ]
+    return []
 
 
 class ApplyGuardrailMessageSelection(NamedTuple):
@@ -380,11 +403,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             blocks.append(QualifiedTextBlock(text=content, qualifier=None))
         elif isinstance(content, list):
             for item in content:
-                if isinstance(item, dict) and "text" in item:
+                if isinstance(item, str):
+                    blocks.append(QualifiedTextBlock(text=item, qualifier=None))
+                elif isinstance(item, dict) and "text" in item:
                     qualifier = _CONTENT_TYPE_TO_QUALIFIER.get(item.get("type", ""))
                     blocks.append(QualifiedTextBlock(text=item["text"], qualifier=qualifier))
-                elif isinstance(item, str):
-                    blocks.append(QualifiedTextBlock(text=item, qualifier=None))
+                elif isinstance(item, dict):
+                    tool_result = cast(Mapping[str, object], item)  # cast-ok: dynamic Anthropic tool_result JSON
+                    if tool_result.get("type") == "tool_result":
+                        blocks.extend(
+                            QualifiedTextBlock(text=text, qualifier=None)
+                            for text in _tool_result_texts(tool_result.get("content"))
+                        )
         return blocks
 
     def _build_content_item(self, block: QualifiedTextBlock) -> BedrockContentItem:
@@ -1977,6 +2007,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     new_item["text"] = masked_texts[masking_index]
                     masking_index += 1
                 new_content.append(new_item)
+            elif isinstance(item, dict) and item.get("type") == "tool_result":
+                masked_item, masking_index = self._mask_tool_result_item(
+                    tool_result=item, masked_texts=masked_texts, masking_index=masking_index
+                )
+                new_content.append(masked_item)
             elif isinstance(item, str):
                 if masking_index < len(masked_texts):
                     item = masked_texts[masking_index]
@@ -1985,6 +2020,38 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     new_content.append(item)
 
         return new_content, masking_index
+
+    def _mask_tool_result_item(
+        self, tool_result: dict, masked_texts: list[str], masking_index: int
+    ) -> tuple[dict, int]:
+        """Write masked text back into an Anthropic ``tool_result`` block.
+
+        Mirrors :func:`_tool_result_texts`: the block's scannable text lives under
+        ``content`` as either a string or a list of ``text`` blocks, so the same
+        units are consumed here in the same order the scan payload sent them. This
+        keeps ``masking_index`` aligned with Bedrock's per-block masked outputs and
+        anonymizes the tool output itself.
+        """
+        new_item = tool_result.copy()
+        tool_content = new_item.get("content")
+        if isinstance(tool_content, str):
+            if masking_index < len(masked_texts):
+                new_item["content"] = masked_texts[masking_index]
+                masking_index += 1
+            return new_item, masking_index
+        if isinstance(tool_content, list):
+            new_blocks: list[Any] = []
+            for block in tool_content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    new_block = block.copy()
+                    if masking_index < len(masked_texts):
+                        new_block["text"] = masked_texts[masking_index]
+                        masking_index += 1
+                    new_blocks.append(new_block)
+                else:
+                    new_blocks.append(block)
+            new_item["content"] = new_blocks
+        return new_item, masking_index
 
     def _apply_masking_to_response(
         self,
