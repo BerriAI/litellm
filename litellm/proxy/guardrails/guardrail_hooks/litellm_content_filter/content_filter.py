@@ -24,6 +24,7 @@ from typing import (
     cast,
 )
 
+import openai
 import yaml
 from fastapi import HTTPException
 
@@ -1934,6 +1935,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 pass
         except HTTPException:
             status = "guardrail_intervened"
+            raise
+        except openai.OpenAIError as e:
+            # Upstream provider/stream error propagating through the iterator.
+            # The guardrail never evaluated content, so it must not be recorded
+            # as a guardrail failure. "not_run" is the canonical status here.
+            status = "not_run"
+            exception_str = str(e)
             raise
         except Exception as e:
             status = "guardrail_failed_to_respond"
