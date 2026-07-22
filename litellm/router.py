@@ -232,16 +232,18 @@ else:
     PreRoutingHookResponse = Any
 
 
-_HTTP_FRAMING_HEADERS: frozenset[str] = frozenset({
-    "content-length",
-    "transfer-encoding",
-    "content-encoding",
-    "content-type",
-    "set-cookie",
-    "cookie",
-    "proxy-authenticate",
-    "proxy-authorization",
-})
+_HTTP_FRAMING_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-length",
+        "transfer-encoding",
+        "content-encoding",
+        "content-type",
+        "set-cookie",
+        "cookie",
+        "proxy-authenticate",
+        "proxy-authorization",
+    }
+)
 
 
 def _strip_http_framing_headers(exc: BaseException) -> None:
@@ -6145,13 +6147,12 @@ class Router:
 
                 if fallback_model_group is None:
                     verbose_router_logger.info(
-                        "No fallback model group found for original model_group=%s.",
+                        "No fallback model group found for original model_group=%s. Fallbacks=%s",
                         model_group,
+                        fallbacks,
                     )
                     if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
-                        original_exception.message += (
-                            f" No fallback model group found for original model_group={model_group}."  # type: ignore
-                        )
+                        original_exception.message += f" No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}."  # type: ignore
                     raise original_exception
 
                 input_kwargs.update(
