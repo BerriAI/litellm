@@ -1,0 +1,26 @@
+dynamicFields:
+  - apiVersion: v1
+    kind: Secret
+    name: chartsnap-postgresql
+    jsonPath:
+      - /data/postgres-password
+      - /data/password
+    base64: true
+  - apiVersion: v1
+    kind: Secret
+    name: chartsnap-litellm-dbcredentials
+    jsonPath:
+      - /data/postgres-password
+      - /data/username
+      - /data/password
+    base64: true
+  - apiVersion: v1
+    kind: Secret
+    name: chartsnap-redis
+    jsonPath:
+      - /data/redis-password
+    base64: true
+  - apiVersion: apps/v1
+    kind: StatefulSet
+    jsonPath:
+      - /spec/template/metadata/annotations/checksum~1secret

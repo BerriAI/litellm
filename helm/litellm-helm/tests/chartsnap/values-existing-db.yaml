@@ -1,0 +1,13 @@
+masterkeySecretName: litellm-masterkey
+db:
+  deployStandalone: false
+  useExisting: true
+  endpoint: postgres.internal
+  database: litellm
+  url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
+  secret:
+    name: postgres
+    usernameKey: username
+    passwordKey: password
+migrationJob:
+  enabled: true
