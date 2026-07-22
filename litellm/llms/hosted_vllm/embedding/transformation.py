@@ -110,10 +110,14 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         if model.startswith("hosted_vllm/"):
             model = model.replace("hosted_vllm/", "", 1)
 
+        request_optional_params = optional_params.copy()
+        if isinstance(request_optional_params.get("encoding_format"), list):
+            request_optional_params.pop("encoding_format")
+
         return {
             "model": model,
             "input": input,
-            **optional_params,
+            **request_optional_params,
         }
 
     def transform_embedding_response(
