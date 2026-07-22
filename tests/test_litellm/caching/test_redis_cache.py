@@ -285,10 +285,7 @@ async def test_async_rpush_pipeline_raises_on_redis_error(monkeypatch, redis_no_
 async def test_async_set_cache_failures_trip_circuit_breaker(
     monkeypatch, redis_no_ping
 ):
-    """async_set_cache must propagate Redis errors so its circuit breaker guard
-    can see the failure and open after enough consecutive failures -- if the
-    error is swallowed instead, the guard always records a success and the
-    breaker can never open."""
+    """Swallowed errors defeat the circuit breaker; verify it opens and fast-fails."""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache()
 
@@ -304,11 +301,96 @@ async def test_async_set_cache_failures_trip_circuit_breaker(
 
         assert redis_cache._circuit_breaker.is_open()
 
-        # Once open, further calls must fast-fail without touching Redis.
         mock_redis_instance.set.reset_mock()
         with pytest.raises(Exception, match="circuit breaker is open"):
             await redis_cache.async_set_cache("key", "value")
         mock_redis_instance.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_failures_trip_circuit_breaker(
+    monkeypatch, redis_no_ping
+):
+    """Same check as above, for async_get_cache."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.get = AsyncMock(side_effect=ConnectionError("Redis down"))
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        for _ in range(redis_cache._circuit_breaker.failure_threshold):
+            with pytest.raises(ConnectionError, match="Redis down"):
+                await redis_cache.async_get_cache("key")
+
+        assert redis_cache._circuit_breaker.is_open()
+
+        mock_redis_instance.get.reset_mock()
+        with pytest.raises(Exception, match="circuit breaker is open"):
+            await redis_cache.async_get_cache("key")
+        mock_redis_instance.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_sadd_failures_trip_circuit_breaker(
+    monkeypatch, redis_no_ping
+):
+    """Same check as above, for async_set_cache_sadd."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.sadd = AsyncMock(side_effect=ConnectionError("Redis down"))
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        for _ in range(redis_cache._circuit_breaker.failure_threshold):
+            with pytest.raises(ConnectionError, match="Redis down"):
+                await redis_cache.async_set_cache_sadd("key", ["value"], ttl=None)
+
+        assert redis_cache._circuit_breaker.is_open()
+
+        mock_redis_instance.sadd.reset_mock()
+        with pytest.raises(Exception, match="circuit breaker is open"):
+            await redis_cache.async_set_cache_sadd("key", ["value"], ttl=None)
+        mock_redis_instance.sadd.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_failures_trip_circuit_breaker(
+    monkeypatch, redis_no_ping
+):
+    """Same check as above, for async_set_cache_pipeline."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    def make_pipeline():
+        mock_pipeline = MagicMock()
+        mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
+        mock_pipeline.__aexit__ = AsyncMock(return_value=None)
+        mock_pipeline.set = MagicMock()
+        mock_pipeline.execute = AsyncMock(side_effect=ConnectionError("Redis down"))
+        return mock_pipeline
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.pipeline = MagicMock(side_effect=lambda **kw: make_pipeline())
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        for _ in range(redis_cache._circuit_breaker.failure_threshold):
+            with pytest.raises(ConnectionError, match="Redis down"):
+                await redis_cache.async_set_cache_pipeline([("key", "value")])
+
+        assert redis_cache._circuit_breaker.is_open()
+
+        mock_redis_instance.pipeline.reset_mock()
+        with pytest.raises(Exception, match="circuit breaker is open"):
+            await redis_cache.async_set_cache_pipeline([("key", "value")])
+        mock_redis_instance.pipeline.assert_not_called()
 
 
 @pytest.mark.asyncio
