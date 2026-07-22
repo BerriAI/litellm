@@ -2420,6 +2420,29 @@ def _is_explicitly_disabled_factory(model: str, custom_llm_provider: Optional[st
         return False
 
 
+def _default_reasoning_effort_factory(model: str, custom_llm_provider: str | None) -> str | None:
+    try:
+        resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        model_info = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
+        value = model_info.get("default_reasoning_effort")
+        if value is not None:
+            return value
+        bare_model_key = _get_model_cost_key(resolved_model)
+        if bare_model_key is None:
+            return None
+        bare_value = (litellm.model_cost.get(bare_model_key) or {}).get("default_reasoning_effort")
+        return bare_value if isinstance(bare_value, str) else None
+    except Exception as e:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
+        verbose_logger.debug(
+            f"Model not found or error in checking default_reasoning_effort. "
+            f"You passed model={model}, custom_llm_provider={custom_llm_provider}. "
+            f"Error: {str(e)}"
+        )
+        return None
+
+
 def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """Check if a given model supports audio input in a chat completion call"""
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
@@ -5520,6 +5543,7 @@ def _get_model_info_helper(
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
+                default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),

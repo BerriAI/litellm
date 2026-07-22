@@ -4,6 +4,7 @@ from typing import Optional, Union
 
 import litellm
 from litellm.utils import (
+    _default_reasoning_effort_factory,
     _is_explicitly_disabled_factory,
     _supports_factory,
 )
@@ -115,6 +116,10 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
+    def _model_map_lookup_name(cls, model: str) -> str:
+        return model
+
+    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 
@@ -123,9 +128,42 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         Returns False for unknown models (safe fallback).
         """
         return _supports_factory(
-            model=model,
+            model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",
+        )
+
+    @classmethod
+    def _get_default_reasoning_effort(cls, model: str) -> "str | None":
+        return _default_reasoning_effort_factory(
+            model=cls._model_map_lookup_name(model),
+            custom_llm_provider=None,
+        )
+
+    @classmethod
+    def _effort_resolves_to_none(cls, model: str, effective_effort: "str | None", supports_none: bool) -> bool:
+        if effective_effort is not None:
+            return effective_effort == "none"
+        default_effort = cls._get_default_reasoning_effort(model)
+        if default_effort is not None:
+            return default_effort == "none"
+        return supports_none
+
+    @classmethod
+    def _unsupported_temperature_message(
+        cls, model: str, temperature_value: float, effective_effort: "str | None"
+    ) -> str:
+        resolved_effort = effective_effort if effective_effort is not None else cls._get_default_reasoning_effort(model)
+        effort_clause = (
+            f"reasoning_effort resolves to '{resolved_effort}'"
+            if resolved_effort is not None
+            else "reasoning is active"
+        )
+        return (
+            f"{model} doesn't support temperature={temperature_value} because {effort_clause}. "
+            "Only temperature=1 is supported unless reasoning_effort resolves to 'none' "
+            "(explicitly set, or as the model's default). "
+            "To drop unsupported params set `litellm.drop_params = True`"
         )
 
     @classmethod
@@ -260,7 +298,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if supports_none:
             sampling_params = ["logprobs", "top_logprobs", "top_p"]
             has_sampling = any(p in non_default_params for p in sampling_params)
-            if has_sampling and effective_effort not in (None, "none"):
+            if has_sampling and not self._effort_resolves_to_none(model, effective_effort, supports_none):
                 if litellm.drop_params or drop_params:
                     for p in sampling_params:
                         non_default_params.pop(p, None)
@@ -268,17 +306,16 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
                             "gpt-5.1/5.2/5.4 only support logprobs, top_p, top_logprobs when "
-                            "reasoning_effort='none'. Current reasoning_effort='{}'. "
+                            "reasoning_effort resolves to 'none'. Current reasoning_effort='{}'. "
                             "To drop unsupported params set `litellm.drop_params = True`"
-                        ).format(effective_effort),
+                        ).format(effective_effort or self._get_default_reasoning_effort(model)),
                         status_code=400,
                     )
 
         if "temperature" in non_default_params:
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
-                # models supporting reasoning_effort="none" also support flexible temperature
-                if supports_none and (effective_effort == "none" or effective_effort is None):
+                if supports_none and self._effort_resolves_to_none(model, effective_effort, supports_none):
                     optional_params["temperature"] = temperature_value
                 elif temperature_value == 1:
                     optional_params["temperature"] = temperature_value
@@ -286,12 +323,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                     pass
                 else:
                     raise litellm.utils.UnsupportedParamsError(
-                        message=(
-                            "gpt-5 models (including gpt-5-codex) don't support temperature={}. "
-                            "Only temperature=1 is supported. "
-                            "For gpt-5.1, temperature is supported when reasoning_effort='none' (or not specified, as it defaults to 'none'). "
-                            "To drop unsupported params set `litellm.drop_params = True`"
-                        ).format(temperature_value),
+                        message=self._unsupported_temperature_message(model, temperature_value, effective_effort),
                         status_code=400,
                     )
         return super()._map_openai_params(

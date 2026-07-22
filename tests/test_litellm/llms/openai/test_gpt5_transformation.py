@@ -137,7 +137,7 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
     """Test that GPT-5-Codex raises error for unsupported temperature when drop_params=False."""
     with pytest.raises(
         litellm.utils.UnsupportedParamsError,
-        match="gpt-5 models \\(including gpt-5-codex\\)",
+        match="gpt-5-codex doesn't support temperature=0.7",
     ):
         config.map_openai_params(
             non_default_params={"temperature": 0.7},
@@ -1309,3 +1309,120 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+def test_gpt5_5_temperature_dropped_without_reasoning_effort(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.1},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_gpt5_5_temperature_error_without_reasoning_effort(config: OpenAIConfig):
+    with pytest.raises(
+        litellm.utils.UnsupportedParamsError,
+        match="reasoning_effort resolves to 'medium'",
+    ):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.1},
+            optional_params={},
+            model="gpt-5.5",
+            drop_params=False,
+        )
+
+
+def test_gpt5_5_dated_temperature_error_without_reasoning_effort(config: OpenAIConfig):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.1},
+            optional_params={},
+            model="gpt-5.5-2026-04-23",
+            drop_params=False,
+        )
+
+
+def test_gpt5_5_temperature_with_explicit_reasoning_effort_none(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.1, "reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.1
+    assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_5_temperature_one_without_reasoning_effort(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 1.0},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=False,
+    )
+    assert params["temperature"] == 1.0
+
+
+def test_gpt5_5_top_p_dropped_without_reasoning_effort(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"top_p": 0.5},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=True,
+    )
+    assert "top_p" not in params
+
+
+def test_gpt5_6_temperature_kept_when_default_effort_absent(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.2},
+        optional_params={},
+        model="gpt-5.6",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.2
+
+
+def test_responses_gpt5_5_temperature_dropped_without_reasoning(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.1,
+        ),
+        model="gpt-5.5",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_responses_gpt5_5_temperature_error_without_reasoning(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    with pytest.raises(
+        litellm.UnsupportedParamsError,
+        match="reasoning_effort resolves to 'medium'",
+    ):
+        responses_config.map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                temperature=0.1,
+            ),
+            model="gpt-5.5",
+            drop_params=False,
+        )
+
+
+def test_responses_gpt5_5_temperature_allowed_with_effort_none(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.1,
+            reasoning={"effort": "none"},
+        ),
+        model="gpt-5.5",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.1
