@@ -499,6 +499,9 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.collector_endpoints.spend_logs import (
+    router as collector_spend_logs_router,
+)
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
@@ -947,6 +950,8 @@ async def proxy_startup_event(app: FastAPI):
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
+    if app is not None:
+        app.state.prisma_client = prisma_client
 
     if prisma_client is not None:
 
@@ -2011,6 +2016,8 @@ store_model_in_db: bool = False
 open_telemetry_logger: Optional[OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
+app.state.proxy_logging_obj = proxy_logging_obj
+app.state.prisma_client = prisma_client
 ### REDIS QUEUE ###
 async_result = None
 celery_app_conn = None
@@ -16260,6 +16267,7 @@ app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
+app.include_router(collector_spend_logs_router)
 app.include_router(spend_management_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
