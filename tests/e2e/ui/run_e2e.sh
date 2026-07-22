@@ -20,8 +20,8 @@ set -euo pipefail
 # ================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DASHBOARD_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+DASHBOARD_DIR="$REPO_ROOT/ui/litellm-dashboard"
 IS_CI="${CI:-false}"
 CONTAINER_NAME="litellm-e2e-postgres-$$"
 MOCK_PID=""
@@ -187,12 +187,12 @@ PGPASSWORD="$DB_PASS" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAM
 
 # --- Playwright ---
 echo "=== Installing Playwright dependencies ==="
-cd "$DASHBOARD_DIR"
+cd "$SCRIPT_DIR"
 npm install --silent 2>/dev/null || true
 npx playwright install chromium --with-deps 2>/dev/null || npx playwright install chromium
 
 echo "=== Running Playwright tests ==="
-npx playwright test --config e2e_tests/playwright.config.ts "$@"
+npx playwright test --config playwright.config.ts "$@"
 EXIT_CODE=$?
 
 exit $EXIT_CODE
