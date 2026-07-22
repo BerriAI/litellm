@@ -4,26 +4,31 @@ import {
   type Cell,
   type Column,
   type ColumnDef,
+  type ColumnFiltersState,
   type ColumnPinningState,
   type ColumnSizingState,
   type ExpandedState,
   flexRender,
   getCoreRowModel,
   getExpandedRowModel,
+  getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
   type Header,
   type OnChangeFn,
   type Row,
   type RowData,
+  type RowSelectionState,
   type Table,
   type TableOptions,
   useReactTable,
   type VisibilityState,
 } from "@tanstack/react-table";
+import { SearchX } from "lucide-react";
 import * as React from "react";
 import { Fragment, useState } from "react";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table as TableRoot,
   TableBody,
@@ -37,7 +42,7 @@ import { cn } from "@/lib/cva.config";
 
 import "./columnMeta";
 import { DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "./DataTablePagination";
-import type { ColumnPinnedSide, DataTableProps, DataTableSize, PaginationMode, SortingMode } from "./types";
+import type { ColumnPinnedSide, DataTableProps, DataTableSize, FilterMode, PaginationMode, SortingMode } from "./types";
 
 const INTERACTIVE_SELECTOR = "button, a, input, select, textarea, [role=checkbox], [data-row-click-exempt]";
 
@@ -60,14 +65,27 @@ export function validateDataTableConfig<TData extends RowData, TValue>(
     props.pagination === undefined || props.onPaginationChange === undefined || props.rowCount === undefined;
   const serverPaginationIncomplete = props.paginationMode === "server" && serverPaginationPropsMissing;
 
+  const serverFilteringIncomplete =
+    props.filterMode === "server" && (props.columnFilters === undefined || props.onColumnFiltersChange === undefined);
+
   const bothSortingSources = props.defaultSorting !== undefined && props.sorting !== undefined;
+  const bothFilterSources = props.defaultColumnFilters !== undefined && props.columnFilters !== undefined;
+
+  const controlledSelectionIncomplete = props.rowSelection !== undefined && props.onRowSelectionChange === undefined;
 
   return [
     serverSortingIncomplete ? "sortingMode='server' requires both `sorting` and `onSortingChange`." : null,
     serverPaginationIncomplete
       ? "paginationMode='server' requires `pagination`, `onPaginationChange`, and `rowCount`."
       : null,
+    serverFilteringIncomplete ? "filterMode='server' requires both `columnFilters` and `onColumnFiltersChange`." : null,
     bothSortingSources ? "Provide either `defaultSorting` (uncontrolled) or `sorting` (controlled), not both." : null,
+    bothFilterSources
+      ? "Provide either `defaultColumnFilters` (uncontrolled) or `columnFilters` (controlled), not both."
+      : null,
+    controlledSelectionIncomplete
+      ? "Controlled `rowSelection` requires `onRowSelectionChange`; without it selection changes are dropped."
+      : null,
   ].filter((message): message is string => message !== null);
 }
 
@@ -93,9 +111,11 @@ function derivePinning<TData, TValue>(columns: ColumnDef<TData, TValue>[]): Colu
 function buildRowModels<TData>(
   sortingMode: SortingMode,
   paginationMode: PaginationMode,
+  filterMode: FilterMode,
   getRowCanExpand: ((row: Row<TData>) => boolean) | undefined,
 ): Partial<TableOptions<TData>> {
   return {
+    ...(filterMode === "client" ? { getFilteredRowModel: getFilteredRowModel() } : {}),
     ...(sortingMode === "client" ? { getSortedRowModel: getSortedRowModel() } : {}),
     ...(paginationMode === "client" ? { getPaginationRowModel: getPaginationRowModel() } : {}),
     ...(getRowCanExpand !== undefined ? { getRowCanExpand, getExpandedRowModel: getExpandedRowModel() } : {}),
@@ -307,6 +327,93 @@ function MessageRow({ colSpan, children }: { colSpan: number; children: React.Re
   );
 }
 
+function DefaultEmptyState() {
+  return (
+    <div className="flex flex-col items-center gap-1 py-6">
+      <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
+        <SearchX className="size-5 text-muted-foreground" />
+      </div>
+      <div className="text-sm font-medium text-foreground">No results</div>
+      <div className="text-sm text-muted-foreground">No rows match your search or filters.</div>
+    </div>
+  );
+}
+
+const SKELETON_WIDTHS = ["w-[58%]", "w-[44%]", "w-[70%]", "w-[50%]", "w-[64%]", "w-[48%]"] as const;
+
+function SkeletonCell<TData>({ column, index }: { column: Column<TData, unknown> | undefined; index: number }) {
+  const meta = column?.columnDef.meta;
+  const width = SKELETON_WIDTHS[index % SKELETON_WIDTHS.length];
+  const shape = meta?.skeleton;
+  if (meta?.renderSkeleton !== undefined) {
+    return <>{meta.renderSkeleton()}</>;
+  }
+  if (shape === "twoLine") {
+    return (
+      <div className="flex flex-col gap-2">
+        <Skeleton className={cn("h-3.5", width)} />
+        <Skeleton className="h-2.5 w-2/5 opacity-65" />
+      </div>
+    );
+  }
+  if (shape === "badge") {
+    return <Skeleton className={cn("h-5 w-16 rounded-full", meta?.numeric ? "ml-auto" : "")} />;
+  }
+  if (shape === "chips") {
+    return (
+      <div className="flex items-center gap-1.5">
+        <Skeleton className="h-5 w-14 rounded-full" />
+        <Skeleton className="h-5 w-20 rounded-full" />
+        <Skeleton className="h-5 w-9 rounded-full opacity-65" />
+      </div>
+    );
+  }
+  if (shape === "meter") {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <Skeleton className="h-3.5 w-24" />
+        <Skeleton className="h-1.5 w-full rounded-full" />
+      </div>
+    );
+  }
+  return <Skeleton className={cn("h-3.5", width, meta?.numeric ? "ml-auto" : "")} />;
+}
+
+function SkeletonRows<TData>({
+  rowCount,
+  columns,
+  size,
+  message,
+}: {
+  rowCount: number;
+  columns: readonly Column<TData, unknown>[];
+  size: DataTableSize;
+  message?: string;
+}) {
+  const rowKeys = Array.from({ length: Math.max(rowCount, 1) }, (_, index) => index);
+  const cells = columns.length > 0 ? columns : [undefined];
+  return (
+    <Fragment>
+      {rowKeys.map((rowKey) => (
+        <TableRow
+          key={`skeleton-${rowKey}`}
+          className={cn("hover:bg-transparent", size === "compact" ? "h-8" : "")}
+          data-testid="skeleton-row"
+        >
+          {cells.map((column, columnKey) => (
+            <TableCell key={column?.id ?? columnKey} className={size === "compact" ? "px-2 py-1" : ""}>
+              <SkeletonCell column={column} index={columnKey} />
+              {rowKey === 0 && columnKey === 0 && message !== undefined ? (
+                <span className="sr-only">{message}</span>
+              ) : null}
+            </TableCell>
+          ))}
+        </TableRow>
+      ))}
+    </Fragment>
+  );
+}
+
 function useControllable<T>(
   controlled: T | undefined,
   controlledOnChange: OnChangeFn<T> | undefined,
@@ -334,6 +441,12 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     onPaginationChange,
     rowCount,
     pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
+    filterMode = "none",
+    columnFilters,
+    onColumnFiltersChange,
+    defaultColumnFilters,
+    globalFilter,
+    onGlobalFilterChange,
     enableColumnResizing = false,
     columnResizeMode = "onEnd",
     defaultColumnVisibility,
@@ -341,6 +454,9 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     renderSubComponent,
     expanded,
     onExpandedChange,
+    enableRowSelection,
+    rowSelection,
+    onRowSelectionChange,
   } = props;
 
   const sortingState = useControllable(sorting, onSortingChange, defaultSorting ?? []);
@@ -348,7 +464,14 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     pageIndex: 0,
     pageSize: pageSizeOptions[0] ?? 25,
   });
+  const filterState = useControllable<ColumnFiltersState>(
+    columnFilters,
+    onColumnFiltersChange,
+    defaultColumnFilters ?? [],
+  );
+  const globalFilterState = useControllable<string>(globalFilter, onGlobalFilterChange, "");
   const expandedState = useControllable<ExpandedState>(expanded, onExpandedChange, {});
+  const rowSelectionState = useControllable<RowSelectionState>(rowSelection, onRowSelectionChange, {});
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(defaultColumnVisibility ?? {});
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const columnPinning = React.useMemo(() => derivePinning(columns), [columns]);
@@ -360,24 +483,32 @@ function useDataTableInstance<TData extends RowData, TValue>(props: DataTablePro
     state: {
       sorting: sortingState.value,
       pagination: paginationState.value,
+      columnFilters: filterState.value,
+      globalFilter: globalFilterState.value,
       expanded: expandedState.value,
+      rowSelection: rowSelectionState.value,
       columnVisibility,
       columnSizing,
     },
     initialState: { columnPinning },
     manualSorting: sortingMode === "server",
     manualPagination: paginationMode === "server",
+    manualFiltering: filterMode === "server",
     enableSortingRemoval,
     enableColumnResizing,
     columnResizeMode,
     onSortingChange: sortingState.onChange,
     onPaginationChange: paginationState.onChange,
+    onColumnFiltersChange: filterState.onChange,
+    onGlobalFilterChange: globalFilterState.onChange,
     onExpandedChange: expandedState.onChange,
+    onRowSelectionChange: rowSelectionState.onChange,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
-    ...buildRowModels(sortingMode, paginationMode, expansionGuard),
+    ...buildRowModels(sortingMode, paginationMode, filterMode, expansionGuard),
     ...(getRowId !== undefined ? { getRowId } : {}),
+    ...(enableRowSelection !== undefined ? { enableRowSelection } : {}),
     ...(paginationMode === "server" && rowCount !== undefined ? { rowCount } : {}),
   };
 
@@ -397,7 +528,8 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const {
     isLoading = false,
     loadingMessage = "Loading…",
-    noDataMessage = "No results",
+    skeletonRowCount = 8,
+    noDataMessage,
     paginationMode = "none",
     rowCount,
     pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
@@ -417,7 +549,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;
   const stickyHeader = maxBodyHeight !== undefined;
-  const tableStyle = enableColumnResizing ? { width: table.getTotalSize() } : undefined;
+  const tableStyle = enableColumnResizing ? { width: table.getTotalSize(), minWidth: "100%" } : undefined;
 
   const renderPagination = (): React.ReactNode => {
     if (paginationSlot !== undefined) {
@@ -443,10 +575,17 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
 
   const renderBody = (): React.ReactNode => {
     if (isLoading) {
-      return <MessageRow colSpan={visibleColumnCount}>{loadingMessage}</MessageRow>;
+      return (
+        <SkeletonRows
+          rowCount={skeletonRowCount}
+          columns={table.getVisibleLeafColumns()}
+          size={size}
+          message={loadingMessage}
+        />
+      );
     }
     if (rows.length === 0) {
-      return <MessageRow colSpan={visibleColumnCount}>{noDataMessage}</MessageRow>;
+      return <MessageRow colSpan={visibleColumnCount}>{noDataMessage ?? <DefaultEmptyState />}</MessageRow>;
     }
     return rows.map((row) => (
       <DataTableBodyRow
@@ -462,34 +601,38 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
     ));
   };
 
+  const paginationNode = renderPagination();
+
   return (
     <div className="w-full">
-      {toolbar !== undefined && <div className="w-full">{toolbar(table)}</div>}
-      <div
-        className={cn("rounded-lg border border-border", stickyHeader ? "overflow-auto" : "overflow-x-auto")}
-        style={stickyHeader ? { maxHeight: maxBodyHeight } : undefined}
-      >
-        <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
-          <TableHeader className={stickyHeader ? "sticky top-0 z-20" : ""}>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id} className="bg-muted/50 hover:bg-muted/50">
-                {headerGroup.headers.map((header) => (
-                  <DataTableHeadCell
-                    key={header.id}
-                    header={header}
-                    size={size}
-                    stickyHeader={stickyHeader}
-                    enableColumnResizing={enableColumnResizing}
-                  />
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>{renderBody()}</TableBody>
-          {footer !== undefined && <TableFooter>{footer(table)}</TableFooter>}
-        </TableRoot>
+      <div className="overflow-hidden rounded-lg border border-border">
+        {toolbar !== undefined && <div className="border-b border-border px-4 py-3">{toolbar(table)}</div>}
+        <div
+          className={stickyHeader ? "overflow-auto" : "overflow-x-auto"}
+          style={stickyHeader ? { maxHeight: maxBodyHeight } : undefined}
+        >
+          <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
+            <TableHeader className={stickyHeader ? "sticky top-0 z-20" : ""}>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id} className="bg-muted/50 hover:bg-muted/50">
+                  {headerGroup.headers.map((header) => (
+                    <DataTableHeadCell
+                      key={header.id}
+                      header={header}
+                      size={size}
+                      stickyHeader={stickyHeader}
+                      enableColumnResizing={enableColumnResizing}
+                    />
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>{renderBody()}</TableBody>
+            {footer !== undefined && <TableFooter>{footer(table)}</TableFooter>}
+          </TableRoot>
+        </div>
+        {paginationNode !== null && <div className="border-t border-border">{paginationNode}</div>}
       </div>
-      {renderPagination()}
     </div>
   );
 }

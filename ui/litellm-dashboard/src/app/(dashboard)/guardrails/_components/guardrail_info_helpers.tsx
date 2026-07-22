@@ -1,4 +1,30 @@
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
+import aktoLogo from "../../../../../public/assets/logos/akto.svg";
+import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
+import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
+import catoNetworksLogo from "../../../../../public/assets/logos/cato_networks.svg";
+import ciscoLogo from "../../../../../public/assets/logos/cisco.png";
+import deepkeepLogo from "../../../../../public/assets/logos/deepkeep.svg";
+import enkryptAiLogo from "../../../../../public/assets/logos/enkrypt_ai.avif";
+import googleLogo from "../../../../../public/assets/logos/google.svg";
+import guardrailsAiLogo from "../../../../../public/assets/logos/guardrails_ai.jpeg";
+import javelinLogo from "../../../../../public/assets/logos/javelin.png";
+import lakeraAiLogo from "../../../../../public/assets/logos/lakeraai.jpeg";
+import lassoLogo from "../../../../../public/assets/logos/lasso.png";
+import litellmLogo from "../../../../../public/assets/logos/litellm_logo.jpg";
+import microsoftAzureLogo from "../../../../../public/assets/logos/microsoft_azure.svg";
+import nomaSecurityLogo from "../../../../../public/assets/logos/noma_security.png";
+import openaiSmallLogo from "../../../../../public/assets/logos/openai_small.svg";
+import paloAltoNetworksLogo from "../../../../../public/assets/logos/palo_alto_networks.jpeg";
+import pangeaLogo from "../../../../../public/assets/logos/pangea.png";
+import pillarLogo from "../../../../../public/assets/logos/pillar.jpeg";
+import promptSecurityLogo from "../../../../../public/assets/logos/prompt_security.png";
+import promptguardLogo from "../../../../../public/assets/logos/promptguard.svg";
+import qohashLogo from "../../../../../public/assets/logos/qohash.jpg";
+import repelloAiLogo from "../../../../../public/assets/logos/repelloai.png";
+import straikerLogo from "../../../../../public/assets/logos/straiker.svg";
+import xecguardLogo from "../../../../../public/assets/logos/xecguard.svg";
+import zscalerLogo from "../../../../../public/assets/logos/zscaler.svg";
 
 // Legacy enum - keeping for backward compatibility
 export enum GuardrailProviders {
@@ -54,6 +80,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Promptguard: "promptguard",
   LlmAsAJudge: "llm_as_a_judge",
   Xecguard: "xecguard",
+  Deepkeep: "deepkeep",
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
 };
@@ -74,6 +101,26 @@ export const populateGuardrailProviderMap = (providerParamsResponse: Record<stri
       guardrail_provider_map[providerKey] = key; // Add directly to the main map
     }
   });
+};
+
+// Normalizes a form "mode" value (string, string[], or empty) into a string array
+export const toModeArray = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) return raw.filter((m): m is string => typeof m === "string");
+  if (typeof raw === "string") return [raw];
+  return [];
+};
+
+// Resolves the supported modes for the selected provider, falling back to the global list
+export const getSupportedModesForProvider = (
+  settings: { supported_modes?: string[]; supported_modes_by_provider?: Record<string, string[]> } | null,
+  selectedProvider: string | null,
+): string[] | undefined => {
+  const providerKey = selectedProvider ? guardrail_provider_map[selectedProvider]?.toLowerCase() : null;
+  const perProvider =
+    providerKey && settings?.supported_modes_by_provider
+      ? settings.supported_modes_by_provider[providerKey]
+      : undefined;
+  return perProvider ?? settings?.supported_modes;
 };
 
 // Decides if we should render the PII config settings for a given provider
@@ -115,38 +162,43 @@ export const shouldRenderLLMJudgeFields = (provider: string | null) => {
   return guardrail_provider_map[provider] === "llm_as_a_judge";
 };
 
-const asset_logos_folder = "/ui/assets/logos/";
+export const guardrailLogoMap = {
+  "Zscaler AI Guard": zscalerLogo.src,
+  "Presidio PII": microsoftAzureLogo.src,
+  "Bedrock Guardrail": bedrockLogo.src,
+  Lakera: lakeraAiLogo.src,
+  "Azure Content Safety Prompt Shield": microsoftAzureLogo.src,
+  "Azure Content Safety Text Moderation": microsoftAzureLogo.src,
+  "Aporia AI": aporiaLogo.src,
+  "PANW Prisma AIRS": paloAltoNetworksLogo.src,
+  "Cisco AI Defense": ciscoLogo.src,
+  "Noma Security": nomaSecurityLogo.src,
+  "Javelin Guardrails": javelinLogo.src,
+  "Pillar Guardrail": pillarLogo.src,
+  "Google Cloud Model Armor": googleLogo.src,
+  "Guardrails AI": guardrailsAiLogo.src,
+  "Lasso Guardrail": lassoLogo.src,
+  "Pangea Guardrail": pangeaLogo.src,
+  "AIM Guardrail": aimSecurityLogo.src,
+  "Cato Networks Guardrail": catoNetworksLogo.src,
+  "OpenAI Moderation": openaiSmallLogo.src,
+  EnkryptAI: enkryptAiLogo.src,
+  "Prompt Security": promptSecurityLogo.src,
+  PromptGuard: promptguardLogo.src,
+  XecGuard: xecguardLogo.src,
+  "LiteLLM Content Filter": litellmLogo.src,
+  "LiteLLM LLM as a Judge": litellmLogo.src,
+  Akto: aktoLogo.src,
+  "DeepKeep AI Firewall": deepkeepLogo.src,
+  "Qostodian Nexus": qohashLogo.src,
+  "RepelloAI Argus": repelloAiLogo.src,
+  Straiker: straikerLogo.src,
+} satisfies Record<string, string>;
 
-export const guardrailLogoMap: Record<string, string> = {
-  "Zscaler AI Guard": `${asset_logos_folder}zscaler.svg`,
-  "Presidio PII": `${asset_logos_folder}microsoft_azure.svg`,
-  "Bedrock Guardrail": `${asset_logos_folder}bedrock.svg`,
-  Lakera: `${asset_logos_folder}lakeraai.jpeg`,
-  "Azure Content Safety Prompt Shield": `${asset_logos_folder}microsoft_azure.svg`,
-  "Azure Content Safety Text Moderation": `${asset_logos_folder}microsoft_azure.svg`,
-  "Aporia AI": `${asset_logos_folder}aporia.png`,
-  "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
-  "Cisco AI Defense": `${asset_logos_folder}cisco.png`,
-  "Noma Security": `${asset_logos_folder}noma_security.png`,
-  "Javelin Guardrails": `${asset_logos_folder}javelin.png`,
-  "Pillar Guardrail": `${asset_logos_folder}pillar.jpeg`,
-  "Google Cloud Model Armor": `${asset_logos_folder}google.svg`,
-  "Guardrails AI": `${asset_logos_folder}guardrails_ai.jpeg`,
-  "Lasso Guardrail": `${asset_logos_folder}lasso.png`,
-  "Pangea Guardrail": `${asset_logos_folder}pangea.png`,
-  "AIM Guardrail": `${asset_logos_folder}aim_security.jpeg`,
-  "Cato Networks Guardrail": `${asset_logos_folder}cato_networks.svg`,
-  "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
-  EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
-  "Prompt Security": `${asset_logos_folder}prompt_security.png`,
-  PromptGuard: `${asset_logos_folder}promptguard.svg`,
-  XecGuard: `${asset_logos_folder}xecguard.svg`,
-  "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
-  "LiteLLM LLM as a Judge": `${asset_logos_folder}litellm_logo.jpg`,
-  Akto: `${asset_logos_folder}akto.svg`,
-  "Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
-  "RepelloAI Argus": `${asset_logos_folder}repelloai.png`,
-};
+export const getGuardrailLogo = (displayName: string): string | undefined =>
+  Object.prototype.hasOwnProperty.call(guardrailLogoMap, displayName)
+    ? guardrailLogoMap[displayName as keyof typeof guardrailLogoMap]
+    : undefined;
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
   if (!guardrailValue) {
@@ -165,7 +217,7 @@ export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string;
   // Get the display name from current GuardrailProviders and logo from map
   const currentProviders = getGuardrailProviders();
   const displayName = currentProviders[enumKey as keyof typeof currentProviders];
-  const logo = resolveLogoSrc(guardrailLogoMap[displayName as keyof typeof guardrailLogoMap]) ?? "";
+  const logo = getGuardrailLogo(displayName ?? "") ?? "";
 
   return { logo, displayName: displayName || guardrailValue };
 };

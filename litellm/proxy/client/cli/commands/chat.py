@@ -150,7 +150,7 @@ def chat(
             f"Max Tokens: [yellow]{max_tokens or 'unlimited'}[/yellow]\n\n"
             f"Type your messages and press Enter. Type '/quit' or '/exit' to end the session.\n"
             f"Type '/help' for more commands.",
-            title="🤖 Chat Session",
+            title="Chat Session",
         )
     )
 

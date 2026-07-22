@@ -1,3 +1,5 @@
+import hashlib
+import os
 import secrets
 from datetime import datetime
 from typing import (
@@ -17,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
@@ -44,7 +47,10 @@ if TYPE_CHECKING:
 dc = DualCache()
 
 
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import (
+    GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+)
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
@@ -57,6 +63,20 @@ from litellm.exceptions import (
 # field to suppress a guardrail on the direct-SDK path that never reaches the
 # proxy's metadata sanitizer.
 _PRE_CALL_EXECUTED_TOKEN = secrets.token_hex(16)
+
+
+def _strict_guardrail_modes_enabled() -> bool:
+    """Whether guardrail-mode validation raises (default) or logs a warning.
+
+    Set `LITELLM_STRICT_GUARDRAIL_MODES=false` to keep the pre-LIT-4226 behavior
+    for guardrails whose supported_event_hooks list newly includes their
+    configured mode: log the mismatch and continue instead of raising at boot.
+    """
+    raw = os.environ.get("LITELLM_STRICT_GUARDRAIL_MODES")
+    if raw is None:
+        return True
+    parsed = str_to_bool(raw)
+    return True if parsed is None else parsed
 
 
 def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[str]:
@@ -97,6 +117,7 @@ class CustomGuardrail(CustomLogger):
         on_sensitive_data: Optional[str] = None,
         sensitive_data_route_to_model: Optional[str] = None,
         sticky_session_routing: bool = True,
+        only_scan_new_messages: bool = False,
         **kwargs,
     ):
         """
@@ -129,10 +150,21 @@ class CustomGuardrail(CustomLogger):
         self.on_sensitive_data: Optional[str] = on_sensitive_data
         self.sensitive_data_route_to_model: Optional[str] = sensitive_data_route_to_model
         self.sticky_session_routing: bool = sticky_session_routing
+        self.only_scan_new_messages: bool = only_scan_new_messages
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
-            self._validate_event_hook(event_hook, supported_event_hooks)
+            try:
+                self._validate_event_hook(event_hook, supported_event_hooks)
+            except ValueError as validation_error:
+                if _strict_guardrail_modes_enabled():
+                    raise
+                verbose_logger.warning(
+                    "%s. LITELLM_STRICT_GUARDRAIL_MODES=false; continuing "
+                    "with unsupported event_hook. Set the env var to true "
+                    "(default) to enforce validation and fail at startup.",
+                    validation_error,
+                )
         super().__init__(**kwargs)
 
     def render_violation_message(self, default: str, context: Optional[Dict[str, Any]] = None) -> str:
@@ -243,6 +275,100 @@ class CustomGuardrail(CustomLogger):
         """Extract session_id from request data."""
         return get_session_id_from_request_data(request_data)
 
+    @staticmethod
+    def _scanned_text_hash(text: str) -> str:
+        """Stable content hash for a single scannable text segment.
+
+        Hashing the exact text the provider would receive means an edited earlier
+        segment produces a different hash and gets re-scanned, while an unchanged
+        segment repeated on a later turn is skipped.
+        """
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _scanned_texts_cache_key(self, session_id: str) -> str:
+        return f"guardrail_scanned_texts:{self.guardrail_name}:{session_id}"
+
+    async def filter_new_texts_for_session(
+        self,
+        texts: list[str] | None,
+        request_data: dict[str, object],
+        cache: DualCache,
+    ) -> list[str] | None:
+        """Return only the text segments not already scanned earlier in this session.
+
+        Returns ``None`` when incremental scanning is inactive (feature off, no
+        session id, masking enabled, or the cache read failed). ``None`` signals
+        the caller to fall back to a full scan; a returned list (possibly empty)
+        signals the caller to scan only that subset and skip masking write-back.
+        """
+        if not self.only_scan_new_messages or not texts:
+            return None
+
+        if self.mask_request_content or self.mask_response_content:
+            verbose_logger.warning(
+                "Guardrail %s: only_scan_new_messages is not supported with masking; scanning full context.",
+                self.guardrail_name,
+            )
+            return None
+
+        session_id = get_session_id_from_request_data(request_data)
+        if not session_id:
+            verbose_logger.debug(
+                "Guardrail %s: only_scan_new_messages enabled but request has no session id; scanning full context.",
+                self.guardrail_name,
+            )
+            return None
+
+        try:
+            cached: object = await cache.async_get_cache(key=self._scanned_texts_cache_key(session_id))
+        except Exception as e:  # noqa: BLE001  # cache is best-effort; any failure must fall back to a full scan
+            verbose_logger.warning(
+                "Guardrail %s: failed to read scanned-message cache (%s); scanning full context.",
+                self.guardrail_name,
+                e,
+            )
+            return None
+
+        seen: set[str] = {str(h) for h in cached} if isinstance(cached, list) else set()
+        return [text for text in texts if self._scanned_text_hash(text) not in seen]
+
+    async def mark_texts_scanned(
+        self,
+        texts: list[str] | None,
+        request_data: dict[str, object],
+        cache: DualCache,
+    ) -> None:
+        """Record the hashes of all text segments present on a successful (non-blocked) scan.
+
+        Called only after the guardrail allows the request, so a blocked segment is
+        never marked scanned and will be re-checked if the client retries.
+        """
+        if not self.only_scan_new_messages or not texts:
+            return
+        if self.mask_request_content or self.mask_response_content:
+            return
+        session_id = get_session_id_from_request_data(request_data)
+        if not session_id:
+            return
+
+        cache_key = self._scanned_texts_cache_key(session_id)
+        current_hashes = [self._scanned_text_hash(text) for text in texts]
+        try:
+            existing: object = await cache.async_get_cache(key=cache_key)
+            existing_hashes: list[str] = [str(h) for h in existing] if isinstance(existing, list) else []
+            merged: list[str] = list(dict.fromkeys(existing_hashes + current_hashes))
+            await cache.async_set_cache(
+                key=cache_key,
+                value=merged,
+                ttl=GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
+            )
+        except Exception as e:  # noqa: BLE001  # cache is best-effort; any failure must not block the request
+            verbose_logger.warning(
+                "Guardrail %s: failed to persist scanned-message cache (%s); next call will re-scan.",
+                self.guardrail_name,
+                e,
+            )
+
     def should_route_on_sensitive_data(self) -> bool:
         """
         Returns True if this guardrail is configured to route requests
@@ -300,6 +426,18 @@ class CustomGuardrail(CustomLogger):
         Returns the config model for the guardrail
 
         This is used to render the config model in the UI.
+        """
+        return None
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> Optional[List[GuardrailEventHooks]]:
+        """
+        Returns the event hooks this guardrail supports, for the UI to render.
+
+        Subclasses should override to return their supported hooks list. When a
+        subclass returns None, the endpoint omits it from the per-provider map
+        and the UI is expected to fall back to the global `supported_modes`
+        list client-side.
         """
         return None
 
@@ -477,6 +615,22 @@ class CustomGuardrail(CustomLogger):
                     return True
         return False
 
+    def uses_apply_guardrail_interface(self) -> bool:
+        return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+
+    def _deployment_pre_call_target(self) -> "CustomLogger":
+        if not self.uses_apply_guardrail_interface():
+            return self
+        try:
+            from litellm.proxy.utils import unified_guardrail
+        except ImportError as e:
+            raise ImportError(
+                f"Guardrail {self.guardrail_name or type(self).__name__} implements apply_guardrail, which needs "
+                "the litellm proxy dependencies to run at the deployment level. "
+                "Install them with: pip install 'litellm[proxy]'"
+            ) from e
+        return unified_guardrail
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
@@ -495,7 +649,10 @@ class CustomGuardrail(CustomLogger):
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
-            result = await self.async_pre_call_hook(
+            target = self._deployment_pre_call_target()
+            if target is not self:
+                kwargs["guardrail_to_apply"] = self
+            result = await target.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(
                     user_id=kwargs.get("user_api_key_user_id"),
                     team_id=kwargs.get("user_api_key_team_id"),
@@ -505,7 +662,7 @@ class CustomGuardrail(CustomLogger):
                 ),
                 cache=dc,
                 data=kwargs,
-                call_type=call_type.value or "acompletion",  # type: ignore
+                call_type="completion" if call_type == CallTypes.completion else "acompletion",
             )
 
             if result is not None and isinstance(result, dict):

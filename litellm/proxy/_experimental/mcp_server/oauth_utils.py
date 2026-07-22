@@ -129,7 +129,19 @@ def get_request_base_url(request: Request) -> str:
         if x_forwarded_port and ":" not in netloc:
             netloc = f"{netloc}:{x_forwarded_port}"
 
-    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
+    return urlunparse((scheme, _strip_default_port(scheme, netloc), parsed.path, "", "", ""))
+
+
+def well_known_root_suffix() -> str:
+    """The ``SERVER_ROOT_PATH`` segment inserted into a ``.well-known`` path (RFC 8414 / 9728
+    path insertion), empty for a root-mounted proxy or an explicit ``/``.
+
+    The discovery route registrations and the 401 challenges that advertise those routes both
+    derive their path from this one function, so the ``resource_metadata`` URL a client is told
+    to fetch cannot drift from the route that actually serves it.
+    """
+    root = os.getenv("SERVER_ROOT_PATH", "")
+    return "" if root == "/" else root
 
 
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
@@ -453,7 +465,10 @@ def _raise_trusted_redirect_uri_rejected(
         "Align the proxy public URL with the browser URL. Set PROXY_BASE_URL to your "
         "HTTPS origin (e.g. https://litellm.example.com), or enable "
         "general_settings.use_x_forwarded_for with mcp_trusted_proxy_ranges for your "
-        "ingress. Verify: curl https://<host>/.well-known/oauth-authorization-server "
+        "ingress. If the redirect_uri is a legitimate separate-origin OAuth client "
+        "(e.g. a web app registering with the proxy from another host via dynamic client "
+        f"registration), add its origin to {_TRUSTED_REDIRECT_ORIGINS_ENV}. "
+        "Verify: curl https://<host>/.well-known/oauth-authorization-server "
         "| jq .issuer — issuer must match window.location.origin in the UI."
     )
 

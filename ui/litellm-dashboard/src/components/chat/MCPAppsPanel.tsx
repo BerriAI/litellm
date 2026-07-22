@@ -14,6 +14,7 @@ import {
   listMCPTools,
 } from "../networking";
 import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
+import { Logo } from "@/components/molecules/logo/Logo";
 import MessageManager from "@/components/molecules/message_manager";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 
@@ -270,26 +271,19 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
         <div className="flex items-start gap-5 mb-7">
           {detailServer.mcp_info?.logo_url ? (
-            <img
+            <Logo
               src={detailServer.mcp_info.logo_url}
-              alt={`${name} logo`}
+              label={name}
               className="w-16 h-16 rounded-2xl object-contain shrink-0 bg-muted/50"
-              onError={(e) => {
-                const el = e.target as HTMLImageElement;
-                el.style.display = "none";
-                if (el.nextElementSibling) (el.nextElementSibling as HTMLElement).style.display = "flex";
-              }}
             />
-          ) : null}
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-[28px] shrink-0"
-            style={{
-              background: color,
-              display: detailServer.mcp_info?.logo_url ? "none" : "flex",
-            }}
-          >
-            {name.charAt(0).toUpperCase()}
-          </div>
+          ) : (
+            <div
+              className="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-[28px] shrink-0"
+              style={{ background: color }}
+            >
+              {name.charAt(0).toUpperCase()}
+            </div>
+          )}
           <div className="flex-1">
             <h2 className="m-0 mb-1 text-[22px] font-bold text-foreground">{name}</h2>
             <p className="m-0 text-sm text-muted-foreground">{detailServer.description ?? "MCP server"}</p>
@@ -478,26 +472,19 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                 } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""}`}
               >
                 {server.mcp_info?.logo_url ? (
-                  <img
+                  <Logo
                     src={server.mcp_info.logo_url}
-                    alt={`${name} logo`}
+                    label={name}
                     className="w-[38px] h-[38px] rounded-xl object-contain shrink-0 bg-muted/50"
-                    onError={(e) => {
-                      const el = e.target as HTMLImageElement;
-                      el.style.display = "none";
-                      if (el.nextElementSibling) (el.nextElementSibling as HTMLElement).style.display = "flex";
-                    }}
                   />
-                ) : null}
-                <div
-                  className="w-[38px] h-[38px] rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0"
-                  style={{
-                    background: color,
-                    display: server.mcp_info?.logo_url ? "none" : "flex",
-                  }}
-                >
-                  {name.charAt(0).toUpperCase()}
-                </div>
+                ) : (
+                  <div
+                    className="w-[38px] h-[38px] rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0"
+                    style={{ background: color }}
+                  >
+                    {name.charAt(0).toUpperCase()}
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-foreground truncate">{name}</div>
                   <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">

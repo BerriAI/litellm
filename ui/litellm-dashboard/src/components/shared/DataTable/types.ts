@@ -1,10 +1,12 @@
 import type {
   ColumnDef,
+  ColumnFiltersState,
   ExpandedState,
   OnChangeFn,
   PaginationState,
   Row,
   RowData,
+  RowSelectionState,
   SortingState,
   Table,
   VisibilityState,
@@ -13,9 +15,11 @@ import type * as React from "react";
 
 export type SortingMode = "none" | "client" | "server";
 export type PaginationMode = "none" | "client" | "server";
+export type FilterMode = "none" | "client" | "server";
 export type ColumnResizeMode = "onEnd" | "onChange";
 export type DataTableSize = "compact" | "default";
 export type ColumnPinnedSide = "left" | "right";
+export type DataTableSkeletonShape = "text" | "twoLine" | "badge" | "chips" | "meter";
 
 export interface DataTableProps<TData extends RowData, TValue> {
   data: TData[];
@@ -24,6 +28,7 @@ export interface DataTableProps<TData extends RowData, TValue> {
 
   isLoading?: boolean;
   loadingMessage?: string;
+  skeletonRowCount?: number;
   noDataMessage?: React.ReactNode;
 
   sortingMode?: SortingMode;
@@ -38,6 +43,14 @@ export interface DataTableProps<TData extends RowData, TValue> {
   rowCount?: number;
   pageSizeOptions?: number[];
 
+  filterMode?: FilterMode;
+  columnFilters?: ColumnFiltersState;
+  onColumnFiltersChange?: OnChangeFn<ColumnFiltersState>;
+  defaultColumnFilters?: ColumnFiltersState;
+
+  globalFilter?: string;
+  onGlobalFilterChange?: OnChangeFn<string>;
+
   enableColumnResizing?: boolean;
   columnResizeMode?: ColumnResizeMode;
   defaultColumnVisibility?: VisibilityState;
@@ -46,6 +59,10 @@ export interface DataTableProps<TData extends RowData, TValue> {
   renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
   expanded?: ExpandedState;
   onExpandedChange?: OnChangeFn<ExpandedState>;
+
+  enableRowSelection?: boolean | ((row: Row<TData>) => boolean);
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: OnChangeFn<RowSelectionState>;
 
   onRowClick?: (row: TData) => void;
 

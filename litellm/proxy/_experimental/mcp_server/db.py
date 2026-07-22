@@ -33,6 +33,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import (
+    MCPServerOAuthClientRepository,
     MCPServerRepository,
     MCPUserCredentialsRepository,
 )
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 
 _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
     {
+        "issuer",
         "authorization_url",
         "token_url",
         "registration_url",
@@ -59,6 +61,13 @@ _AUTH_FLOW_SCOPED_FIELDS: frozenset = frozenset(
         "token_exchange_profile",
     }
 )
+
+
+def _blank_to_none(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
 
 # Token-exchange settings with dedicated columns that also exist on
 # ``MCPCredentials`` as a legacy shape (rows and REST callers that predate the
@@ -75,6 +84,34 @@ _TOKEN_EXCHANGE_COLUMN_FIELDS: frozenset = frozenset(
         "token_exchange_profile",
     }
 )
+
+# The client-forwarded token modes share one stored-credential shape: the admin-declared upstream
+# OAuth app (client_id/client_secret) plus the same authorize relay, and neither mints anything the
+# gateway keeps. So a switch WITHIN this class must preserve the stored app, unlike a cross-class
+# switch (e.g. an oauth2 row whose client may be DCR-minted and is not reusable elsewhere).
+_CLIENT_FORWARDED_AUTH_TYPES: frozenset = frozenset({"true_passthrough", "oauth_delegate"})
+
+# Minted token material that must never survive a client rotation on a persisted row.
+_MINTED_TOKEN_CREDENTIAL_FIELDS: frozenset = frozenset({"access_token", "refresh_token", "expires_in"})
+
+
+def _credential_auth_class(auth_type: Optional[str]) -> Optional[str]:
+    """Collapse the client-forwarded modes to one credential class; every other auth_type is its own
+    class. Used so credential handling keys off whether the stored-credential shape actually changed,
+    not off a raw auth_type inequality that treats true_passthrough<->oauth_delegate as a full reset."""
+    if auth_type in _CLIENT_FORWARDED_AUTH_TYPES:
+        return "client_forwarded"
+    return auth_type
+
+
+def _drop_stale_minted_on_client_rotation(merged: Dict[str, Any], new_creds: Dict[str, Any]) -> Dict[str, Any]:
+    """When the update rotates the client, drop stale minted token keys it did not itself set, so an old
+    app's access/refresh token never rides forward under the new client. A no-op when no client key changed."""
+    if "client_id" not in new_creds and "client_secret" not in new_creds:
+        return merged
+    return {
+        key: value for key, value in merged.items() if key not in _MINTED_TOKEN_CREDENTIAL_FIELDS or key in new_creds
+    }
 
 
 def _is_global_env_var_scope(scope: Any) -> bool:
@@ -338,6 +375,12 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: Optional[st
             value=client_secret,
             new_encryption_key=encryption_key,
         )
+    client_private_key = credentials.get("client_private_key")
+    if client_private_key is not None:
+        credentials["client_private_key"] = encrypt_value_helper(
+            value=client_private_key,
+            new_encryption_key=encryption_key,
+        )
     # AWS SigV4 credential fields
     aws_access_key_id = credentials.get("aws_access_key_id")
     if aws_access_key_id is not None:
@@ -369,6 +412,7 @@ def decrypt_credentials(
         "auth_value",
         "client_id",
         "client_secret",
+        "client_private_key",
         "aws_access_key_id",
         "aws_secret_access_key",
         "aws_session_token",
@@ -603,6 +647,7 @@ async def delete_mcp_server(
         for model, label in (
             (prisma_client.db.litellm_mcpusercredentials, "credential"),
             (prisma_client.db.litellm_mcpuserenvvars, "env var"),
+            (prisma_client.db.litellm_mcpserveroauthclient, "OAuth client"),
         ):
             try:
                 await model.delete_many(where={"server_id": server_id})
@@ -669,25 +714,46 @@ async def update_mcp_server(
     # of being reset to a schema default (transport=sse, allow_all_keys=False...).
     data_dict = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
 
-    # Pre-fetch existing record once if we need it for auth_type or credential logic
+    # Pre-fetch existing record once if we need it for auth_type, url, or credential logic
     existing = None
     has_credentials = "credentials" in data_dict and data_dict["credentials"] is not None
     # An explicit token-exchange column write (set or clear) also migrates the
     # legacy blob copies below, so the existing row is needed for those updates.
     explicit_te_write = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
-    if data.auth_type or has_credentials or explicit_te_write:
+    url_provided = "url" in data_dict and data_dict["url"] is not None
+    issuer_provided = "issuer" in data_dict
+    if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
         existing = await MCPServerRepository(prisma_client).table.find_unique(where={"server_id": data.server_id})
 
     auth_type_changed = bool(
-        data.auth_type and existing and existing.auth_type is not None and existing.auth_type != data.auth_type
+        data.auth_type
+        and existing
+        and _credential_auth_class(existing.auth_type) != _credential_auth_class(data.auth_type)
+    )
+    # A url change re-points the server at a potentially different upstream, so any discovered or
+    # trust-on-first-use OAuth endpoints/issuer belong to the old upstream and must re-discover.
+    url_changed = bool(url_provided and existing and existing.url != data_dict["url"])
+    old_issuer = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
+    issuer_changed = bool(
+        issuer_provided and old_issuer is not None and _blank_to_none(data_dict.get("issuer")) != old_issuer
     )
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:
         data_dict["credentials"] = None
 
-    if auth_type_changed:
-        data_dict.update({field: None for field in _AUTH_FLOW_SCOPED_FIELDS if field not in data_dict})
+    if auth_type_changed or url_changed or issuer_changed:
+        # Clear each auth-flow-scoped field that the caller either omitted (partial update) or
+        # resubmitted unchanged. The edit form re-sends every field, so a stale issuer/endpoint
+        # belonging to the old upstream would otherwise survive a url/auth_type change and win in the
+        # resolution merge; only a genuinely new submitted value is kept.
+        data_dict.update(
+            {
+                field: None
+                for field in _AUTH_FLOW_SCOPED_FIELDS
+                if field not in data_dict or data_dict[field] == getattr(existing, field, None)
+            }
+        )
 
     # An explicit column write that does not touch credentials must still migrate
     # the row's legacy blob copies: lift values for columns the caller left
@@ -712,11 +778,12 @@ async def update_mcp_server(
     # would wipe encrypted secrets that the UI cannot display back.
     if "credentials" in data_dict and data_dict["credentials"] is not None:
         if existing and existing.credentials:
-            # Only merge when auth_type is unchanged. Switching auth types
-            # (e.g. oauth2 → api_key) should replace credentials entirely
-            # to avoid stale secrets from the previous auth type lingering.
-            auth_type_unchanged = data.auth_type is None or data.auth_type == existing.auth_type
-            if auth_type_unchanged:
+            # Only merge when the credential CLASS is unchanged. A cross-class switch
+            # (e.g. oauth2 → api_key, or oauth2 → true_passthrough) replaces credentials
+            # entirely to avoid stale secrets from the previous class lingering; a switch
+            # within the client-forwarded class (true_passthrough ↔ oauth_delegate) keeps
+            # the same declared app and so must merge, not replace.
+            if not auth_type_changed:
                 existing_creds = (
                     json.loads(existing.credentials)
                     if isinstance(existing.credentials, str)
@@ -727,8 +794,9 @@ async def update_mcp_server(
                     if isinstance(data_dict["credentials"], str)
                     else dict(data_dict["credentials"])
                 )
-                # New values override existing; existing keys not in update are preserved
-                merged = {**existing_creds, **new_creds}
+                # New values override existing; existing keys not in update are preserved. A client
+                # rotation additionally drops the previous app's stale minted token keys.
+                merged = _drop_stale_minted_on_client_rotation({**existing_creds, **new_creds}, new_creds)
                 # Migrate-on-write for legacy rows: token-exchange settings the
                 # old blob shape carried move to their dedicated columns (unless
                 # the caller set the column this update, or the row already has
@@ -747,6 +815,14 @@ async def update_mcp_server(
     # Add audit fields
     data_dict["updated_by"] = touched_by
 
+    # prisma-python rejects a raw ``None`` for a ``Json?`` field ("value is required but not set"); the
+    # clear paths above use ``None`` as the merge-skip sentinel, so translate it here to ``Json(None)``,
+    # which writes SQL null and reads back as ``None``. Done at the edge so the merge guards stay simple.
+    if "credentials" in data_dict and data_dict["credentials"] is None:
+        from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
+
+        data_dict["credentials"] = Json(None)
+
     updated_mcp_server = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": data.server_id},
         data=data_dict,  # type: ignore
@@ -756,8 +832,56 @@ async def update_mcp_server(
     return updated_mcp_server
 
 
-async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, touched_by: str, new_master_key: str):
+async def get_mcp_server_oauth_client_credentials(prisma_client: PrismaClient, server_id: str) -> object | None:
+    """Read the persisted (encrypted) DCR OAuth client blob for a server from the
+    server-scoped store, or None. Config.yaml-declared servers have no
+    LiteLLM_MCPServerTable row, so their dynamically registered client lives here keyed
+    by server_id. The returned value is the raw credentials blob for
+    ``_get_persisted_dcr_credentials`` to parse."""
+    row = await MCPServerOAuthClientRepository(prisma_client).table.find_unique(where={"server_id": server_id})
+    if row is None:
+        return None
+    return row.credentials
+
+
+async def upsert_mcp_server_oauth_client_credentials(
+    prisma_client: PrismaClient, server_id: str, credentials: MCPCredentials
+) -> None:
+    """Persist a server's dynamically registered OAuth client (RFC 7591 DCR) in the
+    server-scoped store keyed by server_id, independent of any LiteLLM_MCPServerTable row.
+    client_id/client_secret are encrypted at rest with the same salt key used for the
+    server row's credentials blob, so ``_apply_persisted_dcr_credentials`` decrypts them the
+    same way regardless of which store a server's client came from."""
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    encrypted = encrypt_credentials(credentials=dict(credentials), encryption_key=_get_salt_key())
+    blob = safe_dumps(encrypted)
+    await MCPServerOAuthClientRepository(prisma_client).table.upsert(
+        where={"server_id": server_id},
+        data={
+            "create": {"server_id": server_id, "credentials": blob},
+            "update": {"credentials": blob},
+        },
+    )
+
+
+def _reencrypt_mcp_credentials_blob(credentials: object, new_master_key: str) -> str | None:
+    """Decrypt an at-rest MCP credentials blob with the current key and re-encrypt it under
+    new_master_key, returning the serialized blob or None when there is nothing to rotate. Shared by
+    every table that stores an encrypted MCP credentials blob so a master-key rotation covers them
+    uniformly and cannot silently skip one."""
+    if not credentials:
+        return None
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps  # noqa: PLC0415  # avoids circular import
+
+    creds_dict = json.loads(credentials) if isinstance(credentials, str) else dict(credentials)
+    decrypted = decrypt_credentials(credentials=cast(MCPCredentials, creds_dict))
+    encrypted = encrypt_credentials(credentials=decrypted, encryption_key=new_master_key)
+    return safe_dumps(encrypted)
+
+
+async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, touched_by: str, new_master_key: str):
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps  # noqa: PLC0415  # avoids circular import
 
     mcp_servers = await MCPServerRepository(prisma_client).table.find_many()
 
@@ -765,17 +889,9 @@ async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, 
     for mcp_server in mcp_servers:
         update_data: Dict[str, Any] = {}
 
-        credentials = mcp_server.credentials
-        if credentials:
-            # Decrypt with current key first, then re-encrypt with new key
-            decrypted_credentials = decrypt_credentials(
-                credentials=cast(MCPCredentials, dict(credentials)),
-            )
-            encrypted_credentials = encrypt_credentials(
-                credentials=decrypted_credentials,
-                encryption_key=new_master_key,
-            )
-            update_data["credentials"] = safe_dumps(encrypted_credentials)
+        rotated_credentials = _reencrypt_mcp_credentials_blob(mcp_server.credentials, new_master_key)
+        if rotated_credentials is not None:
+            update_data["credentials"] = rotated_credentials
 
         rotated_env_vars = _reencrypt_global_env_var_values(mcp_server.env_vars, new_master_key)
         if rotated_env_vars is not None:
@@ -790,9 +906,23 @@ async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, 
             data=update_data,
         )
         updated += 1
+
+    oauth_clients = await MCPServerOAuthClientRepository(prisma_client).table.find_many()
+    oauth_updated = 0
+    for oauth_client in oauth_clients:
+        rotated_credentials = _reencrypt_mcp_credentials_blob(oauth_client.credentials, new_master_key)
+        if rotated_credentials is None:
+            continue
+        await MCPServerOAuthClientRepository(prisma_client).table.update(
+            where={"server_id": oauth_client.server_id},
+            data={"credentials": rotated_credentials},
+        )
+        oauth_updated += 1
+
     verbose_proxy_logger.info(
-        "rotate_mcp_server_credentials_master_key: rotated %d MCP server row(s)",
+        "rotate_mcp_server_credentials_master_key: rotated %d MCP server row(s) and %d OAuth-client row(s)",
         updated,
+        oauth_updated,
     )
 
 
@@ -1141,6 +1271,7 @@ def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
         getattr(server, "spec_path", None),
         getattr(server, "auth_type", None),
         getattr(server, "oauth2_flow", None),
+        getattr(server, "issuer", None),
         getattr(server, "authorization_url", None),
         getattr(server, "token_url", None),
         getattr(server, "registration_url", None),

@@ -26,7 +26,9 @@ from litellm.utils import (
     _is_streaming_request,
     get_llm_provider,
     get_optional_params_image_gen,
+    get_prompt_cache_min_tokens,
     is_cached_message,
+    is_prompt_caching_valid_prompt,
 )
 
 # Adds the parent directory to the system path
@@ -615,6 +617,8 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
+        "input_cost_per_video_token",
+        "output_cost_per_video_token",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -732,6 +736,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image_token": {"type": "number"},
+                "input_cost_per_video_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
@@ -807,6 +812,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
@@ -838,6 +844,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_parallel_function_calling": {"type": "boolean"},
                 "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
+                "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -855,6 +862,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
@@ -1091,8 +1099,8 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
 def test_get_model_info_bedrock_regional_profile_without_entry_falls_back_to_base(local_model_cost_map):
     """A regional profile with no dedicated cost-map entry must still resolve to its
     region-stripped base entry."""
-    assert "jp.anthropic.claude-opus-4-8" not in litellm.model_cost
-    info = litellm.get_model_info(model="bedrock/jp.anthropic.claude-opus-4-8")
+    assert "apac.anthropic.claude-opus-4-8" not in litellm.model_cost
+    info = litellm.get_model_info(model="bedrock/apac.anthropic.claude-opus-4-8")
     assert info["key"] == "anthropic.claude-opus-4-8"
 
 
@@ -4309,7 +4317,7 @@ _FIREWORKS_MODELS = [
         "accounts/fireworks/models/glm-5p2",
         1.4e-06,
         4.4e-06,
-        2.6e-07,
+        1.4e-07,
         1048576,
         131072,
         False,
@@ -4709,3 +4717,149 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
+class TestVertexEmbeddingEncodingFormat:
+    """vertex_ai/gemini embeddings must accept encoding_format="float" — it's
+    the OpenAI SDK default and float lists are exactly what the vertex API
+    returns. Other values keep the unsupported-param behavior (drop with
+    drop_params, raise otherwise). Issue #33173."""
+
+    def test_encoding_format_float_is_accepted_and_dropped(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            custom_llm_provider="vertex_ai",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_float_accepted_for_gemini_provider(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            custom_llm_provider="gemini",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_base64_still_rejected_without_drop_params(self):
+        with pytest.raises(Exception) as excinfo:
+            litellm.utils.get_optional_params_embeddings(
+                model="gemini-embedding-001",
+                encoding_format="base64",
+                custom_llm_provider="vertex_ai",
+            )
+        assert "encoding_format" in str(excinfo.value)
+
+    def test_encoding_format_base64_dropped_with_drop_params(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="base64",
+            custom_llm_provider="vertex_ai",
+            drop_params=True,
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_dimensions_still_mapped(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            dimensions=256,
+            custom_llm_provider="vertex_ai",
+        )
+        assert optional_params.get("outputDimensionality") == 256
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/gemini-2.5-flash-image",
+        "vertex_ai/gemini-3-pro-image",
+        "vertex_ai/gemini-3-pro-image-preview",
+        "vertex_ai/gemini-3.1-flash-image",
+        "vertex_ai/gemini-3.1-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
+        "gemini/gemini-3-pro-image",
+        "gemini/gemini-3-pro-image-preview",
+        "gemini/gemini-3.1-flash-image",
+        "gemini/gemini-3.1-flash-image-preview",
+    ],
+)
+def test_gemini_image_models_do_not_support_reasoning(
+    model: str, local_model_cost_map: None
+) -> None:
+    assert model in litellm.model_cost, (
+        f"{model} is missing from the local model cost map. "
+        "Add its entry to litellm/model_prices_and_context_window_backup.json."
+    )
+    assert litellm.supports_reasoning(model) is False, (
+        f"{model} incorrectly classified as reasoning-capable. "
+        "Add 'supports_reasoning: false' to its model_cost entry."
+    )
+
+
+PROMPT_CACHE_MESSAGES = [{"role": "user", "content": "the quick brown fox jumps over the lazy dog " * 155}]
+
+
+@pytest.mark.parametrize(
+    "model, expected_min_tokens",
+    [
+        ("claude-opus-4-6", 4096),
+        ("claude-opus-4-7", 2048),
+        ("claude-opus-4-8", 1024),
+        ("claude-fable-5", 512),
+    ],
+)
+def test_get_prompt_cache_min_tokens_resolves_per_model(
+    model: str, expected_min_tokens: int, local_model_cost_map: None
+) -> None:
+    """The smallest cacheable prefix is a per-model property, read from the cost map's
+    prompt_cache_min_tokens. Anthropic's minimum spans 512..4096 across models and moves in both
+    directions across releases, so a single global constant is wrong for every model but one."""
+    assert get_prompt_cache_min_tokens(model=model) == expected_min_tokens
+
+
+def test_get_prompt_cache_min_tokens_differs_per_platform_for_same_model(local_model_cost_map: None) -> None:
+    """The same model can carry a different minimum per platform, so the threshold must come from
+    the platform's own cost-map entry rather than being derived from the model family name."""
+    assert get_prompt_cache_min_tokens(model="claude-fable-5") == 512
+    assert get_prompt_cache_min_tokens(model="anthropic.claude-fable-5") == 1024
+    assert get_prompt_cache_min_tokens(model="claude-fable-5") != get_prompt_cache_min_tokens(
+        model="anthropic.claude-fable-5"
+    )
+
+
+def test_get_prompt_cache_min_tokens_unmapped_model_falls_back_to_default(local_model_cost_map: None) -> None:
+    """get_model_info raises for a model it has no entry for. The resolver must swallow that and
+    fall back to the default, otherwise the raise reaches callers that would read it as
+    "not cacheable" -- turning an unknown model into a silently uncacheable one."""
+    assert get_prompt_cache_min_tokens(model="totally-unknown-model-xyz") == 1024
+
+
+def test_is_prompt_caching_valid_prompt_uses_per_model_minimum(local_model_cost_map: None) -> None:
+    """Regression: a prompt between two models' minimums is cacheable on one and not the other.
+    A 1403-token prompt clears claude-opus-4-8's 1024 minimum but not claude-opus-4-6's 4096, so
+    the flat-1024 check reported claude-opus-4-6 as cacheable and the cache write was rejected
+    upstream. Both assertions must live together: is_prompt_caching_valid_prompt returns False on
+    any internal error, so the True case is what proves the False case isn't a swallowed exception."""
+    token_count = litellm.token_counter(
+        model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES, use_default_image_token_count=True
+    )
+    assert 1024 <= token_count < 4096, (
+        f"prompt drifted to {token_count} tokens; it must sit between claude-opus-4-8's 1024 minimum "
+        "and claude-opus-4-6's 4096 minimum for this test to distinguish them"
+    )
+
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES) is False
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES) is True
+
+
+def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model(local_model_cost_map: None) -> None:
+    """An explicit min_token_count wins over the model-resolved value in both directions. Callers
+    holding only a model-group alias resolve the threshold themselves and pass it, because an alias
+    resolves to nothing here and would silently fall back to the default."""
+    assert (
+        is_prompt_caching_valid_prompt(model="claude-opus-4-6", messages=PROMPT_CACHE_MESSAGES, min_token_count=512)
+        is True
+    )
+    assert (
+        is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
+        is False
+    )

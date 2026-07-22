@@ -36,6 +36,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
 from ..utils import is_reasoning_auto_summary_enabled
@@ -236,7 +237,9 @@ async def anthropic_messages(
         AnthropicCacheControlHook,
     )
 
-    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+    )
 
     original_stream = stream or kwargs.get("_websearch_interception_converted_stream", False)
 
@@ -425,7 +428,9 @@ def anthropic_messages_handler(
         AnthropicCacheControlHook,
     )
 
-    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+    )
 
     metadata = validate_anthropic_api_metadata(metadata)
 
@@ -463,6 +468,9 @@ def anthropic_messages_handler(
             "model": original_model,
             "custom_llm_provider": custom_llm_provider,
         }
+        litellm_logging_obj.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = (
+            is_async
+        )
 
         # Check if stream was converted for WebSearch interception
         # This is set in the async wrapper above when stream=True is converted to stream=False
@@ -476,6 +484,41 @@ def anthropic_messages_handler(
             max_tokens=max_tokens,
             mock_response=litellm_params.mock_response,
         )
+
+    # Expand litellm_proxy MCP references through the MCP gateway before dispatch, so every
+    # downstream path (native passthrough and both bridges) gets real tools rather than a
+    # reference the provider cannot resolve. Popped from kwargs so it never reaches the provider.
+    skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
+    if not skip_mcp_handler and tools:
+        from litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler import (
+            anthropic_messages_with_mcp,
+        )
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+            return anthropic_messages_with_mcp(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                container=container,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
 
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
 
