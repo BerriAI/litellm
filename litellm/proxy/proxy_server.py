@@ -10796,8 +10796,7 @@ async def _try_provider_token_count(
                 code=status_code,
             )
         verbose_proxy_logger.warning(
-            f"Provider token counting failed ({status_code}): {error_message}. "
-            "Falling back to local tokenizer."
+            f"Provider token counting failed ({status_code}): {error_message}. Falling back to local tokenizer."
         )
         return None
     if result is not None and result.error is True:
