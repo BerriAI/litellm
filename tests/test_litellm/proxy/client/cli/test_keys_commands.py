@@ -126,21 +126,15 @@ def test_async_keys_generate_error_handling(mock_keys_client, cli_runner):
 def test_async_keys_delete_error_handling(mock_keys_client, cli_runner):
     import requests
 
-    # Mock a connection error that would normally happen in CI
+    # A connection error must surface as a friendly message, not a raw traceback.
     mock_keys_client.return_value.delete.side_effect = (
         requests.exceptions.ConnectionError("Connection error")
     )
     result = cli_runner.invoke(cli, ["keys", "delete", "--keys", "abc123"])
     assert result.exit_code != 0
-    # Check that the exception is properly propagated
-    assert result.exception is not None
-    # The ConnectionError should propagate since it's not caught by HTTPError handler
-    # Check for connection-related keywords that appear in both mocked and real errors
-    error_str = str(result.exception).lower()
-    assert any(
-        keyword in error_str
-        for keyword in ["connection", "connect", "refused", "error"]
-    )
+    assert "Traceback" not in result.output
+    assert "Could not connect to the LiteLLM proxy" in result.output
+    assert not isinstance(result.exception, requests.exceptions.ConnectionError)
 
 
 def test_async_keys_delete_http_error_handling(mock_keys_client, cli_runner):
