@@ -563,3 +563,98 @@ def test_build_inspection_messages_custom_tool_call_output():
     }
     msgs = build_inspection_messages(data)
     assert any("custom-tool-leak" in m["content"] for m in msgs)
+
+
+def test_iter_message_text_walks_reasoning_summary_text():
+    """Reasoning items with summary_text parts should yield their text."""
+    data = {
+        "input": [
+            {"type": "reasoning", "summary": [
+                {"type": "summary_text", "text": "secret-in-cot"},
+            ]},
+        ]
+    }
+    from litellm.proxy.guardrails._content_utils import iter_message_text
+    texts = list(iter_message_text(data))
+    assert "secret-in-cot" in texts
+
+
+def test_iter_message_text_reasoning_part_inside_message_content():
+    """A reasoning item nested inside a message's content list is walked
+    directly by ``_iter_text_parts_in_content``: summary_text parts and bare
+    strings in the summary yield their text, everything else is skipped."""
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "cot-secret"},
+                            "bare-summary-string",
+                            {"type": "image_url", "image_url": {"url": "..."}},
+                            42,
+                        ],
+                    },
+                ],
+            },
+        ]
+    }
+    assert list(iter_message_text(data)) == ["cot-secret", "bare-summary-string"]
+
+
+def test_walk_user_text_redacts_reasoning_summary_text():
+    """walk_user_text should rewrite text inside reasoning.summary."""
+    data = {
+        "input": [
+            {"type": "reasoning", "summary": [
+                {"type": "summary_text", "text": "SSN-123"},
+            ]},
+        ]
+    }
+    count = walk_user_text(data, lambda t: t.replace("SSN-123", "[REDACTED]"))
+    assert count >= 1
+    assert data["input"][0]["summary"][0]["text"] == "[REDACTED]"
+
+
+def test_walk_user_text_redacts_reasoning_part_inside_message_content():
+    """Greptile P1: a reasoning item nested inside ``messages[i]["content"]``
+    was detected by ``iter_message_text`` but copied through unchanged by
+    ``walk_user_text``; read and write coverage must agree."""
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "SSN-123 in cot"},
+                            "bare SSN-123",
+                            {"type": "image_url", "image_url": {"url": "..."}},
+                        ],
+                    },
+                ],
+            },
+        ]
+    }
+    count = walk_user_text(data, lambda t: t.replace("SSN-123", "[REDACTED]"))
+    assert count == 2
+    summary = data["messages"][0]["content"][0]["summary"]
+    assert summary[0] == {"type": "summary_text", "text": "[REDACTED] in cot"}
+    assert summary[1] == "bare [REDACTED]"
+    assert summary[2] == {"type": "image_url", "image_url": {"url": "..."}}
+
+
+def test_build_inspection_messages_reasoning_summary():
+    """build_inspection_messages should include reasoning summary text."""
+    data = {
+        "input": [
+            {"type": "reasoning", "summary": [
+                {"type": "summary_text", "text": "chain-of-thought leak"},
+            ]},
+        ]
+    }
+    msgs = build_inspection_messages(data)
+    assert any("chain-of-thought leak" in m["content"] for m in msgs)
