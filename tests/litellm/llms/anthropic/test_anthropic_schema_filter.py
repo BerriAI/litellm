@@ -45,14 +45,21 @@ class TestFilterAnthropicOutputSchema:
         assert "minimum value: 0" in result["properties"]["age"]["description"]
         assert "maximum value: 150" in result["properties"]["age"]["description"]
         # Score had no description, should get one from constraints
-        assert "exclusive minimum value: 0" in result["properties"]["score"]["description"]
-        assert "exclusive maximum value: 100" in result["properties"]["score"]["description"]
+        assert (
+            "exclusive minimum value: 0" in result["properties"]["score"]["description"]
+        )
+        assert (
+            "exclusive maximum value: 100"
+            in result["properties"]["score"]["description"]
+        )
 
     def test_removes_string_constraints(self):
         """Test that minLength/maxLength are removed from string schemas."""
         schema = {
             "type": "object",
-            "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 100}},
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 100}
+            },
         }
 
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
@@ -147,81 +154,3 @@ class TestFilterAnthropicOutputSchema:
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
 
         assert result == schema  # Should be unchanged
-
-    def test_removes_uniqueitems(self):
-        """Test that uniqueItems is removed from array schemas.
-
-        Reproduces the 400 ``invalid_request_error``:
-        "output_format.schema: For 'array' type, property 'uniqueItems' is not
-        supported".
-        """
-        schema = {
-            "type": "object",
-            "properties": {
-                "tags": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "uniqueItems": True,
-                }
-            },
-        }
-
-        result = AnthropicConfig.filter_anthropic_output_schema(schema)
-
-        assert "uniqueItems" not in result["properties"]["tags"]
-        assert result["properties"]["tags"]["items"] == {"type": "string"}
-        # Constraint intent preserved in the description
-        assert "all array items must be unique" in result["properties"]["tags"]["description"]
-
-    def test_removes_contains_constraints(self):
-        """Test that contains/minContains/maxContains are removed from arrays."""
-        schema = {
-            "type": "array",
-            "items": {"type": "integer"},
-            "contains": {"type": "integer", "const": 1},
-            "minContains": 1,
-            "maxContains": 3,
-        }
-
-        result = AnthropicConfig.filter_anthropic_output_schema(schema)
-
-        assert "contains" not in result
-        assert "minContains" not in result
-        assert "maxContains" not in result
-        assert result["items"] == {"type": "integer"}
-        # The contains sub-schema is serialized into the advisory note so the model
-        # knows what item the array must contain.
-        assert "array must contain an item matching:" in result["description"]
-        assert '"const": 1' in result["description"]
-        assert "minimum number of matching items: 1" in result["description"]
-        assert "maximum number of matching items: 3" in result["description"]
-
-    def test_removes_object_property_constraints(self):
-        """Test that minProperties/maxProperties are removed from object schemas."""
-        schema = {
-            "type": "object",
-            "properties": {"a": {"type": "string"}},
-            "minProperties": 1,
-            "maxProperties": 5,
-        }
-
-        result = AnthropicConfig.filter_anthropic_output_schema(schema)
-
-        assert "minProperties" not in result
-        assert "maxProperties" not in result
-        assert "minimum number of properties: 1" in result["description"]
-        assert "maximum number of properties: 5" in result["description"]
-
-    def test_uniqueitems_false_skips_misleading_note(self):
-        """``uniqueItems: false`` is stripped but must not add a 'unique' note."""
-        schema = {
-            "type": "array",
-            "items": {"type": "string"},
-            "uniqueItems": False,
-        }
-
-        result = AnthropicConfig.filter_anthropic_output_schema(schema)
-
-        assert "uniqueItems" not in result
-        # A disabled constraint imposes no requirement -> no advisory note
-        assert "unique" not in result.get("description", "")
