@@ -10784,12 +10784,18 @@ async def _try_provider_token_count(
     except httpx.HTTPStatusError as e:
         error_message = getattr(e, "message", None) or str(e)
         status_code = getattr(e, "status_code", None) or e.response.status_code
-        raise ProxyException(
-            message=error_message,
-            type="token_counting_error",
-            param="model",
-            code=status_code,
+        if litellm.disable_token_counter is True:
+            raise ProxyException(
+                message=error_message,
+                type="token_counting_error",
+                param="model",
+                code=status_code,
+            )
+        verbose_proxy_logger.warning(
+            f"Provider token counting failed ({status_code}): {error_message}. "
+            "Falling back to local tokenizer."
         )
+        return None
     if result is not None and result.error is True:
         if litellm.disable_token_counter is True:
             raise ProxyException(
