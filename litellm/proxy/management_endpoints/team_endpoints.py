@@ -1949,34 +1949,15 @@ async def update_team(
         raise handle_exception_on_proxy(e)
 
 
-def _patch_team_request_schema() -> dict:
-    """OpenAPI schema for the PATCH /team/{team_id} body.
-
-    The handler reads the raw body rather than declaring it as a typed parameter, so
-    that absent-vs-null stays distinguishable for the RFC 7386 metadata merge and the
-    400 contract for a non-object body is preserved. FastAPI therefore cannot infer
-    the request body, and it is declared here instead. Nested models are pointed at
-    the components the other team routes already emit, so only the top-level schema
-    is inlined.
-    """
-    schema = PatchTeamRequest.model_json_schema(ref_template="#/components/schemas/{model}")
-    return {key: value for key, value in schema.items() if key != "$defs"}
-
-
 @router.patch(
     "/team/{team_id}",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_TeamTable,
-    openapi_extra={
-        "requestBody": {
-            "required": True,
-            "content": {"application/json": {"schema": _patch_team_request_schema()}},
-        }
-    },
 )
 async def patch_team(
     team_id: str,
+    data: PatchTeamRequest,
     http_request: Request,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     litellm_changed_by: Annotated[
@@ -1989,11 +1970,12 @@ async def patch_team(
     """
     Partially update a team using RFC 7386 JSON Merge Patch semantics.
 
-    `team_id` is taken from the path. `metadata` is merged with the team's stored
-    metadata rather than replacing it: an omitted key is preserved, `key: null`
-    deletes it, and any other value overwrites (recursing into nested objects).
-    Every other field behaves exactly like `POST /team/update` (omitted preserves,
-    a value overwrites). Returns the full updated team.
+    `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+    matches. `metadata` is merged with the team's stored metadata rather than replacing
+    it: an omitted key is preserved, `key: null` deletes it, and any other value
+    overwrites (recursing into nested objects). Every other field behaves exactly like
+    `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+    updated team.
 
     ```
     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5' \
@@ -2013,21 +1995,15 @@ async def patch_team(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        try:
-            body = await http_request.json()
-        except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
-
-        body_team_id = body.pop("team_id", None)
-        if body_team_id is not None and body_team_id != team_id:
+        if data.team_id is not None and data.team_id != team_id:
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"team_id in body ({body_team_id}) does not match team_id in path ({team_id})"},
+                detail={"error": f"team_id in body ({data.team_id}) does not match team_id in path ({team_id})"},
             )
 
-        if "metadata" in body:
+        patch_fields = data.model_dump(exclude_unset=True, exclude={"team_id"})
+
+        if "metadata" in patch_fields:
             existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if existing_team_row is None:
                 raise HTTPException(
@@ -2035,13 +2011,9 @@ async def patch_team(
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            body["metadata"] = apply_json_merge_patch(existing_metadata, body["metadata"])
+            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
 
-        patch_request = PatchTeamRequest.model_validate(body)
-        update_request = UpdateTeamRequest(
-            team_id=team_id,
-            **patch_request.model_dump(exclude_unset=True, exclude={"team_id"}),
-        )
+        update_request = UpdateTeamRequest(team_id=team_id, **patch_fields)
 
         result = await update_team(
             data=update_request,

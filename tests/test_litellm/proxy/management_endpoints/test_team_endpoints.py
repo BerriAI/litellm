@@ -9733,7 +9733,6 @@ async def _drive_team_write(
     raw_body=None,
     user=None,
     find_returns_none=False,
-    json_side_effect=None,
 ):
     """Drive POST ``update_team`` or PATCH ``patch_team`` against a mocked team.
 
@@ -9748,6 +9747,7 @@ async def _drive_team_write(
     from litellm.proxy._types import (
         LiteLLM_TeamTable,
         LitellmUserRoles,
+        PatchTeamRequest,
         UpdateTeamRequest,
         UserAPIKeyAuth,
     )
@@ -9793,14 +9793,10 @@ async def _drive_team_write(
                 litellm_changed_by=None,
             )
         else:
-            if json_side_effect is not None:
-                req.json = AsyncMock(side_effect=json_side_effect)
-            else:
-                req.json = AsyncMock(
-                    return_value=raw_body if raw_body is not None else dict(payload or {})
-                )
+            body = raw_body if raw_body is not None else dict(payload or {})
             result = await patch_team(
                 team_id=_PATCH_TEAM_ID,
+                data=PatchTeamRequest.model_validate(body),
                 http_request=req,
                 user_api_key_dict=auth,
                 litellm_changed_by=None,
@@ -9948,25 +9944,36 @@ async def test_patch_strips_system_managed_metadata_key_like_post():
     assert patch_meta == {"cost_center": "9999"}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("raw_body", [["not", "an", "object"], "a-string", 42, True])
-async def test_patch_rejects_non_object_body(raw_body):
-    from litellm.proxy._types import ProxyException
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"json": ["not", "an", "object"]},
+        {"json": "a-string"},
+        {"json": 42},
+        {"content": b"{not json"},
+        {"json": {"tpm_limit": "not-an-int"}},
+    ],
+    ids=["list", "string", "number", "malformed-json", "wrong-field-type"],
+)
+def test_patch_rejects_a_malformed_body_with_422(kwargs):
+    """The body is a declared parameter, so FastAPI rejects a malformed one before the
+    handler runs. This is the same 422 POST /team/update already returns; the route
+    previously answered 400 here and 500 for a wrongly typed field, reporting a caller
+    mistake as a server fault."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
-    with pytest.raises(ProxyException) as exc:
-        await _drive_team_write("patch", existing_metadata={"a": 1}, raw_body=raw_body)
-    assert exc.value.code == "400" or exc.value.code == 400
+    from litellm.proxy._types import PatchTeamRequest
 
+    app = FastAPI()
 
-@pytest.mark.asyncio
-async def test_patch_rejects_invalid_json_body():
-    from litellm.proxy._types import ProxyException
+    @app.patch("/team/{team_id}")
+    async def _route(team_id: str, data: PatchTeamRequest):  # pragma: no cover - schema only
+        return {}
 
-    with pytest.raises(ProxyException) as exc:
-        await _drive_team_write(
-            "patch", existing_metadata={"a": 1}, json_side_effect=ValueError("no body")
-        )
-    assert exc.value.code == "400" or exc.value.code == 400
+    response = TestClient(app).patch("/team/abc", **kwargs)
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -10113,15 +10120,6 @@ async def test_patch_ignores_unknown_body_keys():
     assert "not_a_team_field" not in written
 
 
-@pytest.mark.asyncio
-async def test_patch_rejects_a_wrongly_typed_field():
-    """Validation still happens; a bad scalar is an error rather than a silent write."""
-    from litellm.proxy._types import ProxyException
-
-    with pytest.raises(ProxyException):
-        await _drive_team_write("patch", raw_body={"tpm_limit": "not-an-int"})
-
-
 def test_patch_team_request_makes_team_id_optional():
     """PATCH takes team_id from the path, so the body model must not require it,
     while still inheriting every UpdateTeamRequest field."""
@@ -10135,19 +10133,13 @@ def test_patch_team_request_makes_team_id_optional():
 
 
 def test_patch_team_route_publishes_its_request_body_schema():
-    """The dashboard's generated client types this call off the OpenAPI spec. The
-    handler reads the raw body, so FastAPI cannot infer it and the schema is declared
-    on the route; if that declaration is dropped the body silently becomes untyped."""
+    """The dashboard's generated client types this call off the OpenAPI spec, which
+    FastAPI can only emit because the body is a declared parameter."""
     from litellm.proxy.proxy_server import app
 
     operation = app.openapi()["paths"]["/team/{team_id}"]["patch"]
     schema = operation["requestBody"]["content"]["application/json"]["schema"]
 
-    assert "team_id" not in schema.get("required", [])
-    assert "tpm_limit" in schema["properties"]
-    assert "metadata" in schema["properties"]
-    # nested models point at components rather than being inlined as dangling $defs
-    assert "$defs" not in schema
-    assert schema["properties"]["object_permission"]["anyOf"][0]["$ref"].startswith(
-        "#/components/schemas/"
-    )
+    assert schema == {"$ref": "#/components/schemas/PatchTeamRequest"}
+    properties = app.openapi()["components"]["schemas"]["PatchTeamRequest"]["properties"]
+    assert "tpm_limit" in properties and "metadata" in properties
