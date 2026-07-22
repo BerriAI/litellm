@@ -51,10 +51,8 @@ def _model_is_servable(proxy: ProxyClient, model_name: str) -> bool:
     return isinstance(result, Success) and any(entry.id == model_name for entry in result.data.data)
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _ensure_load_model(  # pyright: ignore[reportUnusedFunction]  # pytest autouse session fixture, wired by name
-    client: LoadClient,
-) -> Iterator[None]:
+@pytest.fixture(scope="session")
+def ensure_load_model(client: LoadClient) -> Iterator[None]:
     proxy = client.proxy
     if _model_is_servable(proxy, LOAD_MODEL):
         yield
@@ -78,7 +76,9 @@ def _ensure_load_model(  # pyright: ignore[reportUnusedFunction]  # pytest autou
 
 
 @pytest.fixture
-def load_key(resources: ResourceManager, client: LoadClient) -> str:
+def load_key(
+    resources: ResourceManager, client: LoadClient, ensure_load_model: None
+) -> str:
     key = client.proxy.generate_key(KeyGenerateBody(models=[LOAD_MODEL], user_id="e2e-load"))
     resources.defer(lambda: client.proxy.delete_key(key))
     return key
