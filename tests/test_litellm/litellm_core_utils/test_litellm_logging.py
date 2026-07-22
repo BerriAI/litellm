@@ -32,6 +32,29 @@ def logging_obj():
     )
 
 
+@pytest.mark.parametrize(
+    ("metadata", "expected_environment"),
+    [
+        (
+            {"trace_environment": "staging", "environment": "development"},
+            "staging",
+        ),
+        ({"environment": "development"}, "development"),
+        ({"requester_metadata": {"trace_environment": "production"}}, "production"),
+    ],
+)
+def test_get_langfuse_dynamic_params_uses_request_environment(
+    logging_obj,
+    metadata,
+    expected_environment,
+):
+    logging_obj.model_call_details["litellm_params"]["metadata"] = metadata
+
+    params = logging_obj._get_langfuse_dynamic_params()
+
+    assert params["langfuse_environment"] == expected_environment
+
+
 def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
     assert logging_obj.get_combined_callback_list(
         dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],

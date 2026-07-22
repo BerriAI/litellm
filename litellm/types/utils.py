@@ -3015,6 +3015,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret: Optional[str]
     langfuse_secret_key: Optional[str]
     langfuse_host: Optional[str]
+    langfuse_environment: Optional[str]
 
     # Langfuse prompt version
     langfuse_prompt_version: Optional[int]
