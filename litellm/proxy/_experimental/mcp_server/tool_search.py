@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -12,16 +13,32 @@ if TYPE_CHECKING:
 
 MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
 MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
+DEFAULT_MCP_TOOL_SEARCH_TOP_K: int = 5
 
 
-def coerce_top_k(value: Any, default: int = 5) -> int:
+def coerce_top_k(value: Any, default: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
 
 
-def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
+def get_mcp_tool_search_default_top_k(
+    litellm_settings: Optional[Mapping[str, object]],
+) -> int:
+    if litellm_settings is None:
+        return DEFAULT_MCP_TOOL_SEARCH_TOP_K
+    return coerce_top_k(
+        litellm_settings.get("mcp_tool_search_default_top_k"),
+        default=DEFAULT_MCP_TOOL_SEARCH_TOP_K,
+    )
+
+
+def search_tools(
+    query: str,
+    tools: list[dict[str, Any]],
+    top_k: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K,
+) -> list[dict[str, Any]]:
     if not query:
         return []
     tokens = query.lower().split()
@@ -34,7 +51,9 @@ def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> lis
     return [tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]]
 
 
-def get_virtual_tool_definitions() -> list[dict[str, Any]]:
+def get_virtual_tool_definitions(
+    default_top_k: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K,
+) -> list[dict[str, Any]]:
     return [
         {
             "name": MCP_TOOL_SEARCH_TOOL_NAME,
@@ -49,7 +68,7 @@ def get_virtual_tool_definitions() -> list[dict[str, Any]]:
                     "top_k": {
                         "type": "integer",
                         "description": "Maximum number of results to return.",
-                        "default": 5,
+                        "default": default_top_k,
                     },
                 },
                 "required": ["query"],

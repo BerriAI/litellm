@@ -148,6 +148,7 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.tool_search import (
             MCP_TOOL_SEARCH_TOOL_NAME,
             coerce_top_k,
+            get_mcp_tool_search_default_top_k,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
         )
@@ -168,9 +169,13 @@ if MCP_AVAILABLE:
         ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
         virtual_oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
         if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
+            default_top_k = get_mcp_tool_search_default_top_k(proxy_config.get_config_state().get("litellm_settings"))
             return await handle_mcp_tool_search(
                 query=tool_arguments.get("query", ""),
-                top_k=coerce_top_k(tool_arguments.get("top_k", 5)),
+                top_k=coerce_top_k(
+                    tool_arguments.get("top_k"),
+                    default=default_top_k,
+                ),
                 user_api_key_dict=user_api_key_dict,
                 client_ip=rest_client_ip,
                 mcp_auth_header=virtual_mcp_auth_header,
@@ -750,11 +755,16 @@ if MCP_AVAILABLE:
                 )
             ):
                 from litellm.proxy._experimental.mcp_server.tool_search import (
+                    get_mcp_tool_search_default_top_k,
                     get_virtual_tool_definitions,
                 )
+                from litellm.proxy.proxy_server import proxy_config
 
+                default_top_k = get_mcp_tool_search_default_top_k(
+                    proxy_config.get_config_state().get("litellm_settings")
+                )
                 return {
-                    "tools": get_virtual_tool_definitions(),
+                    "tools": get_virtual_tool_definitions(default_top_k=default_top_k),
                     "error": None,
                     "message": "Successfully retrieved tools",
                 }
