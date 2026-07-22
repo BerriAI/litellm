@@ -5,11 +5,14 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Form, Input, Select, Switch, Tooltip } from "antd";
+import { Collapse, Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import RouterSettingsAccordion, {
+  RouterSettingsAccordionValue,
+} from "../common_components/RouterSettingsAccordion";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
@@ -121,6 +124,14 @@ export function KeyEditView({
   );
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
+  );
+  // Router settings (fallbacks, retries, etc.) — local edit state only.
+  // Initialized once from keyData; the editor remounts on each open
+  // (key_info_view conditionally renders KeyEditView), so no sync effect is needed.
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(
+    keyData.router_settings && Object.keys(keyData.router_settings).length > 0
+      ? { router_settings: keyData.router_settings as RouterSettingsAccordionValue["router_settings"] }
+      : null,
   );
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
@@ -345,6 +356,14 @@ export function KeyEditView({
         values.budget_fallbacks = budgetFallbacks;
       } else if (hadExistingFallbacks) {
         values.budget_fallbacks = {};
+      }
+
+      // Include router_settings (fallbacks, retries, etc.) when set; send {} to clear.
+      if (routerSettings?.router_settings) {
+        const hasValues = Object.values(routerSettings.router_settings).some(
+          (v) => v !== null && v !== undefined && v !== "",
+        );
+        values.router_settings = hasValues ? routerSettings.router_settings : {};
       }
 
       await onSubmit(values);
@@ -848,6 +867,26 @@ export function KeyEditView({
       <Form.Item label="Metadata" name="metadata">
         <Input.TextArea rows={10} />
       </Form.Item>
+
+      {accessToken && (
+        <Collapse
+          className="mb-4"
+          items={[
+            {
+              key: "router-settings",
+              label: <b>Router Settings</b>,
+              forceRender: true,
+              children: (
+                <RouterSettingsAccordion
+                  accessToken={accessToken}
+                  value={routerSettings || undefined}
+                  onChange={setRouterSettings}
+                />
+              ),
+            },
+          ]}
+        />
+      )}
 
       {/* Auto-Rotation Settings */}
       <div className="mb-4">
