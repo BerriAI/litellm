@@ -105,6 +105,7 @@ class AzureOpenAIConfig(BaseConfig):
             "modalities",
             "audio",
             "web_search_options",
+            "prompt_cache_breakpoint",
             "prompt_cache_key",
             "store",
         ]
