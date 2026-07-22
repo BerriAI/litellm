@@ -1241,6 +1241,65 @@ async def test_find_team_with_model_access_model_group(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatch):
+    """Regression for #31189: a single-team JWT that grants the requested model
+    through an access group must resolve on /v1/messages without an explicit
+    x-litellm-team-id header. /v1/messages lives in `anthropic_routes`, so when a
+    team has no `team_allowed_routes` configured the default allowlist must cover
+    it just like /chat/completions and /v1/responses; otherwise the internal route
+    check fails and surfaces a misleading "No team has access to the requested
+    model" 403."""
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-6",
+                "litellm_params": {"model": "claude-sonnet-4-6"},
+                "model_info": {"access_groups": ["coding_only_models"]},
+            }
+        ]
+    )
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    team = LiteLLM_TeamTable(team_id="coding-team", models=["coding_only_models"])
+
+    async def mock_get_team_object(*args, **kwargs):  # type: ignore
+        return team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"coding-team"},
+        requested_model="claude-sonnet-4-6",
+        route="/v1/messages",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert team_id == "coding-team"
+    assert team_obj.team_id == "coding-team"
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_returns_team_membership_object():
     """
     Test that auth_builder returns the team_membership_object when user is a member of a team.
