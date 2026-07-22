@@ -2371,6 +2371,28 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
                         value=system_instructions,
                     )
+                elif isinstance(system_instructions, list) and all(
+                    isinstance(b, dict) and "role" not in b for b in system_instructions
+                ):
+                    # Anthropic Messages-style: `system` is a list of content
+                    # blocks like [{"type": "text", "text": "..."}] — these
+                    # are NOT messages and have no `role`. Treating each as
+                    # a message drops the text into msg.get("content","") =
+                    # "" and emits empty content under role=user (#29756).
+                    # Hoist them all under a single system message.
+                    parts: List[Dict[str, Any]] = []
+                    for block in system_instructions:
+                        text = block.get("text") or block.get("content") or ""
+                        if not text:
+                            continue
+                        parts.append({"type": "text", "content": text})
+                    if parts:
+                        wrapped = [{"role": "system", "parts": parts}]
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
+                            value=safe_dumps(wrapped),
+                        )
                 else:
                     transformed_system_instructions = self._transform_messages_to_otel_semantic_conventions(
                         system_instructions
@@ -2540,10 +2562,20 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if isinstance(content, str):
                 parts.append({"type": "text", "content": content})
             elif isinstance(content, list):
-                # Handle multi-modal content if necessary
+                # Handle multi-modal content if necessary.
+                # Anthropic content blocks carry the text under "text" but
+                # the OTel GenAI semconv 1.38 part shape uses "content" — keep
+                # the part-key consistent with the string-content path so
+                # downstream consumers don't have to look up two keys for the
+                # same field (#29756).
                 for part in content:
                     if isinstance(part, dict):
-                        parts.append(part)
+                        if "text" in part and "content" not in part:
+                            normalized = {**part, "content": part["text"]}
+                            normalized.pop("text", None)
+                            parts.append(normalized)
+                        else:
+                            parts.append(part)
                     else:
                         parts.append({"type": "text", "content": str(part)})
 
