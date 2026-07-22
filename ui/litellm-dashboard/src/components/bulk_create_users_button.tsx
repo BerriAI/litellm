@@ -38,6 +38,10 @@ interface UserData {
   invitation_link?: string;
 }
 
+type BulkCreateUserPayload = Partial<UserData> & {
+  auto_create_key: boolean;
+};
+
 // Define an interface for the UI settings
 interface UISettings {
   PROXY_BASE_URL: string | null;
@@ -302,9 +306,10 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
       const user = updatedData[index];
       try {
         // Create a clean user object with only non-empty values
-        const cleanUser: Partial<UserData> = {
+        const cleanUser: BulkCreateUserPayload = {
           user_email: user.user_email,
           user_role: user.user_role,
+          auto_create_key: true,
         };
 
         // Only add optional fields if they have values
@@ -321,14 +326,16 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
         // Only add models if provided and non-empty
         if (user.models && typeof user.models === "string" && user.models.trim() !== "") {
-          cleanUser.models = user.models
+          const models = user.models
             .split(",")
             .map((model) => model.trim())
             .filter(Boolean);
-          // Only include models if there's at least one valid model
-          if (cleanUser.models.length === 0) {
-            delete cleanUser.models;
+          if (models.length > 0) {
+            cleanUser.models = models;
           }
+        }
+        if ((!cleanUser.models || cleanUser.models.length === 0) && user.user_role !== "proxy_admin") {
+          cleanUser.models = ["no-default-models"];
         }
 
         // Only add max_budget if it's a valid number
@@ -351,10 +358,12 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
         const response = await userCreateCall(accessToken, null, cleanUser);
 
-        // Check if response has key or user_id, indicating success
-        if (response && (response.key || response.user_id)) {
+        const user_id = response?.data?.user_id || response?.user_id;
+        const virtualKey = response?.key;
+
+        // Check if response has key and user_id, indicating success
+        if (response && user_id && virtualKey) {
           anySuccessful = true;
-          const user_id = response.data?.user_id || response.user_id;
 
           // Create invitation link for the user
           try {
@@ -369,7 +378,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     ? {
                         ...u,
                         status: "success",
-                        key: response.key || response.user_id,
+                        key: virtualKey,
                         invitation_link: invitationUrl,
                       }
                     : u,
@@ -385,7 +394,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     ? {
                         ...u,
                         status: "success",
-                        key: response.key || response.user_id,
+                        key: virtualKey,
                         invitation_link: invitationUrl,
                       }
                     : u,
@@ -400,7 +409,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   ? {
                       ...u,
                       status: "success",
-                      key: response.key || response.user_id,
+                      key: virtualKey,
                       error: "User created but failed to generate invitation link",
                     }
                   : u,
@@ -408,7 +417,8 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             );
           }
         } else {
-          const errorMessage = response?.error || "Failed to create user";
+          const errorMessage =
+            response?.error || (user_id ? "User created but no virtual key was returned" : "Failed to create user");
           setParsedData((current) =>
             current.map((u, i) => (i === index ? { ...u, status: "failed", error: errorMessage } : u)),
           );
@@ -440,7 +450,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
       error: user.error || "",
     }));
 
-    const csv = Papa.unparse(results);
+    const csv = Papa.unparse(results, { escapeFormulae: true });
     const blob = new Blob([csv], { type: "text/csv" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
