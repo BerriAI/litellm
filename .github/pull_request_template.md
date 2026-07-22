@@ -1,3 +1,8 @@
+## TLDR
+
+<!-- In a few plain-language sentences, state 1) the problem being solved and 2) how this PR solves it
+     This section must be extremely human parsable, comprehensible, and readable: its target audience is humans, not AI agents, so skip jargon and implementation minutiae and write it so a reviewer understands the PR from this section alone -->
+
 ## Relevant issues
 
 <!-- e.g., "Fixes #000" -->
