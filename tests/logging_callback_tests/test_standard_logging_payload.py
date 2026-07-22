@@ -348,8 +348,6 @@ def test_get_model_cost_information_custom_pricing_uses_base_model():
 
 def test_standard_logging_payload_uses_deployment_when_no_base_model():
     """metadata["deployment"] is used for cost-map lookup when base_model is not set."""
-    from datetime import datetime
-
     from litellm.litellm_core_utils.litellm_logging import (
         Logging,
         get_standard_logging_object_payload,
@@ -401,6 +399,86 @@ def test_standard_logging_payload_uses_deployment_when_no_base_model():
     assert payload is not None
     assert payload["model_map_information"]["model_map_value"] is not None
     assert payload["model_map_information"]["model_map_key"] != "invoke_test_claude"
+
+
+def test_standard_logging_model_map_uses_router_model_info_for_custom_pricing():
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    model_id = "tiered-custom-pricing-logging-test"
+    model_info = {
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000025,
+        "cache_creation_input_token_cost": 0.00000625,
+        "cache_read_input_token_cost": 0.0000005,
+        "input_cost_per_token_above_200k_tokens": 0.00001,
+        "output_cost_per_token_above_200k_tokens": 0.0000375,
+        "cache_creation_input_token_cost_above_200k_tokens": 0.0000125,
+        "cache_read_input_token_cost_above_200k_tokens": 0.000001,
+    }
+    litellm.register_model(model_cost={model_id: model_info})
+
+    try:
+        logging_obj = Logging(
+            model="vertex_ai/claude-opus-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id="test-tiered-pricing",
+            function_id="test-function",
+        )
+        payload = get_standard_logging_object_payload(
+            kwargs={
+                "model": "vertex_ai/claude-opus-4-6",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "response_cost": 1.0,
+                "custom_llm_provider": "vertex_ai",
+                "litellm_params": {
+                    "api_base": "",
+                    "metadata": {
+                        "model_info": {
+                            "id": model_id,
+                            **model_info,
+                        },
+                    },
+                },
+            },
+            init_response_obj={
+                "id": "chatcmpl-test",
+                "model": "vertex_ai/claude-opus-4-6",
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 585659,
+                    "cache_creation_input_tokens": 585659,
+                },
+                "choices": [],
+            },
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        assert payload is not None
+        model_map_value = payload["model_map_information"]["model_map_value"]
+        assert model_map_value is not None
+        assert (
+            model_map_value["cache_creation_input_token_cost_above_200k_tokens"]
+            == model_info["cache_creation_input_token_cost_above_200k_tokens"]
+        )
+        assert (
+            model_map_value["input_cost_per_token_above_200k_tokens"]
+            == model_info["input_cost_per_token_above_200k_tokens"]
+        )
+    finally:
+        litellm.model_cost.pop(model_id, None)
+        litellm.model_cost.pop(f"vertex_ai/{model_id}", None)
 
 
 def test_get_hidden_params():

@@ -198,6 +198,45 @@ def _parse_above_token_threshold(key: str) -> float:
     return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
 
 
+def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
+    """Return the total effective input tokens for tier-threshold comparisons.
+
+    Some providers report cache tokens inside prompt_tokens, while others keep
+    them separate. When prompt_tokens_details is present, prefer the category
+    fields so the threshold check can avoid double-counting cache tokens.
+    """
+    prompt_tokens = float(getattr(usage, "prompt_tokens", 0) or 0)
+    if usage.prompt_tokens_details is not None:
+        details = usage.prompt_tokens_details
+        raw_text_tokens = getattr(details, "text_tokens", None)
+        cached_tokens = float(getattr(details, "cached_tokens", 0) or 0)
+        cache_creation = float(getattr(details, "cache_creation_tokens", 0) or 0)
+        if raw_text_tokens is None:
+            # Some providers populate prompt_tokens_details without text_tokens.
+            # If prompt_tokens already covers the cache detail total, use it as
+            # the rolled-up input total. Otherwise cache tokens were reported
+            # outside prompt_tokens and must be added for the tier threshold.
+            cache_detail_tokens = cached_tokens + cache_creation
+            if cache_detail_tokens > 0 and prompt_tokens < cache_detail_tokens:
+                return prompt_tokens + cache_detail_tokens
+            return prompt_tokens
+        text_tokens = float(raw_text_tokens or 0)
+        audio_tokens = float(getattr(details, "audio_tokens", 0) or 0)
+        image_tokens = float(getattr(details, "image_tokens", 0) or 0)
+        video_tokens = float(getattr(details, "video_tokens", 0) or 0)
+        detail_total = text_tokens + audio_tokens + image_tokens + video_tokens + cached_tokens + cache_creation
+        cache_detail_tokens = cached_tokens + cache_creation
+        if cache_detail_tokens > 0 and detail_total > prompt_tokens:
+            return prompt_tokens
+        return max(prompt_tokens, detail_total)
+
+    # No prompt_tokens_details. Add explicit cache fields only if they are
+    # not already rolled into prompt_tokens (determined by their presence).
+    cache_read_tokens = float(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_creation_tokens = float(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    return prompt_tokens + cache_read_tokens + cache_creation_tokens
+
+
 def _get_token_base_cost(
     model_info: ModelInfo, usage: Usage, service_tier: Optional[str] = None
 ) -> Tuple[float, float, float, float, float]:
@@ -250,6 +289,8 @@ def _get_token_base_cost(
             cache_read_cost,
         )
 
+    effective_prompt_tokens = _get_effective_prompt_tokens_for_tiered_pricing(usage)
+
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: Optional[float] = None
     for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
@@ -259,7 +300,7 @@ def _get_token_base_cost(
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
                 threshold = _parse_above_token_threshold(key)
-                if usage.prompt_tokens > threshold:
+                if effective_prompt_tokens > threshold:
                     # Prefer a service_tier-specific above-threshold key when available,
                     # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
                     # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
@@ -589,8 +630,11 @@ def _calculate_input_cost(
         # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
         image_token_cost_key = "input_cost_per_image_token"
         if model_info.get(image_token_cost_key) is None:
-            image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, image_token_cost_key, prompt_tokens_details["image_tokens"])
+            prompt_cost += float(prompt_tokens_details["image_tokens"]) * prompt_base_cost
+        else:
+            prompt_cost += calculate_cost_component(
+                model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
+            )
 
     ### VIDEO TOKEN COST
     if prompt_tokens_details["video_tokens"]:
