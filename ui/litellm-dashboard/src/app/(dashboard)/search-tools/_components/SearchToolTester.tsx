@@ -1,12 +1,12 @@
 import React, { useState } from "react";
-import { Button, Input, Typography, Spin } from "antd";
+import { ExternalLink, Search } from "lucide-react";
 import MessageManager from "@/components/molecules/message_manager";
-import { SearchOutlined, LoadingOutlined } from "@ant-design/icons";
 import { searchToolQueryCall } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { Card, Title as TremorTitle } from "@tremor/react";
-
-const { Text } = Typography;
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
 interface SearchResult {
   title: string;
@@ -36,7 +36,6 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
     }[]
   >([]);
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
-  const [isInputFocused, setIsInputFocused] = useState(false);
 
   const handleSearch = async () => {
     if (!query.trim()) {
@@ -60,7 +59,6 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
       };
 
       setSearchHistory((prev) => [historyEntry, ...prev]);
-      // Don't clear query after search so user can modify it
     } catch (error) {
       console.error("Error querying search tool:", error);
       NotificationsManager.fromBackend("Failed to query search tool");
@@ -87,113 +85,79 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
     }));
   };
 
-  const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
-
   const latestResults = searchHistory.length > 0 ? searchHistory[0] : null;
 
   return (
-    <Card className="mt-6">
-      <div className="mb-6">
-        <TremorTitle>Test Search Tool</TremorTitle>
+    <Card className={`mt-6 ${className}`}>
+      <div className="mb-6 px-6 pt-6">
+        <h2 className="text-lg font-semibold text-foreground">Test Search Tool</h2>
       </div>
 
-      <div className="flex flex-col" style={{ minHeight: "600px" }}>
-        {/* Search Bar at Top */}
+      <div className="flex min-h-[600px] flex-col px-6 pb-6">
         <div className="mb-6">
           <div className="flex items-stretch gap-3">
-            <div
-              className="flex items-center flex-1 bg-white rounded-lg px-4 transition-all duration-200"
-              style={{
-                border: isInputFocused ? "2px solid #3b82f6" : "2px solid #e5e7eb",
-                boxShadow: isInputFocused ? "0 0 0 3px rgba(59, 130, 246, 0.1)" : "0 1px 2px 0 rgba(0, 0, 0, 0.05)",
-                height: "48px",
-              }}
-            >
-              <SearchOutlined className="text-gray-400 mr-3" style={{ fontSize: "18px" }} />
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-[18px] -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onFocus={() => setIsInputFocused(true)}
-                onBlur={() => setIsInputFocused(false)}
-                onPressEnter={(e) => {
-                  if (!e.shiftKey) {
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     handleSearch();
                   }
                 }}
                 placeholder="Enter your search query..."
                 disabled={isLoading}
-                bordered={false}
-                style={{ fontSize: "15px", padding: 0, height: "100%", boxShadow: "none" }}
+                className="h-12 pl-11 text-[15px]"
               />
             </div>
-            <Button
-              type="primary"
-              onClick={handleSearch}
-              disabled={isLoading || !query.trim()}
-              icon={<SearchOutlined />}
-              loading={isLoading}
-              style={{
-                height: "48px",
-                paddingLeft: "24px",
-                paddingRight: "24px",
-                borderRadius: "8px",
-                fontWeight: 500,
-                fontSize: "15px",
-                backgroundColor: isLoading || !query.trim() ? undefined : "#1890ff",
-                borderColor: isLoading || !query.trim() ? undefined : "#1890ff",
-                boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)",
-              }}
-            >
+            <Button onClick={handleSearch} disabled={isLoading || !query.trim()} className="h-12 px-6 text-[15px]">
+              {isLoading ? <UiLoadingSpinner className="size-4" /> : <Search className="size-4" />}
               Search
             </Button>
           </div>
         </div>
 
-        {/* Results Area */}
         <div className="flex-1">
           {!latestResults && !isLoading ? (
-            <div className="h-full flex flex-col items-center justify-center p-8">
-              <div className="flex items-center justify-center w-24 h-24 rounded-full bg-gray-100 mb-6">
-                <SearchOutlined style={{ fontSize: "48px", color: "#9ca3af" }} />
+            <div className="flex h-full flex-col items-center justify-center p-8">
+              <div className="mb-6 flex size-24 items-center justify-center rounded-full bg-muted">
+                <Search className="size-12 text-muted-foreground" />
               </div>
-              <Text className="text-lg text-gray-600 font-medium">Test your search tool</Text>
-              <Text className="text-sm text-gray-500 mt-2">Enter a query above to see search results</Text>
+              <p className="text-lg font-medium text-foreground">Test your search tool</p>
+              <p className="mt-2 text-sm text-muted-foreground">Enter a query above to see search results</p>
             </div>
           ) : (
             <div>
               {isLoading && (
-                <div className="flex flex-col justify-center items-center py-16">
-                  <Spin indicator={antIcon} />
-                  <Text className="mt-4 text-gray-600 font-medium">Searching...</Text>
+                <div className="flex flex-col items-center justify-center py-16">
+                  <UiLoadingSpinner className="size-8 text-primary" />
+                  <p className="mt-4 font-medium text-muted-foreground">Searching...</p>
                 </div>
               )}
 
               {latestResults && !isLoading && (
                 <>
-                  {/* Query Info Bar */}
-                  <div
-                    className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg"
-                    style={{ boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)" }}
-                  >
+                  <div className="mb-6 rounded-lg border border-border bg-muted/50 p-4">
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
-                        <Text className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                           Search Query
-                        </Text>
-                        <div className="text-base font-semibold text-gray-900 mt-1.5">{latestResults.query}</div>
+                        </p>
+                        <div className="mt-1.5 text-base font-semibold text-foreground">{latestResults.query}</div>
                       </div>
-                      <div className="text-right ml-4">
-                        <Text className="text-xs text-gray-500">{formatTimestamp(latestResults.timestamp)}</Text>
-                        <div className="flex items-center gap-3 mt-1">
-                          <div className="text-sm font-semibold text-blue-600">
+                      <div className="ml-4 text-right">
+                        <p className="text-xs text-muted-foreground">{formatTimestamp(latestResults.timestamp)}</p>
+                        <div className="mt-1 flex items-center gap-3">
+                          <div className="text-sm font-semibold text-primary">
                             {latestResults.response?.results?.length || 0}{" "}
                             {latestResults.response?.results?.length === 1 ? "result" : "results"}
                           </div>
                           {latestResults.latency !== undefined && (
                             <>
-                              <span className="text-gray-400">•</span>
-                              <div className="text-sm font-semibold text-green-600">{latestResults.latency}ms</div>
+                              <span className="text-muted-foreground">•</span>
+                              <div className="text-sm font-semibold text-emerald-600">{latestResults.latency}ms</div>
                             </>
                           )}
                         </div>
@@ -201,7 +165,6 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                     </div>
                   </div>
 
-                  {/* Search Results */}
                   {latestResults.response &&
                   latestResults.response.results &&
                   latestResults.response.results.length > 0 ? (
@@ -212,73 +175,43 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                         return (
                           <div
                             key={resultIndex}
-                            className="bg-white border border-gray-200 rounded-lg overflow-hidden transition-all duration-200"
-                            style={{ boxShadow: "0 1px 2px 0 rgba(0, 0, 0, 0.05)" }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.boxShadow =
-                                "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)";
-                              e.currentTarget.style.borderColor = "#e0e7ff";
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.boxShadow = "0 1px 2px 0 rgba(0, 0, 0, 0.05)";
-                              e.currentTarget.style.borderColor = "#e5e7eb";
-                            }}
+                            className="rounded-lg border border-border bg-card transition-shadow hover:shadow-md"
                           >
                             <div className="p-5">
-                              {/* Title and External Link */}
-                              <div className="flex items-start justify-between gap-3 mb-2">
+                              <div className="mb-2 flex items-start justify-between gap-3">
                                 <a
                                   href={result.url}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="text-lg font-semibold text-blue-600 hover:text-blue-700 flex-1 leading-snug"
-                                  style={{ textDecoration: "none" }}
-                                  onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-                                  onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+                                  className="flex-1 text-lg leading-snug font-semibold text-primary hover:underline"
                                 >
                                   {result.title}
                                 </a>
                                 <Button
-                                  type="text"
-                                  size="small"
-                                  className="shrink-0"
-                                  icon={
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth={2}
-                                        d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                                      />
-                                    </svg>
-                                  }
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label="Open result in new tab"
+                                  className="shrink-0 text-muted-foreground"
                                   onClick={() => window.open(result.url, "_blank")}
-                                  style={{ color: "#6b7280" }}
-                                />
+                                >
+                                  <ExternalLink className="size-4" />
+                                </Button>
                               </div>
 
-                              {/* URL */}
-                              <div className="text-sm text-green-700 mb-3 truncate font-medium">{result.url}</div>
+                              <div className="mb-3 truncate text-sm font-medium text-emerald-700">{result.url}</div>
 
-                              {/* Snippet Preview */}
-                              <div className="text-sm text-gray-700 leading-relaxed">
+                              <div className="text-sm leading-relaxed text-foreground">
                                 {isResultExpanded
                                   ? result.snippet
                                   : `${result.snippet.substring(0, 200)}${result.snippet.length > 200 ? "..." : ""}`}
                               </div>
 
-                              {/* Expand/Collapse */}
                               {result.snippet.length > 200 && (
                                 <Button
-                                  type="link"
-                                  size="small"
-                                  className="mt-3 p-0 h-auto"
+                                  variant="link"
+                                  size="sm"
+                                  className="mt-3 h-auto p-0"
                                   onClick={() => toggleResultExpansion(0, resultIndex)}
-                                  style={{
-                                    fontSize: "13px",
-                                    fontWeight: 500,
-                                    color: "#3b82f6",
-                                  }}
                                 >
                                   {isResultExpanded ? "Show less" : "Show more"}
                                 </Button>
@@ -289,31 +222,22 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                       })}
                     </div>
                   ) : (
-                    <div className="text-center py-12 bg-gray-50 border border-gray-200 rounded-lg">
-                      <div className="flex items-center justify-center w-16 h-16 rounded-full bg-gray-100 mx-auto mb-4">
-                        <SearchOutlined style={{ fontSize: "24px", color: "#9ca3af" }} />
+                    <div className="rounded-lg border border-border bg-muted/50 py-12 text-center">
+                      <div className="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-muted">
+                        <Search className="size-6 text-muted-foreground" />
                       </div>
-                      <Text className="text-gray-600 font-medium">No results found</Text>
-                      <Text className="text-sm text-gray-500 mt-1">Try a different search query</Text>
+                      <p className="font-medium text-foreground">No results found</p>
+                      <p className="mt-1 text-sm text-muted-foreground">Try a different search query</p>
                     </div>
                   )}
                 </>
               )}
 
-              {/* Search History Sidebar */}
               {searchHistory.length > 1 && (
-                <div className="mt-8 pt-6 border-t border-gray-200">
-                  <div className="flex items-center justify-between mb-4">
-                    <Text className="text-sm font-semibold text-gray-700">Previous Searches</Text>
-                    <Button
-                      onClick={clearHistory}
-                      size="small"
-                      type="link"
-                      style={{
-                        fontSize: "13px",
-                        fontWeight: 500,
-                      }}
-                    >
+                <div className="mt-8 border-t border-border pt-6">
+                  <div className="mb-4 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-foreground">Previous Searches</p>
+                    <Button variant="link" size="sm" className="h-auto p-0" onClick={clearHistory}>
                       Clear All
                     </Button>
                   </div>
@@ -321,21 +245,21 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
                     {searchHistory.slice(1, 6).map((entry, index) => (
                       <div
                         key={index + 1}
-                        className="p-3 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer transition-all duration-200 hover:bg-gray-100 hover:border-gray-300"
+                        className="cursor-pointer rounded-lg border border-border bg-muted/50 p-3 transition-colors hover:bg-muted"
                         onClick={() => {
                           setQuery(entry.query);
                         }}
                       >
-                        <div className="text-sm font-medium text-gray-800 truncate">{entry.query}</div>
-                        <div className="text-xs text-gray-500 mt-1.5 flex items-center gap-2">
-                          <span className="font-medium text-blue-600">
+                        <div className="truncate text-sm font-medium text-foreground">{entry.query}</div>
+                        <div className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+                          <span className="font-medium text-primary">
                             {entry.response?.results?.length || 0}{" "}
                             {entry.response?.results?.length === 1 ? "result" : "results"}
                           </span>
                           {entry.latency !== undefined && (
                             <>
                               <span>•</span>
-                              <span className="font-medium text-green-600">{entry.latency}ms</span>
+                              <span className="font-medium text-emerald-600">{entry.latency}ms</span>
                             </>
                           )}
                           <span>•</span>

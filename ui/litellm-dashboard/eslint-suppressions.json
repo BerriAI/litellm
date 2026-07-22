@@ -1057,16 +1057,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/search-tools/_components/SearchToolTester.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/search-tools/_components/SearchToolView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
     "no-restricted-imports": {
       "count": 1
