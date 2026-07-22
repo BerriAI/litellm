@@ -51,9 +51,16 @@ class TestIOTokenRateLimitHelpers:
         deployment = {"litellm_params": {"model": "openai/gpt-4o-mini"}}
         # An explicit max_tokens=0 is honored, not replaced by the model default.
         assert _resolve_max_tokens({"max_tokens": 0}, deployment) == 0
-        # max_completion_tokens is the fallback only when max_tokens is absent.
+        # Any of the explicit cap aliases is honored on its own; when several
+        # are present the reservation uses the largest one.
         assert _resolve_max_tokens({"max_completion_tokens": 12}, deployment) == 12
         assert _resolve_max_tokens({"max_output_tokens": 9}, deployment) == 9
+
+    def test_resolve_max_tokens_conflicting_caps_reserve_larger(self):
+        deployment = {"litellm_params": {"model": "openai/gpt-4o-mini"}}
+        assert _resolve_max_tokens({"max_tokens": 1, "max_completion_tokens": 5000}, deployment) == 5000
+        assert _resolve_max_tokens({"max_tokens": 5000, "max_completion_tokens": 1}, deployment) == 5000
+        assert _resolve_max_tokens({"max_tokens": 0, "max_completion_tokens": 12}, deployment) == 12
 
     def test_build_io_token_rate_limit_headers(self):
         headers = build_io_token_rate_limit_headers(

@@ -1215,11 +1215,14 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
-    requested: Optional[int] = None
-    for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
-        requested = _to_int(request_body.get(key))
-        if requested is not None:
-            break
+    requested: Optional[int] = max(
+        (
+            value
+            for key in ("max_completion_tokens", "max_tokens", "max_output_tokens")
+            if (value := _to_int(request_body.get(key))) is not None
+        ),
+        default=None,
+    )
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the

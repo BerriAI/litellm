@@ -2484,3 +2484,33 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
 
     assert received == [{"content": "hi"}]
     streaming_logging_obj.async_post_call_streaming_hook.assert_awaited_once()
+
+
+def test_estimate_output_tokens_conflicting_caps_reserve_larger():
+    from litellm.proxy.spend_tracking.budget_reservation import _estimate_output_tokens
+
+    model_info = {"max_output_tokens": 200000}
+    assert (
+        _estimate_output_tokens(
+            request_body={"max_completion_tokens": 1, "max_tokens": 5000},
+            route="/chat/completions",
+            model_info=model_info,
+        )
+        == 5000
+    )
+    assert (
+        _estimate_output_tokens(
+            request_body={"max_completion_tokens": 5000, "max_tokens": 1},
+            route="/chat/completions",
+            model_info=model_info,
+        )
+        == 5000
+    )
+    assert (
+        _estimate_output_tokens(
+            request_body={"max_completion_tokens": 7},
+            route="/chat/completions",
+            model_info=model_info,
+        )
+        == 7
+    )
