@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
@@ -994,17 +995,16 @@ async def health_endpoint(
         # response but NOT in the background-cache /health response. This is
         # surfaced via the "warnings" field below so operators can fix the
         # missing model_info.id rather than guess at the discrepancy.
-        # Keys granted SpecialModelNames.all_proxy_models carry the literal
-        # "all-proxy-models" entry, which matches no real model_name; treat
-        # them as unrestricted instead of filtering the list down to nothing.
-        # Keys granted SpecialModelNames.all_team_models inherit the parent
-        # team's allowlist (same semantics as get_key_models in
-        # model_checks.py). Without a team_id the sentinel cannot resolve and
-        # stays in the list, matching nothing; denied rather than
-        # unrestricted, mirroring _resolve_key_models_for_auth_check.
-        accessible_models = list(user_api_key_dict.models)
-        if SpecialModelNames.all_team_models.value in accessible_models and user_api_key_dict.team_id is not None:
-            accessible_models = list(user_api_key_dict.team_models)
+        # Resolve the caller's effective allowlist via get_key_models so the
+        # access sentinels (all-proxy-models / all-team-models) and access
+        # groups expand to concrete model_names. Filtering on raw .models would
+        # drop every deployment for keys whose entry is a group or sentinel
+        # (issue #28206).
+        accessible_models = get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=(llm_router.get_model_names() if llm_router is not None else []),
+            model_access_groups=(llm_router.get_model_access_groups() if llm_router is not None else {}),
+        )
         restrict_to_allowed_models = (
             len(accessible_models) > 0 and SpecialModelNames.all_proxy_models.value not in accessible_models
         )
