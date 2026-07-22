@@ -1399,6 +1399,14 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
+            parallel_guardrails: tuple[CustomGuardrail, ...] = tuple(
+                cb
+                for cb in caps.resolved_callbacks
+                if isinstance(cb, CustomGuardrail)
+                and getattr(cb, "run_in_parallel", False)
+                and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
+            )
+
             deferred_route_exc: Optional[SensitiveDataRouteException] = None
             for _callback in caps.resolved_callbacks:
                 start_time = time.time()
@@ -1406,6 +1414,9 @@ class ProxyLogging:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
                         # Skip guardrails managed by a pipeline
                         if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
+                            continue
+
+                        if getattr(_callback, "run_in_parallel", False):
                             continue
 
                         result = await self._process_guardrail_callback(
@@ -1464,6 +1475,14 @@ class ProxyLogging:
             if deferred_route_exc is not None and data is not None:
                 data = await self._handle_sensitive_data_route_exception(deferred_route_exc, data, user_api_key_dict)
 
+            if parallel_guardrails and data is not None:
+                await self._run_parallel_pre_call_guardrails(
+                    guardrails=parallel_guardrails,
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+
             if data is not None:
                 self._process_guardrail_metadata(data)
 
@@ -1475,6 +1494,47 @@ class ProxyLogging:
             return data
         except Exception as e:
             raise e
+
+    async def _run_parallel_pre_call_guardrails(
+        self,
+        guardrails: tuple[CustomGuardrail, ...],
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        """
+        Run opted-in pre_call guardrails concurrently against one shared payload
+        snapshot. These guardrails are declared block-only, so any modified data
+        they return is discarded; they run for their blocking side effect (raising
+        to reject the request before it reaches the LLM). Every guardrail is
+        awaited to completion (``return_exceptions=True``) so a raise by one never
+        leaves the others running as unobserved background tasks. A guardrail that
+        blocks (any exception other than a reroute or passthrough) takes precedence
+        over one that only changes the request flow, so a fast reroute can never
+        let a slower block be bypassed; the request is rejected before it reaches
+        the LLM, preserving the pre-call barrier that ``during_call`` guardrails
+        cannot provide. Per-guardrail latency is recorded by
+        ``_process_guardrail_callback``'s own metrics.
+        """
+        results = await asyncio.gather(
+            *(
+                self._process_guardrail_callback(
+                    callback=callback,
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    event_type=GuardrailEventHooks.pre_call,
+                )
+                for callback in guardrails
+            ),
+            return_exceptions=True,
+        )
+        raised = tuple(result for result in results if isinstance(result, BaseException))
+        blocking = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
+        if blocking is not None:
+            raise blocking
+        if raised:
+            raise raised[0]
 
     async def _handle_sensitive_data_route_exception(
         self,
@@ -2276,8 +2336,15 @@ class ProxyLogging:
             # Merge model-level guardrails before checking which guardrails to run
             guardrail_data = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
 
+            parallel_guardrails: tuple[CustomGuardrail, ...] = tuple(
+                callback for callback in guardrail_callbacks if getattr(callback, "run_in_parallel", False)
+            )
+
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
+                if getattr(callback, "run_in_parallel", False):
+                    continue
 
                 if (
                     callback.should_run_guardrail(
@@ -2315,6 +2382,15 @@ class ProxyLogging:
                 if guardrail_response is not None:
                     response = guardrail_response
 
+            if parallel_guardrails:
+                await self._run_parallel_post_call_guardrails(
+                    guardrails=parallel_guardrails,
+                    data=data,
+                    guardrail_data=guardrail_data,
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                )
+
             ############ Handle CustomLogger ###############################
             #################################################################
 
@@ -2327,6 +2403,65 @@ class ProxyLogging:
         except Exception as e:
             raise e
         return response
+
+    async def _run_parallel_post_call_guardrails(
+        self,
+        guardrails: tuple[CustomGuardrail, ...],
+        data: dict,
+        guardrail_data: dict,
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Run opted-in post_call guardrails concurrently against the response
+        produced by the sequential guardrails. These guardrails are declared
+        block-only, so any modified response they return is discarded; they run
+        for their blocking side effect (raising to reject the response before it
+        reaches the client). Every guardrail is awaited to completion
+        (``return_exceptions=True``) so a raise by one never leaves the others
+        running as unobserved background tasks. A guardrail that blocks (any
+        exception other than a passthrough) takes precedence over one that only
+        changes the response flow, so a fast passthrough can never let a slower
+        block be bypassed. Each per-guardrail coroutine sets ``guardrail_to_apply``
+        immediately before awaiting, and the unified hook pops it before its first
+        suspension point, so concurrent guardrails never race on that key.
+        """
+
+        async def _run_one(callback: CustomGuardrail) -> None:
+            if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
+                return
+            if "apply_guardrail" in type(callback).__dict__:
+                data["guardrail_to_apply"] = callback
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    unified_guardrail.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    ),
+                    "post_call",
+                )
+            else:
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    ),
+                    "post_call",
+                )
+
+        results = await asyncio.gather(
+            *(_run_one(callback) for callback in guardrails),
+            return_exceptions=True,
+        )
+        raised = tuple(result for result in results if isinstance(result, BaseException))
+        blocking = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
+        if blocking is not None:
+            raise blocking
+        if raised:
+            raise raised[0]
 
     async def post_call_response_headers_hook(
         self,

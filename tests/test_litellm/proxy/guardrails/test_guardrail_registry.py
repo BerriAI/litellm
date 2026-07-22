@@ -1,3 +1,5 @@
+import pytest
+
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
     get_guardrail_initializer_from_hooks,
@@ -30,6 +32,44 @@ def test_noma_registry_resolution():
     assert guardrail_class_registry["noma_v2"] is NomaV2Guardrail
     assert "noma" in guardrail_initializer_registry
     assert "noma_v2" in guardrail_initializer_registry
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [(None, True), (False, False), (True, True)],
+)
+def test_initialize_guardrail_run_in_parallel_preserves_constructor_default(configured, expected):
+    """
+    A guardrail whose constructor sets run_in_parallel=True must keep that default when
+    the config omits the key; only an explicit config value may override it. The
+    previous code wrote bool(None)==False on every instance, silently disabling the
+    opt-in for such guardrails.
+    """
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+            run_in_parallel=True,
+        )
+
+    registry_module.guardrail_initializer_registry["parallel_default_test"] = _initializer
+    try:
+        params = {"guardrail": "parallel_default_test", "mode": "pre_call"}
+        if configured is not None:
+            params["run_in_parallel"] = configured
+
+        handler = InMemoryGuardrailHandler()
+        result = handler.initialize_guardrail(
+            guardrail={"guardrail_name": "cf-parallel-default", "litellm_params": params},
+        )
+
+        stored = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+        assert stored.run_in_parallel is expected
+    finally:
+        registry_module.guardrail_initializer_registry.pop("parallel_default_test", None)
 
 
 def test_update_in_memory_guardrail():
