@@ -26,10 +26,7 @@ EXCLUDED_GUARD_ONLY_VARS = {
 
 # Temporary/internal rollout flags are intentionally not added to the public
 # environment settings docs until the feature is ready for broad use.
-EXCLUDED_ROLLOUT_FLAGS = {
-    "LITELLM_USE_RUST_OCR",
-    "LITELLM_RUST",
-}
+EXCLUDED_ROLLOUT_FLAGS: set[str] = set()
 
 EXCLUDED_TERMINAL_VARS = {
     "TERM",

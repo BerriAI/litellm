@@ -122,27 +122,6 @@ def test_load_rust_messages_returns_injected_impl():
     assert rust_messages.load_rust_messages() is bridge
 
 
-def test_configuring_messages_does_not_enable_ocr():
-    from litellm.rust_bridge.ocr import rust_ocr_enabled
-
-    litellm.use_litellm_rust(False)
-    assert rust_ocr_enabled() is False
-
-    litellm.use_litellm_rust(True, messages=RecordingMessages())
-
-    assert rust_ocr_enabled() is False
-
-
-def test_bare_use_litellm_rust_still_toggles_ocr():
-    from litellm.rust_bridge.ocr import rust_ocr_enabled
-
-    litellm.use_litellm_rust(True)
-    assert rust_ocr_enabled() is True
-
-    litellm.use_litellm_rust(False)
-    assert rust_ocr_enabled() is False
-
-
 def test_load_rust_amessages_returns_injected_impl():
     bridge = RecordingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
@@ -252,36 +231,13 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
-async def test_gate_falls_back_to_python_when_bridge_raises():
+async def test_gate_surfaces_rust_error_without_falling_back():
     bridge = RaisingAsyncMessages()
     litellm.use_litellm_rust(True, amessages=bridge)
 
-    response = await _gate()
-
-    assert response is None
+    with pytest.raises(RuntimeError):
+        await _gate()
     assert bridge.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_gate_skips_rust_when_flag_absent():
-    bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
-
-    response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
-
-    assert response is None
-    assert bridge.calls == 0
-
-
-@pytest.mark.asyncio
-async def test_gate_skips_rust_when_flag_false():
-    bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
-
-    response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure", rust=False))
-
-    assert response is None
-    assert bridge.calls == 0
 
 
 @pytest.mark.asyncio
@@ -291,7 +247,7 @@ async def test_gate_invokes_rust_for_native_anthropic_provider():
 
     response = await _gate(
         custom_llm_provider="anthropic",
-        litellm_params=GenericLiteLLMParams(api_key="sk-ant", rust=True),
+        litellm_params=GenericLiteLLMParams(api_key="sk-ant", rust=False),
         api_key="sk-ant",
         api_base="https://api.anthropic.com",
         headers={"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
@@ -301,36 +257,6 @@ async def test_gate_invokes_rust_for_native_anthropic_provider():
     assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
     assert bridge.calls[0]["custom_llm_provider"] == "anthropic"
     assert bridge.calls[0]["api_key"] == "sk-ant"
-
-
-@pytest.mark.asyncio
-async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
-    bridge = RecordingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
-    monkeypatch.setenv("LITELLM_RUST", "1")
-
-    response = await _gate(
-        custom_llm_provider="anthropic",
-        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
-    )
-
-    assert response is not None
-    assert bridge.calls[0]["custom_llm_provider"] == "anthropic"
-
-
-@pytest.mark.asyncio
-async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
-    bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
-    monkeypatch.setenv("LITELLM_RUST", "0")
-
-    response = await _gate(
-        custom_llm_provider="anthropic",
-        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
-    )
-
-    assert response is None
-    assert bridge.calls == 0
 
 
 @pytest.mark.asyncio
