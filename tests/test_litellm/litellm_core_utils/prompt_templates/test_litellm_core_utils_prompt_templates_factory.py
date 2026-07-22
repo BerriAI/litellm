@@ -182,6 +182,55 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     assert len(tool_use_blocks) == 2
 
 
+@pytest.mark.parametrize("content", ["", "   ", "\n\t "])
+def test_bedrock_converse_blank_string_user_message_substituted_sync(content):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/33016
+
+    A user message whose content is a blank/whitespace-only string must be
+    replaced with the "Please continue." continue message (issue #7169),
+    because Bedrock Converse rejects blank-text ContentBlocks. The
+    string-content branch previously forwarded the original, un-substituted
+    text.
+    """
+    litellm.modify_params = True
+    try:
+        result = _bedrock_converse_messages_pt(
+            messages=[{"role": "user", "content": content}],
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            llm_provider="bedrock",
+        )
+    finally:
+        litellm.modify_params = False
+
+    user_blocks = [m for m in result if m["role"] == "user"]
+    assert len(user_blocks) == 1
+    texts = [b["text"] for b in user_blocks[0]["content"] if "text" in b]
+    assert texts == ["Please continue."]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["", "   ", "\n\t "])
+async def test_bedrock_converse_blank_string_user_message_substituted_async(content):
+    """
+    Async counterpart of the #33016 regression test.
+    """
+    litellm.modify_params = True
+    try:
+        result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=[{"role": "user", "content": content}],
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            llm_provider="bedrock",
+        )
+    finally:
+        litellm.modify_params = False
+
+    user_blocks = [m for m in result if m["role"] == "user"]
+    assert len(user_blocks) == 1
+    texts = [b["text"] for b in user_blocks[0]["content"] if "text" in b]
+    assert texts == ["Please continue."]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [
