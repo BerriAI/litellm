@@ -71,4 +71,8 @@ class TestAudioSpeech:
             f"/audio/speech did not stream: transfer-encoding={result.transfer_encoding!r}, "
             f"content-length={result.content_length!r} (a buffered body is not a stream)"
         )
+        assert result.content_length is None, (
+            f"/audio/speech advertised content-length={result.content_length!r} on a "
+            f"streamed response (a buffered body is not a stream)"
+        )
         assert result.total_bytes > 0, "/audio/speech stream returned no audio bytes"
