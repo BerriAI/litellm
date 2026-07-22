@@ -54,7 +54,6 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:${PATH}" \
     LITELLM_NON_ROOT=true \
-    PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     XDG_CACHE_HOME=/app/.cache
 
 # Copy dependency metadata first for layer caching
@@ -106,7 +105,9 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
         --python python3; \
     fi
 
-RUN prisma generate --schema=./schema.prisma
+RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
+    npm_config_cache=/root/.npm \
+    prisma generate --schema=./schema.prisma
 
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
@@ -127,8 +128,6 @@ RUN for i in 1 2 3; do \
 # the rest of the builder's /app is source and build metadata that must not
 # ship (manifest-scanning tools attribute everything in it to this image).
 # entrypoint.sh invokes litellm/proxy/prisma_migration.py by source path.
-# Prisma caches live under /app/.cache here (XDG_CACHE_HOME /
-# PRISMA_BINARY_CACHE_DIR) so the runtime prisma generate finds them.
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/docker /app/docker
 COPY --from=builder /app/schema.prisma /app/schema.prisma
@@ -138,15 +137,25 @@ COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/pr
 # enterprise.enterprise_hooks from it)
 COPY --from=builder /app/enterprise /app/enterprise
 COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
-COPY --from=builder /app/.cache /app/.cache
+# Prisma CLI + engines are baked under /opt/prisma, a fixed path every runtime
+# uid can read and that no cache volume mount shadows (unlike /app/.cache or
+# $HOME/.cache under readOnlyRootFilesystem + emptyDir or arbitrary-uid setups).
+# PRISMA_CLI_QUERY_ENGINE_TYPE=binary makes the CLI use the baked binary query
+# engine directly, so `prisma migrate deploy` on a fresh database needs no npm
+# and no network access; without it the CLI looks for the library engine, which
+# prisma stopped baking, and falls back to a download that fails offline or as a
+# non-writable uid (#33650, #24554).
+COPY --from=builder /opt/prisma /opt/prisma
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 
 ENV PATH="/app/.venv/bin:${PATH}" \
-    PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+    PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
+    PRISMA_CLI_PATH=/opt/prisma/binaries/node_modules/.bin/prisma \
+    PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
     HOME=/app \
     LITELLM_NON_ROOT=true \
-    XDG_CACHE_HOME=/app/.cache \
+    XDG_CACHE_HOME=/opt/prisma/.cache \
     PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=1 \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
@@ -165,11 +174,13 @@ RUN mkdir -p /nonexistent /var/lib/litellm/assets /var/lib/litellm/ui && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u "$LITELLM_PROXY_EXTRAS_PATH" || true && \
     chmod -R g+w "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w "$LITELLM_PROXY_EXTRAS_PATH" || true && \
-    chmod -R g+rX "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets /app/.cache
+    chmod -R g+rX "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    chmod -R a+rX /opt/prisma && \
+    test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
+    test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \
+    ls /opt/prisma/binaries/node_modules/@prisma/engines/query-engine-* >/dev/null 2>&1
 
 USER 65534
-
-RUN prisma generate --schema=./schema.prisma
 
 EXPOSE 4000/tcp
 

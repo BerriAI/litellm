@@ -9,6 +9,7 @@ on:
       - "litellm_**"
     paths:
       - docker/Dockerfile.non_root
+      - docker/test_offline_migration.sh
       - uv.lock
       - ui/litellm-dashboard/package-lock.json
       - .github/workflows/image-scan.yml
@@ -50,6 +51,14 @@ jobs:
       # is the same; matrix-scan if those variants ever diverge.
       - name: Build runtime image
         run: docker build -f docker/Dockerfile.non_root -t litellm-image-scan:${{ github.sha }} .
+
+      # The prisma bake must migrate a fresh DB with no egress as an arbitrary
+      # non-root uid (OpenShift restricted-v2 / air-gapped / readOnlyRootFilesystem).
+      # `docker run` as the default uid with network hides a broken bake because
+      # the migration entrypoint exits 0 even when it applied nothing; asserting
+      # the schema was created is what catches it.
+      - name: Verify offline migration as a non-root uid
+        run: bash docker/test_offline_migration.sh litellm-image-scan:${{ github.sha }}
 
       # Scans the whole shipped artifact: OS/apk plus every language package
       # baked into the image, including ones no lockfile declares (e.g. prisma's
