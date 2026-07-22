@@ -2375,7 +2375,15 @@ async def _add_team_members_to_team(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> Tuple[LiteLLM_TeamTable, List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
-    """Add team members to the team."""
+    """Add team members to the team.
+
+    The members_with_roles reconciliation runs inside a transaction that locks
+    the team row with ``SELECT ... FOR UPDATE`` before reading the current
+    membership. Concurrent /team/member_add calls for the same team therefore
+    serialize on the row lock and each appends onto the other's committed
+    result, instead of both rewriting the whole JSON array from a stale
+    snapshot (which silently drops one member on the losing write).
+    """
     # Process and add new members
     updated_users, updated_team_memberships = await _process_team_members(
         data=data,
@@ -2385,19 +2393,22 @@ async def _add_team_members_to_team(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
-    # Update team members list
-    await _update_team_members_list(
-        data=data,
-        complete_team_data=complete_team_data,
-        updated_users=updated_users,
-    )
+    async with prisma_client.tx() as tx:
+        complete_team_data.members_with_roles = await TeamRepository(prisma_client).get_members_with_roles_locked(
+            tx, data.team_id
+        )
 
-    # ADD MEMBER TO TEAM
-    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
-    updated_team = await TeamRepository(prisma_client).table.update(
-        where={"team_id": data.team_id},
-        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
-    )
+        await _update_team_members_list(
+            data=data,
+            complete_team_data=complete_team_data,
+            updated_users=updated_users,
+        )
+
+        _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
+        updated_team = await tx.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data={"members_with_roles": json.dumps(_db_team_members)},
+        )
 
     return updated_team, updated_users, updated_team_memberships
 

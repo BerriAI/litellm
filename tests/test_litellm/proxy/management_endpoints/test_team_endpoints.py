@@ -1693,6 +1693,78 @@ async def test_update_team_members_list_duplicate_prevention():
     assert len(mock_team.members_with_roles) == 1
 
 
+@pytest.mark.asyncio
+async def test_add_team_members_reconciles_against_freshly_locked_row():
+    """
+    Regression: _add_team_members_to_team must build the new members_with_roles
+    from the row it re-reads under a lock inside the write transaction, not from
+    the stale complete_team_data snapshot captured at the start of the request.
+
+    Two concurrent /team/member_add calls for the same team read the same
+    snapshot; without the locked re-read the losing write rewrites the whole
+    JSON array from its stale copy and silently drops the member the other call
+    already committed. Here the snapshot holds only "zed", a concurrent writer
+    has already committed "alice" (returned by the locked SELECT), and this call
+    adds "bob". The write must contain all three.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_members_to_team,
+    )
+
+    stale_snapshot = LiteLLM_TeamTable(
+        team_id="test-team-lock",
+        members_with_roles=[Member(user_id="zed", role="user")],
+    )
+
+    freshly_committed = [
+        {"user_id": "zed", "user_email": None, "role": "user"},
+        {"user_id": "alice", "user_email": None, "role": "user"},
+    ]
+
+    captured: dict = {}
+
+    async def _capture_update(where, data):
+        captured["data"] = data
+        return LiteLLM_TeamTable(
+            team_id="test-team-lock",
+            members_with_roles=json.loads(data["members_with_roles"]),
+        )
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[{"members_with_roles": freshly_committed}])
+    tx.litellm_teamtable.update = AsyncMock(side_effect=_capture_update)
+
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+
+    prisma_client = MagicMock()
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._process_team_members",
+        new=AsyncMock(return_value=([], [])),
+    ):
+        updated_team, _, _ = await _add_team_members_to_team(
+            data=TeamMemberAddRequest(
+                team_id="test-team-lock",
+                member=Member(user_id="bob", role="user"),
+            ),
+            complete_team_data=stale_snapshot,
+            prisma_client=cast(object, prisma_client),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_proxy_admin_name="admin",
+        )
+
+    written_ids = sorted(m["user_id"] for m in json.loads(captured["data"]["members_with_roles"]))
+    assert written_ids == ["alice", "bob", "zed"]
+
+    lock_reads = [call for call in tx.query_raw.call_args_list if "FOR UPDATE" in str(call.args[0])]
+    assert lock_reads, "expected a SELECT ... FOR UPDATE row-lock read before the write"
+
+    assert [m.user_id for m in updated_team.members_with_roles] == ["zed", "alice", "bob"]
+
+
 def test_add_new_models_to_team_with_existing_models():
     """
     Test add_new_models_to_team function with existing models
