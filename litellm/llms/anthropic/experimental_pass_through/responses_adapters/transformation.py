@@ -12,15 +12,15 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
+    AllAnthropicPassThroughMessageValues,
     is_reasoning_auto_summary_enabled,
+    normalize_anthropic_system_message_content,
 )
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
-    AnthopicMessagesAssistantMessageParam,
     AnthropicFinishReason,
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
-    AnthropicMessagesUserMessageParam,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
@@ -56,12 +56,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     def translate_messages_to_responses_input(
         self,
-        messages: List[
-            Union[
-                AnthropicMessagesUserMessageParam,
-                AnthopicMessagesAssistantMessageParam,
-            ]
-        ],
+        messages: List[AllAnthropicPassThroughMessageValues],
     ) -> List[Dict[str, Any]]:
         """
         Convert Anthropic messages list to Responses API `input` items.
@@ -79,7 +74,25 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             role = m["role"]
             content = m.get("content")
 
-            if role == "user":
+            if role == "system":
+                normalized_content = normalize_anthropic_system_message_content(content)
+                if isinstance(normalized_content, str):
+                    input_items.append(
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": normalized_content}],
+                        }
+                    )
+                elif normalized_content is not None:
+                    input_items.append(
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": block["text"]} for block in normalized_content],
+                        }
+                    )
+            elif role == "user":
                 if isinstance(content, str):
                     input_items.append(
                         {
@@ -287,12 +300,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         model: str = anthropic_request["model"]
         messages_list = cast(
-            List[
-                Union[
-                    AnthropicMessagesUserMessageParam,
-                    AnthopicMessagesAssistantMessageParam,
-                ]
-            ],
+            List[AllAnthropicPassThroughMessageValues],
             anthropic_request["messages"],
         )
 

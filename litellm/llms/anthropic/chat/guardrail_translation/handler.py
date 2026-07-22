@@ -20,6 +20,9 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    normalize_anthropic_system_message_content,
+)
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -377,6 +380,30 @@ class AnthropicMessagesHandler(BaseTranslation):
                         block.pop("cache_control", None)
         data["messages"] = converted
 
+    @staticmethod
+    def _extract_midturn_system_text(
+        message: Dict[str, Any],
+        msg_idx: int,
+        texts_to_check: List[str],
+        task_mappings: List[Tuple[int, int | None]],
+    ) -> None:
+        content = message.get("content")
+        normalized_content = normalize_anthropic_system_message_content(content)
+        if normalized_content is None:
+            return
+        if isinstance(normalized_content, str):
+            texts_to_check.append(normalized_content)
+            task_mappings.append((msg_idx, None))
+            return
+        if isinstance(content, list):
+            for content_idx, content_item in enumerate(content):
+                if not isinstance(content_item, dict) or content_item.get("type") != "text":
+                    continue
+                text_str = content_item.get("text")
+                if isinstance(text_str, str):
+                    texts_to_check.append(text_str)
+                    task_mappings.append((msg_idx, content_idx))
+
     def extract_request_tool_names(self, data: dict) -> List[str]:
         """Extract tool names from Anthropic messages request (tools[].name)."""
         names: List[str] = []
@@ -401,7 +428,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         Override this method to customize text/image extraction logic.
         """
         role = str(message.get("role") or "").lower()
-        if skip_system_message and role == "system":
+        if role == "system":
+            self._extract_midturn_system_text(
+                message=message,
+                msg_idx=msg_idx,
+                texts_to_check=texts_to_check,
+                task_mappings=task_mappings,
+            )
             return
         if skip_tool_message and role == "tool":
             return

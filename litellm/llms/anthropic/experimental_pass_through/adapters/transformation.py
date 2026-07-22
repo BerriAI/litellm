@@ -83,14 +83,16 @@ from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
 )
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    AllAnthropicPassThroughMessageValues,
+    normalize_anthropic_system_message_content,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
-    AnthopicMessagesAssistantMessageParam,
     AnthropicFinishReason,
     AnthropicMessagesRequest,
     AnthropicMessagesToolChoice,
-    AnthropicMessagesUserMessageParam,
     AnthropicResponseContentBlockRedactedThinking,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
@@ -353,12 +355,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def translate_anthropic_messages_to_openai(
         self,
-        messages: List[
-            Union[
-                AnthropicMessagesUserMessageParam,
-                AnthopicMessagesAssistantMessageParam,
-            ]
-        ],
+        messages: List[AllAnthropicPassThroughMessageValues],
         model: Optional[str] = None,
     ) -> List:
         new_messages: List[AllMessageValues] = []
@@ -366,6 +363,15 @@ class LiteLLMAnthropicMessagesAdapter:
             user_message: Optional[ChatCompletionUserMessage] = None
             tool_message_list: List[ChatCompletionToolMessage] = []
             new_user_content_list: List[Union[ChatCompletionTextObject, ChatCompletionImageObject]] = []
+            if m["role"] == "system":
+                normalized_content = normalize_anthropic_system_message_content(m.get("content"))
+                if isinstance(normalized_content, str):
+                    user_message = ChatCompletionUserMessage(role="user", content=normalized_content)
+                elif normalized_content is not None:
+                    for content in normalized_content:
+                        text_obj = ChatCompletionTextObject(type="text", text=content["text"])
+                        self._add_cache_control_if_applicable(content, text_obj, model)
+                        new_user_content_list.append(text_obj)
             ## USER MESSAGE ##
             if m["role"] == "user":
                 ## translate user message
@@ -1058,13 +1064,8 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping: Dict[str, str] = {}
 
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI
-        messages_list: List[Union[AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam]] = cast(
-            List[
-                Union[
-                    AnthropicMessagesUserMessageParam,
-                    AnthopicMessagesAssistantMessageParam,
-                ]
-            ],
+        messages_list = cast(
+            List[AllAnthropicPassThroughMessageValues],
             anthropic_message_request["messages"],
         )
         new_messages = self.translate_anthropic_messages_to_openai(
