@@ -1860,6 +1860,48 @@ if MCP_AVAILABLE:
             )
         return JSONResponse({"status": "connected", "offline_access": grant.refresh_token is not None})
 
+    @router.get("/idp/providers", include_in_schema=False)
+    async def mcp_idp_providers(user_api_key_dict: UserAPIKeyAuth = _idp_consent_auth_dep) -> JSONResponse:
+        """List the configured IdP providers a user can connect for delegated OBO. Public fields only
+        (no client secret): the token endpoint that identifies the provider, its display label, and the
+        grant key a connected grant is stored under (for the panel to match connected status)."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.idp_oauth_config import (  # noqa: PLC0415  # lazy: avoids cycle
+            get_idp_oauth_registry,
+        )
+
+        providers = [
+            {
+                "token_url": provider.token_url,
+                "label": provider.label or provider.token_url,
+                "grant_key": provider.grant_key,
+            }
+            for provider in get_idp_oauth_registry().all()
+        ]
+        return JSONResponse({"providers": providers})
+
+    @router.get("/idp/grants", include_in_schema=False)
+    async def mcp_idp_grants(user_api_key_dict: UserAPIKeyAuth = _idp_consent_auth_dep) -> JSONResponse:
+        """The signed-in user's connected IdP grants, for the consent panel. Returns only the grant's
+        identity and lifecycle (never the stored access/refresh tokens)."""
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # lazy: avoids cycle
+            list_user_idp_grants,
+        )
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # lazy: runtime global
+
+        user_id = user_api_key_dict.user_id
+        if not user_id or prisma_client is None:
+            return JSONResponse({"grants": []})
+        grants = [
+            {
+                "grant_key": grant["idp_key"],
+                "connected_at": grant.get("connected_at"),
+                "expires_at": grant.get("expires_at"),
+                "offline_access": bool(grant.get("refresh_token")),
+            }
+            for grant in await list_user_idp_grants(prisma_client, user_id)
+        ]
+        return JSONResponse({"grants": grants})
+
     @router.post(
         "/server/oauth/{server_id}/register",
         include_in_schema=False,

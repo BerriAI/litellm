@@ -18,6 +18,30 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
+export const getMcpIdpProvidersCall = async (accessToken: string) => {
+  /**
+   * List the IdP providers a user can connect for delegated (agent-on-behalf-of) MCP access
+   */
+  try {
+    return await apiClient.get(`/v1/mcp/idp/providers`, { accessToken });
+  } catch (error) {
+    console.error("Failed to get MCP IdP providers:", error);
+    throw error;
+  }
+};
+
+export const getMcpIdpGrantsCall = async (accessToken: string) => {
+  /**
+   * The signed-in user's connected IdP grants (identity + lifecycle only, never the tokens)
+   */
+  try {
+    return await apiClient.get(`/v1/mcp/idp/grants`, { accessToken });
+  } catch (error) {
+    console.error("Failed to get MCP IdP grants:", error);
+    throw error;
+  }
+};
+
 /**
  * Helper file for calls being made to proxy
  */

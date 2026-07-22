@@ -36,6 +36,7 @@ class IdpOAuthProvider(BaseModel):
     client_id: str
     client_secret: SecretStr
     scopes: tuple[str, ...] = ("openid", "offline_access")
+    label: str | None = None
 
     @property
     def grant_key(self) -> str:
@@ -58,6 +59,11 @@ class IdpOAuthProviderRegistry:
 
     def get_by_token_url(self, token_url: str) -> IdpOAuthProvider | None:
         return self._by_key.get(idp_grant_key(token_url))
+
+    def all(self) -> tuple[IdpOAuthProvider, ...]:
+        """Every configured provider (for listing what a user can connect); carries no secrets when
+        the caller serializes only the public fields."""
+        return tuple(self._by_key.values())
 
     def __len__(self) -> int:
         return len(self._by_key)

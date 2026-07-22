@@ -23,6 +23,7 @@ from litellm.proxy._experimental.mcp_server.db import (
     get_user_idp_grant,
     get_user_oauth_credential,
     is_oauth_credential_expired,
+    list_user_idp_grants,
     list_user_oauth_credentials,
     resolve_valid_user_oauth_token,
     rotate_mcp_user_credentials_master_key,
@@ -593,6 +594,32 @@ async def test_idp_grant_is_not_surfaced_as_an_oauth2_credential():
 
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[idp_row])
     assert await list_user_oauth_credentials(prisma, "alice") == []
+
+
+@pytest.mark.asyncio
+async def test_list_user_idp_grants_returns_only_idp_rows_tagged_by_key():
+    # The consent panel lists a user's connected IdPs; the same table also holds oauth2 (connected
+    # server) rows, so the listing must return only the idp_grant rows, each tagged with its idp_key,
+    # and never surface an oauth2 row as a phantom IdP connection.
+    prisma = _make_prisma_with_existing(row=None)
+    await store_user_idp_grant(prisma, "alice", "idp::https://idp/token", "idp-at", refresh_token="idp-rt")
+    idp_blob = _stored_value(prisma)
+    await store_user_oauth_credential(prisma, "alice", "server-1", "oauth-at")
+    oauth_blob = _stored_value(prisma)
+
+    idp_row = MagicMock()
+    idp_row.server_id = "idp::https://idp/token"
+    idp_row.credential_b64 = idp_blob
+    oauth_row = MagicMock()
+    oauth_row.server_id = "server-1"
+    oauth_row.credential_b64 = oauth_blob
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[oauth_row, idp_row])
+
+    grants = await list_user_idp_grants(prisma, "alice")
+    assert len(grants) == 1
+    assert grants[0]["idp_key"] == "idp::https://idp/token"
+    assert grants[0]["access_token"] == "idp-at"
+    assert grants[0]["type"] == "idp_grant"
 
 
 # ── _decode_user_credential helper ────────────────────────────────────────────
