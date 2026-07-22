@@ -18,7 +18,7 @@ if [[ "$POST_PR_COMMENT" == "1" && "${KEEP_RESOURCES:-0}" == "1" ]]; then
   exit 2
 fi
 
-for command_name in az git kubectl docker curl jq openssl rg; do
+for command_name in az git kubectl docker curl jq openssl rg tar; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "Missing required command: $command_name" >&2
     exit 2
@@ -310,8 +310,10 @@ jq -e --arg object_id "$IDENTITY_PRINCIPAL_ID" \
 IMAGE_TAG="wi-e2e-${GIT_SHA}"
 ACR_LOGIN_SERVER="$(az acr show -g "$RESOURCE_GROUP" -n "$ACR_NAME" --query loginServer -o tsv)"
 az acr login --name "$ACR_NAME" --only-show-errors >/dev/null
-docker buildx build --platform linux/amd64 --file gateway/Dockerfile \
-  --tag "${ACR_LOGIN_SERVER}/litellm:$IMAGE_TAG" --push .
+mkdir "$TMP_DIR/build-context"
+git archive HEAD | tar -x -C "$TMP_DIR/build-context"
+docker buildx build --platform linux/amd64 --file "$TMP_DIR/build-context/gateway/Dockerfile" \
+  --tag "${ACR_LOGIN_SERVER}/litellm:$IMAGE_TAG" --push "$TMP_DIR/build-context"
 IMAGE_DIGEST="$(az acr repository show -n "$ACR_NAME" --image "litellm:$IMAGE_TAG" --query digest -o tsv)"
 [[ "$IMAGE_DIGEST" == sha256:* ]] || die "ACR did not return an immutable digest."
 IMAGE_REFERENCE="${ACR_LOGIN_SERVER}/litellm@${IMAGE_DIGEST}"
