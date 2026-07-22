@@ -85,8 +85,8 @@ describe("APIReferenceView", () => {
 
     expect(screen.getByRole("tab", { name: tabName }).getAttribute("aria-selected")).toBe("true");
 
-    const snippet = screen.getAllByTestId(codeBlockTestId).find((block) => block.textContent?.includes(marker));
-    expect(snippet).toBeDefined();
-    expect(snippet?.textContent).toContain(proxyUrl);
+    const selectedPanel = screen.getByRole("tabpanel");
+    expect(selectedPanel.textContent).toContain(marker);
+    expect(selectedPanel.textContent).toContain(proxyUrl);
   });
 });
