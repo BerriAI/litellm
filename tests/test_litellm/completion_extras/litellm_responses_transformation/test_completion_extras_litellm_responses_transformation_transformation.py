@@ -3188,3 +3188,106 @@ def test_convert_tools_to_responses_format_text_format_passes_through():
         [{"type": "custom", "custom": {"name": "A", "format": {"type": "text"}}}]
     )
     assert converted[0] == {"type": "custom", "name": "A", "format": {"type": "text"}}
+
+
+def test_convert_chat_completion_messages_maps_custom_tool_call_history():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "use ApplyPatch"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_c",
+                        "type": "custom",
+                        "custom": {"name": "ApplyPatch", "input": "*** Begin Patch"},
+                    },
+                    {
+                        "id": "call_f",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": '{"cmd": "ls"}'},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_c", "content": "patch applied"},
+            {"role": "tool", "tool_call_id": "call_f", "content": "a.py"},
+        ]
+    )
+    assert {
+        "type": "custom_tool_call",
+        "call_id": "call_c",
+        "name": "ApplyPatch",
+        "input": "*** Begin Patch",
+    } in input_items
+    assert {"type": "custom_tool_call_output", "call_id": "call_c", "output": "patch applied"} in input_items
+    assert {"type": "function_call", "call_id": "call_f", "name": "shell", "arguments": '{"cmd": "ls"}'} in input_items
+    assert {
+        "type": "function_call_output",
+        "call_id": "call_f",
+        "output": [{"type": "input_text", "text": "a.py"}],
+    } in input_items
+
+
+def test_convert_chat_completion_messages_still_rejects_unknown_tool_call_shape():
+    import pytest
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    with pytest.raises(ValueError, match="tool call not supported"):
+        handler.convert_chat_completion_messages_to_responses_api(
+            [{"role": "assistant", "tool_calls": [{"id": "call_x", "type": "mystery"}]}]
+        )
+
+
+def test_output_item_done_stateless_emits_complete_tool_call():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    for item, expected_name, expected_args in (
+        (
+            {"type": "function_call", "call_id": "call_f", "name": "shell", "arguments": '{"cmd": "ls"}'},
+            "shell",
+            '{"cmd": "ls"}',
+        ),
+        (
+            {"type": "custom_tool_call", "call_id": "call_c", "name": "ApplyPatch", "input": "*** Begin Patch"},
+            "ApplyPatch",
+            "*** Begin Patch",
+        ),
+    ):
+        chunk = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            {"type": "response.output_item.done", "output_index": 2, "item": item}
+        )
+        tool_calls = chunk.choices[0].delta.tool_calls
+        assert tool_calls is not None and len(tool_calls) == 1
+        assert tool_calls[0].id == item["call_id"]
+        assert tool_calls[0].function.name == expected_name
+        assert tool_calls[0].function.arguments == expected_args
+        assert tool_calls[0].index == 2
+        assert chunk.choices[0].finish_reason is None
+
+
+def test_output_item_done_with_stream_map_keeps_empty_delta():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunk = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {"type": "custom_tool_call", "call_id": "call_c", "name": "ApplyPatch", "input": "x"},
+        },
+        tool_call_index_map={0: 0},
+    )
+    assert chunk.choices[0].delta.tool_calls is None
+    assert chunk.choices[0].finish_reason is None

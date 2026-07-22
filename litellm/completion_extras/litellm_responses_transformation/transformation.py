@@ -220,6 +220,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> Tuple[List[Any], Optional[str]]:
         input_items: List[Any] = []
         instructions: Optional[str] = None
+        custom_tool_call_ids: set = set()
 
         for msg in messages:
             role = msg.get("role")
@@ -265,18 +266,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 else:
                     # Fallback: convert unexpected types to input_text
                     tool_output = [{"type": "input_text", "text": str(content)}]
-                input_items.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": tool_call_id,
-                        "output": tool_output,
-                    }
-                )
+                if tool_call_id in custom_tool_call_ids:
+                    input_items.append(
+                        {
+                            "type": "custom_tool_call_output",
+                            "call_id": tool_call_id,
+                            "output": content if isinstance(content, str) else tool_output,
+                        }
+                    )
+                else:
+                    input_items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": tool_call_id,
+                            "output": tool_output,
+                        }
+                    )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
                 for r_item in _get_reasoning_items(msg):
                     input_items.append(_reasoning_item_to_response_input(r_item))
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
+                    custom = tool_call.get("custom")
                     if function:
                         input_tool_call: Dict[str, Any] = {
                             "type": "function_call",
@@ -287,6 +298,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         if "arguments" in function:
                             input_tool_call["arguments"] = function["arguments"]
                         input_items.append(input_tool_call)
+                    elif isinstance(custom, dict):
+                        custom_tool_call_ids.add(tool_call["id"])
+                        input_items.append(
+                            {
+                                "type": "custom_tool_call",
+                                "call_id": tool_call["id"],
+                                "name": custom.get("name", ""),
+                                "input": custom.get("input", ""),
+                            }
+                        )
                     else:
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
@@ -1268,6 +1289,27 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") in ("function_call", "custom_tool_call"):
+                if tool_call_index_map is None:
+                    # Stateless callers (the responses guardrail handler extracting
+                    # tool calls from a buffered output_item.done) get the complete
+                    # tool call; per-stream callers already received it via
+                    # output_item.added and the argument delta events
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(
+                                    tool_calls=[
+                                        {
+                                            **_tool_call_dict_from_output_item(dict(output_item)),
+                                            "index": parsed_chunk.get("output_index", 0),
+                                        }
+                                    ]
+                                ),
+                                finish_reason=None,
+                            )
+                        ]
+                    )
                 # Do NOT emit finish_reason here — response.completed handles the terminal
                 # finish_reason. Emitting "tool_calls" here would prematurely terminate
                 # the stream before subsequent tool calls arrive (same fix as #17246 for
