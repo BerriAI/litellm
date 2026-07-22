@@ -574,6 +574,45 @@ describe("UsagePage", () => {
     expect(successfulRequestElements.length).toBeGreaterThan(0);
   });
 
+  it("does not crash when a breakdown entry is missing its metrics (issue #33381)", async () => {
+    const malformedSpendData = {
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: {
+            spend: 125.75,
+            api_requests: 1500,
+            successful_requests: 1450,
+            failed_requests: 50,
+            total_tokens: 75000,
+            prompt_tokens: 45000,
+            completion_tokens: 30000,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          breakdown: {
+            models: { "gpt-4": { metadata: {}, api_key_breakdown: {} } },
+            model_groups: { "gpt-4": { metadata: {}, api_key_breakdown: {} } },
+            api_keys: { "sk-test123": { metadata: {} } },
+            providers: { openai: {} },
+            mcp_servers: {},
+          },
+        },
+      ],
+      metadata: { total_spend: 125.75 },
+    };
+    mockUserDailyActivityAggregatedCall.mockResolvedValueOnce(malformedSpendData as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Daily Spend")).toBeInTheDocument();
+    expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+  });
+
   it("should display usage metrics and charts", async () => {
     renderWithProviders(<UsagePage {...defaultProps} />);
 

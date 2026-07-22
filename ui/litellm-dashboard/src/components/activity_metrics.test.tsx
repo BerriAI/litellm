@@ -716,6 +716,31 @@ describe("processActivityData", () => {
     expect(result["gpt-4"].total_spend).toBe(100.5);
   });
 
+  it("does not crash when a breakdown entry is missing its metrics (issue #33381)", () => {
+    const dailyActivityWithMissingMetrics = {
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: { ...EMPTY_SPEND_METRICS, spend: 100.5, api_requests: 100 },
+          breakdown: {
+            ...EMPTY_BREAKDOWN,
+            models: {
+              "gpt-4": { metadata: {}, api_key_breakdown: {} },
+            },
+          },
+        },
+      ],
+    } as unknown as { results: DailyData[] };
+
+    const result = processActivityData(dailyActivityWithMissingMetrics, "models");
+
+    expect(result).toHaveProperty("gpt-4");
+    expect(result["gpt-4"].total_spend).toBe(0);
+    expect(result["gpt-4"].total_requests).toBe(0);
+    expect(result["gpt-4"].daily_data[0].metrics.spend).toBe(0);
+    expect(result["gpt-4"].daily_data[0].metrics.api_requests).toBe(0);
+  });
+
   it("should process data for mcp_servers key", () => {
     const dailyActivityWithMCP: { results: DailyData[] } = {
       results: [
