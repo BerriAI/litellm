@@ -1077,6 +1077,31 @@ async def new_team(
                     detail={"error": f"Team id = {data.team_id} already exists. Please use a different team id."},
                 )
 
+        # Apply defaults from litellm.default_team_params for any fields
+        # not explicitly provided in the request. This runs before the org
+        # limit checks below so inherited defaults (e.g. models) are validated
+        # against the organization's allowlist like explicit values.
+        for field in (
+            "max_budget",
+            "budget_duration",
+            "tpm_limit",
+            "rpm_limit",
+            "team_member_permissions",
+        ):
+            if getattr(data, field, None) is None:
+                default_value = _get_default_team_param(field)
+                if default_value is not None:
+                    setattr(data, field, default_value)
+
+        # `models` defaults to an empty list rather than None on the request, so
+        # use model_fields_set to distinguish "field omitted" (apply the default,
+        # matching SSO-provisioned team behavior) from an explicit `models: []`
+        # (meaning unrestricted access, which must be preserved).
+        if "models" not in data.model_fields_set:
+            default_models = _get_default_team_param("models")
+            if default_models is not None:
+                data.models = default_models
+
         # check org key limits - done here to handle inheriting org id from team
         if data.organization_id is not None and prisma_client is not None:
             org_table = await get_org_object(
@@ -1095,20 +1120,6 @@ async def new_team(
                 data=data,
                 prisma_client=prisma_client,
             )
-
-        # Apply defaults from litellm.default_team_params for any fields
-        # not explicitly provided in the request.
-        for field in (
-            "max_budget",
-            "budget_duration",
-            "tpm_limit",
-            "rpm_limit",
-            "team_member_permissions",
-        ):
-            if getattr(data, field, None) is None:
-                default_value = _get_default_team_param(field)
-                if default_value is not None:
-                    setattr(data, field, default_value)
 
         # Legacy fallback: apply max_budget from default_team_settings (YAML config)
         # if still not set after checking default_team_params.
