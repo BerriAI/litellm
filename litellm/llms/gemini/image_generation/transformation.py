@@ -31,6 +31,35 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def raise_if_image_gen_flagged(
+    response_data: dict,
+    model: str,
+    raw_response: httpx.Response,
+    llm_provider: str = "gemini",
+) -> None:
+    """
+    Gemini image-gen returns a candidate with a flagged finishReason (e.g.
+    IMAGE_SAFETY / IMAGE_PROHIBITED_CONTENT) and no inlineData on a refusal.
+    The chat path surfaces these; the image path used to drop them silently
+    and return an empty ImageResponse. Raise so callers can tell a refusal
+    apart from an unrelated failure. Reasons reuse the central finish-reason
+    map (content_filter == flagged).
+    """
+    from litellm.exceptions import ContentPolicyViolationError
+    from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
+
+    for candidate in response_data.get("candidates", []):
+        finish_reason = candidate.get("finishReason")
+        if finish_reason and _FINISH_REASON_MAP.get(finish_reason) == "content_filter":
+            raise ContentPolicyViolationError(
+                message=f"Gemini image generation blocked with finishReason={finish_reason}",
+                model=model,
+                llm_provider=llm_provider,
+                response=raw_response,
+                provider_specific_fields={"finish_reason": finish_reason},
+            )
+
+
 class GoogleImageGenConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -212,6 +241,11 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                                     ),
                                 )
                             )
+
+            # A safety/prohibited block returns a candidate with finishReason and
+            # no inlineData — surface it instead of returning empty data.
+            if not model_response.data:
+                raise_if_image_gen_flagged(response_data, model, raw_response)
 
             # Extract usage metadata for Gemini models
             if "usageMetadata" in response_data:
