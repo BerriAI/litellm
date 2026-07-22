@@ -1533,6 +1533,125 @@ def test_add_team_models_to_all_models():
     assert result == {"gpt-4-model-2": {"team1"}}
 
 
+def _make_router_with_access_groups(model_names, model_access_groups, deployments):
+    llm_router = MagicMock()
+    llm_router.get_model_names.return_value = model_names
+    llm_router.get_model_access_groups.return_value = model_access_groups
+
+    def get_model_list(model_name=None, team_id=None):
+        matched = [
+            deployment
+            for deployment in deployments
+            if deployment["model_name"] == model_name
+            and (
+                team_id is None
+                or deployment.get("model_info", {}).get("team_id") is None
+                or deployment.get("model_info", {}).get("team_id") == team_id
+            )
+        ]
+        return matched or None
+
+    llm_router.get_model_list.side_effect = get_model_list
+    return llm_router
+
+
+def test_add_team_models_to_all_models_resolves_config_access_group():
+    """
+    LIT-4433: a CONFIG-defined access group (model_info.access_groups) named in
+    team.models must resolve to its member deployments' ids. The pre-fix code
+    passed the group name straight to get_model_list, which never matched, so the
+    team's /v2/model/info?include_team_models=true result was empty.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["test-access-group"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["team-allowed-model-a"],
+        model_access_groups={"test-access-group": ["team-allowed-model-a"]},
+        deployments=[{"model_name": "team-allowed-model-a", "model_info": {"id": "model-a-id"}}],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"model-a-id": {"team-a"}}
+
+
+def test_add_team_models_to_all_models_resolves_mixed_literal_and_access_group():
+    """A team.models list mixing a literal model name and a config access-group
+    name must resolve both to their deployment ids."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["team-allowed-model-b", "test-access-group"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["team-allowed-model-a", "team-allowed-model-b"],
+        model_access_groups={"test-access-group": ["team-allowed-model-a"]},
+        deployments=[
+            {"model_name": "team-allowed-model-a", "model_info": {"id": "model-a-id"}},
+            {"model_name": "team-allowed-model-b", "model_info": {"id": "model-b-id"}},
+        ],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"model-a-id": {"team-a"}, "model-b-id": {"team-a"}}
+
+
+def test_add_team_models_to_all_models_excludes_other_access_group():
+    """Only the access group named in team.models is expanded; deployments that
+    belong solely to a different access group must not leak into the team map."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["test-access-group"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["team-allowed-model-a", "forbidden-model"],
+        model_access_groups={
+            "test-access-group": ["team-allowed-model-a"],
+            "other-access-group": ["forbidden-model"],
+        },
+        deployments=[
+            {"model_name": "team-allowed-model-a", "model_info": {"id": "model-a-id"}},
+            {"model_name": "forbidden-model", "model_info": {"id": "forbidden-id"}},
+        ],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"model-a-id": {"team-a"}}
+
+
+def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_name():
+    """A BYOK deployment owned by a DIFFERENT team but sharing the resolved model
+    name must not be added for this team. Guards the team_id filter passed to
+    get_model_list: dropping it would leak the other team's private deployment."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team-a"
+    team.models = ["test-access-group"]
+
+    llm_router = _make_router_with_access_groups(
+        model_names=["team-allowed-model-a"],
+        model_access_groups={"test-access-group": ["team-allowed-model-a"]},
+        deployments=[
+            {"model_name": "team-allowed-model-a", "model_info": {"id": "model-a-id", "team_id": "team-a"}},
+            {"model_name": "team-allowed-model-a", "model_info": {"id": "other-team-byok-id", "team_id": "team-b"}},
+        ],
+    )
+
+    result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
+    assert result == {"model-a-id": {"team-a"}}
+
+
 @pytest.mark.asyncio
 async def test_apply_search_filter_matches_team_public_model_name():
     """
