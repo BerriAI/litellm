@@ -283,6 +283,26 @@ def get[R: BaseModel](
     return _classify(resp, response_type)
 
 
+def get_external[R: BaseModel](
+    url: str,
+    *,
+    response_type: type[R],
+    timeout: float = 30.0,
+) -> Result[R]:
+    """GET an absolute URL outside the proxy (e.g. a public /.well-known document).
+    Unlike the transport wrappers there is no proxy base url and no proxy auth; the
+    response still gets the same tagged-union classification as every other call."""
+    try:
+        resp = requests.get(
+            url,
+            headers={"Accept": "application/json"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
+
+
 def delete[R: BaseModel](
     url: URL,
     *,
