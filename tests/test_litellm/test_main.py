@@ -998,6 +998,64 @@ def test_responses_api_bridge_check_dict_effort_none_with_summary_routes_to_resp
     assert model_info.get("mode") == "responses"
 
 
+def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat():
+    """
+    Chat-only OpenAI-compatible backends registered under the openai provider with a
+    custom api_base and gpt-5.4+ model names serve tools-without-reasoning fine and
+    have no /responses route; the unset-effort arm must not reroute them.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base="http://vllm.internal:8000/v1",
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_routes():
+    """Explicit reasoning_effort keeps its pre-existing bridging behavior on any api_base."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="high",
+            api_base="http://vllm.internal:8000/v1",
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes():
+    """Azure OpenAI always sets api_base and does enforce the constraint; keep bridging."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="azure",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base="https://myresource.openai.azure.com",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check
