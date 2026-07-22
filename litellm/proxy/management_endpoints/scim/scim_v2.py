@@ -1880,8 +1880,16 @@ async def delete_group(
 
 async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team, prisma_client
-) -> Tuple[Dict[str, Any], Set[str]]:
-    """Process patch operations for a group and return update data and final members."""
+) -> Tuple[Dict[str, Any], Set[str], Set[str] | None]:
+    """Process patch operations for a group and return update data, final members
+    and, when the request contained a member ``replace`` op, the absolute target
+    roster it declared (``None`` otherwise).
+
+    ``add``/``remove`` are deltas relative to the current roster, but ``replace``
+    is absolute: it declares the roster is exactly this set, so the caller must
+    reconcile against it as a set-to-target rather than rebasing it onto a
+    concurrently-mutated roster.
+    """
     update_data: Dict[str, Any] = {}
 
     # Create a fresh copy of existing metadata to avoid Prisma issues
@@ -1967,7 +1975,12 @@ async def _process_group_patch_operations(
     if metadata:
         update_data["metadata"] = metadata
 
-    return update_data, final_members
+    member_replace_present = any(
+        op.op == "replace" and (op.path or "").lower().startswith("members") for op in patch_ops.Operations
+    )
+    replace_target = set(final_members) if member_replace_present else None
+
+    return update_data, final_members, replace_target
 
 
 async def _apply_group_patch_updates(group_id: str, update_data: Dict[str, Any], prisma_client):
@@ -2038,7 +2051,9 @@ async def patch_group(
         existing_team = await _check_team_exists(group_id)
 
         # Process patch operations
-        update_data, final_members = await _process_group_patch_operations(patch_ops, existing_team, prisma_client)
+        update_data, final_members, replace_target = await _process_group_patch_operations(
+            patch_ops, existing_team, prisma_client
+        )
 
         snapshot_members = set(await _get_team_member_user_ids_from_team(existing_team))
         intended_add = final_members - snapshot_members
@@ -2053,7 +2068,9 @@ async def patch_group(
             else snapshot_members
         )
 
-        effective_final = (refreshed_current | intended_add) - intended_remove
+        effective_final = (
+            replace_target if replace_target is not None else (refreshed_current | intended_add) - intended_remove
+        )
 
         await _handle_group_membership_changes(group_id, refreshed_current, effective_final)
 
