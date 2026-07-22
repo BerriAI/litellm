@@ -3804,7 +3804,7 @@ class ProxyConfig:
         Load and parse a YAML file
         """
         try:
-            with open(file_path, "r") as file:
+            with open(file_path, "r", encoding="utf-8") as file:
                 return yaml.safe_load(file) or {}
         except Exception as e:
             raise Exception(f"Error loading yaml file {file_path}: {str(e)}")
@@ -3825,7 +3825,7 @@ class ProxyConfig:
         # Load existing config
         ## Yaml
         if os.path.exists(f"{file_path}"):
-            with open(f"{file_path}", "r") as config_file:
+            with open(f"{file_path}", "r", encoding="utf-8") as config_file:
                 config = yaml.safe_load(config_file)
         elif file_path is not None:
             raise Exception(f"Config file not found: {file_path}")
