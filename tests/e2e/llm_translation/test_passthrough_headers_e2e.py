@@ -1,29 +1,32 @@
 """Live e2e: custom pass-through endpoints inject configured headers and honor
 x-pass-* client headers (prefix stripped) on the way to the upstream.
 
-The upstream is a real public echo service (httpbin.org/anything). Creating the
-route via POST /config/pass_through_endpoint, calling it with a virtual key, and
-asserting the echo body is the product path operators use; a mock would not
-prove the proxy actually rewrote the outbound request.
+The upstream is the real Anthropic Messages API rather than an echo service:
+Anthropic doesn't echo request headers back, but it does gate real behavior on
+two of them, which is enough to prove forwarding without a mock. A static
+x-api-key configured on the pass-through endpoint (the caller never supplies
+one) must reach upstream, or every call 401s; an invalid x-pass-anthropic-version
+sent by the caller must reach upstream with the prefix stripped, and Anthropic
+echoes the exact value back in its 400 body, so a unique-per-run marker proves
+this specific request's header - not a stale or cached one - got there.
 """
 
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from e2e_config import unique_marker
-from e2e_http import AuthHeaders, NoBody, StreamingResponse, require_successful_call, unwrap
+from e2e_http import AuthHeaders, NoBody, require_successful_call, unwrap
+from endpoints_client import MessagesResult
 from lifecycle import ResourceManager
-from models import KeyGenerateBody
+from models import ChatMessage, KeyGenerateBody
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-ECHO_TARGET = "https://httpbin.org/anything"
-STATIC_HEADER_NAME = "x-e2e-static-header"
-PASS_HEADER_STEM = "e2e-client-marker"
-PASS_HEADER_NAME = f"x-pass-{PASS_HEADER_STEM}"
+ANTHROPIC_MESSAGES_TARGET = "https://api.anthropic.com/v1/messages"
+MODEL = "claude-haiku-4-5-20251001"
 
 
 class PassThroughCreateBody(BaseModel):
@@ -48,30 +51,26 @@ class PassThroughDeleteParams(BaseModel):
     endpoint_id: str
 
 
-class EchoCallHeaders(AuthHeaders):
+class AnthropicPassThroughHeaders(AuthHeaders):
     content_type: str = Field(default="application/json", serialization_alias="Content-Type")
-    x_pass_e2e_client_marker: str = Field(serialization_alias="x-pass-e2e-client-marker")
+    x_pass_anthropic_version: str = Field(serialization_alias="x-pass-anthropic-version")
 
 
-class EchoBody(BaseModel):
-    ping: str
+class AnthropicMessagesBody(BaseModel):
+    model: str
+    max_tokens: int = 8
+    messages: list[ChatMessage]
 
 
-class EchoResponse(BaseModel):
-    headers: dict[str, str]
-
-
-def _create_passthrough(
-    client: PassthroughClient, *, path: str, static_value: str
-) -> PassThroughEndpoint:
+def _create_passthrough(client: PassthroughClient, *, path: str) -> PassThroughEndpoint:
     created = unwrap(
         client.proxy.transport.post(
             "/config/pass_through_endpoint",
             headers=client.proxy.transport.master,
             json=PassThroughCreateBody(
                 path=path,
-                target=ECHO_TARGET,
-                headers={STATIC_HEADER_NAME: static_value},
+                target=ANTHROPIC_MESSAGES_TARGET,
+                headers={"x-api-key": "os.environ/ANTHROPIC_API_KEY"},
             ),
             response_type=PassThroughCreateResponse,
         )
@@ -92,12 +91,8 @@ def _delete_passthrough(client: PassthroughClient, endpoint_id: str) -> None:
     )
 
 
-def _echo_headers(resp: StreamingResponse) -> dict[str, str]:
-    try:
-        echo = EchoResponse.model_validate_json(resp.body)
-    except ValidationError as exc:
-        pytest.fail(f"echo upstream did not return a headers map: {exc}; body={resp.body[:300]}")
-    return {k.lower(): v for k, v in echo.headers.items()}
+def _messages_body() -> AnthropicMessagesBody:
+    return AnthropicMessagesBody(model=MODEL, messages=[ChatMessage(role="user", content="Say hi.")])
 
 
 class TestPassthroughHeaders:
@@ -110,10 +105,8 @@ class TestPassthroughHeaders:
     ) -> None:
         marker = unique_marker()
         path = f"/e2e-passthrough-headers-{marker}"
-        static_value = f"static-{marker}"
-        client_value = f"client-{marker}"
 
-        endpoint = _create_passthrough(client, path=path, static_value=static_value)
+        endpoint = _create_passthrough(client, path=path)
         assert endpoint.id is not None
         resources.defer(lambda: _delete_passthrough(client, endpoint.id or ""))
 
@@ -128,23 +121,32 @@ class TestPassthroughHeaders:
 
         result = client.proxy.transport.send(
             path,
-            headers=EchoCallHeaders(
+            headers=AnthropicPassThroughHeaders(
                 authorization=f"Bearer {key}",
-                x_pass_e2e_client_marker=client_value,
+                x_pass_anthropic_version="2023-06-01",
             ),
-            json=EchoBody(ping=marker),
+            json=_messages_body(),
         )
         require_successful_call(result)
+        completion = MessagesResult.model_validate_json(result.body)
+        assert completion.text.strip(), (
+            f"static x-api-key must reach Anthropic for the call to succeed at all; got {result.body[:300]}"
+        )
 
-        upstream = _echo_headers(result)
-        assert upstream.get(STATIC_HEADER_NAME) == static_value, (
-            f"configured pass-through header {STATIC_HEADER_NAME!r} not on upstream "
-            f"request; got {upstream}"
+        invalid_version = f"e2e-passhdr-{unique_marker()}"
+        blocked = client.proxy.transport.send(
+            path,
+            headers=AnthropicPassThroughHeaders(
+                authorization=f"Bearer {key}",
+                x_pass_anthropic_version=invalid_version,
+            ),
+            json=_messages_body(),
         )
-        assert upstream.get(PASS_HEADER_STEM) == client_value, (
-            f"x-pass-* header should strip the prefix and forward as {PASS_HEADER_STEM!r}; "
-            f"got {upstream}"
+        assert blocked.status_code == 400, (
+            f"expected Anthropic to reject the invalid anthropic-version, got "
+            f"{blocked.status_code}: {blocked.body[:300]}"
         )
-        assert PASS_HEADER_NAME not in upstream, (
-            "upstream must not see the x-pass- prefix; proxy should strip it"
+        assert invalid_version in blocked.body, (
+            f"x-pass-anthropic-version must reach upstream with the prefix stripped; "
+            f"marker missing from Anthropic's error body: {blocked.body[:300]}"
         )
