@@ -889,6 +889,65 @@ def test_responses_api_bridge_check_reasoning_none_with_summary_still_routes_to_
     assert model_info.get("mode") == "responses"
 
 
+def test_responses_api_bridge_check_gpt_5_4_custom_tools_only_stays_chat():
+    """
+    Chat Completions serves custom (grammar) tools natively with reasoning on; only
+    FUNCTION tools trigger the OpenAI rejection. Custom-only requests must stay on chat
+    so responses keep the native custom tool_call shape instead of the bridge's
+    function-shaped mapping.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "custom", "custom": {"name": "ApplyPatch", "description": "V4A patch"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_mixed_function_and_custom_tools_routes_to_responses():
+    """One function tool in the mix is enough to make chat unservable with reasoning on."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[
+                {"type": "custom", "custom": {"name": "ApplyPatch"}},
+                {"type": "function", "function": {"name": "shell"}},
+            ],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_flat_function_tool_routes_to_responses():
+    """Responses-style flat function tool defs still count as function tools."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "name": "shell", "parameters": {"type": "object"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check
