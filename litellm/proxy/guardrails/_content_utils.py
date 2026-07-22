@@ -25,6 +25,15 @@ from typing import Any, Callable, Dict, FrozenSet, Iterator, List
 # guardrails on those paths are a separate scope.
 TEXT_CONTENT_CALL_TYPES: FrozenSet[str] = frozenset({"completion", "acompletion", "aresponses"})
 
+# Roles that only make sense alongside tool-call metadata (``tool_call_id``,
+# ``name``, …). ``build_inspection_messages`` flattens each message down to a
+# plain ``{role, content}`` pair, dropping that metadata, so emitting these
+# roles produces payloads that remote guardrail APIs reject (e.g. AIM returns
+# 422 "Tool Call ID required on tool calls"). Their content is intermediate
+# tool plumbing, not user input or model output, so it is excluded from
+# guardrail inspection.
+INSPECTION_EXCLUDED_ROLES: FrozenSet[str] = frozenset({"tool", "function"})
+
 
 def is_text_content_call_type(call_type: str) -> bool:
     """Return True if ``call_type`` carries free-form text that text
@@ -217,7 +226,9 @@ def build_inspection_messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
 
     Each returned message has a plain-string ``content`` — multimodal text
     parts are joined with newlines and Responses-API ``input`` is lifted
-    into synthetic messages. Messages with no inspectable text are dropped.
+    into synthetic messages. Messages with no inspectable text are dropped,
+    as are ``tool``/``function`` role messages (see
+    :data:`INSPECTION_EXCLUDED_ROLES`).
 
     Hooks that POST ``{"messages": [...]}`` to an external service should
     call this instead of ``data.get("messages", [])`` so the Responses API
@@ -227,9 +238,11 @@ def build_inspection_messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
     for message in _iter_inspection_messages(data):
         if not isinstance(message, dict):
             continue
+        role = message.get("role", "user") or "user"
+        if role in INSPECTION_EXCLUDED_ROLES:
+            continue
         text = "\n".join(_iter_text_parts_in_content(message.get("content")))
         if not text:
             continue
-        role = message.get("role", "user") or "user"
         flattened.append({"role": role, "content": text})
     return flattened

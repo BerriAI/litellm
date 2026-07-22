@@ -462,6 +462,41 @@ def test_build_inspection_messages_empty_data():
     assert build_inspection_messages({"input": ""}) == []
 
 
+def test_build_inspection_messages_drops_tool_and_function_roles():
+    """AIM (and other remote guardrail APIs) validate against an
+    OpenAI-compatible schema that requires ``tool_call_id`` on ``tool`` role
+    messages. ``build_inspection_messages`` flattens messages to plain
+    ``{role, content}`` and discards that metadata, so passing tool/function
+    role messages through produced a 422 "Tool Call ID required on tool calls"
+    and made AIM non-functional for any conversation with tool calls. They
+    must be filtered out entirely."""
+    data = {
+        "messages": [
+            {"role": "system", "content": "be helpful"},
+            {"role": "user", "content": "show me milk"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "search_products", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "milk $3.99"},
+            {"role": "function", "name": "search_products", "content": "eggs $2.50"},
+            {"role": "assistant", "content": "Here is the milk you asked for"},
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "show me milk"},
+        {"role": "assistant", "content": "Here is the milk you asked for"},
+    ]
+
+
 # ── has_non_string_content ────────────────────────────────────────────────────
 
 
