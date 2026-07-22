@@ -129,6 +129,10 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        supported_params = self.get_supported_openai_params(model)
+        for key, value in non_default_params.items():
+            if key in supported_params:
+                optional_params[key] = value
         return optional_params
 
     def validate_environment(self, headers: dict, *args, **kwargs) -> dict:
@@ -156,7 +160,12 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         model_dict = {}
         model_dict["name"] = model
         model_dict["version"] = optional_params.get("version", "latest")
-        model_dict["params"] = optional_params.get("parameters", {})
+        params = optional_params.get("parameters", {}).copy()
+        if "dimensions" in optional_params:
+            params["dimensions"] = optional_params["dimensions"]
+        if "encoding_format" in optional_params:
+            params["encoding_format"] = optional_params["encoding_format"]
+        model_dict["params"] = params
         timeout = optional_params.get("timeout", None)
         if timeout is not None:
             model_dict["timeout"] = timeout
