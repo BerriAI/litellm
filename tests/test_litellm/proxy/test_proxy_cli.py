@@ -13,7 +13,6 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
-import builtins
 import types
 
 import uvicorn
@@ -88,6 +87,44 @@ class TestProxyInitializationHelpers:
             api_key="My API Key", base_url="http://test-url"
         )
         mock_client.chat.completions.create.assert_called()
+
+    @patch("sys.platform", "linux")
+    def test_get_loop_type_returns_uvloop_when_available(self):
+        """On Linux/macOS with a working uvloop install, return "uvloop"."""
+        # uvloop is in the proxy extras and importable in this test env.
+        assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
+
+    @patch("sys.platform", "win32")
+    def test_get_loop_type_returns_none_on_windows(self):
+        """Windows / cygwin don't ship uvloop — let uvicorn pick the default."""
+        assert ProxyInitializationHelpers._get_loop_type() is None
+
+    @patch("sys.platform", "linux")
+    def test_get_loop_type_returns_none_when_uvloop_unimportable(self):
+        """GH #20933: uvloop 0.21.0 fails to import on Python 3.14.2 with
+        ``ImportError: cannot import name 'BaseDefaultEventLoopPolicy'
+        from 'asyncio.events'``. Before the fix this propagated up
+        through ``uvicorn.run`` and crashed proxy startup. The probe in
+        ``_get_loop_type`` now catches the ImportError and falls back
+        to ``None`` so uvicorn picks the default asyncio loop.
+
+        Implementation note: setting ``sys.modules["uvloop"] = None``
+        is the documented Python idiom for forcing the next
+        ``import uvloop`` statement to raise ImportError (see CPython
+        importlib source). This routes through the real ``try / except``
+        block in ``_get_loop_type`` rather than mocking it away, so
+        coverage tools see the fallback branch executed.
+        """
+        # Drop any cached real-uvloop module so the patched None takes effect.
+        original = sys.modules.get("uvloop", _MISSING := object())
+        sys.modules["uvloop"] = None  # type: ignore[assignment]
+        try:
+            assert ProxyInitializationHelpers._get_loop_type() is None
+        finally:
+            if original is _MISSING:
+                sys.modules.pop("uvloop", None)
+            else:
+                sys.modules["uvloop"] = original
 
     def test_get_default_unvicorn_init_args(self):
         # Test without log_config

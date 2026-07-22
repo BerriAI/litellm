@@ -520,9 +520,29 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def _get_loop_type():
-        """Helper function to determine the event loop type based on platform"""
+        """Helper function to determine the event loop type based on platform.
+
+        Returns ``None`` (let uvicorn pick the default asyncio loop) when:
+
+          - the platform doesn't ship uvloop (Windows + cygwin); OR
+          - uvloop is installed but can't be imported on the current
+            Python — see GH #20933, where the pinned ``uvloop==0.21.0``
+            fails on Python 3.14.2 with ``ImportError: cannot import
+            name 'BaseDefaultEventLoopPolicy' from 'asyncio.events'``.
+
+        Probing via ``import uvloop`` here is cheap (one-time at proxy
+        startup) and lets the proxy boot under any Python version even
+        when the lock-file-pinned uvloop happens to be incompatible.
+        Users wanting uvloop's perf back on a previously-broken Python
+        install ``uvloop>=0.22.1`` themselves; the probe picks the new
+        wheel up automatically.
+        """
         if sys.platform in ("win32", "cygwin", "cli"):
-            return None  # Let uvicorn choose the default loop on Windows
+            return None
+        try:
+            import uvloop  # noqa: F401
+        except ImportError:
+            return None
         return "uvloop"
 
     @staticmethod
