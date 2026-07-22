@@ -4802,7 +4802,7 @@
         "max_input_tokens": 32000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
-        "mode": "chat",
+        "mode": "realtime",
         "output_cost_per_audio_token": 2e-05,
         "output_cost_per_token": 2.4e-06,
         "supported_endpoints": [
