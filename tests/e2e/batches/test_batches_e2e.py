@@ -26,6 +26,7 @@ import pytest
 from e2e_config import require_env, unique_marker
 
 from batch_client import (
+    UPLOAD_FILENAME,
     BatchClient,
     BatchCreateBody,
     BatchObject,
@@ -508,6 +509,72 @@ class TestBatchFileContent:
         got = downloaded.body.rstrip("\n")
         assert got == expected, (
             "downloaded file content must match the uploaded JSONL bytes"
+        )
+
+
+class TestOpenAIFiles:
+    """GET /v1/files (list) and GET /v1/files/{id} (retrieve) over the OpenAI route.
+
+    The proxy lists the OpenAI org's raw file ids, so the list case uploads a raw
+    (provider-routed) file whose id matches what list returns; retrieve re-encodes
+    the id it was called with, so the model-encoded upload round-trips unchanged.
+    """
+
+    @pytest.mark.covers(
+        "llm.files.openai.list.nonstream.works",
+        exercised_on=["files"],
+    )
+    def test_uploaded_file_appears_in_list(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        key = resources.key()
+        file = unwrap(
+            client.upload_file(
+                content=render_jsonl(OPENAI_BATCH_MODEL),
+                form=FileUploadForm(purpose="batch"),
+                key=key,
+                provider="openai",
+            )
+        )
+        resources.defer(
+            quietly(lambda: client.delete_file(file.id, key=key, provider="openai"))
+        )
+
+        listed = unwrap(client.list_files(key=key))
+        assert listed.object is None or listed.object == "list", (
+            f"list envelope object={listed.object!r}"
+        )
+        match = next((entry for entry in listed.data if entry.id == file.id), None)
+        assert match is not None, f"uploaded file {file.id!r} absent from GET /v1/files"
+        assert match.purpose == "batch", (
+            f"listed file must round-trip the upload purpose, got {match.purpose!r}"
+        )
+
+    @pytest.mark.covers(
+        "llm.files.openai.retrieve.nonstream.works",
+        exercised_on=["files"],
+    )
+    def test_retrieve_round_trips_metadata(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        key = resources.key()
+        file = unwrap(
+            client.upload_file(
+                content=render_jsonl(OPENAI_BATCH_MODEL),
+                form=FileUploadForm(purpose="batch"),
+                model=OPENAI_BATCH_MODEL,
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+
+        fetched = unwrap(client.retrieve_file(file.id, key=key))
+        assert fetched.id == file.id, "retrieve must echo the uploaded file id"
+        assert fetched.purpose == "batch", (
+            f"retrieve must round-trip purpose, got {fetched.purpose!r}"
+        )
+        assert fetched.filename == UPLOAD_FILENAME, (
+            f"retrieve must round-trip filename, got {fetched.filename!r}"
         )
 
 

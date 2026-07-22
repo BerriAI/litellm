@@ -194,6 +194,7 @@ def test_streaming_messages_via_responses_bridge_tracks_spend(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.embeddings.logs_cost")
+@pytest.mark.covers("llm.embeddings.openai.basic.nonstream.cost_logged")
 def test_embedding_writes_nonzero_spend_row(
     client: SpendClient, scoped_key: str
 ) -> None:
