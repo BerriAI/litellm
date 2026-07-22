@@ -12,10 +12,18 @@ import litellm
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
     BedrockLLM,
+    MockResponseIterator,
     make_call,
     make_sync_call,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Function,
+    Message,
+    Usage,
+)
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -25,6 +33,85 @@ def test_transform_thinking_blocks_with_redacted_content():
     assert len(transformed_thinking_blocks) == 1
     assert transformed_thinking_blocks[0]["type"] == "redacted_thinking"
     assert transformed_thinking_blocks[0]["data"] == "This is a redacted content"
+
+
+def test_fake_stream_json_mode_preserves_regular_tool_use():
+    """A fake stream must not turn a user tool call into JSON text."""
+    response = litellm.ModelResponse(
+        id="chatcmpl-test",
+        created=0,
+        model="test",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    content=None,
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            function=Function(
+                                arguments='{"prefix":"service.request"}',
+                                name="get_metrics_by_prefix",
+                            ),
+                            id="call_metrics",
+                            type="function",
+                        )
+                    ],
+                    function_call=None,
+                ),
+            )
+        ],
+        usage=Usage(completion_tokens=1, prompt_tokens=1, total_tokens=2),
+    )
+
+    response_chunk = MockResponseIterator(
+        model_response=response, json_mode=True
+    )._chunk_parser(chunk_data=response)
+
+    assert response_chunk["text"] == ""
+    assert response_chunk["tool_use"] is not None
+    assert response_chunk["tool_use"]["function"]["name"] == "get_metrics_by_prefix"
+
+
+def test_fake_stream_json_mode_converts_only_response_format_tool():
+    """The internal response-format tool remains regular JSON text."""
+    response = litellm.ModelResponse(
+        id="chatcmpl-test",
+        created=0,
+        model="test",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    content=None,
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            function=Function(
+                                arguments='{"values":{"result":"ok"}}',
+                                name="json_tool_call",
+                            ),
+                            id="call_response_format",
+                            type="function",
+                        )
+                    ],
+                    function_call=None,
+                ),
+            )
+        ],
+        usage=Usage(completion_tokens=1, prompt_tokens=1, total_tokens=2),
+    )
+
+    response_chunk = MockResponseIterator(
+        model_response=response, json_mode=True
+    )._chunk_parser(chunk_data=response)
+
+    assert response_chunk["text"] == '{"result": "ok"}'
+    assert response_chunk["tool_use"] is None
 
 
 def test_transform_tool_calls_index():
