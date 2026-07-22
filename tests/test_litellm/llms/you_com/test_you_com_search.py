@@ -20,9 +20,11 @@ class TestYouComSearch:
     @pytest.fixture(autouse=True)
     def _set_api_key(self, monkeypatch):
         """
-        Default fixture: YOUCOM_API_KEY is set, scoped to this test.
-        Tests that need the key absent should call `monkeypatch.delenv` themselves.
+        Default fixture: the canonical YDC_API_KEY is cleared and the legacy
+        YOUCOM_API_KEY is set, scoped to this test. Tests that need the key
+        absent should call `monkeypatch.delenv` themselves.
         """
+        monkeypatch.delenv("YDC_API_KEY", raising=False)
         monkeypatch.setenv("YOUCOM_API_KEY", "test-api-key")
 
     @pytest.mark.asyncio
@@ -327,6 +329,71 @@ class TestYouComSearch:
             assert call_args.kwargs["url"] == "https://ydc-index.io/v1/search"
             headers = call_args.kwargs.get("headers", {})
             assert headers["X-API-Key"] == "my-programmatic-key"
+
+    @pytest.mark.asyncio
+    async def test_you_com_search_prefers_ydc_api_key_over_legacy(self, monkeypatch):
+        """
+        YDC_API_KEY is the canonical env var and must take precedence over the
+        legacy YOUCOM_API_KEY when both are set: the keyed endpoint is selected
+        and X-API-Key carries the YDC_API_KEY value.
+        """
+        monkeypatch.setenv("YDC_API_KEY", "ydc-key")
+        monkeypatch.setenv("YOUCOM_API_KEY", "legacy-key")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": {"web": [], "news": []},
+            "metadata": {},
+        }
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            await litellm.asearch(
+                query="anything",
+                search_provider="you_com",
+            )
+
+            call_args = mock_post.call_args
+            assert call_args.kwargs["url"] == "https://ydc-index.io/v1/search"
+            headers = call_args.kwargs.get("headers", {})
+            assert headers["X-API-Key"] == "ydc-key"
+
+    @pytest.mark.asyncio
+    async def test_you_com_search_legacy_youcom_api_key_still_works(self, monkeypatch):
+        """
+        Backwards compatibility: with only the legacy YOUCOM_API_KEY set (and
+        YDC_API_KEY absent), the keyed endpoint is still selected.
+        """
+        monkeypatch.delenv("YDC_API_KEY", raising=False)
+        monkeypatch.setenv("YOUCOM_API_KEY", "legacy-key")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": {"web": [], "news": []},
+            "metadata": {},
+        }
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            await litellm.asearch(
+                query="anything",
+                search_provider="you_com",
+            )
+
+            call_args = mock_post.call_args
+            assert call_args.kwargs["url"] == "https://ydc-index.io/v1/search"
+            headers = call_args.kwargs.get("headers", {})
+            assert headers["X-API-Key"] == "legacy-key"
 
     def test_you_com_search_complete_url_uses_programmatic_api_key(self, monkeypatch):
         """

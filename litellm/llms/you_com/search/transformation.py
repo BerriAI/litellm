@@ -43,7 +43,7 @@ class YouComSearchConfig(BaseSearchConfig):
     # Keyed tier (higher rate limits): authenticate with X-API-Key.
     YOU_COM_API_BASE = "https://ydc-index.io"
     # Keyless free tier: IP-throttled (100 queries/day) and requires no auth.
-    # Used automatically when YOUCOM_API_KEY is not set.
+    # Used automatically when no API key (YDC_API_KEY / YOUCOM_API_KEY) is set.
     YOU_COM_FREE_API_BASE = "https://api.you.com/v1/agents/search"
 
     @staticmethod
@@ -60,14 +60,15 @@ class YouComSearchConfig(BaseSearchConfig):
         """
         Set headers for the You.com Search API.
 
-        If YOUCOM_API_KEY (or an explicit api_key) is present, use the keyed
-        endpoint with the `X-API-Key` header. Otherwise fall through to the
-        keyless free tier; no auth header is required.
+        If an API key is present (YDC_API_KEY, the legacy YOUCOM_API_KEY, or an
+        explicit api_key), use the keyed endpoint with the `X-API-Key` header.
+        Otherwise fall through to the keyless free tier; no auth header is
+        required.
         """
         api_key = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
-            key_env_vars=("YOUCOM_API_KEY",),
+            key_env_vars=("YDC_API_KEY", "YOUCOM_API_KEY"),
             base_env_var="YOUCOM_API_BASE",
             default_api_base=self.YOU_COM_API_BASE,
         )
@@ -92,14 +93,18 @@ class YouComSearchConfig(BaseSearchConfig):
         Pick the endpoint based on whether an API key is configured.
 
         - api_base explicit override     -> use it as-is (normalized)
-        - YOUCOM_API_KEY set             -> keyed endpoint (ydc-index.io/v1/search)
+        - YDC_API_KEY / YOUCOM_API_KEY   -> keyed endpoint (ydc-index.io/v1/search)
         - no key                         -> keyless free tier (api.you.com/v1/agents/search)
         """
         if api_base is None:
             api_base = get_secret_str("YOUCOM_API_BASE")
 
         if api_base is None:
-            api_key = kwargs.get("api_key") or get_secret_str("YOUCOM_API_KEY")
+            api_key = (
+                kwargs.get("api_key")
+                or get_secret_str("YDC_API_KEY")
+                or get_secret_str("YOUCOM_API_KEY")
+            )
             if api_key:
                 api_base = self.YOU_COM_API_BASE
             else:

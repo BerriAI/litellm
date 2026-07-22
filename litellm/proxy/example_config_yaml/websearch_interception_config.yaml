@@ -8,7 +8,7 @@ search_tools:
   - search_tool_name: "my-perplexity-search"
     litellm_params:
       search_provider: "perplexity"
-  # Alternative provider example (requires YOUCOM_API_KEY):
+  # Alternative provider example (requires YDC_API_KEY or legacy YOUCOM_API_KEY):
   # - search_tool_name: "my-you-com-search"
   #   litellm_params:
   #     search_provider: "you_com"
