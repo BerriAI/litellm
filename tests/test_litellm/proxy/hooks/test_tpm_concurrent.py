@@ -1523,5 +1523,125 @@ async def test_proxy_rejection_refunds_itpm_otpm_only_reservation_with_no_combin
     assert otpm_after == 0, f"OTPM-only reservation leaked on proxy rejection: {otpm_after}"
 
 
+@pytest.mark.asyncio
+async def test_otpm_rejection_does_not_double_refund_combined_tpm(rate_limiter):
+    """
+    Regression for a High-severity review finding: when the project ITPM
+    reservation succeeds but OTPM is then over limit,
+    _reserve_project_io_tokens_or_raise rolls back the combined-TPM
+    reservation that already succeeded earlier in the same pre-call, then
+    raises. If it doesn't also mark that reservation released,
+    async_post_call_failure_hook -- which fires next in the real request
+    lifecycle, since raising from async_pre_call_hook triggers it -- sees
+    the same still-stashed reservation and refunds it a second time,
+    driving the combined TPM counter negative and letting a caller push
+    past the project's real TPM budget by repeatedly triggering OTPM
+    rejections.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-double-refund")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-double-refund",
+        project_metadata={
+            "model_tpm_limit": {"bedrock_mantle/claude-opus": 100000},
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 100000},
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 5},
+        },
+    )
+
+    data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [{"role": "user", "content": "hello there, this is a test message"}],
+        "max_tokens": 60,  # blows past the 5-token OTPM limit
+    }
+
+    tpm_counter_key = handler.create_rate_limit_keys(
+        key="model_per_project", value="proj-double-refund:bedrock_mantle/claude-opus", rate_limit_type="tokens"
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+    assert getattr(exc_info.value, "status_code", None) == 429
+
+    tpm_after_pre_call = int(await cache.async_get_cache(key=tpm_counter_key, local_only=True) or 0)
+    assert tpm_after_pre_call == 0, f"combined TPM reservation not rolled back: {tpm_after_pre_call}"
+
+    # In the real request lifecycle, async_post_call_failure_hook fires next
+    # for a pre-call rejection. It must not refund the same reservation again.
+    await handler.async_post_call_failure_hook(
+        request_data=data,
+        original_exception=exc_info.value,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    tpm_after_failure_hook = int(await cache.async_get_cache(key=tpm_counter_key, local_only=True) or 0)
+    assert tpm_after_failure_hook == 0, (
+        f"combined TPM counter went negative from a double refund: {tpm_after_failure_hook}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_itpm_reservation_accounts_for_image_content_not_just_text(rate_limiter):
+    """
+    Regression for a Medium-severity review finding: the ITPM reservation
+    used to estimate input tokens from message text length alone, so a
+    request with a tiny text prompt but real image content would reserve
+    almost nothing, letting a burst of such requests blow past the
+    configured ITPM limit before post-call usage reconciliation catches up.
+    _estimate_precise_input_tokens uses litellm.token_counter (with
+    use_default_image_token_count=True, so this test makes no network call)
+    to account for image content instead of only text length.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-multimodal-itpm")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-multimodal",
+        project_metadata={
+            # Tighter than the ~250-token default image estimate, but far
+            # bigger than the handful of tokens the bare text "hi" would
+            # cost under the old char-count-only estimate.
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 50},
+        },
+    )
+
+    data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/some-image.png"},
+                    },
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+    assert getattr(exc_info.value, "status_code", None) == 429, (
+        "Expected the image content to push the ITPM reservation over the "
+        "50-token limit; if this doesn't raise, the estimate is undercounting "
+        "non-text content again."
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

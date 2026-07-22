@@ -2542,6 +2542,41 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     llm_provider=llm_provider,
                 )
 
+    def _estimate_precise_input_tokens(self, data: dict, model: str | None) -> int:
+        """
+        Model-aware input token estimate for the project ITPM reservation,
+        using ``litellm.token_counter`` -- the same approach the
+        deployment-level itpm/otpm check uses in
+        ``io_token_rate_limit_check.py``. Unlike the cheap char-count
+        estimate the combined-TPM path uses, this accounts for image/tool
+        content so a burst of multimodal or tool-heavy requests can't each
+        reserve only the one-token floor and blow past ITPM before post-call
+        reconciliation catches up.
+
+        Falls back to the cheap char-count estimate if ``token_counter``
+        can't resolve a tokenizer for this model (e.g. an unrecognized
+        custom model name) or otherwise raises.
+        """
+        from litellm import token_counter
+
+        try:
+            return max(
+                0,
+                int(
+                    token_counter(
+                        model=model or "",
+                        messages=data.get("messages"),
+                        text=data.get("prompt") or data.get("input"),
+                        tools=data.get("tools"),
+                        tool_choice=data.get("tool_choice"),
+                        use_default_image_token_count=True,
+                    )
+                ),
+            )
+        except Exception:  # noqa: BLE001 - any tokenizer/model-resolution failure degrades to the cheap estimate, never a 500
+            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data)
+            return estimated_input_tokens
+
     async def _reserve_project_io_tokens_or_raise(
         self,
         descriptors: list[RateLimitDescriptor],
@@ -2575,10 +2610,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         ]
         min_configured_otpm_limit = min(configured_otpm_limits) if configured_otpm_limits else None
 
-        estimated_input_tokens, estimated_output_tokens = self._estimate_input_and_output_tokens(
+        _, estimated_output_tokens = self._estimate_input_and_output_tokens(
             data=data,
             min_configured_tpm_limit=min_configured_otpm_limit,
         )
+        estimated_input_tokens = self._estimate_precise_input_tokens(data=data, model=requested_model)
         estimated_input_tokens = max(estimated_input_tokens, 1)
         estimated_output_tokens = max(estimated_output_tokens, 1)
 
@@ -2605,12 +2641,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if io_response["overall_code"] == "OVER_LIMIT":
             # A combined-TPM reservation may have already succeeded above for
             # this same request; refund it too, or its counter stays inflated
-            # until the window's TTL expires.
-            await self._refund_reserved_tokens(
-                scopes=tpm_reservation_scopes,
-                amount=tpm_reservation_amount,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
+            # until the window's TTL expires. Mark it released so the
+            # ProxyRateLimitError we're about to raise doesn't get refunded
+            # a second time when async_post_call_failure_hook sees the same
+            # (still-stashed) reservation and refunds it again.
+            if tpm_reservation_amount > 0:
+                await self._refund_reserved_tokens(
+                    scopes=tpm_reservation_scopes,
+                    amount=tpm_reservation_amount,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                self._mark_reservation_released(data)
             acquisition = self._get_parallel_slot_acquisition(kwargs=data)
             if acquisition is not None:
                 await self._release_parallel_request_slots(
