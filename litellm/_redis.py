@@ -467,6 +467,15 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
         if arg in args:
             cluster_kwargs[arg] = redis_kwargs[arg]
 
+    # redis_connect_func is not honored by RedisCluster bootstrap (CLUSTER SLOTS
+    # runs before the hook fires). Swap it for credential_provider so GCP IAM
+    # tokens authenticate the bootstrap connection — mirrors the async cluster path.
+    _rcf = cluster_kwargs.pop("redis_connect_func", None)
+    if _rcf and hasattr(_rcf, "_gcp_service_account"):
+        cluster_kwargs["credential_provider"] = GCPIAMCredentialProvider(
+            _rcf._gcp_service_account
+        )
+
     new_startup_nodes: List[ClusterNode] = []
 
     for item in redis_kwargs["startup_nodes"]:
