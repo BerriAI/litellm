@@ -3091,8 +3091,14 @@ class Router:
         if credential_name:
             credential_tag = f"Credential: {credential_name}"
             existing_tags = kwargs[metadata_variable_name].get("tags") or []
-            if credential_tag not in existing_tags:
-                existing_tags.append(credential_tag)
+            # Strip Credential: tags from any previous deployment attempt so they
+            # do not leak into fallback routing tag checks (fixes #25276).
+            existing_tags = [
+                t
+                for t in existing_tags
+                if not (isinstance(t, str) and t.startswith("Credential: "))
+            ]
+            existing_tags.append(credential_tag)
             kwargs[metadata_variable_name]["tags"] = existing_tags
 
         kwargs["model_info"] = model_info
