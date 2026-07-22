@@ -1755,7 +1755,6 @@ class AmazonConverseConfig(BaseConfig):
     ) -> Usage:
         input_tokens = usage["inputTokens"]
         output_tokens = usage["outputTokens"]
-        total_tokens = usage["totalTokens"]
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
 
@@ -1766,6 +1765,14 @@ class AmazonConverseConfig(BaseConfig):
         if "cacheWriteInputTokens" in usage:
             cache_creation_input_tokens = usage["cacheWriteInputTokens"]
             input_tokens += cache_creation_input_tokens
+
+        # Recalculate total_tokens AFTER inflating input_tokens with cache tokens,
+        # so that total_tokens == prompt_tokens + completion_tokens.
+        # Bedrock's native "totalTokens" only covers inputTokens + outputTokens
+        # (i.e. non-cached tokens), so it would be too low whenever cache tokens
+        # are present.  Mirroring what the Anthropic transformation already does
+        # (see litellm/llms/anthropic/chat/transformation.py).
+        total_tokens = input_tokens + output_tokens
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
