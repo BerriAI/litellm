@@ -643,3 +643,33 @@ async def test_source_refresh_returning_expired_token_reads_expired_but_persists
     stored_assertion = persisted[0][1]
     assert stored_assertion.refresh_token is not None
     assert stored_assertion.refresh_token.get_secret_value() == "rt_rotated"
+
+
+@pytest.mark.asyncio
+async def test_source_waiter_gets_the_winners_token_when_persist_failed():
+    """The memo is the single-flight hand-off: with the write-back failing and a one-time
+    refresh token, the waiter must receive the winner's in-hand assertion from the memo under
+    the lock instead of re-reading the stale row and re-spending the refresh grant."""
+    import asyncio
+
+    new_id_token = _make_id_token(exp_offset=7200)
+    posts: list[dict] = []
+
+    async def fetch(user_id: str):
+        await asyncio.sleep(0)
+        return _stored(-100)
+
+    async def failing_persist(user_id, assertion):
+        raise RuntimeError("db write down")
+
+    async def post(url, form):
+        posts.append(dict(form))
+        await asyncio.sleep(0)
+        if form["refresh_token"] != "rt_stored" or len(posts) > 1:
+            return {"error": "invalid_grant"}
+        return {"id_token": new_id_token, "refresh_token": "rt_rotated"}
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=failing_persist, post=post, getenv=_SSO_ENV.get)
+    results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"))
+    assert all(isinstance(r, UsableSsoAssertion) for r in results)
+    assert len(posts) == 1

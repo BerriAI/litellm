@@ -297,7 +297,10 @@ class LiveSsoAssertionSource:
     Usable results are memoized in-process for a short TTL (capped by the assertion's remaining
     life), the same read-through contract the per-user OAuth store keeps in front of the DB, so
     an egress call served by the exchange cache does not pay a DB read and a warm entry keeps
-    serving through a store outage. Only Usable is memoized: an absent row must be re-checked so
+    serving through a store outage. The memo is also the single-flight hand-off channel: the
+    refresh winner memoizes before releasing the lock and waiters check it under the lock before
+    re-reading the store, so a failed write-back cannot make a waiter re-spend the refresh grant
+    against a stale row. Only Usable is memoized: an absent row must be re-checked so
     a fresh login is visible immediately, and the staleness bound is one TTL on other pods (the
     superseded assertion remains valid, so the cached exchange it keys stays correct). A store
     read failure reads as absent, loudly logged; the store, not this source, declines to cache
@@ -345,6 +348,9 @@ class LiveSsoAssertionSource:
         if not _assertion_is_expired(stored, self._now()):
             return UsableSsoAssertion(assertion=stored)
         async with self._lock(user_id):
+            handed_off = self._memoized(user_id)
+            if handed_off is not None:
+                return handed_off
             rechecked = await self._fetch(user_id)
             if rechecked is None:
                 return NoSsoAssertion()
@@ -353,7 +359,10 @@ class LiveSsoAssertionSource:
             refreshed = await self._refresh(user_id, rechecked)
             if refreshed is None:
                 return ExpiredSsoAssertion()
-            return self._guarded_lookup(refreshed)
+            lookup = self._guarded_lookup(refreshed)
+            if isinstance(lookup, UsableSsoAssertion):
+                self._memoize(user_id, lookup)
+            return lookup
 
     def _guarded_lookup(self, assertion: SSOIdentityAssertion) -> SsoAssertionLookup:
         """The ONE construction gate for ``Usable``: every assertion, stored or freshly
