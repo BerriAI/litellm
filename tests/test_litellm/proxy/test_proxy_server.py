@@ -7173,22 +7173,32 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
 
 @pytest.mark.asyncio
 async def test_reseed_spend_from_db_user_and_org_prefixes():
-    """User and org counters reseed from their own DB tables.
+    """User, end-user, and org counters reseed from their own DB tables.
 
-    End-user and tag counters use the already fetched auth objects passed as
+    Tag counters use the already fetched auth object passed as
     fallback_spend, so this reseed helper must not add extra per-request DB
     reads for them.
+
+    End-user counters now reseed from LiteLLM_EndUserTable (see
+    https://github.com/BerriAI/litellm/issues/34238): without this, a
+    per-pod fallback_spend cache could recreate a stale, lower spend value
+    once the Redis counter expires, letting requests bypass an end user's
+    max_budget.
     """
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     user_row = MagicMock()
     user_row.spend = 17.0
+    end_user_row = MagicMock()
+    end_user_row.spend = 42.0
     org_row = MagicMock()
     org_row.spend = 305.0
 
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
-    fake_prisma.db.litellm_endusertable.find_unique = AsyncMock()
+    fake_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=end_user_row
+    )
     fake_prisma.db.litellm_tagtable.find_unique = AsyncMock()
     fake_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
         return_value=org_row
@@ -7204,9 +7214,11 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
             fake_prisma,
             "spend:end_user:customer-1",
         )
-        is None
+        == 42.0
     )
-    fake_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
+    fake_prisma.db.litellm_endusertable.find_unique.assert_awaited_once_with(
+        where={"user_id": "customer-1"}
+    )
 
     assert await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid-tag") is None
     fake_prisma.db.litellm_tagtable.find_unique.assert_not_awaited()
