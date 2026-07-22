@@ -1,3 +1,4 @@
+import time
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,6 +18,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     UserProvisionerHelpers,
     _apply_group_patch_updates,
     _extract_group_member_ids,
+    _extract_ids_from_path_filter,
     _handle_team_membership_changes,
     _process_group_patch_operations,
     _recompute_scim_member_roles,
@@ -3377,3 +3379,143 @@ async def test_patch_group_replace_stays_absolute_against_concurrent_roster(mock
         call.kwargs["user_id"] for call in calls if call.kwargs.get("teams_ids_to_add_user_to") == [group_id]
     }
     assert added_user_ids == set()
+
+
+@pytest.mark.parametrize(
+    "path, attribute, expected",
+    [
+        ('members[value eq "user-1"]', "members", ["user-1"]),
+        ("members[value eq 'user-1']", "members", ["user-1"]),
+        ('members[value EQ "user-1"]', "members", ["user-1"]),
+        ('members[ value  eq  "user-1" ]', "members", ["user-1"]),
+        ('groups[value eq "team-1"]', "groups", ["team-1"]),
+        ('members[value eq "Mixed-CASE-Id"]', "members", ["Mixed-CASE-Id"]),
+        ('members[value eq "a\\"b"]', "members", ['a"b']),
+        ('members[value eq "a\\\\b"]', "members", ["a\\b"]),
+        ("members[value eq 'a\\'b']", "members", ["a'b"]),
+        ("members", "members", []),
+        ('groups[value eq "team-1"]', "members", []),
+        (None, "members", []),
+        ('members[value eq ""]', "members", []),
+        ("members[value eq user-1]", "members", []),
+        ("members[value eq unintendeduser]", "members", []),
+    ],
+)
+def test_extract_ids_from_path_filter(path, attribute, expected):
+    assert _extract_ids_from_path_filter(path, attribute) == expected
+
+
+def test_extract_ids_from_path_filter_unterminated_is_linear():
+    """A pathological unterminated quoted filter must not trigger super-linear
+    backtracking; it returns no id and completes near-instantly."""
+    pathological = 'members[value eq "' + ("\\" * 200)
+
+    start = time.perf_counter()
+    result = _extract_ids_from_path_filter(pathological, "members")
+    elapsed = time.perf_counter() - start
+
+    assert result == []
+    assert elapsed < 1.0
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_remove_filtered_path_without_value(mocker):
+    """Okta sends group membership removals as a filtered path with no request
+    body value; the member id must be parsed out of members[value eq "..."]"""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path='members[value eq "user-1"]')],
+    )
+
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[
+            Member(user_id="user-1", role="user"),
+            Member(user_id="user-2", role="user"),
+        ],
+    )
+
+    prisma_client = mocker.MagicMock()
+    prisma_client.db = mocker.MagicMock()
+    prisma_client.db.litellm_usertable = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="user-1")
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=prisma_client,
+    )
+
+    assert final_members == {"user-2"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_add_filtered_path_without_value(mocker):
+    """A filtered add path with no body value adds the id parsed from the filter."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="add", path='members[value eq "user-3"]')],
+    )
+
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[Member(user_id="user-1", role="user")],
+    )
+
+    prisma_client = mocker.MagicMock()
+    prisma_client.db = mocker.MagicMock()
+    prisma_client.db.litellm_usertable = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="user-3")
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=prisma_client,
+    )
+
+    assert final_members == {"user-1", "user-3"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(mocker):
+    """An explicit empty replace value must clear membership rather than pull an
+    id from the filtered path, which would retain one member and drop the rest."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(op="replace", path='members[value eq "user-1"]', value=[])
+        ],
+    )
+
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[
+            Member(user_id="user-1", role="user"),
+            Member(user_id="user-2", role="user"),
+        ],
+    )
+
+    prisma_client = mocker.MagicMock()
+    prisma_client.db = mocker.MagicMock()
+    prisma_client.db.litellm_usertable = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="user-1")
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=prisma_client,
+    )
+
+    assert final_members == set()
