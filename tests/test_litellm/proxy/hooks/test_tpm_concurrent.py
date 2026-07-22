@@ -1401,5 +1401,127 @@ async def test_project_itpm_otpm_released_on_failure(rate_limiter):
     assert any(i["increment"] == -60 for i in otpm_releases), otpm_releases
 
 
+@pytest.mark.asyncio
+async def test_proxy_rejection_refunds_itpm_otpm_by_their_own_amount_not_combined(rate_limiter):
+    """
+    Regression for a Greptile-flagged bug: when a project configures both a
+    combined model_tpm_limit and split model_itpm_limit/model_otpm_limit for
+    the same model, async_post_call_failure_hook's proxy-side refund path
+    used to decrement every token descriptor -- including the ITPM/OTPM
+    ones -- by the flat combined reservation amount, instead of each
+    bucket's own reserved amount. That drives the split counters negative
+    (or under-refunds them) instead of returning them to exactly zero.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-mixed-tpm-io")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-mixed",
+        project_metadata={
+            "model_tpm_limit": {"bedrock_mantle/claude-opus": 100000},
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 100000},
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 100000},
+        },
+    )
+
+    data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [{"role": "user", "content": "hello there, this is a test message"}],
+        "max_tokens": 60,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    tpm_counter_key = handler.create_rate_limit_keys(
+        key="model_per_project", value="proj-mixed:bedrock_mantle/claude-opus", rate_limit_type="tokens"
+    )
+    itpm_counter_key = handler.create_rate_limit_keys(
+        key="model_per_project_itpm", value="proj-mixed:bedrock_mantle/claude-opus", rate_limit_type="tokens"
+    )
+    otpm_counter_key = handler.create_rate_limit_keys(
+        key="model_per_project_otpm", value="proj-mixed:bedrock_mantle/claude-opus", rate_limit_type="tokens"
+    )
+
+    tpm_reserved = int(await cache.async_get_cache(key=tpm_counter_key, local_only=True) or 0)
+    itpm_reserved = int(await cache.async_get_cache(key=itpm_counter_key, local_only=True) or 0)
+    otpm_reserved = int(await cache.async_get_cache(key=otpm_counter_key, local_only=True) or 0)
+    assert tpm_reserved > 0 and itpm_reserved > 0 and otpm_reserved > 0
+
+    await handler.async_post_call_failure_hook(
+        request_data=data,
+        original_exception=Exception("guardrail rejected"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    tpm_after = int(await cache.async_get_cache(key=tpm_counter_key, local_only=True) or 0)
+    itpm_after = int(await cache.async_get_cache(key=itpm_counter_key, local_only=True) or 0)
+    otpm_after = int(await cache.async_get_cache(key=otpm_counter_key, local_only=True) or 0)
+
+    assert tpm_after == 0, f"combined TPM counter leaked: {tpm_after}"
+    assert itpm_after == 0, f"ITPM counter corrupted by combined-amount refund: {itpm_after}"
+    assert otpm_after == 0, f"OTPM counter corrupted by combined-amount refund: {otpm_after}"
+
+
+@pytest.mark.asyncio
+async def test_proxy_rejection_refunds_itpm_otpm_only_reservation_with_no_combined_tpm(rate_limiter):
+    """
+    Regression for the second half of the same bug: with only
+    model_itpm_limit/model_otpm_limit configured (no model_tpm_limit), the
+    combined reserved_tokens is 0, and the proxy-side refund path used to
+    return immediately on that -- leaking the ITPM/OTPM reservations until
+    the rate-limit window's TTL expired.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-io-only")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-io-only",
+        project_metadata={
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 100000},
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 100000},
+        },
+    )
+
+    data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [{"role": "user", "content": "hello there, this is a test message"}],
+        "max_tokens": 60,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    itpm_counter_key = handler.create_rate_limit_keys(
+        key="model_per_project_itpm", value="proj-io-only:bedrock_mantle/claude-opus", rate_limit_type="tokens"
+    )
+    otpm_counter_key = handler.create_rate_limit_keys(
+        key="model_per_project_otpm", value="proj-io-only:bedrock_mantle/claude-opus", rate_limit_type="tokens"
+    )
+    assert int(await cache.async_get_cache(key=itpm_counter_key, local_only=True) or 0) > 0
+    assert int(await cache.async_get_cache(key=otpm_counter_key, local_only=True) or 0) > 0
+
+    await handler.async_post_call_failure_hook(
+        request_data=data,
+        original_exception=Exception("guardrail rejected"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    itpm_after = int(await cache.async_get_cache(key=itpm_counter_key, local_only=True) or 0)
+    otpm_after = int(await cache.async_get_cache(key=otpm_counter_key, local_only=True) or 0)
+    assert itpm_after == 0, f"ITPM-only reservation leaked on proxy rejection: {itpm_after}"
+    assert otpm_after == 0, f"OTPM-only reservation leaked on proxy rejection: {otpm_after}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

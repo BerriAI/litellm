@@ -3990,17 +3990,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         traceback_str: Optional[str] = None,
     ) -> None:
         """
-        Release the parallel-request slot and any TPM reservation when the
-        request is rejected after the pre-call hook acquired them but before
-        the LLM call ran (e.g. a downstream guardrail/auth hook raised).
-        Without this, those resources are stranded — async_log_failure_event
-        is a litellm completion-level callback and never fires for proxy-side
-        rejections, so a leaked slot would occupy the gauge for the full
-        PARALLEL_REQUEST_SLOT_TTL_SECONDS.
+        Release the parallel-request slot and any TPM/ITPM/OTPM reservation
+        when the request is rejected after the pre-call hook acquired them
+        but before the LLM call ran (e.g. a downstream guardrail/auth hook
+        raised). Without this, those resources are stranded —
+        async_log_failure_event is a litellm completion-level callback and
+        never fires for proxy-side rejections, so a leaked slot would occupy
+        the gauge for the full PARALLEL_REQUEST_SLOT_TTL_SECONDS.
 
         Idempotent: the slot release clears the acquisition marker (and slot
-        removal is a no-op ZREM on a second run), and the TPM refund is
-        guarded by TPM_RESERVATION_RELEASED_KEY — if both this hook and
+        removal is a no-op ZREM on a second run), and the reservation refund
+        is guarded by TPM_RESERVATION_RELEASED_KEY (shared across the
+        TPM/ITPM/OTPM buckets) — if both this hook and
         async_log_failure_event end up running in the same flow, only the
         first release/refund applies.
         """
@@ -4016,36 +4017,70 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if self._is_reservation_released(kwargs=request_data):
                 return
             reserved_tokens = self._get_reserved_tokens_from_kwargs(kwargs=request_data)
-            if reserved_tokens <= 0:
+            itpm_reserved = self._get_reserved_itpm_tokens_from_kwargs(kwargs=request_data)
+            otpm_reserved = self._get_reserved_otpm_tokens_from_kwargs(kwargs=request_data)
+            if reserved_tokens <= 0 and itpm_reserved <= 0 and otpm_reserved <= 0:
                 return
 
-            # Refund directly against the descriptors we reserved against —
-            # the pre-call hook stashes them in the request-data metadata
-            # channels before success/failure callbacks run.
-            stashed = self._lookup_stashed_value(
-                kwargs=request_data,
-                standard_logging_metadata=None,
-                key=RATE_LIMIT_DESCRIPTORS_KEY,
-            )
-            descriptors: List[RateLimitDescriptor] = stashed if isinstance(stashed, list) else []
             ops: List[RedisPipelineIncrementOperation] = []
-            for descriptor in descriptors:
-                rate_limit = descriptor.get("rate_limit") or {}
-                if rate_limit.get("tokens_per_unit") is None:
-                    continue
-                ops.append(
-                    RedisPipelineIncrementOperation(
-                        key=self.create_rate_limit_keys(
-                            descriptor["key"],
-                            descriptor["value"],
-                            "tokens",
-                        ),
-                        increment_value=-reserved_tokens,
-                        ttl=self.window_size,
+
+            if reserved_tokens > 0:
+                # Refund directly against the descriptors we reserved
+                # against — the pre-call hook stashes them in the
+                # request-data metadata channels before success/failure
+                # callbacks run. Excludes the project ITPM/OTPM descriptors,
+                # which are reserved from different amounts and refunded
+                # separately below.
+                stashed = self._lookup_stashed_value(
+                    kwargs=request_data,
+                    standard_logging_metadata=None,
+                    key=RATE_LIMIT_DESCRIPTORS_KEY,
+                )
+                descriptors: List[RateLimitDescriptor] = stashed if isinstance(stashed, list) else []
+                for descriptor in descriptors:
+                    if descriptor["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY):
+                        continue
+                    rate_limit = descriptor.get("rate_limit") or {}
+                    if rate_limit.get("tokens_per_unit") is None:
+                        continue
+                    ops.append(
+                        RedisPipelineIncrementOperation(
+                            key=self.create_rate_limit_keys(
+                                descriptor["key"],
+                                descriptor["value"],
+                                "tokens",
+                            ),
+                            increment_value=-reserved_tokens,
+                            ttl=self.window_size,
+                        )
+                    )
+
+            if itpm_reserved > 0:
+                itpm_scopes = self._get_reserved_itpm_scopes_from_kwargs(kwargs=request_data)
+                ops.extend(
+                    self._build_reservation_aware_tpm_ops(
+                        targets=list(itpm_scopes),
+                        reserved_scopes=itpm_scopes,
+                        actual_tokens=0,
+                        reserved_tokens=itpm_reserved,
                     )
                 )
+            if otpm_reserved > 0:
+                otpm_scopes = self._get_reserved_otpm_scopes_from_kwargs(kwargs=request_data)
+                ops.extend(
+                    self._build_reservation_aware_tpm_ops(
+                        targets=list(otpm_scopes),
+                        reserved_scopes=otpm_scopes,
+                        actual_tokens=0,
+                        reserved_tokens=otpm_reserved,
+                    )
+                )
+
             if ops:
-                verbose_proxy_logger.debug(f"Releasing reserved TPM tokens on proxy-level rejection: {reserved_tokens}")
+                verbose_proxy_logger.debug(
+                    f"Releasing reserved tokens on proxy-level rejection: "
+                    f"tpm={reserved_tokens}, itpm={itpm_reserved}, otpm={otpm_reserved}"
+                )
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=ops,
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
