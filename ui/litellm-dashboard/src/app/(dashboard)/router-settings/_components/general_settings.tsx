@@ -41,6 +41,7 @@ export interface generalSettingsItem {
   stored_in_db: boolean | null;
   field_options?: string[] | null;
   field_tab?: string | null;
+  field_default_value?: any;
 }
 
 const SettingValueEditor: React.FC<{
@@ -182,12 +183,12 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     setGeneralSettings(updatedSettings);
   };
 
-  const handleUpdateField = (fieldName: string, idx: number) => {
+  const handleUpdateField = (fieldName: string) => {
     if (!accessToken) {
       return;
     }
 
-    let fieldValue = generalSettings[idx].field_value;
+    let fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
 
     if (fieldValue == null || fieldValue == undefined) {
       return;
@@ -205,7 +206,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     }
   };
 
-  const handleResetField = (fieldName: string, idx: number) => {
+  const handleResetField = (fieldName: string) => {
     if (!accessToken) {
       return;
     }
@@ -215,7 +216,9 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName ? { ...setting, stored_in_db: null, field_value: null } : setting,
+        setting.field_name === fieldName
+          ? { ...setting, stored_in_db: null, field_value: setting.field_default_value ?? null }
+          : setting,
       );
       setGeneralSettings(updatedSettings);
     } catch (error) {
@@ -292,8 +295,8 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name, index)}>Update</Button>
-                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
+                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
+                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name)}>
                             Reset
                           </Icon>
                         </TableCell>
