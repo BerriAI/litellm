@@ -7756,6 +7756,7 @@ async def test_cli_completion_persists_assertion_under_db_user_id():
             user_defined_values=None,
             prisma_client=MagicMock(),
             user_api_key_cache=MagicMock(),
+            cli_sso_session_cache=MagicMock(),
             proxy_logging_obj=MagicMock(),
             sso_assertion=assertion,
         )
