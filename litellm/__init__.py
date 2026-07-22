@@ -1425,7 +1425,19 @@ global_disable_no_log_param: bool = False
 from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
 
 ### PASSTHROUGH ###
-from .passthrough import allm_passthrough_route, llm_passthrough_route
+from .passthrough import (
+    aclassify,
+    allm_passthrough_route,
+    classify,
+    llm_passthrough_route,
+)
+from .types.classification import (
+    ClassificationData,
+    ClassificationInput,
+    ClassificationRequest,
+    ClassificationResponse,
+    ClassificationUsage,
+)
 from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###

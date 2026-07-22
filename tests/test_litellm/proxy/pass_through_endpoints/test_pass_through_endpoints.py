@@ -1068,7 +1068,10 @@ def test_resolve_pass_through_request_timeout_precedence():
 
 
 def test_resolve_llm_passthrough_timeout_precedence():
+    timeout = httpx.Timeout(30.0, connect=5.0)
+
     assert resolve_llm_passthrough_timeout(kwargs={"timeout": 45}) == 45.0
+    assert resolve_llm_passthrough_timeout(kwargs={"timeout": timeout}) is timeout
     assert (
         resolve_llm_passthrough_timeout(
             kwargs={"request_timeout": 30},

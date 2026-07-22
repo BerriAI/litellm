@@ -515,14 +515,12 @@ class AsyncHTTPHandler:
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        client: Optional[httpx.AsyncClient] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
-        self.client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
+        self.client = client or self.create_client(
+            timeout=timeout, event_hooks=event_hooks, ssl_verify=ssl_verify, shared_session=shared_session
         )
         self.client_alias = client_alias
 
