@@ -9493,11 +9493,13 @@ async def audio_speech(
         # arrive so time-to-first-audio reflects first-chunk latency instead of
         # full-generation latency. The media type mirrors what the provider actually
         # returned (text/event-stream for speech.audio.delta frames, or audio/* when the
-        # provider ignored stream_format), so nothing is mislabeled.
+        # provider ignored stream_format). Fall back to application/octet-stream rather
+        # than text/event-stream when the provider omits Content-Type, so raw audio bytes
+        # are never mislabeled as SSE.
         if isinstance(response, SpeechStreamingResponse):
             return StreamingResponse(
                 response.stream_iterator,  # pyright: ignore[reportArgumentType]  # SSE byte iterator
-                media_type=response.headers.get("content-type") or "text/event-stream",
+                media_type=response.headers.get("content-type") or "application/octet-stream",
                 headers=custom_headers,  # pyright: ignore[reportArgumentType]  # header values coerced to str by starlette
             )
 
