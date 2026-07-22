@@ -172,6 +172,7 @@ class ChatBody(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
     max_tokens: int | None = None
+    temperature: float | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
@@ -568,6 +569,7 @@ class LiteLLMParamsBody(BaseModel):
     complexity_router_config: dict[str, object] | None = None
     mock_response: str | None = None
     timeout: float | None = None
+    drop_params: bool | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]

@@ -58,6 +58,7 @@ LlmCapability = Literal[
     "assume_role",
     "basic",
     "count_tokens",
+    "drop_params",
     "long_context_1m",
     "mid_conversation_system",
     "pdf_input",
