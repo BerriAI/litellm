@@ -3147,3 +3147,159 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_text_not_dropped_when_reasoning_content_shares_chunk():
+    """
+    Integration test: when content and reasoning_content share a streaming chunk,
+    the content block type must be correctly detected as "thinking", and the
+    text must reach the SSE output in its own text block.
+
+    Without fix: _translate_streaming_openai_chunk_to_anthropic_content_block
+    returned "text" for chunks with both content and reasoning_content because
+    the ``elif content > 0`` check preceded the ``elif reasoning_content`` check.
+    This caused the thinking_delta to be emitted into the text block, corrupting
+    the output visible to Claude Code.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+        AnthropicStreamWrapper,
+    )
+
+    chunk1 = ModelResponseStream(
+        choices=[StreamingChoices(
+            index=0, finish_reason=None,
+            delta=Delta(content=". ", reasoning_content="I need to think", role="assistant"),
+        )],
+    )
+    chunk2 = ModelResponseStream(
+        choices=[StreamingChoices(
+            index=0, finish_reason=None,
+            delta=Delta(content="The answer is 42.", role="assistant"),
+        )],
+    )
+    chunk3 = ModelResponseStream(
+        choices=[StreamingChoices(
+            index=0, finish_reason="stop", delta=Delta(),
+        )],
+    )
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter([chunk1, chunk2, chunk3]),
+        model="glm-5.2",
+    )
+
+    events = []
+    while True:
+        try:
+            events.append(next(wrapper))
+        except StopIteration:
+            break
+
+    # Verify correct block structure
+    block_starts = [
+        e for e in events
+        if isinstance(e, dict) and e.get("type") == "content_block_start"
+    ]
+    block_types = [b.get("content_block", {}).get("type") for b in block_starts]
+
+    # There must be a thinking block (for reasoning_content)
+    assert "thinking" in block_types, (
+        f"Expected a thinking block in SSE output, got block types: {block_types}"
+    )
+    # There must be a text block (for the actual text)
+    assert "text" in block_types, (
+        f"Expected a text block in SSE output, got block types: {block_types}"
+    )
+
+    # Verify text appears in text_delta, not in thinking_delta
+    text_deltas = [
+        e for e in events
+        if isinstance(e, dict) and e.get("type") == "content_block_delta"
+        and isinstance(e.get("delta"), dict)
+        and e["delta"].get("type") == "text_delta"
+    ]
+    thinking_deltas = [
+        e for e in events
+        if isinstance(e, dict) and e.get("type") == "content_block_delta"
+        and isinstance(e.get("delta"), dict)
+        and e["delta"].get("type") == "thinking_delta"
+    ]
+
+    full_text = "".join(d["delta"].get("text", "") for d in text_deltas)
+    assert "The answer is 42." in full_text, (
+        f"Response text should appear in text_deltas, got: {full_text!r}"
+    )
+
+    # Verify thinking content does not leak into text_delta
+    for td in text_deltas:
+        assert "I need to think" not in td["delta"].get("text", ""), (
+            "Thinking content leaked into text_delta"
+        )
+
+    # Assert that the thinking content was actually emitted as thinking_deltas
+    assert len(thinking_deltas) > 0, (
+        "Expected at least one thinking_delta for the reasoning_content chunk"
+    )
+
+    # The ". " prefix from chunk1's content field is lost by the translate
+    # function (pre-existing behavior, not addressed by this PR).  Assert
+    # it does NOT appear in text_deltas so the scope of the fix is clear.
+    assert ". " not in full_text, (
+        f"Shared-chunk text prefix should not survive into text_deltas; "
+        f"found in {full_text!r}"
+    )
+
+
+def test_content_block_type_for_mixed_reasoning_and_content():
+    """
+    Direct unit test for _translate_streaming_openai_chunk_to_anthropic_content_block.
+    Covers the new elif branch added by the fix.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    # Both content and reasoning_content -> should open a thinking block
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="I need to think",
+                content=". ",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    block_type, cb = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "thinking", (
+        f"Expected 'thinking' for mixed chunk, got {block_type!r}"
+    )
+    assert cb["type"] == "thinking"
+
+    # Only content (no reasoning) -> should open a text block
+    text_choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                content="Hello",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    block_type2, _ = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=text_choices
+    )
+    assert block_type2 == "text"
