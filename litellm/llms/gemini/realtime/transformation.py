@@ -1177,6 +1177,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         server_content = json_message.get("serverContent")
         if isinstance(server_content, dict):
+            # Surface Gemini's native barge-in. Gemini emits
+            # ``serverContent.interrupted`` when the user interrupts the model;
+            # mapping it only to ``response.done`` loses that signal. Emit the
+            # OpenAI-realtime ``input_audio_buffer.speech_started`` too, so clients
+            # that flush playback / cancel on speech-start actually interrupt.
+            if server_content.get("interrupted"):
+                returned_message.append(
+                    cast(
+                        OpenAIRealtimeEvents,
+                        {
+                            "type": "input_audio_buffer.speech_started",
+                            "event_id": "event_{}".format(uuid.uuid4()),
+                            "audio_start_ms": 0,
+                            "item_id": "item_{}".format(uuid.uuid4()),
+                        },
+                    )
+                )
             input_tx = server_content.get("inputTranscription")
             if isinstance(input_tx, dict) and input_tx.get("text"):
                 returned_message.append(
