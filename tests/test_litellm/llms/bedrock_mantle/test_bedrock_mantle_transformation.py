@@ -329,7 +329,7 @@ class TestBedrockMantleChatAuth:
 
         assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
         assert "Credential=AKIAEXAMPLE/" in headers["Authorization"]
-        assert "/us-east-2/bedrock/aws4_request" in headers["Authorization"]
+        assert "/us-east-2/bedrock-mantle/aws4_request" in headers["Authorization"]
         assert headers["X-Amz-Security-Token"] == "session-token-test"
         assert json.loads(signed_body) == {
             "model": "openai.gpt-oss-120b",
@@ -364,7 +364,7 @@ class TestBedrockMantleChatAuth:
             api_key=None,
         )
 
-        assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
+        assert "/eu-west-1/bedrock-mantle/aws4_request" in headers["Authorization"]
 
     def test_sigv4_scope_matches_api_base_when_aws_region_name_disagrees(
         self, monkeypatch
@@ -399,8 +399,8 @@ class TestBedrockMantleChatAuth:
             api_key=None,
         )
 
-        assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
-        assert "/us-west-2/bedrock/aws4_request" not in headers["Authorization"]
+        assert "/eu-west-1/bedrock-mantle/aws4_request" in headers["Authorization"]
+        assert "/us-west-2/bedrock-mantle/aws4_request" not in headers["Authorization"]
 
     def test_no_bearer_and_no_credentials_raises_value_error(self, monkeypatch):
         from unittest.mock import MagicMock
@@ -486,7 +486,7 @@ class TestBedrockMantleChatAuth:
         assert len(requests) == 1
         authorization = requests[0]["headers"]["Authorization"]
         assert authorization.startswith("AWS4-HMAC-SHA256")
-        assert "/us-east-2/bedrock/aws4_request" in authorization
+        assert "/us-east-2/bedrock-mantle/aws4_request" in authorization
         assert requests[0]["url"].startswith("https://bedrock-mantle.us-east-2.api.aws")
 
 
