@@ -12,7 +12,7 @@ import AuditLogsPanel from "./AuditLogsPanel";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { getLogFilterOptions } from "./filter_options";
-import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_filter_logic";
+import { useLogFilterLogic, defaultFilters, FILTER_KEYS, type LogFilterState } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
@@ -26,17 +26,37 @@ interface SpendLogsTableProps {
   premiumUser: boolean;
 }
 
+function getDeepLinkFromLocation(): { requestId?: string; sessionId?: string } | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const requestId = params.get("request_id") || undefined;
+  const sessionId = params.get("session_id") || undefined;
+  return requestId || sessionId ? { requestId, sessionId } : null;
+}
+
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
 
+  // Deep link: a shared ?request_id=/&session_id= URL reopens that exact
+  // request/session in the drawer on load, until the user closes it. Read once
+  // at init so the initial filter/time-window target the shared log.
+  const [deepLink] = useState<{ requestId?: string; sessionId?: string } | null>(getDeepLinkFromLocation);
+  const [deepLinkDismissed, setDeepLinkDismissed] = useState(false);
+
   // New state variables for Start and End Time
-  const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
+  const [startTime, setStartTime] = useState<string>(() =>
+    (deepLink ? moment().subtract(1, "year") : moment().subtract(24, "hours")).format("YYYY-MM-DDTHH:mm"),
+  );
   const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
 
-  const [isCustomDate, setIsCustomDate] = useState(false);
-  const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+  const [isCustomDate, setIsCustomDate] = useState(() => !!deepLink);
+  const [filters, setFilters] = useState<LogFilterState>(() => {
+    if (deepLink?.sessionId) return { ...defaultFilters, [FILTER_KEYS.SESSION_ID]: deepLink.sessionId };
+    if (deepLink?.requestId) return { ...defaultFilters, [FILTER_KEYS.REQUEST_ID]: deepLink.requestId };
+    return defaultFilters;
+  });
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
@@ -202,6 +222,31 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     );
   }, [filteredLogs.data, searchTerm]);
 
+  // Resolve a shared deep link (?request_id=/&session_id=) against the loaded
+  // rows. Derived (not stored) so it needs no effect; the filter set at init
+  // guarantees the target row is present once the query resolves.
+  const deepLinkResolved = useMemo(() => {
+    if (!deepLink || deepLinkDismissed) return null;
+    const { requestId, sessionId } = deepLink;
+    if (sessionId) {
+      const row =
+        filteredData.find((log) => log.session_id === sessionId && (!requestId || log.request_id === requestId)) ||
+        filteredData.find((log) => log.session_id === sessionId);
+      if (!row) return null;
+      return { log: requestId ? { ...row, request_id: requestId } : row, sessionId };
+    }
+    if (requestId) {
+      const row = filteredData.find((log) => log.request_id === requestId);
+      if (!row) return null;
+      return { log: row, sessionId: null as string | null };
+    }
+    return null;
+  }, [deepLink, deepLinkDismissed, filteredData]);
+
+  const drawerOpen = isDrawerOpen || deepLinkResolved !== null;
+  const drawerLog = isDrawerOpen ? selectedLog : deepLinkResolved?.log ?? selectedLog;
+  const drawerSessionId = isDrawerOpen ? selectedSessionId : deepLinkResolved?.sessionId ?? selectedSessionId;
+
   // Keep the Fetch button busy until the table has actually committed the new
   // rows. `keepPreviousData` leaves logsQuery.isLoading false on refetch, so
   // without this the button clears while stale rows are still on screen.
@@ -316,13 +361,14 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
       {/* Log Details Drawer */}
       <LogDetailsDrawer
-        open={isDrawerOpen}
+        open={drawerOpen}
         onClose={() => {
           setIsDrawerOpen(false);
           setSelectedSessionId(null);
+          setDeepLinkDismissed(true);
         }}
-        logEntry={selectedLog}
-        sessionId={selectedSessionId}
+        logEntry={drawerLog}
+        sessionId={drawerSessionId}
         accessToken={accessToken}
         allLogs={filteredData}
         onSelectLog={setSelectedLog}

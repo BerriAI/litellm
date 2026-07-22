@@ -1,7 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { uiSpendLogsCall } from "../networking";
@@ -41,6 +41,17 @@ vi.mock("../networking", async (importOriginal) => {
 
 vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllTeams: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("./LogDetailsDrawer", () => ({
+  LogDetailsDrawer: (props: { open: boolean; logEntry: { request_id?: string } | null; sessionId?: string | null }) =>
+    props.open ? (
+      <div
+        data-testid="log-drawer"
+        data-request-id={props.logEntry?.request_id ?? ""}
+        data-session-id={props.sessionId ?? ""}
+      />
+    ) : null,
 }));
 
 describe("SpendLogsTable", () => {
@@ -116,6 +127,75 @@ describe("SpendLogsTable", () => {
 
       expect(document.querySelector(".ant-spin")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
+    });
+  });
+
+  describe("deep linking", () => {
+    const makeRow = (overrides: Record<string, unknown>) => ({
+      request_id: "req-abc",
+      api_key: "",
+      team_id: "",
+      model: "gpt-4o",
+      model_id: "",
+      call_type: "acompletion",
+      spend: 0,
+      total_tokens: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      startTime: "2026-07-08T10:00:00.000Z",
+      endTime: "2026-07-08T10:00:01.000Z",
+      cache_hit: "false",
+      messages: [],
+      response: {},
+      metadata: {},
+      ...overrides,
+    });
+
+    const mockLogs = (data: Array<Record<string, unknown>>) => {
+      vi.mocked(useLogFilterLogic).mockReturnValue({
+        logsQuery: { isLoading: false, isFetching: false, refetch: vi.fn() },
+        filteredLogs: { data, total: data.length, page: 1, page_size: 50, total_pages: 1 },
+        allTeams: [],
+        handleFilterChange: vi.fn(),
+        handleFilterReset: mockHandleFilterResetFromHook,
+      } as unknown as ReturnType<typeof useLogFilterLogic>);
+    };
+
+    const originalUrl = window.location.href;
+    afterEach(() => {
+      window.history.replaceState({}, "", originalUrl);
+    });
+
+    it("auto-opens the drawer for the matching request when ?request_id= is present", async () => {
+      window.history.replaceState({}, "", "/?page=logs&request_id=req-abc");
+      mockLogs([makeRow({ request_id: "req-other" }), makeRow({ request_id: "req-abc" })]);
+
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      const drawer = await screen.findByTestId("log-drawer");
+      expect(drawer).toHaveAttribute("data-request-id", "req-abc");
+      expect(drawer).toHaveAttribute("data-session-id", "");
+    });
+
+    it("auto-opens the session drawer and selects the request when ?session_id= is present", async () => {
+      window.history.replaceState({}, "", "/?page=logs&session_id=sess-1&request_id=req-child");
+      mockLogs([makeRow({ request_id: "req-repr", session_id: "sess-1", session_total_count: 3 })]);
+
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      const drawer = await screen.findByTestId("log-drawer");
+      expect(drawer).toHaveAttribute("data-session-id", "sess-1");
+      expect(drawer).toHaveAttribute("data-request-id", "req-child");
+    });
+
+    it("does not open the drawer when there is no deep-link param", async () => {
+      window.history.replaceState({}, "", "/?page=logs");
+      mockLogs([makeRow({ request_id: "req-abc" })]);
+
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      await waitFor(() => expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument());
+      expect(screen.queryByTestId("log-drawer")).not.toBeInTheDocument();
     });
   });
 
