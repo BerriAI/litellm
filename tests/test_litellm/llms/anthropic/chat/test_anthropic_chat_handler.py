@@ -2045,3 +2045,30 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+def test_content_block_start_text_missing_text_field():
+    """
+    Regression test: some Anthropic-compatible upstreams omit the optional
+    "text" field on content_block_start events whose type == "text". Per
+    the Anthropic streaming spec the value is conventionally "", and the
+    real text arrives via subsequent content_block_delta chunks anyway,
+    so the parser must tolerate the missing field instead of raising
+    KeyError mid-stream.
+    """
+    chunk = {
+        "type": "content_block_start",
+        "index": 0,
+        # NOTE: "text" field intentionally omitted to mirror upstream payloads
+        # observed from Anthropic-compatible providers (e.g. proxies fronting
+        # claude-haiku-4-5-20251001) that skip the empty default.
+        "content_block": {"type": "text"},
+    }
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+
+    # Must not raise KeyError: 'text'
+    parsed = iterator.chunk_parser(chunk=chunk)
+
+    assert parsed is not None
+    assert parsed.choices[0].delta.content == ""

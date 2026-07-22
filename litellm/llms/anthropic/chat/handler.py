@@ -796,7 +796,12 @@ class ModelResponseIterator:
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
-                    text = content_block_start["content_block"]["text"]
+                    # Defensive .get() — some upstream Anthropic-compatible
+                    # providers omit the "text" field on content_block_start
+                    # for "text" blocks (spec says it should be ""). Fall back
+                    # to "" instead of raising KeyError, since the actual text
+                    # arrives via subsequent content_block_delta chunks anyway.
+                    text = content_block_start["content_block"].get("text", "")
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
