@@ -777,6 +777,65 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         await handler.close()
 
 
+def test_sync_http_handler_skips_custom_transport_when_proxy_set(monkeypatch):
+    """
+    When HTTPS_PROXY is set and force_ipv4 creates a custom transport,
+    the sync HTTPHandler must skip the custom transport so that httpx
+    auto-detects proxy from environment variables.
+
+    httpx ignores proxy env vars when an explicit transport is provided,
+    which breaks sync-path providers (e.g. ChatGPT authenticator) behind
+    a proxy. See GitHub issue #24562.
+
+    We check _mounts: a custom transport produces an empty dict,
+    while httpx's default mount system produces a non-empty dict.
+    """
+    original_force_ipv4 = litellm.force_ipv4
+    litellm.force_ipv4 = True
+
+    try:
+        # With proxy: custom transport should be dropped, so httpx
+        # builds its default mount system (non-empty _mounts).
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:8080")
+        handler = HTTPHandler()
+        try:
+            assert len(handler.client._mounts) > 0
+        finally:
+            handler.close()
+
+        # Without proxy: custom transport is used (empty _mounts).
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+        monkeypatch.delenv("HTTP_PROXY", raising=False)
+        handler2 = HTTPHandler()
+        try:
+            assert len(handler2.client._mounts) == 0
+        finally:
+            handler2.close()
+    finally:
+        litellm.force_ipv4 = original_force_ipv4
+
+
+def test_sync_http_handler_prefers_https_proxy_over_http_proxy(monkeypatch):
+    """
+    HTTPS_PROXY takes precedence over HTTP_PROXY, matching httpx convention.
+    """
+    original_force_ipv4 = litellm.force_ipv4
+    litellm.force_ipv4 = True
+
+    try:
+        monkeypatch.setenv("HTTPS_PROXY", "http://https-proxy:8080")
+        monkeypatch.setenv("HTTP_PROXY", "http://http-proxy:8080")
+
+        handler = HTTPHandler()
+        try:
+            # Should not have custom transport (proxy takes priority)
+            assert len(handler.client._mounts) > 0
+        finally:
+            handler.close()
+    finally:
+        litellm.force_ipv4 = original_force_ipv4
+
+
 def test_get_httpx_client_applies_float_timeout_without_mocking_handler():
     """
     Exercise real _get_httpx_client + HTTPHandler: params={'timeout': x} must reach httpx.Client(timeout=...).

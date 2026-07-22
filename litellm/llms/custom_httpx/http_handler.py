@@ -1090,6 +1090,19 @@ class HTTPHandler:
         if client is None:
             transport = self._create_sync_transport()
 
+            # When proxy is configured via env vars, skip custom transport.
+            # httpx ignores proxy env vars when an explicit transport is
+            # provided, which breaks providers that use the sync client
+            # (e.g. ChatGPT authenticator) behind a proxy.
+            proxy_url = (
+                os.environ.get("HTTPS_PROXY")
+                or os.environ.get("https_proxy")
+                or os.environ.get("HTTP_PROXY")
+                or os.environ.get("http_proxy")
+            )
+            if proxy_url and transport is not None:
+                transport = None
+
             # Create a client with a connection pool
             self.client = httpx.Client(
                 transport=transport,
