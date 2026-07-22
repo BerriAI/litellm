@@ -6,7 +6,7 @@ https://docs.cohere.com/reference/rerank
 
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel, PrivateAttr, computed_field
 from typing_extensions import Required, TypedDict
 
 
@@ -69,6 +69,22 @@ class RerankResponse(BaseModel):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @computed_field
+    @property
+    def usage(self) -> Optional[dict]:  # pyright: ignore[reportReturnType]  # TypedDict .get() returns Unknown, acceptable here
+        if self.meta is None:
+            return None
+        tokens = self.meta.get("tokens") or {}
+        billed = self.meta.get("billed_units") or {}
+        input_tokens = tokens.get("input_tokens") or billed.get("total_tokens")
+        if input_tokens is None:
+            return None
+        return {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": 0,
+            "total_tokens": input_tokens,
+        }
 
     def __getitem__(self, key):
         return self.__dict__[key]

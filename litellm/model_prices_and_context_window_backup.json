@@ -12538,6 +12538,16 @@
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
+    "dashscope/qwen3-rerank": {
+        "input_cost_per_token": 1e-7,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "rerank",
+        "source": "https://help.aliyun.com/zh/model-studio/text-rerank-api"
+    },
     "dashscope/qwen-coder": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "dashscope",
