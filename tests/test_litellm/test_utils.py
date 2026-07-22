@@ -4908,7 +4908,8 @@ def test_filter_tools_by_allowed_types_wider_allowlist_and_empty_result() -> Non
     )
 
     assert filter_tools_by_allowed_types(tools=None, allowed_tool_types=["function"]) is None
-    assert filter_tools_by_allowed_types(tools=[], allowed_tool_types=["function"]) == []
+    # an already-empty list is normalized to None too — some providers reject tools: []
+    assert filter_tools_by_allowed_types(tools=[], allowed_tool_types=["function"]) is None
 
 
 def test_reconcile_tool_choice_after_tool_filtering() -> None:

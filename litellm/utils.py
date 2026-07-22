@@ -7447,11 +7447,12 @@ def filter_tools_by_allowed_types(
           allowed_tool_types: ["function"]
 
     A tool without a ``type`` key is treated as ``function`` (matching OpenAI
-    defaults). Returns None when no tools survive so an empty ``tools: []``
-    array is not sent upstream (some providers reject that too).
+    defaults). Returns None when no tools survive — including when the incoming
+    list is already empty — so an empty ``tools: []`` array is never sent
+    upstream (some providers reject that too).
     """
     if not tools:
-        return tools
+        return None
     filtered = [
         t
         for t in tools
