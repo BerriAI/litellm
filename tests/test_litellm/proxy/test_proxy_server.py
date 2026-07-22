@@ -2588,6 +2588,69 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
         litellm.max_budget = original_max_budget
 
 
+def test_max_ui_session_budget_default_is_one_dollar():
+    """LIT-4662: the dashboard session budget default is a product decision; the
+    old 0.25 default locked admins out of auto router Test Connection and the
+    playground mid-session with an error that looked like a hardcoded cap."""
+    assert litellm.max_ui_session_budget == 1.0
+
+
+@pytest.mark.asyncio
+async def test_load_config_max_ui_session_budget_applied_and_coerced(tmp_path, monkeypatch):
+    """
+    max_ui_session_budget configured via os.environ resolves to a string;
+    load_config must coerce it to float so every dashboard session key is
+    minted with a numeric max_budget.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("UI_SESSION_BUDGET", "2.5")
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_ui_session_budget": "os.environ/UI_SESSION_BUDGET"},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_budget = litellm.max_ui_session_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert isinstance(litellm.max_ui_session_budget, float)
+        assert litellm.max_ui_session_budget == 2.5
+    finally:
+        litellm.max_ui_session_budget = original_budget
+
+
+@pytest.mark.asyncio
+async def test_load_config_max_ui_session_budget_none_disables_cap(tmp_path):
+    """
+    max_ui_session_budget: null in config disables the dashboard session cap
+    entirely (session keys minted with no max_budget); load_config must pass
+    None through instead of raising on float(None).
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    test_config = {
+        "model_list": [],
+        "litellm_settings": {"max_ui_session_budget": None},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original_budget = litellm.max_ui_session_budget
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert litellm.max_ui_session_budget is None
+    finally:
+        litellm.max_ui_session_budget = original_budget
+
+
 @pytest.mark.asyncio
 async def test_load_config_default_internal_user_params_max_budget_scientific_notation(tmp_path):
     """
@@ -9046,6 +9109,85 @@ def test_general_settings_ui_fields_are_db_overridable():
         f"UI-editable litellm_settings fields missing from LITELLM_SETTINGS_SAFE_DB_OVERRIDES: {sorted(missing)}. "
         "Add them, or they will not propagate to other workers when changed from the UI."
     )
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_max_ui_session_budget_sets_live_value(monkeypatch):
+    """LIT-4662: the dashboard session budget is editable from the Admin UI General tab.
+    A Dollar field must accept values above 1 (the old Float type capped at 1, which cannot
+    express a dollar budget), apply live via setattr, and persist under litellm_settings."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, "max_ui_session_budget", 1.0)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="max_ui_session_budget",
+            field_value=25.0,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    assert litellm.max_ui_session_budget == 25.0
+    assert saved["litellm_settings"]["max_ui_session_budget"] == 25.0
+
+
+@pytest.mark.parametrize("bad_value", [True, "abc", -1, 0, [2.5]])
+def test_validate_max_ui_session_budget_rejects_malformed(bad_value):
+    """A Dollar field accepts only positive numbers; zero would block every dashboard
+    LLM call at mint and non-numerics would break session key generation."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_general_settings_ui_litellm_value("max_ui_session_budget", bad_value)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("empty_value", [None, ""])
+def test_validate_max_ui_session_budget_empty_restores_default(empty_value):
+    """Clearing the field in the UI restores the shipped $1 default rather than None;
+    None would silently remove the session spend guardrail (unlimited budget), which
+    must stay a deliberate config.yaml act (max_ui_session_budget: null)."""
+    from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
+
+    assert _validate_general_settings_ui_litellm_value("max_ui_session_budget", empty_value) == 1.0
+
+
+def test_general_settings_ui_defaults_unchanged_for_existing_fields():
+    """The spec-default mechanism added for max_ui_session_budget must not change what
+    clearing the pre-existing fields restores (None for Float/Select, False for Boolean)."""
+    from litellm.proxy.proxy_server import (
+        _GENERAL_SETTINGS_UI_LITELLM_FIELDS,
+        _general_settings_ui_litellm_default,
+    )
+
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["budget_exceeded_throttle_percentage"]) is None
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["enable_anthropic_prompt_caching"]) is False
+    assert _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS["anthropic_prompt_caching_ttl"]) is None
 
 
 @pytest.mark.parametrize(
