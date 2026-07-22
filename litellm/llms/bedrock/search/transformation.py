@@ -51,10 +51,19 @@ from litellm.secret_managers.main import get_secret_str
 # AgentCore web-search rejects queries longer than 200 characters
 AGENTCORE_MAX_QUERY_LENGTH = 200
 
+# The provider contract documents a default of 10 results — send it explicitly
+# so the gateway can't silently apply a different default.
+AGENTCORE_DEFAULT_MAX_RESULTS = 10
+
 # Default MCP tool name for a gateway web-search connector target:
 # "<target-name>___<tool-name>". Override with AGENTCORE_SEARCH_TOOL_NAME
 # or optional_params["tool_name"] when the target uses a custom name.
 AGENTCORE_DEFAULT_TOOL_NAME = "web-search-tool___WebSearch"
+
+# All web-search connector tools share this suffix; rejecting other names keeps
+# a caller-supplied tool_name from invoking unrelated tools on the same gateway
+# with the proxy's credentials.
+AGENTCORE_TOOL_NAME_SUFFIX = "___WebSearch"
 
 
 class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
@@ -128,10 +137,15 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             or get_secret_str("AGENTCORE_SEARCH_TOOL_NAME")
             or AGENTCORE_DEFAULT_TOOL_NAME
         )
+        if not tool_name.endswith(AGENTCORE_TOOL_NAME_SUFFIX):
+            raise ValueError(
+                f"Invalid AgentCore search tool_name '{tool_name}': must end with "
+                f"'{AGENTCORE_TOOL_NAME_SUFFIX}' (a web-search connector tool). "
+                "Other gateway tools cannot be invoked through this provider."
+            )
 
         arguments: dict[str, Union[str, int]] = {"query": query}
-        if "max_results" in optional_params:
-            arguments["maxResults"] = optional_params["max_results"]
+        arguments["maxResults"] = optional_params.get("max_results", AGENTCORE_DEFAULT_MAX_RESULTS)
 
         return {
             "jsonrpc": "2.0",
@@ -159,14 +173,28 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         if not isinstance(request_data, dict):
             raise ValueError("AgentCore search expects a single dict request body")
 
-        bearer_token = api_key or get_secret_str("AGENTCORE_GATEWAY_TOKEN")
+        # Server-managed token fallback is gated on the request targeting the
+        # operator-configured gateway host — otherwise an authenticated caller
+        # could point api_base at their own server (e.g. via
+        # /search_tools/test_connection) and receive AGENTCORE_GATEWAY_TOKEN.
+        bearer_token = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("AGENTCORE_GATEWAY_TOKEN",),
+            base_env_var="AGENTCORE_GATEWAY_URL",
+            default_api_base=None,
+        )
         if bearer_token:
             headers["Authorization"] = f"Bearer {bearer_token}"
             return headers, json.dumps(request_data).encode()
 
         # The signing region must match the gateway's region — derive it from
-        # the gateway URL so callers don't have to set aws_region_name to a
-        # region different from their default.
+        # standard gateway hostnames so callers don't have to set
+        # aws_region_name to a region different from their default. Custom or
+        # private hostnames can't be parsed: fall back to an explicitly
+        # configured region (param or AWS env vars), and error out rather than
+        # silently signing for a guessed region the gateway would reject with
+        # a confusing auth error.
         signing_params = dict(optional_params)
         if signing_params.get("aws_region_name") is None:
             match = re.search(
@@ -175,13 +203,23 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             )
             if match:
                 signing_params["aws_region_name"] = match.group(1)
+            elif not any(get_secret_str(var) for var in ("AWS_REGION", "AWS_REGION_NAME", "AWS_DEFAULT_REGION")):
+                raise ValueError(
+                    f"Cannot derive the SigV4 signing region from api_base '{api_base}'. "
+                    "Set aws_region_name (or the AWS_REGION env var) to the gateway's "
+                    "region when using a custom hostname."
+                )
 
+        # api_key="" (not None, but falsy) disables BaseAWSLLM's fallback to the
+        # AWS_BEARER_TOKEN_BEDROCK env var: that token is a Bedrock Runtime
+        # credential and must not be sent to an AgentCore gateway.
         return self._sign_request(
             service_name="bedrock-agentcore",
             headers=headers,
             optional_params=signing_params,
             request_data=request_data,
             api_base=api_base,
+            api_key="",
         )
 
     def transform_search_response(
@@ -231,17 +269,42 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
     @staticmethod
     def _parse_mcp_body(raw_response: httpx.Response) -> dict:
-        """Parse a JSON or SSE-framed (Streamable HTTP transport) MCP response."""
+        """
+        Parse a JSON or SSE-framed (Streamable HTTP transport) MCP response.
+
+        Per the SSE spec, an event's data is the concatenation of all its
+        ``data:`` lines (joined with newlines), and a stream may carry several
+        events (e.g. progress notifications before the JSON-RPC response).
+        Return the event whose payload carries the ``id``-matched JSON-RPC
+        response — i.e. one containing ``result`` or ``error``.
+        """
         text = raw_response.text
-        if text.lstrip().startswith(("event:", "data:")):
-            for line in text.splitlines():
-                if line.startswith("data:"):
-                    return json.loads(line[len("data:") :].strip())
-            raise BedrockError(
-                status_code=502,
-                message=f"AgentCore gateway returned SSE without a data frame: {text[:200]}",
-            )
-        return raw_response.json()
+        if not text.lstrip().startswith(("event:", "data:", ":", "id:", "retry:")):
+            return raw_response.json()
+
+        last_parsed: dict | None = None
+        data_lines: list[str] = []
+        # Trailing sentinel flushes the final event even without a blank line
+        for line in text.splitlines() + [""]:
+            if line.startswith("data:"):
+                data_lines.append(line[len("data:") :].lstrip())
+                continue
+            if line == "" and data_lines:
+                try:
+                    parsed = json.loads("\n".join(data_lines))
+                except json.JSONDecodeError:
+                    parsed = None
+                data_lines = []
+                if isinstance(parsed, dict):
+                    last_parsed = parsed
+                    if "result" in parsed or "error" in parsed:
+                        return parsed
+        if last_parsed is not None:
+            return last_parsed
+        raise BedrockError(
+            status_code=502,
+            message=f"AgentCore gateway returned SSE without a JSON data frame: {text[:200]}",
+        )
 
     def get_error_class(
         self,
