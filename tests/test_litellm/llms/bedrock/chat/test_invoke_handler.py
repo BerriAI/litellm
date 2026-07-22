@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock
@@ -326,3 +327,121 @@ def test_legacy_bedrock_llm_streaming_does_not_rechunk_by_default():
     )
 
     mock_response.iter_bytes.assert_called_once_with(chunk_size=None)
+
+
+def _collect_tool_call_args(parsed_chunks):
+    """Accumulate tool_call argument deltas across parsed chunks, keyed by tool index."""
+    accumulated_args = {}
+    for parsed_chunk in parsed_chunks:
+        chunk_dict = (
+            parsed_chunk.model_dump()
+            if hasattr(parsed_chunk, "model_dump")
+            else parsed_chunk
+        )
+        choices = chunk_dict.get("choices") or []
+        if not choices:
+            continue
+        for tool_call in choices[0].get("delta", {}).get("tool_calls") or []:
+            index = tool_call["index"]
+            accumulated_args.setdefault(index, "")
+            accumulated_args[index] += tool_call["function"]["arguments"] or ""
+    return accumulated_args
+
+
+def test_tool_call_with_no_input_deltas_emits_empty_args_chunk():
+    """
+    A tool called with zero arguments streams contentBlockStart(toolUse)
+    followed directly by contentBlockStop - no contentBlockDelta events.
+    The decoder must still emit the arguments="{}" repair chunk, otherwise
+    clients accumulate arguments == "" and json.loads("") fails.
+
+    See: https://github.com/BerriAI/litellm/issues/19858
+    """
+    chunks = [
+        {"messageStart": {"role": "assistant"}},
+        {
+            "start": {"toolUse": {"toolUseId": "tooluse_noargs", "name": "get_time"}},
+            "contentBlockIndex": 0,
+        },
+        {"contentBlockIndex": 0},  # stop event, no deltas were streamed
+        {"stopReason": "tool_use"},
+    ]
+    decoder = AWSEventStreamDecoder(model="test")
+    parsed_chunks = [decoder._chunk_parser(chunk) for chunk in chunks]
+
+    accumulated_args = _collect_tool_call_args(parsed_chunks)
+    assert accumulated_args == {0: "{}"}
+    json.loads(accumulated_args[0])  # must be valid JSON
+
+
+def test_tool_call_with_no_input_deltas_followed_by_second_tool():
+    """A zero-argument tool must not corrupt a following tool call's index or args."""
+    chunks = [
+        {"messageStart": {"role": "assistant"}},
+        {
+            "start": {"toolUse": {"toolUseId": "tooluse_1", "name": "get_time"}},
+            "contentBlockIndex": 0,
+        },
+        {"contentBlockIndex": 0},
+        {
+            "start": {"toolUse": {"toolUseId": "tooluse_2", "name": "search_drugs"}},
+            "contentBlockIndex": 1,
+        },
+        {
+            "delta": {"toolUse": {"input": '{"query": "amlodipine"}'}},
+            "contentBlockIndex": 1,
+        },
+        {"contentBlockIndex": 1},
+        {"stopReason": "tool_use"},
+    ]
+    decoder = AWSEventStreamDecoder(model="test")
+    parsed_chunks = [decoder._chunk_parser(chunk) for chunk in chunks]
+
+    accumulated_args = _collect_tool_call_args(parsed_chunks)
+    assert accumulated_args == {0: "{}", 1: '{"query": "amlodipine"}'}
+
+
+def test_empty_args_tool_then_startless_text_block_no_duplicate_empty_args_chunk():
+    """
+    Text blocks stream without a contentBlockStart event, so delta state must
+    be reset at contentBlockStop. Otherwise the text block's stop event
+    re-checks the stale toolUse deltas and emits a second "{}" chunk, and the
+    accumulated arguments "{}{}" fail json.loads with "Extra data".
+
+    See: https://github.com/BerriAI/litellm/issues/19858
+    """
+    chunks = [
+        {"messageStart": {"role": "assistant"}},
+        {
+            "start": {"toolUse": {"toolUseId": "tooluse_G", "name": "get_time"}},
+            "contentBlockIndex": 0,
+        },
+        {"delta": {"toolUse": {"input": ""}}, "contentBlockIndex": 0},
+        {"contentBlockIndex": 0},  # tool stop -> emits the "{}" repair chunk
+        {
+            "delta": {"text": "Fetching the time."},
+            "contentBlockIndex": 1,
+        },  # no start event
+        {"contentBlockIndex": 1},  # text stop -> must NOT emit another "{}"
+        {"stopReason": "tool_use"},
+    ]
+    decoder = AWSEventStreamDecoder(model="test")
+    parsed_chunks = [decoder._chunk_parser(chunk) for chunk in chunks]
+
+    accumulated_args = _collect_tool_call_args(parsed_chunks)
+    assert accumulated_args == {0: "{}"}
+    json.loads(accumulated_args[0])  # "{}{}" would raise "Extra data"
+
+
+def test_text_only_block_stop_emits_no_tool_call_chunk():
+    """A stream with only text blocks must never emit tool_call chunks at stop events."""
+    chunks = [
+        {"messageStart": {"role": "assistant"}},
+        {"delta": {"text": "Hello"}, "contentBlockIndex": 0},
+        {"contentBlockIndex": 0},
+        {"stopReason": "end_turn"},
+    ]
+    decoder = AWSEventStreamDecoder(model="test")
+    parsed_chunks = [decoder._chunk_parser(chunk) for chunk in chunks]
+
+    assert _collect_tool_call_args(parsed_chunks) == {}
