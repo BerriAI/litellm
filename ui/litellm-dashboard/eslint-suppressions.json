@@ -1109,11 +1109,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/transform-request/TransformRequestPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/ui-theme/UIThemeSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
