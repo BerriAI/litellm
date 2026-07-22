@@ -245,7 +245,15 @@ def ollama_pt(
                 for call in tool_calls:
                     call_id: str = call["id"]
                     function_name: str = call["function"]["name"]
-                    arguments = json.loads(call["function"]["arguments"])
+                    # Use the shared safe parser (mirrors the other tool-call
+                    # sites in this module): a no-argument function call carries
+                    # arguments="" / None, on which a bare json.loads raises
+                    # JSONDecodeError and aborts the whole request during prompt
+                    # construction. parse_tool_call_arguments returns {} for
+                    # empty/None and repairs truncated JSON.
+                    arguments = parse_tool_call_arguments(
+                        call["function"]["arguments"], tool_name=function_name
+                    )
 
                     ollama_tool_calls.append(
                         {
