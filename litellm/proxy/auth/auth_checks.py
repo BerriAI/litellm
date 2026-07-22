@@ -1764,9 +1764,14 @@ async def _cache_team_object(
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
+    key = "team_id:{}".format(team_id)
+
+    if proxy_logging_obj is not None:
+        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+
     # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
-        key="team_id:{}".format(team_id),
+        key=key,
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,

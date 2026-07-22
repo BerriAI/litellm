@@ -6500,6 +6500,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
             return_value=mock_existing_team
         )
         mock_cache.async_set_cache = AsyncMock()
+        mock_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)

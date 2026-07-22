@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import (
     vector_store_access_check,
 )
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -4156,6 +4157,11 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
          len(teams)==1 before populating the cache.
       3. When team_alias is None, NO alias-key operation happens (no
          delete of an empty-keyed entry, no spurious write).
+      4. DELETES the team_id-keyed entry from the internal usage cache
+         BEFORE the fresh write (LIT-4391). `_get_team_object_from_cache`
+         consults the internal usage cache first, so a leftover copy there
+         (backfilled from a Redis shared with `user_api_key_cache`) would
+         keep serving the pre-update team allowlist.
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -4202,9 +4208,14 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache
     # and the Redis dual cache (mirrors _delete_cache_key_object pattern).
     cache.delete_cache.assert_called_once_with(key="team_alias:H-Capacity")
-    logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
-        key="team_alias:H-Capacity"
-    )
+
+    # (4) internal usage cache: team_id entry deleted BEFORE the fresh
+    # write, alias entry deleted as before.
+    internal_deleted_keys = [
+        (c.kwargs.get("key") or c.args[0])
+        for c in logging_obj.internal_usage_cache.dual_cache.async_delete_cache.await_args_list
+    ]
+    assert internal_deleted_keys == ["team_id:team-1234", "team_alias:H-Capacity"]
 
     # ===== team_alias is None: no alias-key operation =====
     aliasless = LiteLLM_TeamTableCachedObj(**{**base_team_row, "team_alias": None})
@@ -4222,12 +4233,114 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     )
 
     cache2.delete_cache.assert_not_called()
-    logging_obj2.internal_usage_cache.dual_cache.async_delete_cache.assert_not_awaited()
+    logging_obj2.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
+        key="team_id:team-no-alias"
+    )
     written_keys_aliasless = [
         (c.kwargs.get("key") or c.args[0])
         for c in cache2.async_set_cache.await_args_list
     ]
     assert written_keys_aliasless == ["team_id:team-no-alias"]
+
+
+class _SharedFakeRedis(RedisCache):
+    """Dict-backed stand-in for the single Redis that both
+    ``user_api_key_cache`` (enable_redis_auth_cache) and
+    ``proxy_logging_obj.internal_usage_cache.dual_cache`` share in the
+    LIT-4391 deployment topology. Only the methods DualCache calls are
+    implemented; ``super().__init__`` is skipped intentionally."""
+
+    def __init__(self):
+        self._store: dict = {}
+
+    async def async_set_cache(self, key, value, **kwargs):
+        self._store[key] = json.dumps(value)
+
+    async def async_get_cache(self, key, **kwargs):
+        raw = self._store.get(key)
+        return json.loads(raw) if raw is not None else None
+
+    async def async_delete_cache(self, key):
+        self._store.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
+    """
+    Regression test for LIT-4391: keys with models=["all-team-models"] kept
+    getting 403 team_model_access_denied for models added via /team/update.
+
+    `_get_team_object_from_cache` consults the internal usage cache BEFORE
+    `user_api_key_cache`. When both share one Redis (enable_redis_auth_cache),
+    any team read backfills the internal cache's in-memory tier with the team
+    object. `_cache_team_object` (the /team/update refresh) only wrote
+    `user_api_key_cache`, so that backfilled copy kept shadowing the update
+    until its TTL expired — and the auth-time write-back then pushed the stale
+    copy back into the shared Redis, making the staleness self-sustaining.
+
+    Pins:
+      1. After `_cache_team_object` writes an updated team, `get_team_object`
+         returns the UPDATED model list even though the internal usage cache's
+         in-memory tier was backfilled with the pre-update team.
+      2. The shared Redis still holds the updated team afterwards — the
+         internal-cache invalidation must happen BEFORE the fresh write, or it
+         would wipe the value it just wrote.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import _cache_team_object, get_team_object
+
+    team_id = "team-lit-4391"
+    shared_redis = _SharedFakeRedis()
+    user_api_key_cache = UserApiKeyCache(redis_cache=shared_redis)
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache = DualCache(
+        redis_cache=shared_redis,
+        default_in_memory_ttl=300,
+    )
+    prisma_client = MagicMock()
+
+    await _cache_team_object(
+        team_id=team_id,
+        team_table=LiteLLM_TeamTableCachedObj(team_id=team_id, models=["model-a"]),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    primed = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    assert primed is not None and primed.models == ["model-a"]
+
+    await _cache_team_object(
+        team_id=team_id,
+        team_table=LiteLLM_TeamTableCachedObj(
+            team_id=team_id, models=["model-a", "model-b"]
+        ),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    refreshed = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    assert refreshed is not None and refreshed.models == ["model-a", "model-b"], (
+        "get_team_object served a stale team allowlist after _cache_team_object "
+        f"refreshed it. Got models={refreshed.models if refreshed else None}"
+    )
+
+    redis_copy = await shared_redis.async_get_cache(f"team_id:{team_id}")
+    assert redis_copy is not None and redis_copy["models"] == ["model-a", "model-b"], (
+        "The shared Redis lost the refreshed team object — the internal-cache "
+        "invalidation must run BEFORE the fresh write, not after. "
+        f"Got: {redis_copy}"
+    )
 
 
 MODEL_DISCOVERY_ROUTES = [
