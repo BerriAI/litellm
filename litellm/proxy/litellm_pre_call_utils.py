@@ -969,26 +969,13 @@ class LiteLLMProxyRequestSetup:
             verbose_proxy_logger.debug(f"Extracted agent_id from header: {agent_id_from_header}")
 
         if chain_id:
-        if chain_id:
             request_metadata = data.get(_metadata_variable_name) or {}
             body_session_id = data.get("litellm_session_id")
             body_trace_id = data.get("litellm_trace_id")
             metadata_session_id = request_metadata.get("session_id")
             metadata_trace_id = request_metadata.get("trace_id")
-            session_id = (
-                body_session_id
-                if body_session_id is not None
-                else metadata_session_id
-                if metadata_session_id is not None
-                else chain_id
-            )
-            trace_id = (
-                body_trace_id
-                if body_trace_id is not None
-                else metadata_trace_id
-                if metadata_trace_id is not None
-                else chain_id
-            )
+            session_id = body_session_id or metadata_session_id or chain_id
+            trace_id = body_trace_id or metadata_trace_id or chain_id
             metadata_from_headers["trace_id"] = trace_id
             metadata_from_headers["session_id"] = session_id
             data["litellm_session_id"] = session_id

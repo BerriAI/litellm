@@ -2537,8 +2537,8 @@ def test_add_litellm_metadata_from_request_headers_preserves_body_chain_ids():
     assert data["metadata"]["trace_id"] == "body-trace-id"
 
 
-def test_add_litellm_metadata_from_request_headers_preserves_empty_body_chain_ids():
-    """An explicitly empty body ID must not be replaced by the header chain ID."""
+def test_add_litellm_metadata_from_request_headers_falls_back_from_empty_body_chain_ids():
+    """Empty body IDs must fall back to the header chain ID for session limit enforcement."""
     headers = {"x-litellm-trace-id": "header-trace-id"}
     data = {
         "metadata": {},
@@ -2549,10 +2549,10 @@ def test_add_litellm_metadata_from_request_headers_preserves_empty_body_chain_id
         headers=headers, data=data, _metadata_variable_name="metadata"
     )
 
-    assert data["litellm_session_id"] == ""
-    assert data["litellm_trace_id"] == ""
-    assert data["metadata"]["session_id"] == ""
-    assert data["metadata"]["trace_id"] == ""
+    assert data["litellm_session_id"] == "header-trace-id"
+    assert data["litellm_trace_id"] == "header-trace-id"
+    assert data["metadata"]["session_id"] == "header-trace-id"
+    assert data["metadata"]["trace_id"] == "header-trace-id"
 
 
 def test_add_litellm_metadata_from_request_headers_preserves_metadata_chain_ids():
@@ -2572,6 +2572,25 @@ def test_add_litellm_metadata_from_request_headers_preserves_metadata_chain_ids(
     assert data["litellm_trace_id"] == "metadata-trace-id"
     assert data["metadata"]["session_id"] == "metadata-session-id"
     assert data["metadata"]["trace_id"] == "metadata-trace-id"
+
+
+def test_add_litellm_metadata_from_request_headers_falls_back_from_empty_metadata_chain_ids():
+    """Empty metadata IDs must fall back to the header chain ID for session limit enforcement."""
+    headers = {"x-litellm-trace-id": "header-trace-id"}
+    data = {
+        "metadata": {
+            "session_id": "",
+            "trace_id": "",
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+
+    assert data["litellm_session_id"] == "header-trace-id"
+    assert data["litellm_trace_id"] == "header-trace-id"
+    assert data["metadata"]["session_id"] == "header-trace-id"
+    assert data["metadata"]["trace_id"] == "header-trace-id"
 
 
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
