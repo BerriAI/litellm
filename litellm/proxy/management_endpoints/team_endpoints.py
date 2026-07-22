@@ -18,7 +18,7 @@ from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple, Union, 
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -2368,21 +2368,6 @@ async def _update_team_members_list(
                 complete_team_data.members_with_roles.append(nm)
 
 
-_MEMBERS_WITH_ROLES_ADAPTER = TypeAdapter(list[Member])
-
-
-def _coerce_members_with_roles(raw_value: object) -> list[Member]:
-    """Parse a raw ``members_with_roles`` DB value into typed members.
-
-    The column is Postgres jsonb with a ``{}`` default, so a freshly-read row
-    can be an empty dict, a JSON string, an already-parsed list, or None.
-    """
-    parsed = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
-    if not parsed:
-        return []
-    return _MEMBERS_WITH_ROLES_ADAPTER.validate_python(parsed)
-
-
 async def _add_team_members_to_team(
     data: TeamMemberAddRequest,
     complete_team_data: LiteLLM_TeamTable,
@@ -2409,12 +2394,8 @@ async def _add_team_members_to_team(
     )
 
     async with prisma_client.tx() as tx:
-        locked_rows = await tx.query_raw(
-            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
-            data.team_id,
-        )
-        complete_team_data.members_with_roles = _coerce_members_with_roles(
-            locked_rows[0]["members_with_roles"] if locked_rows else None
+        complete_team_data.members_with_roles = await TeamRepository(prisma_client).get_members_with_roles_locked(
+            tx, data.team_id
         )
 
         await _update_team_members_list(
