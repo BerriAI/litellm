@@ -18,6 +18,9 @@ export const MCP_CALL_TYPES = ["call_mcp_tool", "list_mcp_tools"];
 /** Call types that represent agent/A2A requests (e.g. asend_message). */
 export const AGENT_CALL_TYPES = ["asend_message"];
 
+/** Call types that represent local collector captures from LiteLLM Relay. */
+export const RELAY_CALL_TYPES = ["litellm-relay"];
+
 export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string }[] = [
   { label: "Last Minute", value: 1, unit: "minutes" },
   { label: "Last 15 Minutes", value: 15, unit: "minutes" },

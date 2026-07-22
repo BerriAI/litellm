@@ -29,13 +29,24 @@ import {
   TAB_RESPONSE,
   FONT_SIZE_SMALL,
   FONT_FAMILY_MONO,
+  COLOR_BG_LIGHT,
+  SPACING_LARGE,
   SPACING_XLARGE,
   SPACING_MEDIUM,
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
+import { RelaySourceBadge, getRelaySource } from "../TypeBadges";
 
 const { Text } = Typography;
+
+const getObjectRequestTags = (requestTags: LogEntry["request_tags"]): Record<string, unknown> | undefined => {
+  if (!requestTags || Array.isArray(requestTags) || typeof requestTags !== "object") {
+    return undefined;
+  }
+
+  return requestTags;
+};
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
@@ -54,8 +65,11 @@ export interface LogDetailContentProps {
  */
 export function LogDetailContent({ logEntry, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
+  const requestTags = getObjectRequestTags(logEntry.request_tags);
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
+  const isRelayCapture = logEntry.call_type === "litellm-relay";
+  const relaySource = getRelaySource(logEntry);
 
   const hasMessages = checkHasMessages(logEntry.messages);
   const hasResponse = checkHasResponse(logEntry.response);
@@ -108,9 +122,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       )}
 
       {/* Tags */}
-      {logEntry.request_tags && Object.keys(logEntry.request_tags).length > 0 && (
-        <TagsSection tags={logEntry.request_tags} />
-      )}
+      {requestTags && Object.keys(requestTags).length > 0 && <TagsSection tags={requestTags} />}
 
       {/* Request Details */}
       <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
@@ -119,6 +131,11 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
             <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
             <Descriptions.Item label="Provider">{logEntry.custom_llm_provider || "-"}</Descriptions.Item>
             <Descriptions.Item label="Call Type">{logEntry.call_type}</Descriptions.Item>
+            {isRelayCapture && (
+              <Descriptions.Item label="Source">
+                <RelaySourceBadge source={relaySource} />
+              </Descriptions.Item>
+            )}
             <Descriptions.Item label="Model ID">
               <TruncatedValue value={logEntry.model_id} />
             </Descriptions.Item>
@@ -233,7 +250,7 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
   );
 }
 
-function TagsSection({ tags }: { tags: Record<string, any> }) {
+function TagsSection({ tags }: { tags: Record<string, unknown> }) {
   return (
     <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
       <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
@@ -472,6 +489,7 @@ function RequestResponseSection({
     : totalTokens > 0
       ? (totalSpend * completionTokens) / totalTokens
       : 0;
+  const isRelayCapture = logEntry.call_type === "litellm-relay";
 
   return (
     <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
@@ -502,6 +520,7 @@ function RequestResponseSection({
             ),
             children: (
               <div>
+                {isRelayCapture && <RelayPayloadPreview request={getRawRequest()} response={getFormattedResponse()} />}
                 {viewMode === "pretty" ? (
                   <PrettyMessagesView
                     request={getRawRequest()}
@@ -559,6 +578,61 @@ function RequestResponseSection({
           },
         ]}
       />
+    </div>
+  );
+}
+
+function getPreviewText(payload: any): string {
+  if (!payload) return "";
+  if (typeof payload === "string") return payload;
+  if (typeof payload.body === "string") return payload.body;
+  if (typeof payload.body_preview === "string") return payload.body_preview;
+  return JSON.stringify(payload, null, 2);
+}
+
+function PayloadCodeBlock({ value }: { value: string }) {
+  return (
+    <pre
+      className="whitespace-pre-wrap break-words text-xs"
+      style={{
+        margin: 0,
+        maxHeight: 220,
+        overflow: "auto",
+        padding: SPACING_LARGE,
+        background: COLOR_BG_LIGHT,
+        border: "1px solid #e5e7eb",
+        borderRadius: 6,
+        fontFamily: FONT_FAMILY_MONO,
+      }}
+    >
+      {value || "No body captured"}
+    </pre>
+  );
+}
+
+function RelayPayloadPreview({ request, response }: { request: any; response: any }) {
+  const requestBody = getPreviewText(request);
+  const responseBody = getPreviewText(response);
+  return (
+    <div className="mb-4">
+      <Alert
+        type="info"
+        showIcon
+        message="HTTP payload captured by LiteLLM Relay"
+        description="This is the intercepted request and response body stored on the LiteLLM spend log."
+        className="mb-3"
+      />
+      <div className="grid grid-cols-1 gap-3">
+        <Card
+          size="small"
+          title={`Request${request?.method ? ` · ${request.method}` : ""}${request?.path ? ` ${request.path}` : ""}`}
+        >
+          <PayloadCodeBlock value={requestBody} />
+        </Card>
+        <Card size="small" title={`Response${response?.status_code ? ` · ${response.status_code}` : ""}`}>
+          <PayloadCodeBlock value={responseBody} />
+        </Card>
+      </div>
     </div>
   );
 }

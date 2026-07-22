@@ -1646,3 +1646,9 @@ ADVISOR_TOOL_DESCRIPTION: str = (
     "want to verify your reasoning, or face a complex decision. "
     "Describe your question or challenge clearly in the 'question' field."
 )
+
+########################### LiteLLM Relay Collector Constants ###########################
+LITELLM_RELAY_CALL_TYPE = "litellm-relay"
+MAX_COLLECTOR_SPEND_LOGS = 1000
+MAX_COLLECTOR_SPEND_LOG_BYTES = 256 * 1024
+MAX_COLLECTOR_SPEND_LOG_BATCH_BYTES = 10 * 1024 * 1024

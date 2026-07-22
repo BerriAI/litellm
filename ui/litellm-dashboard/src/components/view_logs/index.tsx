@@ -10,7 +10,7 @@ import { keyInfoV1Call } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogsPanel from "./AuditLogsPanel";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
-import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
+import { AGENT_CALL_TYPES, MCP_CALL_TYPES, RELAY_CALL_TYPES } from "./constants";
 import { getLogFilterOptions } from "./filter_options";
 import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
@@ -154,6 +154,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           acc[log.session_id].mcp += 1;
         } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
           acc[log.session_id].agent += 1;
+        } else if (RELAY_CALL_TYPES.includes(log.call_type)) {
+          // Relay captures are not LLM calls; they get their own Type badge.
         } else {
           acc[log.session_id].llm += 1;
         }
@@ -163,14 +165,22 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     );
 
     // Build a single-pass map of session_id → representative request_id.
-    // Prefers an LLM row over an MCP row as the representative.
-    const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
+    // Prefer higher-signal execution rows over collector/tool rows.
+    const sessionRepresentativeMap = new Map<string, { requestId: string; priority: number }>();
     for (const log of searchedLogs) {
       if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
       const isMcp = MCP_CALL_TYPES.includes(log.call_type);
+      const isRelay = RELAY_CALL_TYPES.includes(log.call_type);
+      const isAgent = AGENT_CALL_TYPES.includes(log.call_type);
+      let priority = 2;
+      if (isRelay || isMcp) {
+        priority = 0;
+      } else if (isAgent) {
+        priority = 1;
+      }
       const existing = sessionRepresentativeMap.get(log.session_id);
-      if (!existing || (existing.isMcp && !isMcp)) {
-        sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
+      if (!existing || priority > existing.priority) {
+        sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, priority });
       }
     }
 
