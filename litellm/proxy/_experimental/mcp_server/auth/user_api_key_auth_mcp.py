@@ -131,11 +131,9 @@ def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> b
     """True when this auth is a keyless subject admitted by the gateway session / bridge user
     path, as opposed to a JWT or other keyless auth that merely lacks a ``team_id``.
 
-    Reads the server-only ``UserAPIKeyAuth.mcp_admitted_user_subject`` field, set exclusively by
-    ``_reload_admitted_user`` at admission. It is deliberately NOT a ``metadata`` key: virtual-key
-    metadata is caller-controlled at key creation, so a metadata marker could be forged on a
-    personal key to gain the team-inherited grant union or to dodge the caller-Authorization
-    egress scrub. This field cannot be set from caller input."""
+    Reads the server-only ``mcp_admitted_user_subject`` field, set only by ``_reload_admitted_user``. It
+    is deliberately NOT a ``metadata`` key, which is caller-controlled at key creation and so forgeable
+    on a personal key to gain the team grant union or dodge the egress scrub; this field cannot be."""
     return user_api_key_auth is not None and user_api_key_auth.mcp_admitted_user_subject is True
 
 
@@ -391,11 +389,9 @@ class MCPRequestHandler:
             and oauth2_headers
             and is_session_bearer_shaped(oauth2_headers["Authorization"])
         ):
-            # A gateway DCR session bearer at the aggregate /mcp scope: open the
-            # identity-only session token and admit under the live litellm user it
-            # references. A session-shaped bearer that does not open fails closed with
-            # the aggregate invalid_token challenge; a non-session bearer never reaches
-            # here (is_session_bearer_shaped is false) and falls through to the oauth2 arm.
+            # A gateway DCR session bearer at the aggregate /mcp scope: open the identity-only session
+            # token and admit under the live litellm user. One that does not open fails closed with the
+            # aggregate invalid_token challenge; a non-session bearer falls through to the oauth2 arm.
             validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
                 authorization_value=oauth2_headers["Authorization"],
                 request=request,
@@ -431,13 +427,10 @@ class MCPRequestHandler:
                     bearer_presented=False,
                 )
 
-        # Leak-defense (single chokepoint): a gateway admission credential — the session bearer or the
-        # bridge envelope — is NEVER a valid upstream MCP token. Scrub it from EVERY egress header context
-        # (top-level Authorization, the deprecated `x-mcp-auth`, and per-server `x-mcp-{alias}-authorization`)
-        # so no client-forwarded, OBO-subject, or passthrough path can send it upstream, where a hostile
-        # server could capture and replay it against the aggregate endpoint as this user. Anchored to the
-        # credential SHAPE, so a legitimate upstream/passthrough token (never session- or envelope-shaped)
-        # is forwarded unchanged; per-server vaulted credentials (resolved at egress) are unaffected.
+        # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
+        # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
+        # client-forwarded, OBO, or passthrough path can send it upstream for replay. Anchored to the
+        # credential SHAPE, so a legitimate upstream/passthrough token is forwarded unchanged.
         raw_headers = dict(headers)
         (
             oauth2_headers,
@@ -463,10 +456,9 @@ class MCPRequestHandler:
 
     @staticmethod
     def _is_gateway_admission_credential(value: str | None) -> bool:
-        """True when a header value is a gateway admission credential — a session bearer (``llm_session_`` /
-        ``llm_srefresh_``) or a bridge envelope. Such a value proves who signed in to the GATEWAY; it is
-        never a valid credential for an UPSTREAM MCP server, so it must never be forwarded, where a hostile
-        upstream could capture and replay it against the aggregate ``/mcp`` endpoint as this user."""
+        """True when a header value is a gateway admission credential — a session bearer or bridge
+        envelope. It proves who signed in to the GATEWAY, never a valid UPSTREAM token, so it must never
+        be forwarded (a hostile upstream could capture and replay it against the aggregate ``/mcp`` scope)."""
         return value is not None and (is_session_bearer_shaped(value) or is_bridge_envelope_shaped(value))
 
     @staticmethod
@@ -478,13 +470,10 @@ class MCPRequestHandler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
     ) -> tuple[dict[str, str] | None, dict[str, str], str | None, dict[str, dict[str, str]] | None]:
         """Remove any gateway admission credential from EVERY egress header context, keyed on the credential
-        SHAPE: the top-level ``Authorization`` (``oauth2_headers`` + ``raw_headers``), the deprecated
-        ``x-mcp-auth`` (``mcp_auth_header``), and per-server ``x-mcp-{alias}-authorization``
-        (``mcp_server_auth_headers``). A legitimate upstream/passthrough token is never session- or
-        envelope-shaped, so it is forwarded unchanged; the per-server token the bridge arm injects is the
-        real upstream credential (also not gateway-shaped), so it survives. An admitted subject's top-level
-        Authorization IS the admission bearer, so it is dropped unconditionally as defense-in-depth even
-        though it is already gateway-shaped."""
+        SHAPE: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and per-server
+        ``x-mcp-{alias}-authorization``. A legitimate upstream/passthrough token is never gateway-shaped so
+        it survives (including the real upstream token the bridge arm injects per-server); an admitted
+        subject's top-level Authorization is dropped unconditionally as defense-in-depth."""
         cred = MCPRequestHandler._is_gateway_admission_credential
 
         # 1. Top-level Authorization → oauth2_headers.
@@ -745,21 +734,12 @@ class MCPRequestHandler:
     ) -> UserAPIKeyAuth:
         """Open a gateway DCR session bearer and admit the live litellm user it references.
 
-        The custody sibling of :meth:`_admit_dcr_bridge_delegate`: the session token seals
-        no upstream credential (those are vaulted per user and resolved at egress), so this
-        admits identity only and injects no per-server header. The token's signature proves
-        the user signed in when it was minted, but authorization is resolved fresh here, the
-        sealed ``user_id`` reloads the current user record through the SAME
-        :meth:`_reload_admitted_user` the bridge user-subject path uses, and the admitted
-        identity runs through the centralized policy gate, so the user's present team, org,
-        budget, and SCIM state gate the request rather than a snapshot frozen at mint time.
-
-        Fails closed with the aggregate ``invalid_token`` challenge on an expired, tampered,
-        or foreign token, on a refresh token presented at the tool edge, and when the
-        referenced user is missing, deactivated, or rejected by the policy gate. The
-        pre-DB gates (size, IP, route allowlist) run first, mirroring the bridge arm and the
-        standard pipeline, so a caller blocked by IP or route is turned away before any
-        crypto or DB read."""
+        Identity-only sibling of :meth:`_admit_dcr_bridge_delegate`: the session token seals no
+        upstream credential (those are vaulted per user, resolved at egress), so authorization is
+        resolved fresh via :meth:`_reload_admitted_user` + the centralized policy gate rather than a
+        mint-time snapshot. Pre-DB gates (size, IP, route allowlist) run first, mirroring the standard
+        pipeline. Fails closed with the aggregate ``invalid_token`` challenge on an expired, tampered,
+        foreign, or refresh token, or a missing/deactivated/policy-rejected user."""
         from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
             NotSessionBearer,
             SessionBearerAdmitted,
@@ -842,34 +822,18 @@ class MCPRequestHandler:
 
     @staticmethod
     async def _reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
-        """Reload the live user an interactively-minted envelope references and admit them as
-        themselves.
+        """Reload the live user an interactively-minted envelope references and admit them as themselves.
 
-        The DCR client authenticates via SSO at the bridged authorize, which yields a user
-        subject rather than a virtual key, so the envelope admits under the user's own
-        identity: the reloaded ``user_id``, the user's own MCP object permission, and the user's
-        ``org_id`` ride on the returned ``UserAPIKeyAuth``, and the SAME ``get_allowed_mcp_servers``
-        the key path uses then computes which servers the user may reach, so the user's litellm MCP
-        grants and access groups gate the request exactly as a key's do. Because the returned auth is
-        stamped ``mcp_admitted_user_subject`` (below), ``get_allowed_mcp_servers`` unions the servers the
-        user reaches through ANY of their teams on top of these direct grants — a ``UserAPIKeyAuth``
-        pins one ``team_id`` but a user belongs to many, so the team fan-out happens off the marker, not
-        the single ``team_id``. Each source is bounded by ITS OWN org: the user's direct grants by the
-        bound ``org_id`` (their primary org), and each team's grant by that team's owning org inside
-        ``_allowed_mcp_servers_for_single_team`` — so a user who spans organizations does not leak one
-        org's servers past another org's ceiling. The caller's centralized policy gate enforces the
-        user's live budget and org state, and a SCIM-deactivated owner fails closed.
+        The user's own object permission and ``org_id`` ride on the returned ``UserAPIKeyAuth``, and the
+        SAME ``get_allowed_mcp_servers`` the key path uses gates the request. The ``mcp_admitted_user_subject``
+        marker (set below) makes that resolver union the servers the user reaches through ANY of their teams
+        on top of these direct grants, each source bounded by ITS OWN org, so a user spanning organizations
+        cannot leak one org's servers past another's ceiling.
 
-        Error handling mirrors the key path's retryable-503 contract, but ``get_user_object`` defeats a
-        type-based check: where ``get_key_object`` raises a typed ``ProxyException`` for a missing key
-        and lets a DB outage propagate raw, ``get_user_object`` catches every DB failure and re-raises a
-        bare ``ValueError``, so a missing user and a real outage look identical and the original error
-        survives only as ``__context__``. ``_raise_503_if_db_unavailable`` therefore walks the cause
-        chain: a transient DB outage still surfaces as a retryable 503, while a missing user, or any
-        other non-outage resolution failure, fails closed as a 401 rather than an opaque 500. The
-        object-permission load shares this one boundary, so an outage there is classified the same
-        way (``get_object_permission`` itself swallows a failed load to ``None``, matching how
-        ``get_key_object`` best-effort-loads a key's object permission)."""
+        Error handling: ``get_user_object`` catches every DB failure and re-raises a bare ``ValueError``, so a
+        missing user and a real outage look identical (the cause survives only as ``__context__``).
+        ``_raise_503_if_db_unavailable`` walks the cause chain so an outage stays a retryable 503 while any
+        other failure fails closed as 401, not an opaque 500; the object-permission load shares that boundary."""
         from litellm.proxy.auth.auth_checks import get_object_permission, get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -907,49 +871,35 @@ class MCPRequestHandler:
             org_id=user_object.organization_id,
             object_permission=object_permission,
             object_permission_id=user_object.object_permission_id,
-            # Copy the live user's rate limits, exactly as the standard user-subject auth path does
-            # (user_api_key_auth.py). The parallel limiter reads these off the auth object rather than
-            # re-fetching, and treats None as sys.maxsize (unlimited), so a keyless admitted user with
-            # them unset would invoke tools past their configured user RPM/TPM.
-            #
-            # Rate-limit model for the keyless admitted subject: bounded by their USER rpm/tpm
-            # (copied here; those descriptors key off user_id, which is set) AND by the per-server
-            # mcp_rpm_limit of EVERY team it reaches servers through, stamped below. Per-KEY MCP
-            # limits genuinely do not apply, because there is no key.
+            # Copy the live user's rate limits, as the standard user-subject path does: the parallel
+            # limiter reads these off the auth object and treats None as unlimited, so a keyless subject
+            # with them unset would outrun its user RPM/TPM. (Per-team mcp_rpm_limit is stamped below;
+            # per-KEY limits do not apply, there being no key.)
             user_tpm_limit=user_object.tpm_limit,
             user_rpm_limit=user_object.rpm_limit,
         )
-        # Set the server-only admission marker AFTER construction: the before-validator strips it
-        # from any validated input, so a post-construction assignment is the only way to set it, and
-        # caller-supplied data (key metadata, JWT claims) can never forge it.
+        # Server-only marker, set AFTER construction: the before-validator strips it from any validated
+        # input, so caller-supplied data (key metadata, JWT claims) can never forge it.
         admitted.mcp_admitted_user_subject = True
-        # Carry each granting team's per-server MCP rpm limit. A key is pinned to one team so the
-        # limiter reads team_metadata directly; this subject reaches servers through several teams
-        # under its own identity, so without this the team ceiling silently does not apply to it and
-        # a cross-team user outruns every team's mcp_rpm_limit. Resolved from the same roster-checked
-        # sources the grant union uses, so a team can only throttle what it actually granted.
+        # Carry each granting team's per-server mcp_rpm_limit: this subject reaches servers through
+        # several teams under its own identity, so without this a cross-team user outruns every team's
+        # limit. Resolved from the same roster-checked sources as the grant union, so a team throttles
+        # only what it granted.
         admitted.mcp_source_team_rpm_limits = await MCPRequestHandler._admitted_subject_team_rpm_limits(admitted)
         return admitted
 
     @staticmethod
     async def _admitted_subject_team_rpm_limits(auth: UserAPIKeyAuth) -> dict[str, dict[str, int]] | None:
-        """``team_id -> mcp_rpm_limit`` for every team this subject reaches servers through, with each
-        team's map filtered to the servers THAT team's grant actually reaches.
+        """``team_id -> mcp_rpm_limit`` for every team this subject reaches servers through, each map
+        filtered to the servers THAT team's grant actually reaches.
 
-        A limit rides the same scope as the access it bounds: a team's throttle exists to cap usage of
-        the access the team granted, so a roster team whose grant does not reach a server (not granted,
-        blocked, org-forbidden, opted out) must not be charged when the user reaches that server
-        through a DIFFERENT team — otherwise this user's calls drain a bucket shared by that team's own
-        keys for access the team never provided. The grant scope comes from the SAME
-        ``get_allowed_mcp_servers(source)`` call authorization uses, so the throttle scope cannot
-        diverge from the access scope. Limit maps are keyed by server name/alias (the limiter matches
-        on the called server's name) while grants are ids, so each key is resolved through
-        ``expand_permission_list`` — the one existing name->id owner — before the membership check.
-
-        Returns None when no team contributes an applicable limit, so the limiter adds no descriptors
-        rather than empty ones. A lookup failure narrows to None rather than raising: rate limiting
-        must not be able to deny a request that authorization already allowed, and the user's own
-        rpm/tpm still bounds them."""
+        A limit rides the same scope as the access it bounds, so a roster team is charged only for a
+        server its OWN grant reaches (never one the user reaches through a different team, which would
+        drain a bucket shared by that team's keys for access it never provided). Grant scope comes from
+        the SAME ``get_allowed_mcp_servers(source)`` authorization uses; limit-map keys are names/aliases
+        so each is resolved to an id via ``expand_permission_list`` before the membership check. Returns
+        None (no descriptors) when nothing applies; a lookup failure narrows to None rather than raising,
+        since rate limiting must not deny a request authorization already allowed."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -969,12 +919,9 @@ class MCPRequestHandler:
                     for server_id in global_mcp_server_manager.expand_permission_list([server_name]):
                         if server_id not in granted_ids:
                             continue
-                        # Charge ONLY the source the call is attributed to — the same single source
-                        # billing picks, from the same owner. Adding a descriptor for every granting
-                        # team let one cross-team user drain several teams' SHARED buckets at once,
-                        # blocking their other members for access those teams did not provide on
-                        # this call; and when the user's OWN grant reaches the server, no team
-                        # provided it, so no team bucket is charged at all.
+                        # Charge ONLY the source billing attributes the call to (same owner), so one
+                        # cross-team user cannot drain several teams' shared buckets on a single call,
+                        # and a server the user's OWN grant reaches charges no team bucket.
                         attributed = await MCPRequestHandler.attributing_source_for_server(
                             auth, server_id, source_grants=source_grants
                         )
@@ -1358,11 +1305,10 @@ class MCPRequestHandler:
         from litellm.proxy.proxy_server import general_settings
 
         try:
-            # A keyless admitted subject is resolved entirely per source, BEFORE any single-source
-            # rule runs here. Ordering matters: the no_mcp_servers opt-out below reads the caller's
-            # own object_permission, so leaving it above this branch let a user's own opt-out zero
-            # their TEAMS' grants too — the sources are independent, and an opt-out on one of them
-            # must silence only that one (it is applied per source, inside the recursive call).
+            # A keyless admitted subject resolves per source BEFORE any single-source rule here. Ordering
+            # matters: the no_mcp_servers opt-out below reads the caller's own object_permission, so above
+            # this branch a user's own opt-out would wrongly zero their TEAMS' grants too (each source is
+            # independent; an opt-out silences only its own source, inside the recursive call).
             if _is_mcp_admitted_user_subject(user_api_key_auth) and user_api_key_auth is not None:
                 return await MCPRequestHandler._resolve_admitted_subject_servers(user_api_key_auth)
 
@@ -1484,22 +1430,14 @@ class MCPRequestHandler:
         has_lower_level_mcp_restrictions: bool,
         keyless_source: bool = False,
     ) -> list[str]:
-        """Cap the resolved server list by this caller's org ceiling. If the org names an explicit MCP
-        list, lower-level restrictions are intersected with it, else the org list becomes the ceiling.
-        No org, or an empty org list, leaves the result unchanged.
+        """Cap the resolved server list by this caller's org ceiling: an explicit org list intersects
+        lower-level restrictions (else becomes the ceiling); no org or an empty list leaves it unchanged.
 
-        ``keyless_source`` marks one grant source of a keyless admitted subject and governs BOTH
-        org divergences, because they are the same fact about that caller shape.
-
-        First, what an UNRESOLVABLE ceiling means. A virtual key keeps the
-        long-standing fail-open behavior (a DB blip must not lock working keys out mid-incident). A
-        keyless admitted subject fails CLOSED, because its only org bound is this ceiling: silently
-        dropping it on a transient fault would widen a cross-org user to servers their team's org
-        forbids, which is a privilege escalation rather than an availability blip.
-
-        Second, whether the org list may SUBSTITUTE for absent lower-level grants. For a key it may
-        (that is the key ceiling model). For a source it may only ever intersect, because the
-        admitted model is a union of grants and a ceiling that grants is not a ceiling."""
+        ``keyless_source`` governs both divergences for a keyless admitted source. An UNRESOLVABLE ceiling
+        fails CLOSED for it (its only org bound is this ceiling, so dropping it on a fault would escalate a
+        cross-org user) while a key stays fail-open. And an org list may only ever INTERSECT a source (the
+        admitted model unions grants, so a ceiling must not become one), whereas for a key it may
+        substitute, that being the key ceiling model."""
         if not (user_api_key_auth and user_api_key_auth.org_id):
             return allowed_mcp_servers
         allowed_mcp_servers_for_org = await MCPRequestHandler._get_allowed_mcp_servers_for_org(user_api_key_auth)
@@ -1512,12 +1450,8 @@ class MCPRequestHandler:
         if len(allowed_mcp_servers_for_org) == 0:
             return allowed_mcp_servers
         if has_lower_level_mcp_restrictions or keyless_source:
-            # Lower-level restrictions exist, so org can only cap them.
-            #
-            # A keyless admitted source ALWAYS takes this arm: its model is a union of GRANTS, so an
-            # org list may only narrow what a source already grants, never become one. Letting it
-            # substitute would hand every admitted user with an org_id that org's whole server list
-            # without any direct or team grant — a ceiling silently acting as a grant.
+            # Org can only cap lower-level restrictions. A keyless admitted source ALWAYS takes this
+            # arm: its model unions GRANTS, so an org list may only narrow a source, never become one.
             capped = [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_org]
         else:
             # No lower-level restrictions → org list becomes the ceiling.
@@ -1535,15 +1469,12 @@ class MCPRequestHandler:
     ) -> UserAPIKeyAuth:
         """A plain, UNMARKED auth describing ONE grant source of an admitted subject.
 
-        Only the fields the resolver actually consults are carried. Everything else is left at its
-        default on purpose: ``api_key``/``token`` stay unset (this is not a key), budget, spend and
-        rate-limit fields stay unset because the admitted subject's own user-level limits are what
-        the request is metered against and cloning them per source would show the limiter N copies of
-        the same descriptor, and ``user_role`` stays unset because an admin role would grant every
-        server if this auth ever reached the server-manager wrapper. The admission marker cannot be
-        set through the constructor at all (a before-validator pops it), so each source is resolved
-        as an ordinary caller and cannot re-enter the admitted path.
-        """
+        Only the fields the resolver consults are carried; everything else is left at its default on
+        purpose: no ``api_key``/``token`` (not a key), no budget/spend/rate-limit (the subject's own
+        user-level limits meter the request, and per-source copies would double descriptors), no
+        ``user_role`` (an admin role would grant every server at the server-manager wrapper). The
+        admission marker cannot be set via the constructor (a before-validator pops it), so each source
+        resolves as an ordinary caller and cannot re-enter the admitted path."""
         scoped = UserAPIKeyAuth(
             user_id=auth.user_id,
             team_id=team_id,
@@ -1551,9 +1482,8 @@ class MCPRequestHandler:
             parent_otel_span=auth.parent_otel_span,
         )
         if carry_user_grants:
-            # The user's OWN grants. A team source deliberately carries none of these: the resolver
-            # loads that team's object_permission and access groups from team_id itself, and mixing
-            # the user's in would widen the team source with grants the team never made.
+            # The user's OWN grants. A team source carries none of these (the resolver loads the team's
+            # own object_permission from team_id); mixing them in would widen the team with grants it never made.
             scoped.object_permission = auth.object_permission
             scoped.object_permission_id = auth.object_permission_id
             scoped.access_group_ids = auth.access_group_ids
@@ -1564,17 +1494,11 @@ class MCPRequestHandler:
         """The independent sources a keyless admitted subject reaches MCP servers through: their own
         direct grants, plus every team they are a live roster member of.
 
-        Each team source carries that TEAM's org as its ``org_id``, which is what makes the canonical
-        resolver apply the team's OWN owning-org ceiling to it — a cross-org user's teams are each
-        bounded by their own org rather than by the caller's home org. A team with no organization
-        falls back to the user's org so it is bounded rather than unbounded.
-
-        Roster membership is checked HERE because it is a property of the source list, not of any one
-        resolution: a key is structurally pinned to a team it belongs to, while a user's cached
-        ``teams`` array can name a team whose ``members_with_roles`` no longer contains them (SCIM
-        group sync, or cache lag after a team_member_delete), and JWT auth can rewrite that array
-        outright. The roster is the source of truth for revocation.
-        """
+        Each team source carries that TEAM's org (falling back to the user's), so the canonical resolver
+        applies the team's OWN owning-org ceiling — a cross-org user's teams are each bounded by their
+        own org, not the caller's home org. Roster membership is checked HERE (not per resolution)
+        because a user's cached ``teams`` array can name a team whose ``members_with_roles`` no longer
+        lists them; the roster is the source of truth for revocation."""
         from litellm.proxy.proxy_server import prisma_client
 
         sources = [
@@ -1622,11 +1546,9 @@ class MCPRequestHandler:
                 proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:  # noqa: BLE001  # per-source isolation: one team's blip must not deny the others
-            # The unit of fault isolation is the SOURCE: a team that cannot be resolved contributes
-            # nothing this request (fail closed for that team alone — access only ever narrows),
-            # while the user's own grants and every other resolvable team stand. Raising here
-            # instead would collapse the whole union to deny-all because one team's row was
-            # momentarily unreadable, on the servers, tools and throttle axes alike.
+            # Fault isolation is per SOURCE: an unresolvable team contributes nothing (fail closed for
+            # it alone, access only narrows) while every other source stands. Raising would collapse the
+            # whole union to deny-all over one momentarily-unreadable row.
             verbose_logger.warning(f"MCP admitted-subject source team {team_id!r} unresolvable, skipping: {str(e)}")
             return None
         if team_obj is None:
@@ -1634,14 +1556,11 @@ class MCPRequestHandler:
         member_user_ids = {getattr(m, "user_id", None) for m in (team_obj.members_with_roles or [])} - {None}
         if auth.user_id not in member_user_ids:
             return None
-        # A team over its own max budget — or owned by an org over ITS budget — is not a live
-        # grantor, exactly as it is not for a virtual key pinned to it (common_checks rejects that
-        # key outright). Enforced with the SAME owners the key path uses (_team_max_budget_check /
-        # _organization_max_budget_check, cross-pod Redis-first spend), targeted at the TEAM's org
-        # via the scoped source view, so a cross-org team is judged by its own org's budget. This is
-        # budget ENFORCEMENT of an already-exceeded state; ATTRIBUTION of new spend stays with the
-        # user (documented deferral) — the two are different questions. Sitting here, no consumer of
-        # the source list (servers, tools, throttle stamping) can ever see an over-budget team.
+        # A team (or its owning org) over budget is not a live grantor, exactly as it is not for a key
+        # pinned to it. Enforced via the SAME owners the key path uses (_team_max_budget_check /
+        # _organization_max_budget_check), targeted at the TEAM's org through the scoped source view, so
+        # no consumer of the source list ever sees an over-budget team. This is ENFORCEMENT of an
+        # already-exceeded state; ATTRIBUTION of new spend stays with the user (documented deferral).
         from litellm.exceptions import BudgetExceededError
         from litellm.proxy.auth.auth_checks import (
             _organization_max_budget_check,
@@ -1696,16 +1615,11 @@ class MCPRequestHandler:
     async def billing_auth_for_tool_call(auth: UserAPIKeyAuth, tool_name: str) -> UserAPIKeyAuth:
         """The auth object a tool call's SPEND should be recorded against.
 
-        Returns ``auth`` unchanged for every caller that is not a keyless admitted subject, so key
-        and JWT billing is byte-identical. For an admitted subject whose call is reached through a
-        team's grant, returns a copy carrying that team's ``team_id`` and its owning ``org_id`` so
-        the team's budget accumulates and the correct organization is charged.
-
-        Inert rather than wrong when the target server cannot be resolved from the tool name (a
-        display-name override, or a REST caller passing server_id with an unprefixed name): billing
-        then falls back to today's user-level attribution instead of guessing a team. Resolution
-        reuses the manager's own tool-name lookup rather than re-deriving prefix rules that live
-        there."""
+        ``auth`` unchanged for any non-admitted caller (key/JWT billing byte-identical). For an admitted
+        subject whose call is reached through a team's grant, a copy carrying that team's ``team_id`` and
+        owning ``org_id`` so the team's budget accumulates and the right org is charged. Falls back to
+        user-level attribution (rather than guessing a team) when the tool name does not resolve to a
+        server, reusing the manager's own tool-name lookup."""
         if not _is_mcp_admitted_user_subject(auth):
             return auth
         try:
@@ -1733,19 +1647,14 @@ class MCPRequestHandler:
         server_id: str,
         source_grants: list[tuple[UserAPIKeyAuth, set[str]]] | None = None,
     ) -> UserAPIKeyAuth | None:
-        """The source a billable call to ``server_id`` is attributed to, or None to bill the caller
-        as themselves (their own grant reaches it, or nothing does).
+        """The source a billable call to ``server_id`` is attributed to, or None to bill the caller as
+        themselves (their own grant reaches it, or nothing does).
 
-        A keyless admitted subject carries no ``team_id``, so downstream spend skipped team updates
-        entirely and charged the user's PRIMARY org — a team-derived call neither accumulated its
-        team's budget (so that budget could never begin to block) nor charged the org that owns the
-        granting team. Attribution restores both.
-
-        The rule: a user's OWN grant is not "through a team", so it bills the user. Otherwise the
-        call is billed to a granting team — deterministically the lowest ``team_id`` when several
-        grant the same server, so the choice is stable, reproducible and auditable rather than
-        dependent on dict ordering. Reads the one grant owner, so the team that gets billed is
-        always a team that actually granted the server."""
+        The rule: a user's OWN grant is not "through a team", so it bills the user; otherwise the call
+        bills a granting team, deterministically the lowest ``team_id`` when several grant the server so
+        the pick is stable rather than dict-ordering-dependent. Reads the one grant owner, so the billed
+        team is always one that actually granted the server (restoring the team budget accrual and
+        owning-org charge that a keyless, team_id-less subject otherwise skipped)."""
         source_grants = source_grants or await MCPRequestHandler.admitted_source_grants(auth)
         granting = [(source, granted) for source, granted in source_grants if server_id in granted]
         if not granting:
@@ -1768,14 +1677,10 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
-        # An OPEN channel (operator-opened allow_all_keys, the user's own BYOM submission) makes the
-        # server REACHABLE through the user themselves — no grant source names it, so without this
-        # the union below would return [] and leave it listable but uninvokable. Reachability is ALL
-        # it confers: it is not a waiver of the ceilings that bound the server. The user's own
-        # mcp_tool_permissions and their org's tool ceiling still bind, which is what a virtual key
-        # on the same allow_all server gets (its key_tools and _apply_agent_and_org_tool_ceilings
-        # both run). Returning None here instead skipped both and let a session holder invoke tools
-        # their own or their org's policy excludes.
+        # An OPEN channel (allow_all_keys, the user's own BYOM) makes the server REACHABLE through the
+        # user, though no grant source names it — without this the union returns [], listable but
+        # uninvokable. Reachability is ALL it confers, NOT a ceiling waiver: the user's own
+        # mcp_tool_permissions and org tool ceiling still bind, exactly as a key's do on an allow_all server.
         reachable_via_open_channel = server_id in await global_mcp_server_manager.operator_open_server_ids(auth)
 
         allowed: set[str] = set()
@@ -1867,12 +1772,9 @@ class MCPRequestHandler:
             return None
 
         try:
-            # FIRST statement, mirroring get_allowed_mcp_servers: a keyless admitted subject is
-            # resolved per grant source and shares NOTHING with the single-credential prelude below.
-            # Ordering is the invariant, not a nicety — when this branch sat after the prelude, a
-            # fault in a lookup the subject never uses (its own mcp_toolsets, its team_obj_perm) hit
-            # the fail-closed handler and denied tools its teams did grant. Nothing that resolves a
-            # single credential's scope may run before this line.
+            # FIRST statement, mirroring get_allowed_mcp_servers: a keyless admitted subject resolves per
+            # source and shares nothing with the single-credential prelude below. Ordering is the invariant:
+            # sat after the prelude, a fault in a lookup the subject never uses denied tools its teams grant.
             if _is_mcp_admitted_user_subject(user_api_key_auth):
                 return await MCPRequestHandler._resolve_admitted_subject_tools(server_id, user_api_key_auth)
 
@@ -1917,9 +1819,6 @@ class MCPRequestHandler:
                 else None
             )
 
-            # A keyless gateway/bridge-admitted user has no single team_id, so team_obj_perm above is
-            # None and the single-team lookup yields allow-all — silently dropping every team's
-            # per-server tool exclusions. Resolve it as the union over the sources that grant the
             # Apply same inheritance logic as get_allowed_mcp_servers
             if team_tools:
                 if key_tools:
@@ -1938,15 +1837,10 @@ class MCPRequestHandler:
 
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed tools for server: {str(e)}")
-            # Fail CLOSED for a keyless admitted subject: ANY error resolving the tool allowlist
-            # (multi-team fan-out, org/agent lookups) must deny the server's tools ([]) for this
-            # request rather than collapse to allow-all (None), mirroring the fail-closed server
-            # path. Key/JWT auth keeps its prior allow-all-on-error behavior.
-            #
-            # keyless_source matters as much as the marker: each source of an admitted subject is
-            # resolved through an UNMARKED auth, so without it a fault under a source returned None,
-            # and None wins the union as allow-all — dropping every team and org tool ceiling on a
-            # blip. The marker alone only covers a fault raised before the fan-out.
+            # Fail CLOSED for a keyless admitted subject: ANY error must deny the server's tools ([]),
+            # not collapse to allow-all (None); key/JWT auth keeps its prior allow-all-on-error. Both
+            # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
+            # without keyless_source a fault under a source returns None and wins the union as allow-all.
             return [] if (keyless_source or _is_mcp_admitted_user_subject(user_api_key_auth)) else None
 
     @staticmethod
@@ -1957,16 +1851,12 @@ class MCPRequestHandler:
         keyless_source: bool = False,
     ) -> list[str] | None:
         """Narrow a key/team tool allowlist by the agent's tool permissions and the caller's org tool
-        ceiling. Each level only ever intersects, and None at a level means "no restriction from this
-        level".
+        ceiling. Each level only intersects; None at a level means no restriction from it.
 
-        An UNRESOLVABLE org ceiling (``_get_org_object_permission`` raises: the org names a permission
-        that cannot be loaded) is decided here, per caller shape, mirroring the servers axis: a
-        virtual key keeps its long-standing fail-open — the org step is skipped and the key/team/agent
-        restrictions already computed STAND (letting the raise escape would collapse them to
-        allow-all, which is fail-open WIDER than before the fault). A keyless admitted source
-        re-raises, and the outer handler denies tools for that one source while the subject's other
-        sources stand — its only org bound is this ceiling, so skipping it would widen access."""
+        An UNRESOLVABLE org ceiling is decided per caller shape, mirroring the servers axis: a key stays
+        fail-open (skip the org step, keep the key/team/agent restrictions; letting the raise escape
+        would collapse them to allow-all, WIDER than before the fault), while a keyless source re-raises
+        so the outer handler denies that one source (its only org bound is this ceiling)."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -2346,9 +2236,8 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return None
 
-        # An ABSENT org is a determinate fact, not a failure: a team's organization_id can point at a
-        # row that was deleted or has not synced yet, and get_org_object raises for that. It places no
-        # ceiling, exactly as a key with a dangling org_id is not locked out.
+        # A team's organization_id can point at a deleted or not-yet-synced row; get_org_object raises
+        # OrganizationNotFoundError for that. That is a determinate ABSENCE (no ceiling), handled below.
         try:
             org_obj = await get_org_object(
                 org_id=user_api_key_auth.org_id,
@@ -2358,20 +2247,17 @@ class MCPRequestHandler:
                 proxy_logging_obj=proxy_logging_obj,
             )
         except OrganizationNotFoundError as e:
-            # CONFIRMED absent (deleted org, not-yet-synced organization_id): a determinate fact, so
-            # it places no ceiling. Every OTHER exception is an operational failure and propagates —
-            # caught upstream as an unresolvable ceiling, which denies for a keyless source and stays
-            # fail-open for a key. Catching bare Exception here treated a DB outage as "no org", which
-            # silently dropped a real org's ceiling for exactly as long as the outage lasted.
+            # CONFIRMED absent: places no ceiling. Every OTHER exception propagates as an unresolvable
+            # ceiling (denies for a keyless source, fail-open for a key); catching bare Exception here
+            # would treat a DB outage as "no org" and silently drop a real ceiling for its duration.
             verbose_logger.debug(f"MCP org ceiling: org {user_api_key_auth.org_id!r} does not exist: {e}")
             return None
 
         if org_obj is None or not org_obj.object_permission_id:
             return None
 
-        # From here the org NAMES a permission. Failing to read it is INDETERMINATE, so it must not
-        # collapse into the same None that means "no ceiling" -- that is what would silently drop a
-        # real ceiling on a transient fault. Raise and let each caller pick fail-open or fail-closed.
+        # The org NAMES a permission; failing to read it is INDETERMINATE and must not collapse into the
+        # None that means "no ceiling". Raise and let each caller pick fail-open or fail-closed.
         object_permission = await get_object_permission(
             object_permission_id=org_obj.object_permission_id,
             prisma_client=prisma_client,
@@ -2420,9 +2306,8 @@ class MCPRequestHandler:
             all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
             return list(set(all_servers))
         except Exception as e:
-            # None = the org ceiling could NOT be resolved, which is not the same fact as [] = the
-            # org places no restriction. Collapsing the two is what let a transient DB fault silently
-            # remove an org's ceiling; the caller picks fail-open or fail-closed from this signal.
+            # None = ceiling UNRESOLVED, distinct from [] = org places no restriction. Collapsing them
+            # let a DB fault silently drop a ceiling; the caller picks fail-open/closed from this signal.
             verbose_logger.warning(f"Failed to get allowed MCP servers for org: {str(e)}")
             return None
 
