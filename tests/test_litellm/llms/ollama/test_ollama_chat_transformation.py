@@ -480,6 +480,71 @@ class TestOllamaToolCalling:
         assert result.choices[0].finish_reason == "stop"
         assert result.choices[0].message.tool_calls is None
 
+    def test_tool_calls_streaming(self):
+        """Streaming: native Ollama tool_calls must surface with string arguments, and the
+        terminal chunk must report finish_reason='tool_calls'.
+
+        Ollama /api/chat streams the tool call in a non-final chunk (done=False) and then
+        sends a SEPARATE terminal chunk (done=True, done_reason='stop') that carries no
+        tool_calls. finish_reason must still be upgraded to 'tool_calls' on that terminal
+        chunk so clients execute the tool. Regression guard for
+        https://github.com/BerriAI/litellm/issues/24091 on the streaming path; the
+        non-streaming path is covered by test_finish_reason_tool_calls_non_streaming.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_call_chunk = {
+            "model": "qwen3:4b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "Beijing", "date": "tomorrow"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        tool_result = iterator.chunk_parser(tool_call_chunk)
+
+        assert tool_result.choices[0].finish_reason is None
+
+        tool_calls = tool_result.choices[0].delta.tool_calls
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+
+        tool_call = tool_calls[0]
+        assert tool_call.index == 0
+        assert tool_call.id is not None and tool_call.id != ""
+        assert tool_call.type == "function"
+        assert tool_call.function.name == "get_weather"
+        assert isinstance(tool_call.function.arguments, str)
+        assert json.loads(tool_call.function.arguments) == {
+            "location": "Beijing",
+            "date": "tomorrow",
+        }
+
+        done_chunk = {
+            "model": "qwen3:4b",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 50,
+        }
+
+        done_result = iterator.chunk_parser(done_chunk)
+
+        assert done_result.choices[0].finish_reason == "tool_calls"
+
 
 class TestOllamaFinishReasonLength:
     """Tests for done_reason 'length' → finish_reason 'length' mapping.
