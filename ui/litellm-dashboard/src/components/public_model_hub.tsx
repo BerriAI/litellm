@@ -1410,13 +1410,20 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   {(() => {
                     const capabilities = getModelCapabilities(selectedModel);
                     const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
+                    const capabilityColor = (cap: string) => {
+                      let hash = 0;
+                      for (let i = 0; i < cap.length; i++) {
+                        hash = ((hash << 5) - hash + cap.charCodeAt(i)) | 0;
+                      }
+                      return colors[Math.abs(hash) % colors.length];
+                    };
 
                     if (capabilities.length === 0) {
                       return <Text className="text-gray-500">No special capabilities listed</Text>;
                     }
 
-                    return capabilities.map((capability, index) => (
-                      <Tag key={capability} color={colors[index % colors.length]}>
+                    return capabilities.map((capability) => (
+                      <Tag key={capability} color={capabilityColor(capability)}>
                         {formatCapabilityName(capability)}
                       </Tag>
                     ));
