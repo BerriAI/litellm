@@ -342,9 +342,7 @@ class AWSEventStreamDecoder:
         """
         args = ""
         # if text content block -> skip
-        content_blocks = self._content_blocks_by_content_block_index.get(
-            content_block_index, []
-        )
+        content_blocks = self._content_blocks_by_content_block_index.get(content_block_index, [])
         if len(content_blocks) == 0:
             return False
 
@@ -478,8 +476,7 @@ class AWSEventStreamDecoder:
             # convert tool input to text content instead of tool call arguments
             if (
                 self.json_mode is True
-                and self._tool_names_by_content_block_index.get(index)
-                == RESPONSE_FORMAT_TOOL_NAME
+                and self._tool_names_by_content_block_index.get(index) == RESPONSE_FORMAT_TOOL_NAME
             ):
                 text = delta_obj["toolUse"]["input"]
             else:
@@ -794,20 +791,14 @@ class MockResponseIterator:  # for returning ai21 streaming responses
             # user tool call, so converting the first tool unconditionally loses
             # the protocol signal needed by streaming SDK clients to execute it.
             json_mode_tool_calls = [
-                tool_call
-                for tool_call in tool_calls
-                if tool_call["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
+                tool_call for tool_call in tool_calls if tool_call["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
             ]
             regular_tool_calls = [
-                tool_call
-                for tool_call in tool_calls
-                if tool_call["function"].get("name") != RESPONSE_FORMAT_TOOL_NAME
+                tool_call for tool_call in tool_calls if tool_call["function"].get("name") != RESPONSE_FORMAT_TOOL_NAME
             ]
 
             if json_mode_tool_calls:
-                message = litellm.AnthropicConfig()._convert_tool_response_to_message(
-                    tool_calls=json_mode_tool_calls
-                )
+                message = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=json_mode_tool_calls)
                 if message is not None:
                     text = message.content or ""
             if regular_tool_calls:
