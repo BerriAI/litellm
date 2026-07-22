@@ -1573,6 +1573,18 @@ async def _user_api_key_auth_builder(
             except Exception as e:
                 verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
 
+
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
+            # Re-apply per-request end_user_params on the cached-token path so
+            # spend is attributed to the current end-user, not the first user
+            # seen on this key. Mirrors the PROXY_ADMIN cached-token branch above.
+            valid_token = update_valid_token_with_end_user_params(
+                valid_token=valid_token, end_user_params=end_user_params
+            )
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
         except Exception:
