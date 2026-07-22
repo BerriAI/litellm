@@ -13,13 +13,15 @@ def _claude_mapping(messages, response_obj):
 
 
 def test_claude_mapping_serializes_custom_tool_calls(monkeypatch):
-    try:
-        import anthropic  # noqa: F401
-    except ImportError:
-        stub = types.ModuleType("anthropic")
-        stub.HUMAN_PROMPT = "\n\nHuman:"
-        stub.AI_PROMPT = "\n\nAssistant:"
-        monkeypatch.setitem(sys.modules, "anthropic", stub)
+    """
+    Stub the anthropic module unconditionally: the SDK may be absent (it lives in the
+    proxy-runtime extra), and the tests/test_litellm/llms/anthropic test package can
+    shadow it on sys.path, so an import probe proves nothing about the real SDK.
+    """
+    stub = types.ModuleType("anthropic")
+    stub.HUMAN_PROMPT = "\n\nHuman:"
+    stub.AI_PROMPT = "\n\nAssistant:"
+    monkeypatch.setitem(sys.modules, "anthropic", stub)
     response_obj = {
         "id": "chatcmpl-1",
         "choices": [
