@@ -33,6 +33,8 @@ vi.mock("@/components/networking", () => ({
   getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
   latestHealthChecksCall: vi.fn().mockResolvedValue({ latest_health_checks: {} }),
   getModelCostMapReloadStatus: vi.fn().mockResolvedValue({}),
+  getProxyBaseUrl: vi.fn(() => ""),
+  getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
 vi.mock("@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab/ModelAnalyticsTab", () => ({
