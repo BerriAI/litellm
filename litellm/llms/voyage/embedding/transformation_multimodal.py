@@ -113,6 +113,22 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                 _, _, encoded = image_url.partition(",")
                 return {"type": "image_base64", "image_base64": encoded}
             return {"type": "image_url", "image_url": image_url}
+        if item_type == "video_url":
+            # Voyage accepts MP4 videos via `video_url` / `video_base64` blocks.
+            # Mirror the image_url normalization: unwrap {"url": ...} dicts and
+            # convert `data:video/mp4;base64,...` payloads into `video_base64`.
+            video_url = item.get("video_url")
+            if isinstance(video_url, dict):
+                video_url = video_url.get("url")
+            if video_url is None:
+                raise ValueError(
+                    "Voyage multimodal embeddings require a non-empty `video_url`. "
+                    "Got a video content block without a `url`."
+                )
+            if isinstance(video_url, str) and video_url.startswith("data:video/"):
+                _, _, encoded = video_url.partition(",")
+                return {"type": "video_base64", "video_base64": encoded}
+            return {"type": "video_url", "video_url": video_url}
         return item
 
     def _normalize_input_item(self, item: Any) -> Dict[str, Any]:
