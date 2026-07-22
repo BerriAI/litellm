@@ -170,10 +170,12 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     """
-    In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
+    In-place: normalize JSON Schema fields unsupported by Bedrock (iterative walk).
 
     Anthropic / Claude Code use ``custom`` for tool schemas; Bedrock Invoke and
     Bedrock Converse only accept standard JSON Schema type strings.
+    Bedrock Invoke also rejects ``minimum`` and ``maximum`` on number schemas,
+    even though other providers accept those JSON Schema validation keywords.
 
     Uses an explicit stack (not recursion) to satisfy recursive-function guards in CI.
     """
@@ -189,6 +191,8 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
         seen.add(node_id)
         if node.get("type") == "custom":
             node["type"] = "object"
+        node.pop("minimum", None)
+        node.pop("maximum", None)
         items = node.get("items")
         if isinstance(items, dict):
             stack.append(items)
@@ -213,8 +217,9 @@ def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> 
     Bedrock Invoke (Anthropic Messages) validates ``input_schema`` as JSON Schema.
     Anthropic's API allows ``type: \"custom\"`` for Claude Code custom tools; Bedrock
     rejects it with: ``tools.0.custom.input_schema.type: Input should be 'object'``.
+    Bedrock also rejects ``minimum`` and ``maximum`` constraints on number schemas.
 
-    Normalizes ``type: \"custom\"`` to ``\"object\"`` throughout each tool's
+    Normalizes provider-unsupported schema fields throughout each tool's
     ``input_schema`` (recursive for nested properties, items, combinators).
 
     Args:

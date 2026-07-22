@@ -1,4 +1,3 @@
-import asyncio
 import copy
 import json
 import os
@@ -408,6 +407,7 @@ def test_normalize_tool_input_schema_types_for_bedrock_invoke():
     """
     Claude Code sends ``input_schema.type: \"custom\"`` for custom tools.
     Bedrock Invoke rejects this; it requires JSON Schema ``type: \"object\"``.
+    Bedrock also rejects ``minimum`` and ``maximum`` numeric bounds.
     """
 
     request = {
@@ -422,7 +422,31 @@ def test_normalize_tool_input_schema_types_for_bedrock_invoke():
                     "properties": {
                         "nested": {
                             "type": "custom",
-                            "properties": {"x": {"type": "string"}},
+                            "properties": {
+                                "x": {"type": "string"},
+                                "score": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1,
+                                },
+                                "values": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "number",
+                                        "minimum": -1,
+                                        "maximum": 1,
+                                    },
+                                },
+                                "choice": {
+                                    "oneOf": [
+                                        {
+                                            "type": "number",
+                                            "minimum": 0,
+                                            "maximum": 10,
+                                        }
+                                    ]
+                                },
+                            },
                         }
                     },
                     "required": ["nested"],
@@ -440,7 +464,14 @@ def test_normalize_tool_input_schema_types_for_bedrock_invoke():
     agent_tool = request["tools"][0]
     assert agent_tool["type"] == "custom"
     assert agent_tool["input_schema"]["type"] == "object"
-    assert agent_tool["input_schema"]["properties"]["nested"]["type"] == "object"
+    nested_schema = agent_tool["input_schema"]["properties"]["nested"]
+    assert nested_schema["type"] == "object"
+    assert "minimum" not in nested_schema["properties"]["score"]
+    assert "maximum" not in nested_schema["properties"]["score"]
+    assert "minimum" not in nested_schema["properties"]["values"]["items"]
+    assert "maximum" not in nested_schema["properties"]["values"]["items"]
+    assert "minimum" not in nested_schema["properties"]["choice"]["oneOf"][0]
+    assert "maximum" not in nested_schema["properties"]["choice"]["oneOf"][0]
     assert request["tools"][1]["input_schema"]["type"] == "object"
 
     request2 = {"messages": []}
