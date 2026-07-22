@@ -63,10 +63,50 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from prometheus_client.metrics import MetricWrapperBase
 else:
     AsyncIOScheduler = Any
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+_NON_ENUM_METRIC_LABELS: frozenset[str] = frozenset(
+    {
+        "guardrail_name",
+        "status",
+        "error_type",
+        "hook_type",
+        "purpose",
+        "file_type",
+        "result",
+    }
+)
+
+
+class _ExcludedLabelMetric:
+    """Proxies a prometheus metric whose declared ``labelnames`` had globally
+    excluded labels removed, dropping those labels from every ``labels(...)``
+    call so the emitted arguments always match the metric's real label set."""
+
+    def __init__(
+        self,
+        metric: MetricWrapperBase,
+        original_labelnames: tuple[str, ...],
+        excluded_labels: frozenset[str],
+    ) -> None:
+        self._metric = metric
+        self._original_labelnames = original_labelnames
+        self._excluded_labels = excluded_labels
+
+    def labels(self, *labelvalues: str, **labelkwargs: str) -> MetricWrapperBase:
+        if labelvalues:
+            kept_values = tuple(
+                value
+                for name, value in zip(self._original_labelnames, labelvalues)
+                if name not in self._excluded_labels
+            )
+            return self._metric.labels(*kept_values) if kept_values else self._metric
+        kept_kwargs = {name: value for name, value in labelkwargs.items() if name not in self._excluded_labels}
+        return self._metric.labels(**kept_kwargs) if kept_kwargs else self._metric
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -714,7 +754,7 @@ class PrometheusLogger(CustomLogger):
 
     @staticmethod
     def _all_defined_labels() -> frozenset[str]:
-        """Every label name a metric can emit: built-in labels plus configured custom labels / tags."""
+        """Every label a metric can emit: enum labels, hard-coded labels, and configured custom labels / tags."""
         import litellm
 
         builtin_labels = frozenset(label.value for label in UserAPIKeyLabelNames)
@@ -724,7 +764,7 @@ class PrometheusLogger(CustomLogger):
         custom_tag_labels = frozenset(
             _sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags
         )
-        return builtin_labels | custom_metadata_labels | custom_tag_labels
+        return builtin_labels | _NON_ENUM_METRIC_LABELS | custom_metadata_labels | custom_tag_labels
 
     def _validate_all_configurations(self, parsed_configs: List) -> ValidationResults:
         """Validate all metric configurations and return collected errors"""
@@ -1065,10 +1105,26 @@ class PrometheusLogger(CustomLogger):
             # Extract metric name from the first argument or 'name' keyword argument
             metric_name = args[0] if args else kwargs.get("name", "")
 
-            if self._is_metric_enabled(metric_name):
-                return metric_class(*args, **kwargs)
-            else:
+            if not self._is_metric_enabled(metric_name):
                 return NoOpMetric()
+
+            if "labelnames" in kwargs:
+                original_labelnames = tuple(kwargs["labelnames"])
+            elif len(args) > 2:
+                original_labelnames = tuple(args[2])
+            else:
+                original_labelnames = ()
+
+            if not (frozenset(original_labelnames) & self.exclude_labels):
+                return metric_class(*args, **kwargs)
+
+            kept = [name for name in original_labelnames if name not in self.exclude_labels]
+            if "labelnames" in kwargs:
+                real_metric = metric_class(*args, **{**kwargs, "labelnames": kept})
+            else:
+                real_metric = metric_class(*args[:2], kept, *args[3:], **kwargs)
+
+            return _ExcludedLabelMetric(real_metric, original_labelnames, self.exclude_labels)
 
         return factory
 

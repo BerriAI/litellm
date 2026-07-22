@@ -619,6 +619,97 @@ def test_invalid_exclude_label_name_raises(reset_prometheus_exclude_settings):
     assert "prometheus_exclude_labels" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "hardcoded_label",
+    ["guardrail_name", "status", "error_type", "hook_type", "purpose", "file_type", "result"],
+)
+def test_exclude_hardcoded_label_name_is_accepted(reset_prometheus_exclude_settings, hardcoded_label):
+    """Labels that only appear in hard-coded metric definitions (not UserAPIKeyLabelNames)
+    are valid exclude targets and must not fail validation at logger init."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = [hardcoded_label]
+
+    logger = PrometheusLogger()
+
+    assert hardcoded_label in logger.exclude_labels
+
+
+def test_exclude_labels_dropped_from_hardcoded_metric(reset_prometheus_exclude_settings):
+    """A metric built with a hard-coded labelnames list drops excluded labels from its
+    declared label set instead of silently retaining them."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["guardrail_name"]
+
+    logger = PrometheusLogger()
+
+    labelnames = logger.litellm_guardrail_latency_metric._metric._labelnames
+    assert "guardrail_name" not in labelnames
+    assert set(labelnames) == {"status", "error_type", "hook_type"}
+
+
+def test_hardcoded_metric_emission_omits_excluded_label(reset_prometheus_exclude_settings):
+    """Emitting a hard-coded metric with the excluded label still passed keeps the emission
+    working and the excluded label never reaches the scrape output."""
+    from prometheus_client import generate_latest
+
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["guardrail_name"]
+
+    logger = PrometheusLogger()
+    logger.litellm_guardrail_latency_metric.labels(
+        guardrail_name="my_guardrail",
+        status="success",
+        error_type="",
+        hook_type="pre_call",
+    ).observe(0.25)
+
+    scrape = generate_latest(REGISTRY).decode()
+    assert "litellm_guardrail_latency_seconds_bucket" in scrape
+    assert "my_guardrail" not in scrape
+    assert 'guardrail_name="' not in scrape
+    assert 'status="success"' in scrape
+
+
+def test_exclude_only_hardcoded_label_drops_all_labels(reset_prometheus_exclude_settings):
+    """Excluding the sole label of a hard-coded metric leaves it label-less and still emittable
+    via both keyword and positional labels() calls."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["result", "api_provider"]
+
+    logger = PrometheusLogger()
+
+    assert logger.litellm_managed_file_deleted_total._metric._labelnames == ()
+    assert logger.litellm_provider_remaining_budget_metric._metric._labelnames == ()
+
+    logger.litellm_managed_file_deleted_total.labels(result="blocked").inc()
+    logger.litellm_provider_remaining_budget_metric.labels("anthropic").set(5.0)
+
+
+def test_exclude_labels_does_not_touch_unrelated_metrics(reset_prometheus_exclude_settings):
+    """A metric that never declares the excluded label is left as a plain prometheus metric,
+    not wrapped, so no behavior changes for it."""
+    from litellm.integrations.prometheus import _ExcludedLabelMetric
+
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["guardrail_name"]
+
+    logger = PrometheusLogger()
+
+    assert not isinstance(logger.litellm_spend_metric, _ExcludedLabelMetric)
+    assert not isinstance(logger.litellm_provider_remaining_budget_metric, _ExcludedLabelMetric)
+    assert isinstance(logger.litellm_guardrail_latency_metric, _ExcludedLabelMetric)
+
+
 # ==============================================================================
 # END GLOBAL EXCLUDE TESTS
 # ==============================================================================
