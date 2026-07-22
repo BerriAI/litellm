@@ -680,3 +680,44 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
 
     assert excinfo.value.status_code == 404
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+ollama_status_code_test_cases = [
+    (400, litellm.BadRequestError),
+    (401, litellm.AuthenticationError),
+    (404, litellm.NotFoundError),
+    (429, litellm.RateLimitError),
+    (500, litellm.InternalServerError),
+    (503, litellm.ServiceUnavailableError),
+]
+
+
+@pytest.mark.parametrize("status_code, expected_exception", ollama_status_code_test_cases)
+@pytest.mark.parametrize("custom_llm_provider", ["ollama", "ollama_chat"])
+def test_ollama_status_code_maps_to_typed_exception(
+    status_code, expected_exception, custom_llm_provider
+):
+    """A structured Ollama error carrying a status_code must map to the matching
+    typed exception instead of falling through to a generic APIConnectionError.
+
+    Regression: https://github.com/BerriAI/litellm/issues/33622 - Ollama returning
+    {"error": "error parsing tool call: ..."} was surfaced as APIConnectionError,
+    mislabeling a model error as a connection/timeout failure."""
+    from litellm.llms.ollama.common_utils import OllamaError
+
+    original_exception = OllamaError(
+        status_code=status_code,
+        message="error parsing tool call: invalid character",
+        headers={},
+    )
+
+    with pytest.raises(expected_exception) as excinfo:
+        exception_type(
+            model=f"{custom_llm_provider}/llama3.1",
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert not isinstance(excinfo.value, litellm.APIConnectionError)
+    assert excinfo.value.llm_provider == "ollama"
+    assert "error parsing tool call" in str(excinfo.value)

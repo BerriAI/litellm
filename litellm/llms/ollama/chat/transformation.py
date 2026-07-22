@@ -46,6 +46,16 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _raise_on_ollama_structured_error(response: dict) -> None:
+    error = response.get("error")
+    if error is not None:
+        raise OllamaError(
+            message=str(error),
+            status_code=500,
+            headers={"Content-Type": "application/json"},
+        )
+
+
 class OllamaChatConfig(BaseConfig):
     """
     Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
@@ -343,11 +353,18 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json = raw_response.json()
+        _raise_on_ollama_structured_error(response_json)
 
         ## RESPONSE OBJECT
         _done_reason = map_finish_reason(response_json.get("done_reason") or "stop")
         model_response.choices[0].finish_reason = _done_reason
         response_json_message = response_json.get("message")
+        if response_json_message is None:
+            raise OllamaError(
+                message=f"Got unexpected response from Ollama: {response_json}",
+                status_code=500,
+                headers={"Content-Type": "application/json"},
+            )
         if response_json_message is not None:
             if "thinking" in response_json_message:
                 # remap 'thinking' to 'reasoning_content'
@@ -394,10 +411,15 @@ class OllamaChatConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
-        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
-        completion_tokens = response_json.get(
-            "eval_count",
-            litellm.token_counter(text=response_json["message"]["content"]),
+        prompt_eval_count = response_json.get("prompt_eval_count")
+        prompt_tokens = (
+            prompt_eval_count if prompt_eval_count is not None else litellm.token_counter(messages=messages)  # type: ignore
+        )
+        eval_count = response_json.get("eval_count")
+        completion_tokens = (
+            eval_count
+            if eval_count is not None
+            else litellm.token_counter(text=response_json_message.get("content") or "")
         )
         setattr(
             model_response,
@@ -440,6 +462,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             return False
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        _raise_on_ollama_structured_error(chunk)
         try:
             """
             Expected chunk format:
