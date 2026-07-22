@@ -385,8 +385,13 @@ export default function ModelInfoView({
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
-      if (values.guardrails) {
+      if (values.guardrails?.length > 0) {
         updatedLitellmParams.guardrails = values.guardrails;
+      } else if (values.guardrails !== undefined) {
+        // User explicitly cleared previously-set guardrails — send [] to clear on backend
+        updatedLitellmParams.guardrails = [];
+      } else {
+        delete updatedLitellmParams.guardrails;
       }
       if (values.vector_store_ids?.length > 0) {
         updatedLitellmParams.vector_store_ids = values.vector_store_ids;
@@ -781,9 +786,11 @@ export default function ModelInfoView({
                     model_access_group: Array.isArray(localModelData.model_info?.access_groups)
                       ? localModelData.model_info.access_groups
                       : [],
-                    guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
-                      ? localModelData.litellm_params.guardrails
-                      : [],
+                    guardrails:
+                      Array.isArray(localModelData.litellm_params?.guardrails) &&
+                      localModelData.litellm_params.guardrails.length > 0
+                        ? localModelData.litellm_params.guardrails
+                        : undefined,
                     vector_store_ids:
                       Array.isArray(localModelData.litellm_params?.vector_store_ids) &&
                       localModelData.litellm_params.vector_store_ids.length > 0
