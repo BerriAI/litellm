@@ -1939,10 +1939,24 @@ class Logging(LiteLLMLoggingBaseClass):
         3. Log the complete streaming response (trigger success handler)
         This is used for passthrough endpoints
         """
-        complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
+        try:
+            complete_streaming_response = (
+                self._flush_passthrough_collected_chunks_helper(
+                    raw_bytes=raw_bytes,
+                    provider_config=provider_config,
+                )
+            )
+        except Exception as e:
+            # The flush is a logging/spend-tracking path. Provider errors
+            # surfaced inside buffered chunks (e.g. mid-stream `overloaded_error`
+            # for Anthropic / Bedrock) must not become unhandled exceptions —
+            # the upstream stream is already closed and the client response is
+            # done by the time we get here.
+            verbose_logger.warning(
+                "flush_passthrough_collected_chunks: skipping success-logging — "
+                f"provider config raised during chunk replay: {type(e).__name__}: {e}"
+            )
+            return
 
         if complete_streaming_response is not None:
             self.success_handler(result=complete_streaming_response)
@@ -1953,10 +1967,23 @@ class Logging(LiteLLMLoggingBaseClass):
         raw_bytes: List[bytes],
         provider_config: "BasePassthroughConfig",
     ):
-        complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
+        try:
+            complete_streaming_response = (
+                self._flush_passthrough_collected_chunks_helper(
+                    raw_bytes=raw_bytes,
+                    provider_config=provider_config,
+                )
+            )
+        except Exception as e:
+            # See `flush_passthrough_collected_chunks` above — the flush is a
+            # logging/spend-tracking task scheduled via `asyncio.create_task`,
+            # so a bare raise here surfaces as `Task exception was never
+            # retrieved` and gives users no signal about the real cause.
+            verbose_logger.warning(
+                "async_flush_passthrough_collected_chunks: skipping success-logging — "
+                f"provider config raised during chunk replay: {type(e).__name__}: {e}"
+            )
+            return
 
         if complete_streaming_response is not None:
             await self.async_success_handler(result=complete_streaming_response)

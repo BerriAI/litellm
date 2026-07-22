@@ -951,12 +951,20 @@ class ModelResponseIterator:
             elif type_chunk == "error":
                 """
                 {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }
+
+                Anthropic does not return an HTTP status code in the in-stream
+                error event. Use `error.type` to pick a sensible default so
+                clients can distinguish retryable conditions: `overloaded_error`
+                is 529 per Anthropic's public conventions, everything else
+                stays 500.
                 """
                 _error_dict = chunk.get("error", {}) or {}
                 message = _error_dict.get("message", None) or str(chunk)
+                _error_type = _error_dict.get("type", "") or ""
+                _status_code = 529 if _error_type == "overloaded_error" else 500
                 raise AnthropicError(
                     message=message,
-                    status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
+                    status_code=_status_code,
                 )
 
             text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
