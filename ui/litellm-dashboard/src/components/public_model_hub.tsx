@@ -553,6 +553,18 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     NotificationsManager.success("Copied to clipboard!");
   };
 
+  type FeatureColor = "blue" | "green" | "red" | "yellow" | "orange" | "purple" | "cyan" | "gray" | "pink";
+
+  const featureColors: Record<string, FeatureColor> = {
+    "Function Calling": "blue",
+    Vision: "green",
+    Reasoning: "red",
+    "Prompt Caching": "gray",
+    "Web Search": "pink",
+    "Response Schema": "orange",
+    "System Messages": "yellow",
+  };
+
   const formatCapabilityName = (key: string) => {
     return key
       .replace(/^supports_/, "")
@@ -1409,13 +1421,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 <div className="flex flex-wrap gap-2">
                   {(() => {
                     const capabilities = getModelCapabilities(selectedModel);
-                    const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
-                    const capabilityColor = (cap: string) => {
-                      let hash = 0;
-                      for (let i = 0; i < cap.length; i++) {
-                        hash = ((hash << 5) - hash + cap.charCodeAt(i)) | 0;
-                      }
-                      return colors[Math.abs(hash) % colors.length];
+                    const capabilityColor = (cap: string): FeatureColor => {
+                      const display = formatCapabilityName(cap);
+                      if (display in featureColors) return featureColors[display];
+                      return "blue";
                     };
 
                     if (capabilities.length === 0) {

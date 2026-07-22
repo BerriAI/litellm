@@ -48,6 +48,20 @@ const formatTokens = (tokens: number) => {
   return tokens.toString();
 };
 
+type FallbackColor = "blue" | "green" | "purple" | "orange";
+
+const featureColors: Record<string, FeatureColor> = {
+  FunctionCalling: "blue",
+  Vision: "green",
+  Reasoning: "red",
+  PromptCaching: "gray",
+  WebSearch: "pink",
+  ResponseSchema: "orange",
+  SystemMessages: "yellow",
+};
+
+const fallbackColors: FallbackColor[] = ["blue", "green", "purple", "orange"];
+
 export const modelHubColumns = (
   showModal: (model: ModelHubData) => void,
   copyToClipboard: (text: string) => void,
@@ -182,13 +196,11 @@ export const modelHubColumns = (
       cell: ({ row }) => {
         const model = row.original;
         const capabilities = getModelCapabilities(model);
-        const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
-        const capabilityColor = (cap: string) => {
-          let hash = 0;
-          for (let i = 0; i < cap.length; i++) {
-            hash = ((hash << 5) - hash + cap.charCodeAt(i)) | 0;
-          }
-          return colors[Math.abs(hash) % colors.length];
+
+        const getCapabilityColor = (capability: string): FeatureColor => {
+          const display = formatCapabilityName(capability);
+          if (display in featureColors) return featureColors[display];
+          return fallbackColors[display.length % fallbackColors.length];
         };
 
         return (
@@ -197,7 +209,7 @@ export const modelHubColumns = (
               <Text className="text-gray-500 text-xs">-</Text>
             ) : (
               capabilities.map((capability) => (
-                <Badge key={capability} color={capabilityColor(capability)} size="xs">
+                <Badge key={capability} color={getCapabilityColor(capability)} size="xs">
                   {formatCapabilityName(capability)}
                 </Badge>
               ))
