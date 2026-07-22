@@ -1727,5 +1727,59 @@ async def test_responses_api_usage_reconciles_using_input_output_tokens_fields(r
     )
 
 
+@pytest.mark.asyncio
+async def test_itpm_reservation_accounts_for_audio_content_not_just_text(rate_limiter):
+    """
+    Regression for the audio half of a Medium-severity review finding:
+    litellm.token_counter has no per-type handling for `input_audio`
+    content blocks (unlike images, which it does count via
+    use_default_image_token_count), so it silently contributes 0 tokens for
+    them. Without DEFAULT_AUDIO_TOKEN_ESTIMATE, a burst of audio-heavy
+    requests with minimal text would each reserve only the one-token floor
+    and blow past the project ITPM limit before post-call reconciliation.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-audio-itpm")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-audio",
+        project_metadata={
+            # Tighter than DEFAULT_AUDIO_TOKEN_ESTIMATE (300), but far bigger
+            # than the handful of tokens the bare text "hi" would cost.
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 50},
+        },
+    )
+
+    data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "base64-audio-bytes", "format": "wav"},
+                    },
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=data,
+            call_type="",
+        )
+    assert getattr(exc_info.value, "status_code", None) == 429, (
+        "Expected the audio content to push the ITPM reservation over the "
+        "50-token limit; if this doesn't raise, audio content isn't being "
+        "counted again."
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
