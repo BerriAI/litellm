@@ -1158,7 +1158,7 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_data"] = item["file_data"]
 
         new_item: dict[str, Any] = {"type": "file", "file": file_dict}
-        if "cache_control" in item:
+        if item.get("cache_control") is not None:
             new_item["cache_control"] = item["cache_control"]
         return new_item
 
@@ -1181,15 +1181,14 @@ class LiteLLMCompletionResponsesConfig:
         Normalize a Responses API object (Pydantic model or custom class) to a dictionary
         """
         if hasattr(item, "model_dump"):
-        if hasattr(item, "model_dump"):
             try:
                 return item.model_dump(exclude_none=True)
-            except Exception:  # noqa: BLE001  # fallback if custom model_dump does not accept exclude_none
+            except TypeError:
                 return item.model_dump()
         elif hasattr(item, "dict"):
             try:
                 return item.dict(exclude_none=True)
-            except Exception:  # noqa: BLE001  # fallback if custom dict does not accept exclude_none
+            except TypeError:
                 return item.dict()
 
         target_attrs = (
@@ -1247,7 +1246,11 @@ class LiteLLMCompletionResponsesConfig:
                     elif item.get("type") == "input_image":
                         image_block = {
                             **LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item),
-                            **({"cache_control": item["cache_control"]} if "cache_control" in item else {}),
+                            **(
+                                {"cache_control": item["cache_control"]}
+                                if item.get("cache_control") is not None
+                                else {}
+                            ),
                         }
                         content_list.append(image_block)
                     else:
@@ -1260,7 +1263,11 @@ class LiteLLMCompletionResponsesConfig:
                                 item.get("type") or "text"
                             ),
                             "text": text_value,
-                            **({"cache_control": item["cache_control"]} if "cache_control" in item else {}),
+                            **(
+                                {"cache_control": item["cache_control"]}
+                                if item.get("cache_control") is not None
+                                else {}
+                            ),
                         }
                         content_list.append(content_block)
             return content_list
