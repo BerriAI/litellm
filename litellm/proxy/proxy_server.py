@@ -10769,6 +10769,8 @@ async def _try_provider_token_count(
     system: Optional[str] = None,
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+    import openai
+
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
     try:
@@ -10781,7 +10783,7 @@ async def _try_provider_token_count(
             tools=tools,
             system=system,
         )
-    except Exception as e:
+    except (httpx.HTTPError, openai.OpenAIError) as e:
         error_message = getattr(e, "message", None) or str(e)
         status_code = getattr(e, "status_code", None)
         if status_code is None and hasattr(e, "response") and hasattr(e.response, "status_code"):
