@@ -2,7 +2,7 @@ import httpx
 import json
 import pytest
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock, Mock, patch
 import os
 from litellm._uuid import uuid
@@ -63,6 +63,30 @@ def _usage_format_tests(usage: litellm.Usage):
 
     if usage.prompt_tokens_details is not None:
         assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
+
+
+_TOOL_CALL_STREAM_TIMEOUT = 30
+
+
+def _drain_tool_call_stream(stream) -> Tuple[str, List[Any]]:
+    """
+    Consume a streaming completion, returning the concatenated text content and the
+    tool calls reassembled from their per-index argument deltas.
+    """
+    content = ""
+    tool_calls_by_index: Dict[Any, Any] = {}
+    for chunk in stream:
+        delta = chunk.choices[0].delta
+        if delta.content:
+            content += delta.content
+        for tool_call in delta.tool_calls or []:
+            accumulated = tool_calls_by_index.get(tool_call.index)
+            if accumulated is None:
+                tool_call.function.arguments = tool_call.function.arguments or ""
+                tool_calls_by_index[tool_call.index] = tool_call
+            else:
+                accumulated.function.arguments += tool_call.function.arguments or ""
+    return content, list(tool_calls_by_index.values())
 
 
 class BaseLLMChatTest(ABC):
@@ -1332,102 +1356,110 @@ class BaseLLMChatTest(ABC):
             ), "Audio URL not sent to gemini"
 
     def test_function_calling_with_tool_response(self):
+        """
+        A streamed tool call must reassemble into valid JSON arguments, round-trip back
+        into `messages` as an assistant turn, and let the model answer from the tool result.
+        """
         from litellm.utils import supports_function_calling
-        from litellm import completion
 
-        litellm._turn_on_debug()
-        try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
 
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-            litellm.model_cost = litellm.get_model_cost_map(url="")
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support function calling")
 
-            base_completion_call_args = self.get_base_completion_call_args()
-            if not supports_function_calling(base_completion_call_args["model"], None):
-                print("Model does not support function calling")
-                pytest.skip("Model does not support function calling")
-
-            def get_weather(city: str):
-                return f"City: {city}, Weather: Sunny with 34 degree Celcius"
-
-            TOOLS = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "description": "Get the weather in a city",
-                        "parameters": {
-                            "$id": "https://some/internal/name",
-                            "$schema": "https://json-schema.org/draft-07/schema",
-                            "type": "object",
-                            "properties": {
-                                "city": {
-                                    "type": "string",
-                                    "description": "The city to get the weather for",
-                                }
-                            },
-                            "required": ["city"],
-                            "additionalProperties": False,
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather in a city",
+                    "parameters": {
+                        "$id": "https://some/internal/name",
+                        "$schema": "https://json-schema.org/draft-07/schema",
+                        "type": "object",
+                        "properties": {
+                            "city": {
+                                "type": "string",
+                                "description": "The city to get the weather for",
+                            }
                         },
-                        "strict": True,
+                        "required": ["city"],
+                        "additionalProperties": False,
                     },
-                }
-            ]
+                    "strict": True,
+                },
+            }
+        ]
+        messages: List[Dict[str, Any]] = [
+            {"content": "How is the weather in Mumbai?", "role": "user"}
+        ]
 
-            messages = [{"content": "How is the weather in Mumbai?", "role": "user"}]
-            response, iteration = "", 0
-            while True:
-                if response:
-                    break
-                # Create a streaming response with tool calling enabled
-                stream = completion(
+        try:
+            content, tool_calls = _drain_tool_call_stream(
+                self.completion_function(
                     **base_completion_call_args,
                     messages=messages,
-                    tools=TOOLS,
+                    tools=tools,
                     stream=True,
+                    timeout=_TOOL_CALL_STREAM_TIMEOUT,
                 )
+            )
 
-                final_tool_calls = {}
-                for chunk in stream:
-                    delta = chunk.choices[0].delta
-                    print(delta)
-                    if delta.content:
-                        response += delta.content
-                    elif delta.tool_calls:
-                        for tool_call in chunk.choices[0].delta.tool_calls or []:
-                            index = tool_call.index
-                            if index not in final_tool_calls:
-                                final_tool_calls[index] = tool_call
-                            else:
-                                final_tool_calls[
-                                    index
-                                ].function.arguments += tool_call.function.arguments
-                if final_tool_calls:
-                    for tool_call in final_tool_calls.values():
-                        if tool_call.function.name == "get_weather":
-                            city = json.loads(tool_call.function.arguments)["city"]
-                            tool_response = get_weather(city)
-                            messages.append(
-                                {
-                                    "role": "assistant",
-                                    "tool_calls": [tool_call],
-                                    "content": None,
-                                }
-                            )
-                            messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "content": tool_response,
-                                }
-                            )
-                iteration += 1
-                if iteration > 2:
-                    print("Something went wrong!")
-                    break
+            assert [
+                tool_call.function.name for tool_call in tool_calls
+            ] == ["get_weather"], (
+                f"expected a single streamed get_weather call, got {tool_calls} "
+                f"with content={content!r}"
+            )
 
-            print(response)
+            tool_call = tool_calls[0]
+            assert tool_call.id, "streamed tool call has no id to reply to"
+
+            raw_arguments = tool_call.function.arguments
+            try:
+                arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError as e:
+                pytest.fail(
+                    f"streamed argument deltas did not reassemble into valid JSON: "
+                    f"{raw_arguments!r} ({e})"
+                )
+            assert "city" in arguments, f"tool call arguments missing 'city': {arguments}"
+            assert "mumbai" in arguments["city"].lower()
+
+            messages.append(
+                {"role": "assistant", "tool_calls": [tool_call], "content": None}
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": f"City: {arguments['city']}, Weather: Sunny with 34 degree Celcius",
+                }
+            )
+
+            final_content, final_tool_calls = _drain_tool_call_stream(
+                self.completion_function(
+                    **base_completion_call_args,
+                    messages=messages,
+                    tools=tools,
+                    stream=True,
+                    timeout=_TOOL_CALL_STREAM_TIMEOUT,
+                )
+            )
+
+            assert final_content.strip(), (
+                "model returned no answer after being given the tool response "
+                f"(tool_calls={final_tool_calls})"
+            )
+            assert (
+                "34" in final_content or "sunny" in final_content.lower()
+            ), f"answer is not grounded in the tool response: {final_content!r}"
+        except litellm.Timeout:
+            pytest.skip("Model took too long to respond")
         except litellm.ServiceUnavailableError:
-            pass
+            pytest.skip("Model is unavailable")
 
     def test_reasoning_effort(self):
         """Test that reasoning_effort is passed correctly to the model"""
