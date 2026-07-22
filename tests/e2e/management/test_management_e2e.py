@@ -610,3 +610,18 @@ class TestManagementRoutePermissions:
             f"/team/info returned {team_probe.status_code}: {team_probe.body[:300]}"
         )
         assert client.user_count(user_id) == 0, f"user {user_id} was created despite the 403 route denial"
+
+
+class TestCustomer:
+    @pytest.mark.covers("mgmt.end_user.new.happy_path")
+    def test_customer_create_persists_to_info(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        customer = f"e2e-customer-{unique_marker()}"
+        client.create_customer(customer)
+        resources.defer(lambda: client.delete_customer(customer))
+
+        info = client.customer_info(customer)
+        assert info.user_id == customer, (
+            f"/customer/info did not report the created end-user; got {info.user_id!r}"
+        )

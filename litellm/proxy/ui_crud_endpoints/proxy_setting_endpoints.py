@@ -1,6 +1,8 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import asyncio
 import json
+import os
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
 
@@ -34,6 +36,44 @@ _SSO_SENSITIVE_FIELDS: Set[str] = {
     "microsoft_client_secret",
     "generic_client_secret",
 }
+
+# Maps each UIThemeConfig field to the env var the UI branding path reads it
+# from. /update/ui_theme_settings writes both the stored ui_theme_config and
+# these env vars, so /get/ui_theme_settings resolves the same env vars to
+# reflect a deployment branded purely through process env.
+_UI_THEME_FIELD_ENV_VARS: dict[str, str] = {
+    "logo_url": "UI_LOGO_PATH",
+    "favicon_url": "LITELLM_FAVICON_URL",
+}
+
+
+def _is_public_http_url(value: str | None) -> bool:
+    """Whether a value is a plain http(s) URL with a host, safe to disclose publicly."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parsed = urlparse(value.strip())
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _resolve_ui_theme_field(stored_values: Mapping[str, Any], field_name: str) -> str | None:
+    """Resolve one UI theme field to the value the branding path actually uses.
+
+    The stored ui_theme_config wins; a field absent or blank there falls back to
+    the process environment. The branding path reads the env var, and stored
+    settings reach it by being pushed into the environment on save, so a value
+    supplied only as a process env var is live even though no stored entry exists.
+
+    This endpoint is unauthenticated, so the env fallback only surfaces a public
+    http(s) URL: an operator can point UI_LOGO_PATH at a local filesystem path
+    (the branding path serves it server-side), and that path must not be
+    disclosed to anonymous callers. A stored value is already validated as a
+    public URL on write, so it passes through.
+    """
+    stored = stored_values.get(field_name)
+    if isinstance(stored, str) and stored.strip():
+        return stored
+    env_value = os.environ.get(_UI_THEME_FIELD_ENV_VARS[field_name])
+    return env_value if _is_public_http_url(env_value) else None
 
 
 class IPAddress(BaseModel):
@@ -977,11 +1017,18 @@ async def get_ui_theme_settings():
     # Load existing config
     config = await proxy_config.get_config()
 
-    return await _get_settings_with_schema(
+    result = await _get_settings_with_schema(
         settings_key="ui_theme_config",
         settings_class=UIThemeConfig,
         config=config,
     )
+
+    stored_values = result.get("values", {})
+    result["values"] = {
+        **stored_values,
+        **{field: _resolve_ui_theme_field(stored_values, field) for field in _UI_THEME_FIELD_ENV_VARS},
+    }
+    return result
 
 
 def _validate_public_image_url(value: Optional[str], field_name: str) -> None:
