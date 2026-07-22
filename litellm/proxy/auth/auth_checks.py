@@ -1769,7 +1769,7 @@ async def _cache_team_object(
     if proxy_logging_obj is not None:
         try:
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the write
             verbose_proxy_logger.warning(
                 "Failed to invalidate internal usage cache entry %s; "
                 "a stale team object may be served until its TTL expires: %s",
@@ -1805,7 +1805,7 @@ async def _cache_team_object(
             user_api_key_cache.delete_cache(key=alias_key)
             if proxy_logging_obj is not None:
                 await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the mutation
             verbose_proxy_logger.warning(
                 "Failed to invalidate cached team alias entry %s; "
                 "a stale team object may be served until its TTL expires: %s",
