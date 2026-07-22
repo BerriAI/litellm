@@ -694,6 +694,55 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should keep an existing canonical budget_duration canonical when saved untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_duration).toBe("30d");
+    });
+  });
+
+  it("should heal a legacy word-form budget_duration to canonical when saved untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const legacyKeyData = { ...MOCK_KEY_DATA, budget_duration: "monthly" };
+    renderWithProviders(
+      <KeyEditView
+        keyData={legacyKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_duration).toBe("30d");
+    });
+  });
+
   it("should omit budget_limits when existing windows are left untouched (issue #33246)", async () => {
     // The backend treats any budget_limits in the payload as an admin-only
     // budget change, so re-sending untouched windows 403s a non-admin owner.
