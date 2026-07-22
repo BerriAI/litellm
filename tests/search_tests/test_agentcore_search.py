@@ -264,10 +264,12 @@ class TestAgentCoreSearch:
             assert mock_base_sign.call_args.kwargs["api_key"] == ""
 
     def test_sign_request_custom_hostname_requires_region(self):
-        """Non-standard hostnames can't yield a signing region — require it explicitly."""
+        """Custom hostname + empty AWS config chain → clear error, no guessed region."""
         config = AgentCoreSearchConfig()
-        saved = {var: os.environ.pop(var, None) for var in ("AWS_REGION", "AWS_REGION_NAME", "AWS_DEFAULT_REGION")}
-        try:
+
+        mock_session = MagicMock()
+        mock_session.region_name = None  # nothing configured anywhere
+        with patch("boto3.Session", return_value=mock_session):
             with pytest.raises(ValueError, match="signing region"):
                 config.sign_request(
                     headers={},
@@ -275,10 +277,28 @@ class TestAgentCoreSearch:
                     request_data={"jsonrpc": "2.0"},
                     api_base="https://gateway.internal.example.com/mcp",
                 )
-        finally:
-            for var, val in saved.items():
-                if val is not None:
-                    os.environ[var] = val
+
+    def test_sign_request_custom_hostname_uses_shared_config_region(self):
+        """Custom hostname + region from AWS shared config (profile) must be honored."""
+        config = AgentCoreSearchConfig()
+
+        mock_session = MagicMock()
+        mock_session.region_name = "eu-west-1"  # e.g. from ~/.aws/config profile
+        with (
+            patch("boto3.Session", return_value=mock_session),
+            patch.object(
+                AgentCoreSearchConfig.__mro__[2],  # BaseAWSLLM
+                "_sign_request",
+                return_value=({}, b"{}"),
+            ) as mock_base_sign,
+        ):
+            config.sign_request(
+                headers={},
+                optional_params={},
+                request_data={"jsonrpc": "2.0"},
+                api_base="https://gateway.internal.example.com/mcp",
+            )
+            assert mock_base_sign.call_args.kwargs["optional_params"]["aws_region_name"] == "eu-west-1"
 
     def test_sign_request_passes_explicit_aws_credentials(self):
         """Explicit aws_* params (e.g. from a proxy search_tools entry) reach the signer."""
