@@ -10781,9 +10781,13 @@ async def _try_provider_token_count(
             tools=tools,
             system=system,
         )
-    except httpx.HTTPStatusError as e:
+    except Exception as e:
         error_message = getattr(e, "message", None) or str(e)
-        status_code = getattr(e, "status_code", None) or e.response.status_code
+        status_code = getattr(e, "status_code", None)
+        if status_code is None and hasattr(e, "response") and hasattr(e.response, "status_code"):
+            status_code = e.response.status_code
+        status_code = status_code or 500
+
         if litellm.disable_token_counter is True:
             raise ProxyException(
                 message=error_message,

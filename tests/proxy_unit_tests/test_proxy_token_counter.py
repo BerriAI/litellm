@@ -1446,3 +1446,79 @@ async def test_try_provider_token_count_http_error_disabled():
         assert exc_info.value.code == "500"
     finally:
         litellm.disable_token_counter = original_disable
+
+
+@pytest.mark.asyncio
+async def test_try_provider_token_count_generic_error_fallback():
+    """
+    Test that _try_provider_token_count catches a generic Exception 
+    and returns None (falling back to local tokenizer) when litellm.disable_token_counter != True.
+    """
+    from litellm.proxy.proxy_server import _try_provider_token_count
+    from unittest.mock import AsyncMock, MagicMock
+    import litellm
+
+    original_disable = getattr(litellm, "disable_token_counter", False)
+    litellm.disable_token_counter = False
+
+    try:
+        mock_provider_counter = MagicMock()
+        mock_provider_counter.should_use_token_counting_api.return_value = True
+        
+        # Make count_tokens raise a generic Exception
+        error = ValueError("Some weird provider error")
+        mock_provider_counter.count_tokens = AsyncMock(side_effect=error)
+
+        result = await _try_provider_token_count(
+            provider_counter=mock_provider_counter,
+            custom_llm_provider="openai",
+            model_to_use="gpt-4",
+            messages=[{"role": "user", "content": "hello"}],
+            contents=None,
+            deployment=None,
+            request_model="gpt-4"
+        )
+        
+        # It should return None on generic Exception instead of raising Exception
+        assert result is None
+    finally:
+        litellm.disable_token_counter = original_disable
+
+
+@pytest.mark.asyncio
+async def test_try_provider_token_count_generic_error_disabled():
+    """
+    Test that _try_provider_token_count raises ProxyException on generic Exception
+    when litellm.disable_token_counter == True.
+    """
+    from litellm.proxy.proxy_server import _try_provider_token_count
+    from litellm.proxy._types import ProxyException
+    from unittest.mock import AsyncMock, MagicMock
+    import litellm
+
+    original_disable = getattr(litellm, "disable_token_counter", False)
+    litellm.disable_token_counter = True
+
+    try:
+        mock_provider_counter = MagicMock()
+        mock_provider_counter.should_use_token_counting_api.return_value = True
+        
+        # Make count_tokens raise a generic Exception
+        error = ValueError("Some weird provider error")
+        mock_provider_counter.count_tokens = AsyncMock(side_effect=error)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _try_provider_token_count(
+                provider_counter=mock_provider_counter,
+                custom_llm_provider="openai",
+                model_to_use="gpt-4",
+                messages=[{"role": "user", "content": "hello"}],
+                contents=None,
+                deployment=None,
+                request_model="gpt-4"
+            )
+        
+        # Default status code for generic exceptions is 500
+        assert exc_info.value.code == "500"
+    finally:
+        litellm.disable_token_counter = original_disable
