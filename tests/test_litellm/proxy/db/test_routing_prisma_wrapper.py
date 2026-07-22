@@ -947,6 +947,38 @@ def test_azure_postgres_auth_requires_azure_identity(monkeypatch):
         _build_azure_postgres_credential()
 
 
+@pytest.mark.parametrize(
+    ("schema", "expected_url"),
+    (
+        (
+            "public",
+            "postgresql://u:TOKEN@h:5432/db?schema=public&sslmode=require&sslaccept=strict",
+        ),
+        (None, "postgresql://u:TOKEN@h:5432/db?sslmode=require&sslaccept=strict"),
+    ),
+)
+def test_build_database_token_auth_url_requires_strict_tls_for_azure(
+    monkeypatch, schema, expected_url
+):
+    from litellm.proxy.db.prisma_client import (
+        IAMEndpoint,
+        build_database_token_auth_url,
+    )
+
+    fake_module = MagicMock()
+    fake_module.generate_azure_postgres_auth_token.return_value = "TOKEN"
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.auth.azure_postgres_token", fake_module
+    )
+
+    url = build_database_token_auth_url(
+        IAMEndpoint(host="h", port="5432", user="u", name="db", schema=schema),
+        azure_postgresql_auth=True,
+    )
+
+    assert url == expected_url
+
+
 def test_writer_get_azure_postgres_token_uses_database_env_vars(
     monkeypatch, unset_database_url
 ):
@@ -978,7 +1010,8 @@ def test_writer_get_azure_postgres_token_uses_database_env_vars(
 
     assert new_url == (
         "postgresql://managed-identity-name:AZURE%2FTOKEN@"
-        "server.postgres.database.azure.com:5432/litellm?schema=public"
+        "server.postgres.database.azure.com:5432/litellm?"
+        "schema=public&sslmode=require&sslaccept=strict"
     )
     assert os.environ["DATABASE_URL"] == new_url
     fake_module.generate_azure_postgres_auth_token.assert_called_once()

@@ -92,7 +92,10 @@ def build_database_token_auth_url(
             generate_azure_postgres_auth_token,
         )
 
-        return endpoint.build_url(generate_azure_postgres_auth_token())
+        return (
+            f"{endpoint.build_url(generate_azure_postgres_auth_token())}"
+            f"{'&' if endpoint.schema else '?'}sslmode=require&sslaccept=strict"
+        )
 
     from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
