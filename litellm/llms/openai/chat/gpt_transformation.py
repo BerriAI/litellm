@@ -533,9 +533,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
             tool_calls = choice["message"].get("tool_calls", None)
-            new_tool_calls: Optional[
-                List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]
-            ] = None
+            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = None
             message_content = choice["message"].get("content", None)
             if tool_calls is not None:
                 _openai_tool_calls = []
