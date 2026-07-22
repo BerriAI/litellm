@@ -12,12 +12,25 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `batches/` - the `/batches` endpoint (placeholder until the first test lands)
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
-- `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials; also the dashboard UI behavior on top of them, driven through the proxy-served UI at /ui with playwright (optional dep behind importorskip)
+- `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials (API surface; not Playwright)
+- `mcp/` - the MCP server surface over api_key auth against the real Datadog remote MCP server only (see "MCP suite: real Datadog only" below)
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)
+- `load/` - throughput/performance under concurrency: drives real concurrent traffic through the whole stack with Locust and asserts a throughput SLO; marked `load` so the parent conftest collects it last and it never perturbs latency-sensitive suites
+- `other/` - the holding-pen suite for the `other.*` registry cluster with no home of its own yet: the master-key auth gate and the process-lifecycle health probes (liveness, public readiness, authenticated readiness diagnostics). Promote a cluster out once it is large/stable enough for its own suite
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
-- `claude_code/` - the Claude Code compatibility matrix: drives the real `claude` CLI (and HTTP probes) against a proxy for each feature x provider cell, reporting tagged-union outcomes via the `compat_result` fixture; ships its own driver/builder/publisher plus `_*_unit_tests/` trees, and does not use the shared transport harness
+- `claude_code/` - the Claude Code compatibility matrix: drives the real `claude` CLI (and HTTP probes) against a proxy for each feature x provider cell, reporting tagged-union outcomes via the `compat_result` fixture; ships its own driver/builder/publisher plus `_*_unit_tests/` trees. The HTTP probes ride the shared transport (`ProxyClient.count_tokens` / `ProxyClient.messages`); the CLI-driving path stays bespoke
+
+## MCP suite: real Datadog only
+
+Every test under `tests/e2e/mcp/` must exercise the proxy against the real Datadog remote MCP server. Do not add a compose service, FastMCP fixture, mock upstream, or any other fake MCP host for this suite
+
+- Register via `register_datadog_mcp` in `tests/e2e/mcp/datadog_mcp.py` (or extend that helper if you need a different `toolsets=` / `allowed_tools` slice of the same Datadog endpoint). That posts `/v1/mcp/server` with `url=datadog_mcp_url(...)` and static headers `DD-API-KEY` / `DD-APPLICATION-KEY` from the process env
+- Auth is Datadog's documented CI/header path, not a browser OAuth authorize/token dance. Hard-fail when `DD_API_KEY` or `DD_APP_KEY` is missing (`assert_dd_mcp_creds`); never skip for a missing fake upstream
+- Prefer calling real Datadog tools that prove the product path (e.g. `search_datadog_logs` for list/call and permission denials). Seed a unique marker (`e2e-datadog-mcp-*`) in a chat completion when you need a log the tool can find; dual-read with `dd_logs` from conftest when delivery matters
+- Delete the MCP server (and any keys) through `resources.defer` the same way every other suite tears down
+- If a new MCP behavior cannot be covered with Datadog's tool surface, say so in the PR and get agreement before inventing another upstream; the default is always Datadog
 
 ## Lay the pattern down in a class
 
@@ -32,7 +45,7 @@ class TestPromptCompression:
 
     def test_prompt_compression_accumulate_spend(self, key_id, user_id):
         for _ in range(10):
-            response = self.resources.gateway.post("gemini-2.5-flash", key_id, user_id)
+            response = self.resources.proxy.post("gemini-2.5-flash", key_id, user_id)
         compressed_value = ...
         assert response.cost == compressed_value  # the cost was actually reduced
 ```
@@ -47,9 +60,9 @@ The shape is layered so tests stay declarative
 
 `transport.py` exposes a `Transport` Protocol with `post`, `get`, `delete`, `send`, `stream`, `probe`, plus `bearer(key)` and the `master` header. `HttpTransport` fulfils it, and `SplitTransport` routes each call by path to the data plane or the control plane so a split control-plane/data-plane deployment works without any change in the test
 
-`e2e_gateway.py` holds `Gateway`, a frozen dataclass that wraps a `Transport` and adds the operations tests reuse: `generate_key` / `delete_key` / `key_info`, `model_info`, the LLM calls `chat` / `chat_stream` / `embed` / `ocr`, the spend read-back `spend_logs`, and the poll helpers `poll_logs_for_key` / `poll_logs_for_request_id` that loop to `poll_timeout` instead of sleeping once. Add a new route as a method here so other suites get it for free
+`proxy_client.py` holds `ProxyClient`, a frozen dataclass that wraps a `Transport` and adds the operations tests reuse: `generate_key` / `delete_key` / `key_info`, `model_info`, the LLM calls `chat` / `chat_stream` / `embed` / `ocr`, the spend read-back `spend_logs`, and the poll helpers `poll_logs_for_key` / `poll_logs_for_request_id` that loop to `poll_timeout` instead of sleeping once. It is exposed as the session-scoped `proxy` fixture (see tests/e2e/conftest.py), which each suite's `client` fixture depends on and injects. Add a new route as a method here so other suites get it for free
 
-Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `Gateway` and adds suite-specific routes. Cleanup runs through that same `Gateway`, so whatever keys or customers your test creates get torn down by the `resources` fixture
+Each suite provides its own `client` fixture (see `llm_translation/passthrough_client.py`), a frozen dataclass that holds the shared `ProxyClient` (as `.proxy`) and adds suite-specific routes. Cleanup runs through that same `ProxyClient`, so whatever keys or customers your test creates get torn down by the `resources` fixture
 
 Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
@@ -134,9 +147,9 @@ quota_management.<behavior>.<variant>.<assertion>
               <budget>         key | internal_user | end_user | organization | team | team_member | tag
                                | model_max | soft | key_multi_window | team_multi_window
                                | fallback | spend_counter
-              <spend_tracking> chat_completions | stream | embeddings | cache_hit | key_rollup
-                               | concurrent_burst | tags | end_user | per_model | failure
-                               | spend_calculate | pagination
+              <spend_tracking> chat_completions | stream | messages_bridge | embeddings
+                               | cache_hit | key_rollup | concurrent_burst | tags | end_user
+                               | per_model | failure | spend_calculate | pagination
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
               | isolates_per_model | isolates_per_member | enforced_across_keys | routes_to_fallback
@@ -182,6 +195,6 @@ other.<area>.<case>.<assertion>
 
 - when it comes to typing an input schema for an api endpoint, have it type X = A | B | C ... where X = exhaustive union of all supported input schemas and A, B, C typically are composed by a base type. types are only pretty for a api request / response body. make sure to compose types instead of repeating the same base attributes over and over again.
  
-- use the docker-compose to your advantage and spin up a local proxy, make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
+- spin up a local proxy by running the litellm proxy locally (`litellm --config <your-e2e-config>.yml --port 4000`; see CONTRIBUTING.md), make sure all tests pass. if a test fails due to an internally found issue, let users know to create a linear ticket for it. 
 
 - do not use xfail markers, tests should be written in a form that the end user expects it to pass

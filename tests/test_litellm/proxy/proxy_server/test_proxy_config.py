@@ -8,6 +8,7 @@ Pins covered:
 
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 from typing import Any, Dict
@@ -405,6 +406,124 @@ async def test_ProxyConfig_save_config_invalid_path_raises(monkeypatch):
     pc = ProxyConfig()
     with pytest.raises(Exception):
         await pc.save_config({"x": 1})
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_db_omits_environment_variables_by_default(monkeypatch):
+    """A save_config after get_config() (which resolves os.environ/ placeholders
+    to plaintext and merges the environment_variables section) must not snapshot
+    those env vars into the DB config row. Persisting them would make a stale DB
+    row shadow YAML/container env on every subsequent restart."""
+    mock_prisma = MagicMock()
+    mock_prisma.insert_data = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    # a valid salt so the env-var encryption path (reached only if the pop
+    # regresses) runs cleanly, making this fail on the assertion below rather
+    # than on an incidental encryption crash
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+
+    pc = ProxyConfig()
+    cfg = {
+        "model_list": [{"model_name": "gpt-4o"}],
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "environment_variables": {"OPENAI_API_KEY": "sk-from-yaml"},
+    }
+    await pc.save_config(cfg)
+
+    mock_prisma.insert_data.assert_awaited_once()
+    written = mock_prisma.insert_data.await_args.kwargs["data"]
+    assert "environment_variables" not in written
+    # unrelated sections are still persisted; model_list is stripped as before
+    assert written["litellm_settings"] == {"success_callback": ["langfuse"]}
+    assert "model_list" not in written
+    # the caller's dict is not mutated (save_config works on a copy)
+    assert cfg["environment_variables"] == {"OPENAI_API_KEY": "sk-from-yaml"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_db_persists_environment_variables_when_opted_in(monkeypatch):
+    """The explicit opt-in path (include_env_vars=True) still persists env vars,
+    encrypted, so the dedicated config-update flow can write them."""
+    mock_prisma = MagicMock()
+    mock_prisma.insert_data = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+
+    pc = ProxyConfig()
+    cfg = {"litellm_settings": {}, "environment_variables": {"OPENAI_API_KEY": "sk-explicit"}}
+    await pc.save_config(cfg, include_env_vars=True)
+
+    mock_prisma.insert_data.assert_awaited_once()
+    written = mock_prisma.insert_data.await_args.kwargs["data"]
+    assert set(written["environment_variables"].keys()) == {"OPENAI_API_KEY"}
+    # value is encrypted at rest, not the plaintext it came in as
+    assert written["environment_variables"]["OPENAI_API_KEY"] != "sk-explicit"
+
+
+def _install_fake_config_repo(monkeypatch, existing_row):
+    """Route ProxyConfig's ConfigRepository through an in-memory fake that
+    records the value written to the environment_variables row."""
+    captured: dict = {}
+
+    class _FakeTable:
+        async def find_first(self, where):
+            return SimpleNamespace(param_value=existing_row) if existing_row is not None else None
+
+        async def upsert(self, where, data):
+            captured["value"] = json.loads(data["update"]["param_value"])
+
+    class _FakeRepo:
+        def __init__(self, client):
+            self.table = _FakeTable()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.ConfigRepository", _FakeRepo)
+    monkeypatch.setattr("litellm.proxy.proxy_server.invalidate_config_param", AsyncMock())
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_environment_variables_merges_sets_and_deletes(monkeypatch):
+    """The per-key env-var write updates/deletes only the named keys and leaves
+    every other stored key untouched, so an unrelated env var is never lost or
+    snapshotted."""
+    captured = _install_fake_config_repo(
+        monkeypatch,
+        existing_row={"EXISTING_KEY": "ciphertext-existing", "UI_LOGO_PATH": "old-logo", "LITELLM_FAVICON_URL": "old"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+
+    pc = ProxyConfig()
+    await pc.save_environment_variables({"UI_LOGO_PATH": "new-logo", "LITELLM_FAVICON_URL": None})
+
+    written = captured["value"]
+    # unrelated key preserved byte-for-byte
+    assert written["EXISTING_KEY"] == "ciphertext-existing"
+    # set key updated and encrypted (not the plaintext)
+    assert "UI_LOGO_PATH" in written and written["UI_LOGO_PATH"] != "new-logo"
+    # None-valued key deleted
+    assert "LITELLM_FAVICON_URL" not in written
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_environment_variables_noop_without_db(monkeypatch):
+    """With no DB configured the per-key write must do nothing (never touch the
+    config repository)."""
+    captured = _install_fake_config_repo(monkeypatch, existing_row={})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    pc = ProxyConfig()
+    await pc.save_environment_variables({"UI_LOGO_PATH": "x"})
+
+    assert "value" not in captured
 
 
 # ---------------------------------------------------------------------------
@@ -951,6 +1070,32 @@ async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, monkeypatch):
+    """general_settings.proxy_config_reload_interval_seconds must reach the proxy_server
+    module global that schedules the DB config-reload jobs, so operators can tune multi-pod
+    convergence from config.yaml."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings:\n"
+        "  proxy_config_reload_interval_seconds: 47\n"
+        "litellm_settings: {}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    original = proxy_server.proxy_config_reload_interval_seconds
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        assert proxy_server.proxy_config_reload_interval_seconds == 47
+    finally:
+        proxy_server.proxy_config_reload_interval_seconds = original
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_missing_file_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
@@ -1244,7 +1389,8 @@ def test_ProxyConfig_get_model_info_with_id_returns_router_model_info():
     assert snapshot == {"id": "m-1", "db_model": True, "blocked": False}
 
 
-def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises():
+def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     pc = ProxyConfig()
     # model with no model_id, no model_info — accessing .model_id will fail.
     bad = SimpleNamespace(model_info=None)

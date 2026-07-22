@@ -22647,6 +22647,12 @@ export interface components {
              */
             provider_url_destination_allowed_hosts?: string[] | null;
             /**
+             * Proxy Config Reload Interval Seconds
+             * @description how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup
+             * @default 30
+             */
+            proxy_config_reload_interval_seconds: number;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
@@ -22728,6 +22734,10 @@ export interface components {
             field_description: string;
             /** Field Name */
             field_name: string;
+            /** Field Options */
+            field_options?: string[] | null;
+            /** Field Tab */
+            field_tab?: string | null;
             /** Field Type */
             field_type: string;
             /** Field Value */
@@ -23257,6 +23267,16 @@ export interface components {
              */
             total_completion_tokens: number;
             /**
+             * Total Compression Saved Tokens
+             * @default 0
+             */
+            total_compression_saved_tokens: number;
+            /**
+             * Total Compression Savings Spend
+             * @default 0
+             */
+            total_compression_savings_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -23266,6 +23286,11 @@ export interface components {
              * @default 1
              */
             total_pages: number;
+            /**
+             * Total Prompt Caching Savings Spend
+             * @default 0
+             */
+            total_prompt_caching_savings_spend: number;
             /**
              * Total Prompt Tokens
              * @default 0
@@ -24339,7 +24364,7 @@ export interface components {
          */
         HTTPAuthSecurityScheme: {
             /** Bearerformat */
-            bearerFormat: string | null;
+            bearerFormat?: string | null;
             /** Description */
             description?: string | null;
             /** Scheme */
@@ -27301,7 +27326,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "true_passthrough" | "oauth_delegate") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
@@ -28527,7 +28552,7 @@ export interface components {
             description?: string | null;
             flows: components["schemas"]["OAuthFlows"];
             /** Oauth2Metadataurl */
-            oauth2MetadataUrl: string | null;
+            oauth2MetadataUrl?: string | null;
             /**
              * Type
              * @constant
@@ -30897,10 +30922,25 @@ export interface components {
              */
             completion_tokens: number;
             /**
+             * Compression Saved Tokens
+             * @default 0
+             */
+            compression_saved_tokens: number;
+            /**
+             * Compression Savings Spend
+             * @default 0
+             */
+            compression_savings_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
             failed_requests: number;
+            /**
+             * Prompt Caching Savings Spend
+             * @default 0
+             */
+            prompt_caching_savings_spend: number;
             /**
              * Prompt Tokens
              * @default 0

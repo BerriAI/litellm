@@ -110,6 +110,22 @@ describe("CacheDashboard cache analytics charts", () => {
     expect(screen.getByText("Cached Completion Tokens vs Generated Completion Tokens")).toBeInTheDocument();
   });
 
+  it("scopes the analytics tab to the response cache, not provider prompt caching", async () => {
+    renderDashboard();
+
+    expect(await screen.findByText(/is not shown here/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "response cache" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/caching",
+    );
+    expect(screen.getByRole("link", { name: "prompt caching" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/completion/prompt_caching",
+    );
+    expect(screen.queryByText("Cached Tokens")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Cached Completion Tokens").length).toBeGreaterThan(0);
+  });
+
   it("renders the requests chart with each category legend-bound to its fill and stacked in order", async () => {
     renderDashboard();
     const { requestsCard } = await findChartCards();

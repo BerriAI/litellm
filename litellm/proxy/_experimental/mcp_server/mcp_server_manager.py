@@ -93,6 +93,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
+    ClientCredentialsConfig,
+    CredError,
+    IdJagConfig,
     PassthroughConfig,
     ServerSpec,
     TokenExchangeConfig,
@@ -219,6 +222,20 @@ def _uses_issuer_anchor(manual_issuer: str | None, is_discovery_auth_type: bool)
     this one definition, so the answer cannot diverge across build paths.
     """
     return _blank_to_none(manual_issuer) is not None and is_discovery_auth_type
+
+
+def _has_oauth_discovery_source(server_url: str | None, use_issuer_anchor: bool) -> bool:
+    """Whether the server has any source OAuth discovery can fetch metadata from.
+
+    Resource-rooted discovery (RFC 9728) is fetched from the server ``url``, so spec-only
+    (OpenAPI) and stdio servers, which have none, could never discover: their OAuth endpoints
+    stayed unset unless entered manually and ``/authorize`` served its 400 with no hint of why.
+    An admin-pinned issuer is a trust anchor in its own right (RFC 8414 section 3.3) whose
+    metadata fetch does not touch the resource at all, so an anchored server can discover with
+    no ``url``. Called by both build paths (config and DB) so the two cannot disagree on when
+    discovery is reachable.
+    """
+    return bool(server_url) or use_issuer_anchor
 
 
 def _endpoints_yield_to_issuer(
@@ -607,6 +624,34 @@ def _passthrough_token_from_mcp_auth_header(
     return None
 
 
+async def _materialize_auth_headers(auth: httpx.Auth | None) -> dict[str, str] | None:
+    """Extract the header a resolved ``httpx.Auth`` would set, as a plain dict, or None.
+
+    OpenAPI tool closures egress through ``AsyncHTTPHandler`` methods that accept headers but no
+    ``auth``, so a resolved credential must be materialized into a header value. Driving one step
+    of the auth's own flow (against a throwaway request that is never sent) keeps this generic
+    across every auth shape without per-class branching; ``header_name`` is the resolver-arm
+    convention for "this auth sets a header" (``NoOpAuth`` has none and yields nothing to apply).
+    The materialized value is point-in-time: flow behaviors past the first request, like the M2M
+    one-shot 401 refetch, do not apply on this arm.
+    """
+    if auth is None:
+        return None
+    header_name = getattr(auth, "header_name", None)
+    if not isinstance(header_name, str) or not header_name:
+        return None
+    probe = httpx.Request("GET", "http://localhost/")
+    flow = auth.async_auth_flow(probe)
+    try:
+        first_request = await flow.__anext__()
+    except StopAsyncIteration:
+        return None
+    finally:
+        await flow.aclose()
+    header_value = first_request.headers.get(header_name)
+    return {header_name: header_value} if header_value else None
+
+
 def _consumes_caller_authorization(server: MCPServer) -> bool:
     """True when this server's egress forwards the caller's request-wide ``Authorization`` upstream:
     the client-forwarded token modes, legacy OAuth pass-through, and legacy upstream-delegated
@@ -619,6 +664,47 @@ def _consumes_caller_authorization(server: MCPServer) -> bool:
         and getattr(server, "delegate_auth_to_upstream", False) is True
         and not server.has_client_credentials
     )
+
+
+_REGISTRY_DUMP_SECRET_FIELDS = frozenset(
+    {"authentication_token", "client_secret", "client_private_key", "aws_secret_access_key", "aws_session_token"}
+)
+
+
+def _redacted_registry_dump(servers: dict[str, MCPServer]) -> dict[str, dict[str, str]]:
+    """A JSON-safe view of the server registry with credential fields masked, for debug logging.
+
+    The registry holds long-lived secrets as plain strings (the static token, OAuth client secret,
+    the ID-JAG signing key, AWS keys); dumping them verbatim hands the gateway's client identity to
+    anyone who can read debug logs.
+    """
+    dumps: dict[str, dict[str, object]] = {server_id: server.model_dump() for server_id, server in servers.items()}
+    return {
+        server_id: {
+            field: ("**REDACTED**" if field in _REGISTRY_DUMP_SECRET_FIELDS and value is not None else str(value))
+            for field, value in dump.items()
+        }
+        for server_id, dump in dumps.items()
+    }
+
+
+def _to_server_spec_fail_closed(server: MCPServer) -> Optional[ServerSpec]:
+    """`to_server_spec`, except a half-configured `oauth2_id_jag` server refuses instead of deferring.
+
+    ID-JAG has no v1 arm, so deferring to v1 would let `resolve_mcp_auth` honor a caller x-mcp-*
+    override or fall through to the static `authentication_token`, both of which bypass the per-user
+    identity assertion the mode promises. That is an operator misconfiguration, not a fallback.
+    """
+    spec = to_server_spec(server)
+    if spec is None and server.auth_type == MCPAuth.oauth2_id_jag:
+        raise_public(
+            CredError.of_misconfigured(
+                "oauth2_id_jag requires token_exchange_endpoint, id_jag_resource_token_endpoint, "
+                "client_id, and a client_secret or client_private_key; refusing to fall back to "
+                "a static credential."
+            )
+        )
+    return spec
 
 
 def _caller_authorization_fans_out(
@@ -643,7 +729,7 @@ def _extract_upstream_auth_failure(
 ) -> Optional[tuple[int, Optional[str]]]:
     """The upstream 401/403 and its ``WWW-Authenticate`` header from the exception tree, or ``None``.
 
-    Delegates to the shared traversal in ``faults.list_outcomes`` so every consumer (tool listing,
+    Delegates to the shared traversal in ``faults`` so every consumer (tool listing,
     tool calls, the connect-time probe) selects the same response with the same deliberate order:
     explicit ``raise ... from`` causes first, ExceptionGroup members in raise order, the incidental
     ``__context__`` chain last. A response raised while handling the real failure can therefore never
@@ -1100,6 +1186,14 @@ class MCPServerManager:
         """
         return self.config_mcp_servers | self.registry
 
+    def is_config_declared_server(self, server_id: str) -> bool:
+        """True when server_id was declared in config.yaml (present in the in-memory config map).
+        Config servers are rowless and persistent, so their DCR client belongs in the server-scoped
+        store; a rowless server that is NOT config-declared is a throwaway temp/session server whose
+        client must not be persisted. This never overrides the row-existence check: a server that has
+        a LiteLLM_MCPServerTable row is always resolved to that row first."""
+        return server_id in self.config_mcp_servers
+
     async def load_servers_from_config(
         self,
         mcp_servers_config: dict[str, Any],
@@ -1174,7 +1268,12 @@ class MCPServerManager:
             manual_token_url = _blank_to_none(server_config.get("token_url"))
             manual_registration_url = _blank_to_none(server_config.get("registration_url"))
             is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
-            use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type)
+            obo_needs_discovery = self._obo_needs_endpoint_discovery(
+                auth_type,
+                server_config.get("token_exchange_endpoint"),
+                manual_token_url,
+            )
+            use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type or obo_needs_discovery)
             manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
                 manual_issuer,
                 is_discovery_auth_type,
@@ -1182,17 +1281,12 @@ class MCPServerManager:
                 manual_token_url,
                 manual_registration_url,
             )
-            should_discover = bool(server_url) and (
-                is_discovery_auth_type
-                or self._obo_needs_endpoint_discovery(
-                    auth_type,
-                    server_config.get("token_exchange_endpoint"),
-                    manual_token_url,
-                )
+            should_discover = _has_oauth_discovery_source(server_url, use_issuer_anchor) and (
+                is_discovery_auth_type or obo_needs_discovery
             )
             if not should_discover:
                 mcp_oauth_metadata = None
-            elif manual_issuer is not None and is_discovery_auth_type:
+            elif use_issuer_anchor and manual_issuer is not None:
                 mcp_oauth_metadata = await self._fetch_issuer_anchored_oauth_metadata(manual_issuer, server_url)
             else:
                 mcp_oauth_metadata = await self._descovery_metadata(
@@ -1318,6 +1412,12 @@ class MCPServerManager:
                     "subject_token_type",
                     DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
+                # ID-JAG fields
+                id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
+                id_jag_resource=server_config.get("id_jag_resource", None),
+                client_private_key=server_config.get("client_private_key", None),
+                client_private_key_id=server_config.get("client_private_key_id", None),
+                client_assertion_signing_alg=server_config.get("client_assertion_signing_alg", "RS256"),
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
@@ -1338,9 +1438,35 @@ class MCPServerManager:
                     base_url=server_config.get("url", ""),
                 )
 
-        verbose_logger.debug(f"Loaded MCP Servers: {json.dumps(self.config_mcp_servers, indent=4, default=str)}")
+        verbose_logger.debug(
+            f"Loaded MCP Servers: {json.dumps(_redacted_registry_dump(self.config_mcp_servers), indent=4)}"
+        )
+
+        await self._hydrate_config_servers_dcr_clients()
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
+
+    async def _hydrate_config_servers_dcr_clients(self) -> None:
+        """Overlay each config-declared server's persisted DCR client (from the server-scoped
+        store) onto its in-memory object so token refresh authenticates after a restart. A
+        best-effort no-op when the DB is unreachable at config-load time."""
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # circular import
+            hydrate_config_server_dcr_client,
+        )
+
+        for server in self.config_mcp_servers.values():
+            try:
+                if await hydrate_config_server_dcr_client(server):
+                    verbose_logger.debug(
+                        "hydrated persisted DCR client onto config MCP server server_id=%s",
+                        server.server_id,
+                    )
+            except Exception as exc:  # noqa: BLE001  # best-effort hydration; never fail config load
+                verbose_logger.debug(
+                    "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s",
+                    server.server_id,
+                    exc,
+                )
 
     async def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
         """
@@ -1556,7 +1682,7 @@ class MCPServerManager:
         token_exchange_endpoint: Optional[str],
     ) -> Optional[MCPOAuthMetadata]:
         has_all_upstream_oauth_fields = bool(manual_authorization_url and manual_token_url and scopes)
-        needs_discovery = bool(server_url) and (
+        needs_discovery = _has_oauth_discovery_source(server_url, use_issuer_anchor) and (
             (is_discovery_auth_type and not has_all_upstream_oauth_fields)
             or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url)
         )
@@ -1675,12 +1801,16 @@ class MCPServerManager:
         manual_token_url = _blank_to_none(mcp_server.token_url)
         manual_registration_url = _blank_to_none(mcp_server.registration_url)
         is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
-        use_issuer_anchor = _uses_issuer_anchor(manual_issuer, is_discovery_auth_type)
-        manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
-            manual_issuer, is_discovery_auth_type, manual_authorization_url, manual_token_url, manual_registration_url
-        )
         token_exchange_endpoint = mcp_server.token_exchange_endpoint or (
             credentials_dict.get("token_exchange_endpoint") if credentials_dict else None
+        )
+        use_issuer_anchor = _uses_issuer_anchor(
+            manual_issuer,
+            is_discovery_auth_type
+            or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url),
+        )
+        manual_authorization_url, manual_token_url, manual_registration_url = _endpoints_yield_to_issuer(
+            manual_issuer, is_discovery_auth_type, manual_authorization_url, manual_token_url, manual_registration_url
         )
         gated_oauth_metadata = await self._resolve_table_oauth_metadata(
             mcp_server=mcp_server,
@@ -1765,6 +1895,21 @@ class MCPServerManager:
             subject_token_type=mcp_server.subject_token_type
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or DEFAULT_SUBJECT_TOKEN_TYPE,
+            # ID-JAG fields — read from credentials JSON blob
+            id_jag_resource_token_endpoint=(
+                credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
+            ),
+            id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            client_private_key=self._decrypt_credential_field(
+                credentials_dict.get("client_private_key") if credentials_dict else None,
+                "client_private_key",
+                credentials_are_encrypted,
+            ),
+            client_private_key_id=(credentials_dict.get("client_private_key_id") if credentials_dict else None),
+            client_assertion_signing_alg=(
+                credentials_dict.get("client_assertion_signing_alg") if credentials_dict else None
+            )
+            or "RS256",
             token_exchange_profile=mcp_server.token_exchange_profile
             or (credentials_dict.get("token_exchange_profile") if credentials_dict else None)
             or "rfc8693",
@@ -1844,7 +1989,7 @@ class MCPServerManager:
         family: discovered ``authorization_url``/``token_url``/``scopes`` otherwise live only on
         the in-memory registry entry, which is rebuilt on every client connect (the DCR reuse path
         calls ``update_server``) and on every post-write DB reload, so one failed re-discovery
-        serves 400 "authorization url is not set" from /authorize until a later rebuild succeeds.
+        serves the 400 "authorization url is not configured" from /authorize until a later rebuild succeeds.
         Only fills row fields that are currently empty, never persists origin-fallback guesses
         (RFC 9728/8414-advertised metadata only), and deliberately skips ``registration_url``
         because ``_dcr_bridge_relays_client_registration`` keys off that column. Best-effort: a
@@ -2641,13 +2786,18 @@ class MCPServerManager:
                 )
                 if not conflicts:
                     return auth, extra_headers
-                if isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig)):
-                    # The resolver owns the per-user credential here (token_exchange's exchanged
-                    # token, authorization_code's stored token). It is authoritative: a guardrail such
-                    # as MCPJWTSigner, static_headers, or any other injected Authorization must NOT
-                    # shadow it (otherwise the upstream gets e.g. the signer's JWT instead of the
-                    # exchanged token and rejects it). Drop the conflicting header so the resolved
-                    # token reaches upstream.
+                if isinstance(
+                    spec.config,
+                    (TokenExchangeConfig, AuthorizationCodeConfig, IdJagConfig, ClientCredentialsConfig),
+                ):
+                    # The resolver owns the credential here (token_exchange's exchanged token,
+                    # authorization_code's stored token, id_jag's minted assertion,
+                    # client_credentials' gateway-minted M2M token). It is authoritative: a
+                    # guardrail such as MCPJWTSigner, static_headers, or any other injected
+                    # Authorization must NOT shadow it (otherwise the upstream gets e.g. the
+                    # signer's JWT instead of the minted token and rejects it, and for M2M the
+                    # one-shot 401 refetch is lost with it). Drop the conflicting header so the
+                    # resolved token reaches upstream.
                     return auth, _without_authorization(extra_headers)
                 # Other modes: an Authorization already supplied via extra_headers (a forwarded caller
                 # header or static_headers) is intentional and wins; v1 applies those last.
@@ -2734,20 +2884,23 @@ class MCPServerManager:
             Configured MCP client instance.
         """
         transport = server.transport or MCPTransport.sse
-        spec = None if transport == MCPTransport.stdio else to_server_spec(server)
+        spec = None if transport == MCPTransport.stdio else _to_server_spec_fail_closed(server)
         provider = cred_provider or self._cred_provider
         # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
         # so it wins - except for the modes the v2 resolver owns per-caller (authorization_code's
-        # stored token, token_exchange's RFC 8693 minted token, and the passthrough modes'
-        # forwarded caller token). A caller must not be able to substitute another user's stored
-        # credential, nor silently disable the OBO exchange and forward an arbitrary bearer
-        # upstream, so we keep the v2 spec and ignore the override for these; the REST tools
-        # preview supplies its not-yet-persisted token through the resolver (cred_provider),
-        # never this path.
+        # stored token, token_exchange's RFC 8693 minted token, id_jag's minted assertion, and the
+        # passthrough modes' forwarded caller token). A caller must not be able to substitute another
+        # user's stored credential, nor silently disable the OBO / ID-JAG exchange and forward an
+        # arbitrary bearer upstream, so we keep the v2 spec and ignore the override for these; the
+        # REST tools preview supplies its not-yet-persisted token through the resolver
+        # (cred_provider), never this path.
         if (
             spec is not None
             and mcp_auth_header
-            and not isinstance(spec.config, (AuthorizationCodeConfig, PassthroughConfig, TokenExchangeConfig))
+            and not isinstance(
+                spec.config,
+                (AuthorizationCodeConfig, IdJagConfig, PassthroughConfig, TokenExchangeConfig),
+            )
         ):
             spec = None
         auth_value = (
@@ -4276,10 +4429,13 @@ class MCPServerManager:
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
-        # Extract subject token for OAuth2 Token Exchange (OBO) flow
+        # Extract subject token for OAuth2 Token Exchange (OBO) and ID-JAG flows
         subject_token: Optional[str] = None
         extra_headers: Optional[dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+        if mcp_server.auth_type in (
+            MCPAuth.oauth2_token_exchange,
+            MCPAuth.oauth2_id_jag,
+        ):
             subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
         elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
@@ -4381,10 +4537,10 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange and subject_token:
-            # OBO: the exchanged token may have been revoked/rotated upstream since it was cached, so
-            # an upstream 401 gets one re-mint + retry. Gated to this mode; all others keep the plain
-            # single call below.
+        if mcp_server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag) and subject_token:
+            # OBO / ID-JAG: the exchanged token may have been revoked/rotated upstream since it was
+            # cached, so an upstream 401 gets one invalidate + re-mint + retry. Gated to these modes;
+            # all others keep the plain single call below.
             async def _obo_call_tool_limited():
                 async with self._limit_outbound_concurrency(mcp_server):
                     return await self._obo_call_tool_with_retry(
@@ -4595,6 +4751,61 @@ class MCPServerManager:
             )
         return oauth2_headers
 
+    async def resolve_openapi_upstream_auth(
+        self,
+        *,
+        mcp_server: MCPServer,
+        oauth2_headers: dict[str, str] | None,
+        raw_headers: dict[str, str] | None,
+        mcp_auth_header: str | dict[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        forwarded_headers: dict[str, str] | None,
+    ) -> tuple[dict[str, str] | None, dict[str, str] | None]:
+        """Resolve the gateway-owned upstream credential for a spec_path (OpenAPI) tool call.
+
+        OpenAPI tools egress through a plain httpx call assembled from ContextVars, never through
+        ``_create_mcp_client``, so the v2 resolver graft there does not run for them and a resolved
+        credential (authorization_code's stored per-user token, client_credentials' minted M2M
+        token, token_exchange's exchanged token, passthrough's forwarded caller token) must be
+        materialized into headers here. Returns ``(resolved_auth_headers, forwarded_headers)``:
+        the resolved headers are authoritative over every other Authorization source (the same
+        rule ``_resolve_v2_auth`` applies on the MCPClient path) and ``forwarded_headers`` comes
+        back with any header the resolver claimed already dropped. Unmigrated (v1) servers resolve
+        through the stored-token lookup instead, and a missing per-user credential raises the same
+        discovery challenge the MCPClient path serves, rather than egressing unauthenticated.
+
+        The resolved headers carry only credentials the gateway itself resolved (a stored per-user
+        token, a minted or exchanged token). Caller-supplied ``oauth2_headers`` are never promoted
+        into them: on the v2 arm they feed only subject-token extraction (the designed RFC 8693
+        input), and on the v1 arm their presence disables the stored lookup entirely, so a
+        caller's gateway credential can never displace a per-server BYOK header or leak upstream
+        as the resolved credential.
+        """
+        spec = to_server_spec(mcp_server)
+        if spec is None:
+            if oauth2_headers:
+                return None, forwarded_headers
+            stored_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, None, user_api_key_auth)
+            return stored_headers, forwarded_headers
+
+        subject_token: str | None = None
+        if isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
+            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+        elif isinstance(spec.config, PassthroughConfig):
+            inbound_token, forwarded_headers = _take_forwarded_authorization(forwarded_headers)
+            per_server_token = _passthrough_token_from_mcp_auth_header(mcp_auth_header)
+            subject_token = per_server_token if per_server_token is not None else inbound_token
+
+        resolved_auth, forwarded_headers = await self._resolve_v2_auth(
+            server=mcp_server,
+            spec=spec,
+            provider=self._cred_provider,
+            subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
+            extra_headers=forwarded_headers,
+        )
+        return await _materialize_auth_headers(resolved_auth), forwarded_headers
+
     async def _gather_openapi_tool_tasks(
         self,
         tasks: list[Any],
@@ -4686,6 +4897,7 @@ class MCPServerManager:
             )
             tasks.append(during_hook_task)
 
+        caller_oauth2_headers = oauth2_headers
         oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, oauth2_headers, user_api_key_auth)
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
@@ -4703,22 +4915,32 @@ class MCPServerManager:
             auth_header_value = (
                 _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
             )
-            forwarded_headers = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
+            resolved_auth_headers, forwarded_headers = await self.resolve_openapi_upstream_auth(
+                mcp_server=mcp_server,
+                oauth2_headers=caller_oauth2_headers,
+                raw_headers=raw_headers,
+                mcp_auth_header=mcp_auth_header,
+                user_api_key_auth=user_api_key_auth,
+                forwarded_headers=_openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth),
+            )
 
             async def _call_openapi_via_handler():
                 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
                     _request_auth_header,
                     _request_extra_headers,
+                    _request_resolved_auth_headers,
                 )
 
                 auth_token = _request_auth_header.set(auth_header_value)
                 extra_token = _request_extra_headers.set(forwarded_headers)
+                resolved_token = _request_resolved_auth_headers.set(resolved_auth_headers)
                 try:
                     async with self._limit_outbound_concurrency(mcp_server):
                         return await self._call_openapi_tool_handler(mcp_server, name, arguments)
                 finally:
                     _request_auth_header.reset(auth_token)
                     _request_extra_headers.reset(extra_token)
+                    _request_resolved_auth_headers.reset(resolved_token)
 
             tasks.append(asyncio.create_task(_call_openapi_via_handler()))
         else:
@@ -4934,6 +5156,8 @@ class MCPServerManager:
             self.initialize_tool_name_to_mcp_server_name_mapping()
 
         verbose_logger.debug("MCP registry refreshed (%s servers in registry)", len(registered_registry))
+
+        await self._hydrate_config_servers_dcr_clients()
 
     def get_mcp_servers_from_ids(self, server_ids: list[str]) -> list[MCPServer]:
         servers = []
