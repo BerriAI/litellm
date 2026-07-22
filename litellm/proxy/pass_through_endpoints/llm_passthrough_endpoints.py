@@ -760,6 +760,8 @@ async def handle_bedrock_passthrough_router_model(
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
+    if isinstance(request_body.get("messages"), list):
+        data["messages"] = request_body["messages"]
     data["custom_llm_provider"] = "bedrock"
 
     # Use the common passthrough processing to handle metadata and hooks
