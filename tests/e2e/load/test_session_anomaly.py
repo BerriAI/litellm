@@ -62,7 +62,7 @@ class TestSummarizePlannedTurns:
 
 class TestRetried:
     def test_transient_failures_then_success_returns_the_success(self) -> None:
-        outcome = Success(data=SessionMessagesResponse())
+        outcome = Success(status_code=200, data=SessionMessagesResponse())
         calls = iter(
             (NetworkError(message="overloaded"), NetworkError(message="overloaded"), outcome)
         )
@@ -88,7 +88,7 @@ class TestRetried:
             raise AssertionError("slept after a successful attempt")
 
         result = retried(
-            lambda: Success(data=SessionMessagesResponse()),
+            lambda: Success(status_code=200, data=SessionMessagesResponse()),
             attempts=3,
             sleep=sleep_means_retry,
         )

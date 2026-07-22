@@ -4652,3 +4652,28 @@ async def test_streaming_mirror_matches_non_streaming_header_shape(monkeypatch):
         f" non_streaming={_rl_only(non_stream_headers)}"
     )
     assert "x-ratelimit-model_per_key-remaining-requests" in stream_slp_headers
+
+
+def test_estimate_tokens_reserves_larger_cap_when_max_tokens_conflicts():
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+    )
+    messages = [{"role": "user", "content": "hi"}]
+
+    conflicting_small_first = handler._estimate_tokens_for_request(
+        data={"messages": messages, "max_tokens": 1, "max_completion_tokens": 5000},
+    )
+    conflicting_large_first = handler._estimate_tokens_for_request(
+        data={"messages": messages, "max_tokens": 5000, "max_completion_tokens": 1},
+    )
+    only_max_completion_tokens = handler._estimate_tokens_for_request(
+        data={"messages": messages, "max_completion_tokens": 5000},
+    )
+    only_max_tokens = handler._estimate_tokens_for_request(
+        data={"messages": messages, "max_tokens": 5000},
+    )
+
+    assert conflicting_small_first == only_max_completion_tokens
+    assert conflicting_small_first == only_max_tokens
+    assert conflicting_large_first == conflicting_small_first
+    assert conflicting_small_first > 5000

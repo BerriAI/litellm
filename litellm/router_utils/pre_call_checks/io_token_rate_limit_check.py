@@ -135,13 +135,17 @@ def _resolve_max_tokens(request_kwargs: Optional[dict[str, Any]], deployment: di
     if request_kwargs:
         # An explicit max_tokens=0 must be honored, not treated as absent and
         # replaced by the model default.
-        explicit = request_kwargs.get("max_tokens")
-        if explicit is None:
-            explicit = request_kwargs.get("max_completion_tokens")
-        if explicit is None:
-            explicit = request_kwargs.get("max_output_tokens")
-        if explicit is not None:
-            return max(0, int(explicit))
+        explicit_caps = [
+            int(value)
+            for value in (
+                request_kwargs.get("max_tokens"),
+                request_kwargs.get("max_completion_tokens"),
+                request_kwargs.get("max_output_tokens"),
+            )
+            if value is not None
+        ]
+        if explicit_caps:
+            return max(0, max(explicit_caps))
 
     model_name = (deployment.get("litellm_params") or {}).get("model")
     if model_name:

@@ -517,7 +517,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         estimated_input_tokens = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
 
-        explicit_max_tokens = data.get("max_tokens") or data.get("max_completion_tokens")
+        explicit_max_tokens = max(
+            (int(v) for v in (data.get("max_tokens"), data.get("max_completion_tokens")) if v),
+            default=None,
+        )
 
         match (explicit_max_tokens, input_text):
             case (mt, _) if mt is not None:
