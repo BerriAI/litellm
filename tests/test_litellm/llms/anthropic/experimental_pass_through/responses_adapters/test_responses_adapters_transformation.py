@@ -6,8 +6,11 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 import json
 import os
 import sys
+from copy import deepcopy
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
+
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
@@ -18,6 +21,9 @@ from litellm.constants import (
 )
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
+)
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    normalize_anthropic_system_message_content,
 )
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
 
@@ -171,6 +177,36 @@ def _translate_messages(messages: List[Any]) -> List[Dict[str, Any]]:
     return _ADAPTER.translate_messages_to_responses_input(messages)  # type: ignore[arg-type]
 
 
+def test_normalize_anthropic_system_message_content_filters_non_text_blocks_without_mutation():
+    content = [
+        {
+            "type": "text",
+            "text": "Use the corrected result.",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "type": "image",
+            "source": {"type": "url", "url": "https://example.com/correction.png"},
+        },
+    ]
+    original_content = deepcopy(content)
+
+    result = normalize_anthropic_system_message_content(content)
+
+    assert result == (
+        {
+            "type": "text",
+            "text": "Use the corrected result.",
+            "cache_control": {"type": "ephemeral"},
+        },
+    )
+    assert result[0] is not content[0]
+    normalized_cache_control = result[0]["cache_control"]
+    assert isinstance(normalized_cache_control, dict)
+    normalized_cache_control["ttl"] = "5m"
+    assert content == original_content
+
+
 class TestTranslateMessagesToResponsesInput:
     """Anthropic messages list -> OpenAI Responses API input items."""
 
@@ -219,6 +255,66 @@ class TestTranslateMessagesToResponsesInput:
         assert result[0]["content"] == [
             {"type": "input_text", "text": "First part."},
             {"type": "input_text", "text": "Second part."},
+        ]
+
+    @pytest.mark.parametrize(
+        "system_content",
+        [
+            "Use the corrected result.",
+            [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        ],
+    )
+    def test_midturn_system_correction_becomes_user_input_text(self, system_content: object):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01234",
+                        "name": "get_weather",
+                        "input": {"location": "Boston"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01234",
+                        "content": "Rainy, 55°F",
+                    }
+                ],
+            },
+            {"role": "system", "content": system_content},
+        ]
+
+        result = _translate_messages(messages)
+
+        assert result == [
+            {
+                "type": "function_call",
+                "call_id": "toolu_01234",
+                "name": "get_weather",
+                "arguments": '{"location": "Boston"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "toolu_01234",
+                "output": "Rainy, 55°F",
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Use the corrected result."}],
+            },
         ]
 
     def test_user_base64_image(self):

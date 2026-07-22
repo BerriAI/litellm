@@ -413,6 +413,87 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     ), "Tool message should be placed before user message"
 
 
+@pytest.mark.parametrize(
+    ("system_content", "expected_content"),
+    [
+        ("Use the corrected result.", "Use the corrected result."),
+        (
+            [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        ),
+    ],
+)
+def test_translate_anthropic_messages_to_openai_preserves_midturn_system_correction(
+    system_content: object,
+    expected_content: object,
+):
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": "Rainy, 55°F",
+                }
+            ],
+        },
+        {"role": "system", "content": system_content},
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert result == [
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_01234",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Boston"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01234",
+            "content": "Rainy, 55°F",
+        },
+        {"role": "user", "content": expected_content},
+    ]
+
+
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
     """Test that empty function arguments are handled safely and don't cause JSON parsing errors."""
 
