@@ -92,6 +92,12 @@ def get_response_body(response: httpx.Response) -> Optional[dict]:
         return None
 
 
+def _get_passthrough_model_from_url(url: Optional[httpx.URL]) -> str:
+    if url is None:
+        return "unknown"
+    return url.path.strip("/") or "unknown"
+
+
 async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optional[dict]:
     """
     checks if any headers on config.yaml are defined as os.environ/COHERE_API_KEY etc
@@ -881,7 +887,9 @@ async def pass_through_request(
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
-        passthrough_model = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        passthrough_model = (
+            _parsed_body.get("model") if isinstance(_parsed_body, dict) else None
+        ) or _get_passthrough_model_from_url(url)
         start_time = datetime.now()
         logging_obj = Logging(
             model=passthrough_model,
