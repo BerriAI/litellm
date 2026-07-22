@@ -25,7 +25,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-backend-changes
+
       - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
+        if: steps.changes.outputs.decision != 'skip'
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: BerriAI/litellm-docs
@@ -53,79 +58,104 @@ jobs:
             ${{ runner.os }}-uv-
 
       - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
         run: uv sync --frozen --all-groups --all-extras
 
       - name: check_licenses
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/check_licenses.py
 
       - name: check_provider_folders_documented
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
       - name: router_code_coverage
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
 
       - name: test_chat_completion_imports
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/test_chat_completion_imports.py
 
       - name: info_log_check
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/info_log_check.py
 
       - name: check_guardrail_apply_decorator
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/check_guardrail_apply_decorator.py
 
       - name: test_ban_set_verbose
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/test_ban_set_verbose.py
 
       - name: code_qa_check_tests
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/code_qa_check_tests.py
 
       - name: check_get_model_cost_key_performance
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
 
       - name: test_proxy_types_import
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/test_proxy_types_import.py
 
       - name: callback_manager_test
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/callback_manager_test.py
 
       - name: recursive_detector
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/recursive_detector.py
 
       - name: test_router_strategy_async
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/test_router_strategy_async.py
 
       - name: litellm_logging_code_coverage
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
 
       - name: ensure_async_clients_test
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/ensure_async_clients_test.py
 
       - name: enforce_llms_folder_style
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/enforce_llms_folder_style.py
 
       - name: prevent_key_leaks_in_exceptions
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
 
       - name: check_unsafe_enterprise_import
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
 
       - name: ban_copy_deepcopy_kwargs
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
 
       - name: check_fastuuid_usage
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
 
       - name: check_e2e_no_raw_requests
         run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
 
       - name: memory_test
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
 
       - name: documentation_test_env_keys
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
 
       - name: documentation_test_router_settings
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/documentation_tests/test_router_settings.py
 
       - name: documentation_test_api_docs
+        if: steps.changes.outputs.decision != 'skip'
         run: uv run --no-sync python ./tests/documentation_tests/test_api_docs.py

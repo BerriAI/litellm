@@ -27,6 +27,10 @@ jobs:
           clean: true
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-backend-changes
+
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
@@ -43,10 +47,12 @@ jobs:
           find . -name "*.pyc" -delete || true
 
       - name: Check uv.lock is up to date
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv lock --check || (echo "❌ uv.lock is out of sync with pyproject.toml. Run 'uv lock' locally and commit the result." && exit 1)
 
       - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv sync --frozen --group proxy-dev --group e2e-dev
 
@@ -54,12 +60,14 @@ jobs:
       # only after `prisma generate` writes prisma/client.py et al. Without this the
       # DB wrappers typed against the generated client would degrade to Unknown.
       - name: Generate Prisma client
+        if: steps.changes.outputs.decision != 'skip'
         env:
           PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Check ruff format
+        if: steps.changes.outputs.decision != 'skip'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -71,6 +79,7 @@ jobs:
           xargs uv run --no-sync ruff format --check --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
 
       - name: Debug - Check file state
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           echo "Current branch:"
           git branch --show-current
@@ -80,28 +89,33 @@ jobs:
           head -50 litellm/litellm_core_utils/custom_logger_registry.py | tail -10
 
       - name: Run Ruff linting
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           cd litellm
           uv run --no-sync ruff check .
           cd ..
 
       - name: Check strict-rule budget (delta vs base)
+        if: steps.changes.outputs.decision != 'skip'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           uv run --no-sync python scripts/ruff_strict_gate.py --base "$BASE_SHA"
 
       - name: Check type-discipline budget (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs base)
+        if: steps.changes.outputs.decision != 'skip'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           uv run --no-sync python scripts/type_discipline_gate.py --base "$BASE_SHA"
 
       - name: Print OpenAI version
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
       - name: Check basedpyright budget (delta vs base)
+        if: steps.changes.outputs.decision != 'skip'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -118,12 +132,14 @@ jobs:
           fi
 
       - name: Check for circular imports
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           cd litellm
           uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py
           cd ..
 
       - name: Check import safety
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
@@ -143,12 +159,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-backend-changes
+
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Ratchet check (budgets may only decrease; non-gating)
+        if: steps.changes.outputs.decision != 'skip'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
