@@ -286,6 +286,7 @@ class CountTokensBody(BaseModel):
 
 class AnthropicContentBlock(BaseModel):
     type: str | None = None
+    text: str | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -817,3 +818,23 @@ class TagListResponse(RootModel[list[TagListEntry]]):
     """GET /tag/list answers with a bare array of tag configs (the stored tags plus
     any dynamically-seen spend tags), not an object wrapping them. Read the rows off
     .root."""
+
+
+# ---------- health / lifecycle ----------
+
+
+class ReadinessResponse(BaseModel):
+    """GET /health/readiness (public probe). The low-detail payload a load
+    balancer sees: `status` plus the resolved DB state (`connected`,
+    `disconnected`, or `Not connected`)."""
+
+    status: str
+    db: str | None = None
+
+
+class ReadinessDetailsResponse(ReadinessResponse):
+    """GET /health/readiness/details (authenticated). Extends the public payload
+    with the diagnostics only an authenticated caller may read."""
+
+    litellm_version: str | None = None
+    success_callbacks: list[str] = []
