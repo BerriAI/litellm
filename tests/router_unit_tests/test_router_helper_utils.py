@@ -608,6 +608,28 @@ async def test_deployment_callback_on_failure(model_list):
     )
 
 
+@pytest.mark.asyncio
+async def test_async_deployment_callback_on_failure_with_none_metadata(model_list):
+    import time
+
+    router = Router(model_list=model_list)
+    kwargs = {
+        "litellm_params": {
+            "metadata": None,
+            "model_info": {"id": 100},
+        },
+    }
+
+    result = await router.async_deployment_callback_on_failure(
+        kwargs=kwargs,
+        completion_response=None,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+    assert result is None
+
+
 def test_deployment_callback_respects_cooldown_time(model_list):
     """Ensure per-model cooldown_time is honored even when exception headers are present."""
     import httpx
