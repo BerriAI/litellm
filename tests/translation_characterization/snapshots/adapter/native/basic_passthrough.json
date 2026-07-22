@@ -1,0 +1,29 @@
+{
+  "max_tokens": 512,
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "system": "You are a terse geographer.",
+  "temperature": 0.2,
+  "tools": [
+    {
+      "description": "Get current weather for a city.",
+      "input_schema": {
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "type": "object"
+      },
+      "name": "get_weather"
+    }
+  ]
+}

@@ -39,6 +39,7 @@ help:
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
 	@echo "  make test-unit          - Run unit tests (tests/test_litellm)"
+	@echo "  make test-characterization - Run translation v1 snapshot corpus"
 	@echo "  make test-unit-llms     - Run LLM provider tests (~225 files)"
 	@echo "  make test-unit-proxy-guardrails - Run proxy guardrails+mgmt tests (~51 files)"
 	@echo "  make test-unit-proxy-core - Run proxy auth+client+db+hooks tests (~52 files)"
@@ -246,6 +247,9 @@ test: install-test-deps
 
 test-unit: install-test-deps
 	$(UV_RUN) pytest tests/test_litellm -x -vv -n 4
+
+test-characterization: install-test-deps
+	$(UV_RUN) pytest tests/translation_characterization --tb=short -vv
 
 # Matrix test targets (matching CI workflow groups)
 test-unit-llms: install-test-deps

@@ -1,0 +1,12 @@
+[
+  {"role": "assistant"},
+  {"contentBlockIndex": 0, "delta": {"text": "I'll check the weather."}},
+  {"contentBlockIndex": 0},
+  {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "tooluse_charstream01", "name": "get_weather"}}},
+  {"contentBlockIndex": 1, "delta": {"toolUse": {"input": "{\"ci"}}},
+  {"contentBlockIndex": 1, "delta": {"toolUse": {"input": "ty\": \"Par"}}},
+  {"contentBlockIndex": 1, "delta": {"toolUse": {"input": "is\"}"}}},
+  {"contentBlockIndex": 1},
+  {"stopReason": "tool_use"},
+  {"usage": {"inputTokens": 410, "outputTokens": 60, "totalTokens": 470}, "metrics": {"latencyMs": 702}}
+]

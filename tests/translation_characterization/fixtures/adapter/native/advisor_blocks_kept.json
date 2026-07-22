@@ -1,0 +1,19 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "messages": [
+    {"role": "user", "content": "Weather in Paris?"},
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "server_tool_use", "id": "srvtoolu_01CharAdvisor1", "name": "advisor", "input": {"query": "check forecast"}},
+        {"type": "advisor_tool_result", "tool_use_id": "srvtoolu_01CharAdvisor1", "content": [{"type": "text", "text": "Advise checking the radar."}]},
+        {"type": "text", "text": "I'll check the weather."}
+      ]
+    },
+    {"role": "user", "content": "Go ahead."}
+  ],
+  "params": {
+    "max_tokens": 512,
+    "tools": [{"type": "advisor_20260301", "name": "advisor"}]
+  }
+}

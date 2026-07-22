@@ -1,0 +1,14 @@
+{
+  "max_tokens": 2048,
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "thinking": {
+    "budget_tokens": 1024,
+    "type": "enabled"
+  }
+}

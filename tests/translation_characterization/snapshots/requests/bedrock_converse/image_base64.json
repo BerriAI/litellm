@@ -1,0 +1,26 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false
+  },
+  "inferenceConfig": {
+    "maxTokens": 256
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Describe this image."
+        },
+        {
+          "image": {
+            "format": "png",
+            "source": {
+              "bytes": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+            }
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ]
+}

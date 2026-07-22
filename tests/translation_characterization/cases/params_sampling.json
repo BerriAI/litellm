@@ -1,0 +1,20 @@
+{
+  "id": "params_sampling",
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 128,
+    "stop": [
+      "\n\n",
+      "END"
+    ],
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "user": "char-user-1234"
+  },
+  "skip": {}
+}

@@ -1,0 +1,20 @@
+{
+  "model": "gpt-4o",
+  "max_tokens": 512,
+  "system": "You are a terse geographer.",
+  "temperature": 0.2,
+  "stop_sequences": ["END"],
+  "messages": [{"role": "user", "content": "Weather in Paris?"}],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get current weather for a city.",
+      "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"]
+      }
+    }
+  ],
+  "tool_choice": {"type": "auto"}
+}

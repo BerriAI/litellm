@@ -1,0 +1,44 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Paris is the capital of France.",
+        "function_call": null,
+        "provider_specific_fields": {
+          "citations": null,
+          "thinking_blocks": null
+        },
+        "role": "assistant",
+        "tool_calls": null
+      }
+    }
+  ],
+  "created": 1718064000,
+  "id": "chatcmpl-00000000-0000-0000-0000-000000000001",
+  "model": "claude-3-5-sonnet-20240620",
+  "object": "chat.completion",
+  "system_fingerprint": null,
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "completion_tokens": 9,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "text_tokens": 9
+    },
+    "inference_geo": null,
+    "prompt_tokens": 12,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_creation_tokens": 0,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": 12,
+      "video_tokens": null
+    },
+    "speed": null,
+    "total_tokens": 21
+  }
+}

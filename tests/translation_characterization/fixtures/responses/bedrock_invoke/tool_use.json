@@ -1,0 +1,13 @@
+{
+  "id": "msg_bdrk_01CharInvokeTool01",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-3-5-sonnet-20240620",
+  "content": [
+    {"type": "text", "text": "I'll check the weather."},
+    {"type": "tool_use", "id": "toolu_bdrk_01CharWeather", "name": "get_weather", "input": {"city": "Paris"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 410, "output_tokens": 60}
+}

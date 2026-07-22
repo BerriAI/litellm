@@ -1,0 +1,8 @@
+[
+  {"role": "assistant"},
+  {"contentBlockIndex": 0, "delta": {"text": "Paris is the"}},
+  {"contentBlockIndex": 0, "delta": {"text": " capital of France."}},
+  {"contentBlockIndex": 0},
+  {"stopReason": "end_turn"},
+  {"usage": {"inputTokens": 12, "outputTokens": 9, "totalTokens": 21}, "metrics": {"latencyMs": 551}}
+]

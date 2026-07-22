@@ -1,0 +1,23 @@
+{
+  "openai_request": {
+    "max_tokens": 512,
+    "messages": [
+      {
+        "content": [
+          {
+            "text": "You are a terse geographer.",
+            "type": "text"
+          }
+        ],
+        "role": "system"
+      },
+      {
+        "content": "What is the capital of France?",
+        "role": "user"
+      }
+    ],
+    "model": "gpt-4o",
+    "user": "char-user-1234"
+  },
+  "tool_name_mapping": {}
+}

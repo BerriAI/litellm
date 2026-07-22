@@ -1,0 +1,33 @@
+{
+  "additionalModelRequestFields": {
+    "stream": false
+  },
+  "inferenceConfig": {
+    "maxTokens": 256
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the capital of France?"
+        },
+        {
+          "cachePoint": {
+            "type": "default"
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "system": [
+    {
+      "text": "You are a terse geographer."
+    },
+    {
+      "cachePoint": {
+        "type": "default"
+      }
+    }
+  ]
+}

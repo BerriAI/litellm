@@ -1,0 +1,29 @@
+{
+  "id": "chatcmpl-char-adapter-tool-0001",
+  "object": "chat.completion",
+  "created": 1718064000,
+  "model": "gpt-4o-2024-08-06",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "tool_calls",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_char_adapter_001",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}
+          },
+          {
+            "id": "call_char_adapter_002",
+            "type": "function",
+            "function": {"name": "get_time", "arguments": "{\"tz\": \"Europe/Paris\"}"}
+          }
+        ]
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 410, "completion_tokens": 60, "total_tokens": 470}
+}

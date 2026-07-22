@@ -1,0 +1,14 @@
+{
+  "metrics": {"latencyMs": 702},
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [
+        {"text": "I'll check the weather."},
+        {"toolUse": {"toolUseId": "tooluse_charweather01", "name": "get_weather", "input": {"city": "Paris"}}}
+      ]
+    }
+  },
+  "stopReason": "tool_use",
+  "usage": {"inputTokens": 410, "outputTokens": 60, "totalTokens": 470}
+}

@@ -1,0 +1,32 @@
+{
+  "id": "response_format_json_schema",
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 256,
+    "response_format": {
+      "json_schema": {
+        "name": "capital",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "capital": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "capital"
+          ],
+          "type": "object"
+        },
+        "strict": true
+      },
+      "type": "json_schema"
+    }
+  },
+  "skip": {}
+}

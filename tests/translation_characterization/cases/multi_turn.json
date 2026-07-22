@@ -1,0 +1,21 @@
+{
+  "id": "multi_turn",
+  "messages": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    },
+    {
+      "content": "Paris.",
+      "role": "assistant"
+    },
+    {
+      "content": "And of Italy?",
+      "role": "user"
+    }
+  ],
+  "params": {
+    "max_tokens": 256
+  },
+  "skip": {}
+}
