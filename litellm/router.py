@@ -11005,6 +11005,10 @@ class Router:
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
+        resolved_model = self._get_model_from_alias(model=model)
+        if resolved_model is not None:
+            model = resolved_model
+
         #########################################################
         # Run the routing-plugin pipeline, if any plugins are configured.
         # Plugins narrow the candidate deployment pool (consumed later by
