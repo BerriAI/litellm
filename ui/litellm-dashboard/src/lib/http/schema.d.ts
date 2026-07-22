@@ -18943,6 +18943,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/team/{team_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Bulk Update Team Members */
+        patch: operations["bulk_update_team_members_v2_team__team_id__members_patch"];
+        trace?: never;
+    };
     "/v2/user/info": {
         parameters: {
             query?: never;
@@ -21481,6 +21498,28 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** BulkTeamMemberUpdateRequest */
+        BulkTeamMemberUpdateRequest: {
+            /**
+             * All Members In Team
+             * @default false
+             */
+            all_members_in_team: boolean;
+            update_fields: components["schemas"]["TeamMemberBulkUpdateFields"];
+            /** User Ids */
+            user_ids?: string[] | null;
+        };
+        /** BulkTeamMemberUpdateResponse */
+        BulkTeamMemberUpdateResponse: {
+            /** Failed Updates */
+            failed_updates: components["schemas"]["FailedTeamMemberUpdate"][];
+            /** Successful Updates */
+            successful_updates: components["schemas"]["TeamMemberUpdateResponse"][];
+            /** Team Id */
+            team_id: string;
+            /** Total Requested */
+            total_requested: number;
+        };
         /**
          * BulkUpdateKeyRequest
          * @description Request for bulk key updates
@@ -23730,6 +23769,15 @@ export interface components {
             key_info?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** FailedTeamMemberUpdate */
+        FailedTeamMemberUpdate: {
+            /** Failed Reason */
+            failed_reason: string;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /**
          * FallbackCreateRequest
@@ -31404,6 +31452,21 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id?: string | null;
+        };
+        /** TeamMemberBulkUpdateFields */
+        TeamMemberBulkUpdateFields: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget In Team */
+            max_budget_in_team?: number | null;
+            /** Role */
+            role?: ("admin" | "user") | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /** TeamMemberDeleteRequest */
         TeamMemberDeleteRequest: {
@@ -57591,6 +57654,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeamListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_update_team_members_v2_team__team_id__members_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkTeamMemberUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTeamMemberUpdateResponse"];
                 };
             };
             /** @description Validation Error */
