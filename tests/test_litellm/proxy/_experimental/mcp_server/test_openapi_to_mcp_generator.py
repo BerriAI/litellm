@@ -411,6 +411,169 @@ class TestBuildInputSchema:
         # Required should include original names
         assert "repository-id" in schema["required"]
 
+    def test_preserves_array_items_for_repeatable_query_params(self):
+        """#29715: array-of-string query parameters must carry their
+        `items` keyword through to the MCP schema. Without it, downstream
+        consumers (CrewAI etc.) emit `items: {}` and OpenAI rejects the
+        tool schema."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "domain",
+                    "in": "query",
+                    "required": True,
+                    "description": "Repeatable query parameter",
+                    "schema": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                }
+            ]
+        }
+
+        schema = build_input_schema(operation)
+
+        domain = schema["properties"]["domain"]
+        assert domain["type"] == "array"
+        assert domain["items"] == {"type": "string"}
+        assert domain["description"] == "Repeatable query parameter"
+
+    def test_preserves_enum_format_default_on_parameters(self):
+        """#29715: enum/format/default and similar JSON Schema keywords
+        must round-trip into the MCP schema."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "status",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "enum": ["open", "closed"],
+                        "default": "open",
+                    },
+                },
+                {
+                    "name": "created_at",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "format": "date-time",
+                    },
+                },
+            ]
+        }
+
+        schema = build_input_schema(operation)
+
+        status = schema["properties"]["status"]
+        assert status["enum"] == ["open", "closed"]
+        assert status["default"] == "open"
+        created = schema["properties"]["created_at"]
+        assert created["format"] == "date-time"
+
+    def test_preserves_nested_object_properties_and_required(self):
+        """#29715: an inline object parameter must keep its `properties`
+        and `required` so downstream validators see the full shape."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "filter",
+                    "in": "query",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "min": {"type": "integer"},
+                            "max": {"type": "integer"},
+                        },
+                        "required": ["min"],
+                    },
+                }
+            ]
+        }
+
+        schema = build_input_schema(operation)
+
+        f = schema["properties"]["filter"]
+        assert f["properties"]["min"] == {"type": "integer"}
+        assert f["properties"]["max"] == {"type": "integer"}
+        assert f["required"] == ["min"]
+
+    def test_parameter_description_overrides_schema_description(self):
+        """OpenAPI 3 places the description on the parameter object; let it
+        win over a schema-level description when both are present."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "q",
+                    "in": "query",
+                    "description": "from parameter",
+                    "schema": {
+                        "type": "string",
+                        "description": "from schema",
+                    },
+                }
+            ]
+        }
+
+        schema = build_input_schema(operation)
+        assert schema["properties"]["q"]["description"] == "from parameter"
+
+    def test_parameter_falls_back_to_schema_description(self):
+        """If only the schema has a description, surface that instead of an
+        empty string."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "q",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "description": "from schema only",
+                    },
+                }
+            ]
+        }
+
+        schema = build_input_schema(operation)
+        assert (
+            schema["properties"]["q"]["description"] == "from schema only"
+        )
+
+    def test_preserves_request_body_required_and_additional_props(self):
+        """#29715 (requestBody half): the body schema must keep `required`,
+        `additionalProperties`, and other top-level JSON Schema keywords —
+        not just `properties`."""
+        operation = {
+            "requestBody": {
+                "required": True,
+                "description": "Create user",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "email": {"type": "string"},
+                                "tags": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["email"],
+                            "additionalProperties": False,
+                        }
+                    }
+                },
+            }
+        }
+
+        schema = build_input_schema(operation)
+        body = schema["properties"]["body"]
+        assert body["properties"]["email"] == {"type": "string"}
+        assert body["properties"]["tags"]["items"] == {"type": "string"}
+        assert body["required"] == ["email"]
+        assert body["additionalProperties"] is False
+        assert body["description"] == "Create user"
+
 
 class TestExtractParameters:
     """Test parameter extraction from OpenAPI operations."""
