@@ -190,11 +190,11 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
         # The signing region must match the gateway's region — derive it from
         # standard gateway hostnames so callers don't have to set
-        # aws_region_name to a region different from their default. Custom or
-        # private hostnames can't be parsed: fall back to an explicitly
-        # configured region (param or AWS env vars), and error out rather than
-        # silently signing for a guessed region the gateway would reject with
-        # a confusing auth error.
+        # aws_region_name to a region different from their default. For custom
+        # or private hostnames, defer to BaseAWSLLM's normal region resolution
+        # (params, env vars, AWS shared config / profile); only error out when
+        # that chain yields nothing, rather than silently signing for a guessed
+        # region the gateway would reject with a confusing auth error.
         signing_params = dict(optional_params)
         if signing_params.get("aws_region_name") is None:
             match = re.search(
@@ -203,12 +203,21 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             )
             if match:
                 signing_params["aws_region_name"] = match.group(1)
-            elif not any(get_secret_str(var) for var in ("AWS_REGION", "AWS_REGION_NAME", "AWS_DEFAULT_REGION")):
-                raise ValueError(
-                    f"Cannot derive the SigV4 signing region from api_base '{api_base}'. "
-                    "Set aws_region_name (or the AWS_REGION env var) to the gateway's "
-                    "region when using a custom hostname."
-                )
+            else:
+                # boto3's session resolution covers env vars AND the AWS shared
+                # config (profile region) — unlike BaseAWSLLM's helper, which
+                # silently defaults to us-west-2 when nothing is configured.
+                import boto3
+
+                configured_region = boto3.Session().region_name
+                if configured_region:
+                    signing_params["aws_region_name"] = configured_region
+                else:
+                    raise ValueError(
+                        f"Cannot derive the SigV4 signing region from api_base '{api_base}' "
+                        "or the AWS configuration chain. Set aws_region_name (or AWS_REGION / "
+                        "a profile region) to the gateway's region when using a custom hostname."
+                    )
 
         # api_key="" (not None, but falsy) disables BaseAWSLLM's fallback to the
         # AWS_BEARER_TOKEN_BEDROCK env var: that token is a Bedrock Runtime
