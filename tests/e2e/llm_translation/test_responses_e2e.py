@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from e2e_config import unique_marker
+from e2e_config import require_env, unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import (
     EndpointsClient,
@@ -28,6 +28,26 @@ from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
+
+BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+WEATHER_TOOL = ResponsesFunctionTool(
+    name="get_weather",
+    description="Get the weather for a location",
+    parameters=FunctionParameters(
+        properties={"location": FunctionParameterProperty(type="string")},
+        required=["location"],
+    ),
+)
+
+
+def _bedrock_params() -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model=BEDROCK_CONVERSE_BACKEND,
+        aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+        aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+        aws_region_name="os.environ/AWS_REGION",
+    )
 
 
 class WeatherArguments(BaseModel):
@@ -189,6 +209,84 @@ class TestResponses:
         require_successful_call(result)
         parsed = ResponsesResult.model_validate_json(result.body)
         assert parsed.text.strip(), f"/responses returned no output text: {result.body[:300]}"
+
+    @pytest.mark.covers("llm.responses.anthropic.tool_use.nonstream.works")
+    def test_responses_anthropic_returns_function_call(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(
+                model="anthropic/claude-haiku-4-5", api_key="os.environ/ANTHROPIC_API_KEY"
+            ),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.responses_with_tools(
+            key,
+            model,
+            "What is the weather in San Francisco? Use the get_weather tool.",
+            [
+                ResponsesFunctionTool(
+                    name="get_weather",
+                    description="Get the weather for a location",
+                    parameters=FunctionParameters(
+                        properties={"location": FunctionParameterProperty(type="string")},
+                        required=["location"],
+                    ),
+                )
+            ],
+        )
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        function_call = next(
+            (call for call in parsed.function_calls if call.name == "get_weather"),
+            None,
+        )
+        assert function_call is not None, f"no get_weather function call: {result.body[:500]}"
+        assert function_call.arguments is not None
+        raw_arguments = cast(object, json.loads(function_call.arguments))
+        arguments = WeatherArguments.model_validate(raw_arguments)
+        assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
+
+    @pytest.mark.covers("llm.responses.bedrock_converse.basic.nonstream.works")
+    def test_responses_bedrock_returns_completion(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
+        model = f"e2e-responses-{unique_marker()}"
+        model_id = endpoints_client.create_model(model, _bedrock_params())
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.responses(key, model, "reply with one word")
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        assert parsed.text.strip(), f"/responses over bedrock returned no output text: {result.body[:300]}"
+
+    @pytest.mark.covers("llm.responses.bedrock_converse.tool_use.nonstream.works")
+    def test_responses_bedrock_returns_function_call(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
+        model = f"e2e-responses-{unique_marker()}"
+        model_id = endpoints_client.create_model(model, _bedrock_params())
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.responses_with_tools(
+            key, model, "What is the weather in San Francisco? Use the get_weather tool.", [WEATHER_TOOL]
+        )
+        require_successful_call(result)
+        parsed = ResponsesResult.model_validate_json(result.body)
+        function_call = next((call for call in parsed.function_calls if call.name == "get_weather"), None)
+        assert function_call is not None, f"no get_weather function call over bedrock: {result.body[:500]}"
+        assert function_call.arguments is not None
+        raw_arguments = cast(object, json.loads(function_call.arguments))
+        arguments = WeatherArguments.model_validate(raw_arguments)
+        assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
 
 
 def _parse_stream_event(

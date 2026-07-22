@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import unique_marker
+from e2e_config import require_env, unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import EndpointsClient, RerankResult
 from lifecycle import ResourceManager
@@ -23,6 +23,16 @@ DOCUMENTS = [
     "Washington, D.C. is the capital of the United States.",
     "Capital punishment has existed in the United States since before it was a country.",
 ]
+QUERY = "What is the capital of the United States?"
+
+
+def _assert_top_n_scored(body: str) -> None:
+    parsed = RerankResult.model_validate_json(body)
+    assert parsed.results, f"/rerank returned no results: {body[:300]}"
+    assert len(parsed.results) <= 3, f"top_n=3 not honored: {body[:300]}"
+    assert parsed.results[0].relevance_score is not None, (
+        f"top rerank result has no relevance_score: {body[:300]}"
+    )
 
 
 class TestRerank:
@@ -38,13 +48,28 @@ class TestRerank:
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
 
-        result = endpoints_client.rerank(
-            key, model, "What is the capital of the United States?", DOCUMENTS, top_n=3
-        )
+        result = endpoints_client.rerank(key, model, QUERY, DOCUMENTS, top_n=3)
         require_successful_call(result)
-        parsed = RerankResult.model_validate_json(result.body)
-        assert parsed.results, f"/rerank returned no results: {result.body[:300]}"
-        assert len(parsed.results) <= 3, f"top_n=3 not honored: {result.body[:300]}"
-        assert parsed.results[0].relevance_score is not None, (
-            f"top rerank result has no relevance_score: {result.body[:300]}"
+        _assert_top_n_scored(result.body)
+
+    @pytest.mark.covers("llm.rerank.bedrock.basic.nonstream.works", exercised_on=["rerank"])
+    def test_bedrock_rerank_scores_top_n(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
+        model = f"e2e-bedrock-rerank-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(
+                model="bedrock/amazon.rerank-v1:0",
+                aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+                aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+                aws_region_name="os.environ/AWS_REGION",
+            ),
         )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.rerank(key, model, QUERY, DOCUMENTS, top_n=3)
+        require_successful_call(result)
+        _assert_top_n_scored(result.body)
