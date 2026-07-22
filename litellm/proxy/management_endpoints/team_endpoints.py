@@ -180,6 +180,27 @@ async def _refresh_cached_team(
     )
 
 
+async def _invalidate_team_membership_caches(
+    team_id: str,
+    user_ids: List[str],
+    user_api_key_cache: Any,
+) -> None:
+    """
+    Invalidate the per-member membership caches after a budget/allowed_models
+    write to `litellm_teammembership` for `user_ids` in `team_id`.
+
+    `get_team_membership` (auth_checks.py) caches `LiteLLM_TeamMembership`
+    under `team_membership:{user_id}:{team_id}` with no TTL, and the legacy
+    spend-check path in `user_api_key_auth.py` caches the same row under
+    `{team_id}_{user_id}`. Without invalidating both, a member keeps their
+    prior `allowed_models`/budget until the cache entry is separately evicted,
+    bypassing restrictions an admin just applied.
+    """
+    for user_id in user_ids:
+        await user_api_key_cache.async_delete_cache(key="team_membership:{}:{}".format(user_id, team_id))
+        await user_api_key_cache.async_delete_cache(key="{}_{}".format(team_id, user_id))
+
+
 async def _verify_team_access(
     team_obj: LiteLLM_TeamTable,
     user_api_key_dict: UserAPIKeyAuth,
@@ -3173,6 +3194,13 @@ async def bulk_update_team_members(
             team_row=refreshed_team_row,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+        )
+
+    if budget_target_user_ids:
+        await _invalidate_team_membership_caches(
+            team_id=team_id,
+            user_ids=budget_target_user_ids,
+            user_api_key_cache=user_api_key_cache,
         )
 
     successful_updates = [
