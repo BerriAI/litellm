@@ -1108,22 +1108,12 @@ class PrometheusLogger(CustomLogger):
             if not self._is_metric_enabled(metric_name):
                 return NoOpMetric()
 
-            if "labelnames" in kwargs:
-                original_labelnames = tuple(kwargs["labelnames"])
-            elif len(args) > 2:
-                original_labelnames = tuple(args[2])
-            else:
-                original_labelnames = ()
-
+            original_labelnames = tuple(kwargs.get("labelnames") or ())
             if not (frozenset(original_labelnames) & self.exclude_labels):
                 return metric_class(*args, **kwargs)
 
             kept = [name for name in original_labelnames if name not in self.exclude_labels]
-            if "labelnames" in kwargs:
-                real_metric = metric_class(*args, **{**kwargs, "labelnames": kept})
-            else:
-                real_metric = metric_class(*args[:2], kept, *args[3:], **kwargs)
-
+            real_metric = metric_class(*args, **{**kwargs, "labelnames": kept})
             return _ExcludedLabelMetric(real_metric, original_labelnames, self.exclude_labels)
 
         return factory
