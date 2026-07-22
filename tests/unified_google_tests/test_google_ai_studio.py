@@ -84,15 +84,12 @@ async def test_mock_stream_generate_content_with_tools():
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
 
-        # Mock aiter_lines: yield one line at a time (no trailing newlines),
-        # with a blank line between events, matching httpx aiter_lines behaviour.
-        async def mock_aiter_lines():
-            yield f"data: {json.dumps(mock_response_chunk)}"
-            yield ""
-            yield "data: [DONE]"
-            yield ""
+        # Mock aiter_bytes: yield raw SSE frames, matching httpx aiter_bytes.
+        async def mock_aiter_bytes():
+            yield f"data: {json.dumps(mock_response_chunk)}\n\n".encode("utf-8")
+            yield b"data: [DONE]\n\n"
 
-        mock_response.aiter_lines = mock_aiter_lines
+        mock_response.aiter_bytes = mock_aiter_bytes
         mock_post.return_value = mock_response
 
         print(
@@ -335,13 +332,11 @@ async def test_validate_post_request_parameters():
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
 
-        # Mock aiter_lines: yield one line at a time (no trailing newlines),
-        # with a blank line between events, matching httpx aiter_lines behaviour.
-        async def mock_aiter_lines():
-            yield "data: [DONE]"
-            yield ""
+        # Mock aiter_bytes: yield raw SSE frames, matching httpx aiter_bytes.
+        async def mock_aiter_bytes():
+            yield b"data: [DONE]\n\n"
 
-        mock_response.aiter_lines = mock_aiter_lines
+        mock_response.aiter_bytes = mock_aiter_bytes
         mock_post.return_value = mock_response
 
         print("\n--- Testing POST request parameters validation ---")
