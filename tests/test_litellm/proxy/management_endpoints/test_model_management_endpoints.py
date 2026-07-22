@@ -1916,6 +1916,48 @@ class TestAddAndDeleteModelLifecycle:
             assert str(exc_info.value.code) == "400"
 
 
+class TestDBRouterRebuildCaching:
+    @pytest.mark.asyncio
+    async def test_update_llm_router_enables_cache_responses_when_litellm_cache_exists(
+        self,
+    ):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        db_model = LiteLLM_ProxyModelTable(
+            model_id="db-cache-model-1",
+            model_name="cached-db-model",
+            litellm_params={"model": "openai/gpt-4.1-nano", "api_key": "sk-test"},
+            model_info={"id": "db-cache-model-1"},
+            created_by="admin",
+            updated_by="admin",
+        )
+        created_router = MagicMock()
+        created_router.get_model_list.return_value = ["cached-db-model"]
+        router_constructor = MagicMock(return_value=created_router)
+        proxy_config = ProxyConfig()
+        proxy_config._add_callbacks_from_db_config = MagicMock()
+        proxy_config._add_general_settings_from_db_config = MagicMock()
+        proxy_config._add_router_settings_from_db_config = AsyncMock()
+        mock_config = MagicMock()
+        mock_config.get_config = AsyncMock(return_value={})
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", None),
+            patch("litellm.proxy.proxy_server.llm_model_list", []),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.litellm.cache", object()),
+            patch("litellm.proxy.proxy_server.litellm.Router", router_constructor),
+        ):
+            await proxy_config._update_llm_router(
+                new_models=[db_model],
+                proxy_logging_obj=MagicMock(),
+            )
+
+        assert router_constructor.call_args.kwargs["cache_responses"] is True
+
+
 class TestDeleteTeamBYOKModelGhost:
     """Regression for issue #22594.
 
