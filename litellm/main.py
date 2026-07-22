@@ -176,6 +176,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     filter_tools_by_allowed_types,
+    reconcile_tool_choice_after_tool_filtering,
     validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
     validate_openai_optional_params,
@@ -4922,6 +4923,9 @@ def completion(  # type: ignore
     if allowed_tool_types is not None and tools is not None:
         tools = filter_tools_by_allowed_types(
             tools=tools, allowed_tool_types=allowed_tool_types
+        )
+        tool_choice = reconcile_tool_choice_after_tool_filtering(
+            tool_choice=tool_choice, tools=tools
         )
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)

@@ -7461,6 +7461,75 @@ def filter_tools_by_allowed_types(
     return filtered or None
 
 
+def relocate_input_additional_tools(
+    input, tools: List[dict] | None
+):
+    """
+    Move tools delivered via ``input`` items of type ``additional_tools`` into
+    the regular ``tools`` param.
+
+    Codex Desktop (0.145 alpha) sends its tools as an input item
+    ``{"type": "additional_tools", "role": "developer", "tools": [...]}`` with
+    an EMPTY ``tools`` param. Strict Responses-API providers reject the whole
+    request on the unknown input variant (e.g. "invalid request body: Invalid
+    'input': value did not match any expected variant") — while accepting the
+    very same tools when they arrive in the ``tools`` param. Relocating keeps
+    the request valid AND lets filter_tools_by_allowed_types apply the
+    deployment's allowlist to the merged list.
+
+    Returns ``(input, tools)``; both unchanged when there is nothing to move.
+    """
+    if not isinstance(input, list):
+        return input, tools
+    relocated: List[dict] = []
+    kept_items = []
+    for item in input:
+        if isinstance(item, dict) and item.get("type") == "additional_tools":
+            relocated.extend(item.get("tools") or [])
+        else:
+            kept_items.append(item)
+    if not relocated:
+        return input, tools
+    merged = list(tools) if tools is not None else []
+    merged.extend(relocated)
+    return kept_items, merged
+
+
+def reconcile_tool_choice_after_tool_filtering(
+    tool_choice, tools: List[dict] | None
+):
+    """
+    Reset ``tool_choice`` when filter_tools_by_allowed_types dropped the tool
+    it referenced — otherwise the provider 400s on a tool_choice pointing at a
+    tool that is no longer in the request.
+
+    Handles both the Chat Completions shape ({"type": "function", "function":
+    {"name": ...}}) and the Responses shape ({"type": "function", "name": ...}).
+    Returns None when no tools survived (a bare tool_choice without tools is
+    itself invalid), "auto" when the named function was dropped, and the
+    original value otherwise.
+    """
+    if not isinstance(tool_choice, dict):
+        return tool_choice
+    if tools is None:
+        return None
+    _fn = tool_choice.get("function")
+    name = (_fn or {}).get("name") if isinstance(_fn, dict) else tool_choice.get("name")
+    if not name:
+        return tool_choice
+    surviving_names = set()
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        t_fn = t.get("function")
+        t_name = (t_fn or {}).get("name") if isinstance(t_fn, dict) else t.get("name")
+        if t_name:
+            surviving_names.add(t_name)
+    if name in surviving_names:
+        return tool_choice
+    return "auto"
+
+
 def validate_and_fix_thinking_param(
     thinking: Optional["AnthropicThinkingParam"],
 ) -> Optional["AnthropicThinkingParam"]:

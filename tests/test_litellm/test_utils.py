@@ -4909,3 +4909,69 @@ def test_filter_tools_by_allowed_types_wider_allowlist_and_empty_result() -> Non
 
     assert filter_tools_by_allowed_types(tools=None, allowed_tool_types=["function"]) is None
     assert filter_tools_by_allowed_types(tools=[], allowed_tool_types=["function"]) == []
+
+
+def test_reconcile_tool_choice_after_tool_filtering() -> None:
+    """tool_choice pointing at a dropped tool must not reach the provider (it
+    400s on an unknown tool reference). Dropped -> "auto"; kept -> unchanged;
+    no surviving tools -> None; string/None tool_choice passes through."""
+    from litellm.utils import reconcile_tool_choice_after_tool_filtering
+
+    surviving = [{"type": "function", "function": {"name": "kept_fn"}}]
+
+    # chat-completions shape, referenced tool was dropped
+    assert (
+        reconcile_tool_choice_after_tool_filtering(
+            tool_choice={"type": "function", "function": {"name": "dropped_fn"}},
+            tools=surviving,
+        )
+        == "auto"
+    )
+    # responses shape, referenced tool survived
+    kept = {"type": "function", "name": "kept_fn"}
+    assert (
+        reconcile_tool_choice_after_tool_filtering(tool_choice=kept, tools=surviving)
+        == kept
+    )
+    # nothing survived -> tool_choice must go away entirely
+    assert (
+        reconcile_tool_choice_after_tool_filtering(
+            tool_choice={"type": "function", "function": {"name": "x"}}, tools=None
+        )
+        is None
+    )
+    # non-dict values pass through untouched
+    assert reconcile_tool_choice_after_tool_filtering(tool_choice="auto", tools=surviving) == "auto"
+    assert reconcile_tool_choice_after_tool_filtering(tool_choice=None, tools=surviving) is None
+
+
+def test_relocate_input_additional_tools() -> None:
+    """Codex Desktop delivers tools via an input item {type: "additional_tools",
+    tools: [...]} with an empty tools param; strict providers 400 on the unknown
+    input variant but accept the same tools in the tools param. Relocation must
+    move them over (merging with any existing tools) and leave other input
+    items untouched; non-list input and tool-free input pass through."""
+    from litellm.utils import relocate_input_additional_tools
+
+    codex_input = [
+        {
+            "role": "developer",
+            "type": "additional_tools",
+            "tools": [{"name": "exec", "type": "custom", "format": {"type": "grammar"}}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+    new_input, new_tools = relocate_input_additional_tools(
+        input=list(codex_input), tools=[{"type": "function", "name": "f"}]
+    )
+    assert [i.get("type") for i in new_input] == ["message"]
+    assert [t.get("name") or t.get("type") for t in new_tools] == ["f", "exec"]
+
+    # nothing to move -> both returned unchanged
+    plain_input = [{"type": "message", "role": "user", "content": []}]
+    same_input, same_tools = relocate_input_additional_tools(input=plain_input, tools=None)
+    assert same_input == plain_input and same_tools is None
+
+    # string input passes through
+    s_input, s_tools = relocate_input_additional_tools(input="hello", tools=None)
+    assert s_input == "hello" and s_tools is None
