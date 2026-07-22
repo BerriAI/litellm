@@ -3934,6 +3934,53 @@ class TestDropParamsWithPromptCacheKey:
         assert result.get("temperature") == 0.7
 
 
+class TestStreamOptionsPreserved:
+    """
+    stream_options must survive get_optional_params for every provider, even ones
+    whose get_supported_openai_params override omits it (fireworks_ai, deepinfra,
+    mistral, perplexity, gemini, ...). Before this fix map_openai_params silently
+    dropped it, so providers that gate the trailing usage chunk on
+    stream_options.include_usage never reported cached/prompt token usage.
+    """
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [
+            ("accounts/fireworks/models/llama-v3p1-8b-instruct", "fireworks_ai"),
+            ("deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct", "deepinfra"),
+            ("mistral/mistral-small-latest", "mistral"),
+            ("perplexity/sonar", "perplexity"),
+            ("gemini/gemini-2.5-flash", "gemini"),
+            ("xai/grok-4", "xai"),
+            ("gpt-4o", "openai"),
+        ],
+    )
+    def test_stream_options_kept(self, model, custom_llm_provider):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+
+        assert result.get("stream_options") == {"include_usage": True}
+
+    def test_explicit_drop_still_respected(self):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="accounts/fireworks/models/llama-v3p1-8b-instruct",
+            custom_llm_provider="fireworks_ai",
+            stream=True,
+            stream_options={"include_usage": True},
+            additional_drop_params=["stream_options"],
+        )
+
+        assert "stream_options" not in result
+
+
 class TestGetOptionalParamsDeepSeek:
     """Tests that deepseek provider uses DeepSeekChatConfig for parameter mapping."""
 
