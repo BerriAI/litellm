@@ -81,6 +81,54 @@ class TestChatCompletionsRegression:
         ), f"{model} ({route}): 200 with an empty completion (#28991): {response}"
 
 
+class TestGpt5TemperatureDropParams:
+    """gpt-5 family models whose default reasoning_effort is active (gpt-5.5
+    defaults to medium, unlike gpt-5.1 which defaults to none) reject
+    temperature != 1. A deployment with drop_params must drop the temperature
+    instead of forwarding it and surfacing the provider's 400 (LIT-3797)."""
+
+    @pytest.mark.covers(
+        "llm.chat_completions.openai.drop_params.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_gpt55_drops_unsupported_temperature(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-gpt55-temp-drop-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model="openai/gpt-5.5",
+                api_key="os.environ/OPENAI_API_KEY",
+                drop_params=True,
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=f"Reply with the single word pong. {unique_marker()}",
+                        )
+                    ],
+                    temperature=0.1,
+                    max_tokens=512,
+                ),
+            )
+        )
+        assert response.choices, f"gpt-5.5 chat returned no choices: {response}"
+        message = response.choices[0].message
+        assert (
+            message is not None and message.content and message.content.strip()
+        ), f"gpt-5.5 with temperature 0.1 returned an empty completion: {response}"
+
+
 class TestCohereChat:
     """Cohere via the OpenAI-compatible /chat/completions path."""
 
