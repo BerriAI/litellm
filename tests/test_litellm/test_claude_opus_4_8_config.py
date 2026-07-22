@@ -95,6 +95,8 @@ def test_opus_4_8_model_pricing_and_capabilities():
         assert info["supports_tool_choice"] is True
         assert info["supports_vision"] is True
 
+    assert model_data["claude-opus-4-8"]["supports_native_structured_output"] is True
+
 
 def test_opus_4_8_bedrock_regional_model_pricing():
     model_data = _load_root_cost_map()
@@ -165,6 +167,7 @@ def test_opus_4_8_present_in_bundled_backup():
         "azure_ai/claude-opus-4-8",
     ):
         assert model_name in backup, f"Missing from backup cost map: {model_name}"
+    assert backup["claude-opus-4-8"]["supports_native_structured_output"] is True
 
 
 def test_opus_4_8_registered_for_bedrock_converse():

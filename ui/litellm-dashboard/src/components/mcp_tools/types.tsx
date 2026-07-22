@@ -39,13 +39,121 @@ export const AUTH_TYPE = {
   TOKEN: "token",
   BASIC: "basic",
   OAUTH2: "oauth2",
+  OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
   AWS_SIGV4: "aws_sigv4",
+  TRUE_PASSTHROUGH: "true_passthrough",
+  OAUTH_DELEGATE: "oauth_delegate",
 };
+
+// The two client-forwarded token modes: the caller supplies the upstream Authorization (forwarded
+// verbatim for true_passthrough, alongside LiteLLM admission for oauth_delegate). The dashboard holds
+// their token in sessionStorage instead of persisting it, and the browser-authorize temp payload keeps
+// their real auth_type so the backend does not treat them as needing a stored per-user token.
+export const isClientForwardedTokenMode = (authType?: string | null): boolean =>
+  authType === AUTH_TYPE.TRUE_PASSTHROUGH || authType === AUTH_TYPE.OAUTH_DELEGATE;
 
 export const OAUTH_FLOW = {
   INTERACTIVE: "interactive",
   M2M: "m2m",
 };
+
+// The fields that determine which upstream OAuth token "Authorize & Fetch" mints: the resource/audience
+// (url, or spec_path for OpenAPI servers), the OAuth mode/grant (auth_type, oauth_flow_type), the OAuth
+// client and requested scope (credentials.client_id / client_secret / scopes), and the authorization-server
+// endpoints (authorization_url / token_url / registration_url). Grounded in RFC 8707 / RFC 8693 and the MCP
+// auth spec: an access token is bound to exactly this tuple (resource/audience + scope + client + issuer), so
+// a previously authorized token is stale if and only if this identity changes and must be re-minted.
+// url and spec_path are compared independently rather than selected by transport: the create form keeps
+// transport in component state, not in form values, so a transport-conditional target would silently pin the
+// audience to a missing url and never fire for spec_path edits on OpenAPI servers. Mirrors the backend's
+// mcp_oauth_token_identity. Deliberately EXCLUDES: transport itself (http<->sse on the same url is the same
+// audience; a switch to/from OpenAPI shows up as url/spec_path changes because each form clears the field the
+// new transport does not use), delegate_auth_to_upstream (a downstream-usage toggle that is never sent to the
+// authorize request), and all metadata/RBAC/routing fields. Shared by the create and edit forms so their
+// invalidation logic cannot drift.
+export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): string => {
+  const credentials = (values.credentials ?? {}) as Record<string, unknown>;
+  const identity = {
+    url: typeof values.url === "string" ? values.url : null,
+    spec_path: typeof values.spec_path === "string" ? values.spec_path : null,
+    auth_type: values.auth_type ?? null,
+    oauth_flow_type: values.oauth_flow_type ?? null,
+    client_id: credentials.client_id ?? null,
+    client_secret: credentials.client_secret ?? null,
+    scopes: credentials.scopes ?? null,
+    issuer: values.issuer ?? null,
+    authorization_url: values.authorization_url ?? null,
+    token_url: values.token_url ?? null,
+    registration_url: values.registration_url ?? null,
+  };
+  return JSON.stringify(identity);
+};
+
+// The form fields wiped when a held OAuth token is invalidated: only `credentials`, which holds the
+// minted material (the fetched token + DCR client). The authorization/token/registration endpoint
+// fields are deliberately NOT wiped: nothing programmatic ever writes them (upstream discovery happens
+// backend-side), so they only ever hold admin input, and resetting them would wipe it (create) or
+// silently revert it to the saved record (edit, whose Form has initialValues). Shared by the create and
+// edit forms so what gets wiped cannot drift.
+export const CLEARED_ON_INVALIDATION = ["credentials"] as const;
+
+// The declared-app filter over form.credentials. It is a pure key filter with no mode/transition
+// guard because the surrounding code establishes that a client_id/client_secret in form.credentials
+// is ALWAYS admin-typed in every reachable state: the create form holds the DCR-minted client in a
+// ref and never writes it into the form store, the edit form's onTokenReceived never writes client
+// keys, and the invalidation reset clears the whole object atomically. So preserving the string
+// client keys across any invalidation (URL/endpoint edit, true_passthrough<->oauth_delegate switch,
+// or a round trip through another mode) is always legitimate, while the output key filter excludes
+// token-shaped keys so a preserve can never carry minted material through. Shared by both forms.
+const DECLARED_APP_CREDENTIAL_KEYS = ["client_id", "client_secret"] as const;
+
+// Minted token material the oauth2 authorize path writes beside the app keys; stripped from restored
+// snapshots and from any credentials that transit to the temp-session preview so a stale token never
+// reaches the backend or a client-forwarded server row.
+export const MINTED_TOKEN_CREDENTIAL_KEYS = ["access_token", "refresh_token", "expires_in", "scope"] as const;
+
+export const preservedDeclaredAppCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined => {
+  if (!credentials) return undefined;
+  const kept = Object.fromEntries(
+    DECLARED_APP_CREDENTIAL_KEYS.filter((key) => typeof credentials[key] === "string" && credentials[key] !== "").map(
+      (key) => [key, credentials[key] as string],
+    ),
+  );
+  return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
+// Drop minted token keys, keeping everything else (the declared app plus any non-token config).
+export const withoutMintedTokenCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | undefined => {
+  if (!credentials) return undefined;
+  const kept = Object.fromEntries(
+    Object.entries(credentials).filter(([key]) => !(MINTED_TOKEN_CREDENTIAL_KEYS as readonly string[]).includes(key)),
+  );
+  // Return undefined (not {}) when only minted keys were present, so a restore spreads `credentials:
+  // undefined` (the fields keep their placeholder / keep-existing state) rather than blanking them.
+  return Object.keys(kept).length > 0 ? kept : undefined;
+};
+
+// The client-forwarded modes share one credential class (same declared app, same authorize relay), so
+// a switch between them must NOT be treated as an app change. Mirrors the backend _credential_auth_class
+// in db.py; kept in sync so the UI's keep-existing copy and the backend's merge cannot disagree.
+export const credentialAuthClass = (authType: string | null | undefined): string | null => {
+  if (authType === AUTH_TYPE.TRUE_PASSTHROUGH || authType === AUTH_TYPE.OAUTH_DELEGATE) return "client_forwarded";
+  return authType ?? null;
+};
+
+// True when a token was authorized in this session (authorizedIdentity recorded at mint time) and the
+// form's current identity no longer matches it. Every invalidation decision in both forms goes through
+// this single check: onValuesChange for user edits, and an explicit recheck after any programmatic
+// form.setFieldsValue (antd does not fire onValuesChange for those), so a missed event path cannot let a
+// stale token survive.
+export const isHeldOAuthTokenStale = (
+  values: Record<string, unknown>,
+  authorizedIdentity: string | undefined,
+): boolean => authorizedIdentity !== undefined && getOAuthAuthorizationIdentity(values) !== authorizedIdentity;
 
 // Backend value of `oauth2_flow` that marks a machine-to-machine server. Distinct
 // from the UI-local OAUTH_FLOW.M2M ("m2m"); this is what the API actually returns.
@@ -53,22 +161,38 @@ export const MCP_OAUTH2_FLOW_M2M = "client_credentials";
 
 export const MCP_OAUTH2_FLOW_INTERACTIVE = "authorization_code";
 
-export type McpOAuthMode = "m2m" | "passthrough" | "obo";
+export type McpOAuthMode = "m2m" | "passthrough" | "authorization_code" | "token_exchange";
 
-// Classify an OAuth2 MCP server into the mode that decides how the tool list is
-// authenticated: M2M (backend service token), PKCE passthrough (browser-held
-// session token), or OBO (backend-stored per-user token). `token_url` is
-// intentionally not consulted: every OAuth2 grant that exchanges for a token
-// carries one (interactive PKCE and client_credentials alike), so it cannot
-// distinguish the modes; `oauth2_flow` is the authoritative M2M signal.
+// Classify an OAuth MCP server into the mode that decides how the tool list is
+// authenticated. token_exchange (RFC 8693 / OBO) is its own auth_type
+// (`oauth2_token_exchange`), so it is keyed off auth_type directly; the other
+// three all share auth_type `oauth2` and are told apart by secondary fields:
+// M2M (backend service token via the client_credentials grant), PKCE passthrough
+// (browser-held session token), or authorization_code (per-user token obtained
+// via the interactive authorization_code/PKCE grant and stored by the backend).
+// `token_url` is intentionally not consulted for the oauth2 modes: every OAuth2
+// grant that exchanges for a token carries one (interactive PKCE and
+// client_credentials alike), so it cannot distinguish the modes; `oauth2_flow`
+// is the authoritative M2M signal.
 export function getMcpOAuthMode(s: {
   auth_type?: string | null;
   oauth2_flow?: string | null;
   delegate_auth_to_upstream?: boolean | null;
 }): McpOAuthMode | null {
+  if (s.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE) return "token_exchange";
   if (s.auth_type !== AUTH_TYPE.OAUTH2) return null;
   if (s.oauth2_flow === MCP_OAUTH2_FLOW_M2M) return "m2m";
-  return s.delegate_auth_to_upstream ? "passthrough" : "obo";
+  return s.delegate_auth_to_upstream ? "passthrough" : "authorization_code";
+}
+
+// Map a server's stored `oauth2_flow` (the API value: client_credentials /
+// authorization_code / null) to the edit form's OAuth Flow Type select value.
+// A null/unset flow returns undefined so the select shows its placeholder rather
+// than a guessed default — an unstamped legacy row must be assigned explicitly.
+export function oauth2FlowToFormValue(oauth2Flow?: string | null): string | undefined {
+  if (oauth2Flow === MCP_OAUTH2_FLOW_M2M) return OAUTH_FLOW.M2M;
+  if (oauth2Flow) return OAUTH_FLOW.INTERACTIVE;
+  return undefined;
 }
 
 export const TRANSPORT = {
@@ -218,9 +342,14 @@ export interface MCPServer {
   transport?: string | null;
   auth_type?: string | null;
   oauth2_flow?: string | null;
+  issuer?: string | null;
   authorization_url?: string | null;
   token_url?: string | null;
   registration_url?: string | null;
+  token_exchange_endpoint?: string | null;
+  audience?: string | null;
+  subject_token_type?: string | null;
+  token_exchange_profile?: string | null;
   mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;
@@ -240,6 +369,10 @@ export interface MCPServer {
   available_on_public_internet?: boolean;
   delegate_auth_to_upstream?: boolean;
   oauth_passthrough?: boolean;
+  dcr_bridge?: boolean | null;
+  max_concurrent_requests?: number | null;
+  /** Redacted to null in server responses; present when constructing a server locally. */
+  credentials?: Record<string, unknown> | null;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;

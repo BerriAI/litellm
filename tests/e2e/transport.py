@@ -52,6 +52,20 @@ class Transport(Protocol):
     ) -> Result[R]: ...
 
     def delete[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
+    ) -> Result[R]: ...
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]: ...
+
+    def put[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]: ...
 
@@ -121,9 +135,38 @@ class HttpTransport:
         )
 
     def delete[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
     ) -> Result[R]:
         return e2e_http.delete(
+            self._url(path),
+            headers=headers,
+            json=json,
+            params=params,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return e2e_http.patch(
+            self._url(path),
+            headers=headers,
+            json=json,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def put[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return e2e_http.put(
             self._url(path),
             headers=headers,
             json=json,
@@ -206,8 +249,11 @@ CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
     "/tag",
     "/budget",
     "/model/",
+    "/access_group",
     "/spend",
     "/global",
+    "/config",
+    "/guardrails",
     "/openapi.json",
 )
 
@@ -265,9 +311,33 @@ class SplitTransport:
         )
 
     def delete[R: BaseModel](
-        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        json: BaseModel,
+        response_type: type[R],
+        params: BaseModel | None = None,
     ) -> Result[R]:
         return self._route(path).delete(
+            path,
+            headers=headers,
+            json=json,
+            response_type=response_type,
+            params=params,
+        )
+
+    def patch[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).patch(
+            path, headers=headers, json=json, response_type=response_type
+        )
+
+    def put[R: BaseModel](
+        self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
+    ) -> Result[R]:
+        return self._route(path).put(
             path, headers=headers, json=json, response_type=response_type
         )
 

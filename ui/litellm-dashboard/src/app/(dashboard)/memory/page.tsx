@@ -1,6 +1,6 @@
 "use client";
 
-import { MemoryView } from "./components/MemoryView";
+import { MemoryView } from "./_components/MemoryView";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 

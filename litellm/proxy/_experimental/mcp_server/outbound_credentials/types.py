@@ -39,6 +39,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
 
 
 class AuthSpecKind(str, Enum):
@@ -55,6 +56,7 @@ class AuthSpecKind(str, Enum):
     authorization_code = "authorization_code"  # per-user 3LO; gateway-stored token
     client_credentials = "client_credentials"  # gateway service account (M2M)
     token_exchange = "token_exchange"  # RFC 8693: token endpoint + subject_token (OBO)
+    id_jag = "id_jag"  # draft-ietf-oauth-identity-assertion-authz-grant: two-leg exchange then jwt-bearer
     api_key = "api_key"  # static header, any scheme (BYOK = per-user-seeded source)
     passthrough = "passthrough"  # client forwards an upstream-audience token
     none = "none"  # no upstream credential; resolve yields a no-op auth, never an error
@@ -182,7 +184,12 @@ class ClientCredentialsConfig(BaseModel):
 
     Fields are optional so the config can be built incomplete: a value may be supplied at
     runtime (`token_url` via RFC 8414 discovery, `client_id`/`secret` via DCR), and the
-    resolver arm raises `CredError.misconfigured` when a needed field is still absent.
+    resolver arm returns `CredError.misconfigured` when a needed field is still absent.
+
+    `audience` is the IdP-specific audience parameter some authorization servers require on
+    the client_credentials grant (sent as `audience` in the token request when set).
+    `token_endpoint_auth_method` selects how the client authenticates to the token endpoint
+    (RFC 6749 section 2.3.1); `None` defaults to `client_secret_post`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -191,6 +198,8 @@ class ClientCredentialsConfig(BaseModel):
     client_secret: SecretStr | None = None
     token_url: str | None = None
     scopes: tuple[str, ...] = ()
+    audience: str | None = None
+    token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
 
 
 class TokenExchangeConfig(BaseModel):
@@ -215,12 +224,55 @@ class TokenExchangeConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
     profile: Literal["rfc8693", "entra_obo"] = "rfc8693"
-    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
     token_exchange_endpoint: str | None = None
     audience: str | None = None
     client_id: str | None = None
     client_secret: SecretStr | None = None
     token_endpoint_auth_method: Literal["client_secret_basic", "client_secret_post"] | None = None
+    scopes: tuple[str, ...] = ()
+
+
+class PrivateKeyJwtAuth(BaseModel):
+    """RFC 7523 private-key-JWT client authentication: the gateway signs a `client_assertion`."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["private_key_jwt"] = "private_key_jwt"
+    private_key: SecretStr
+    key_id: str | None = None
+    signing_alg: str = "RS256"
+
+
+class ClientSecretAuth(BaseModel):
+    """`client_secret_post` client authentication: the gateway posts `client_id` + `client_secret`."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["client_secret"] = "client_secret"
+    client_secret: SecretStr
+
+
+ClientAuth = Annotated[PrivateKeyJwtAuth | ClientSecretAuth, Field(discriminator="source")]
+
+
+class IdJagConfig(BaseModel):
+    """draft-ietf-oauth-identity-assertion-authz-grant (Okta "AI agent token exchange").
+
+    Two legs: leg 1 is an RFC 8693 token exchange at the IdP org AS (`org_token_endpoint`) that
+    swaps the caller's identity token for an ID-JAG assertion; leg 2 is an RFC 7523 jwt-bearer at
+    the upstream resource AS (`resource_token_endpoint`) that swaps the assertion for the access
+    token. The gateway authenticates to both endpoints as `client_id` via `client_auth`. Required
+    fields are enforced at construction so a half-configured server cannot reach the arm.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal[AuthSpecKind.id_jag] = AuthSpecKind.id_jag
+    org_token_endpoint: str
+    resource_token_endpoint: str
+    client_id: str
+    client_auth: ClientAuth
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:id_token"
+    audience: str | None = None
+    resource: str | None = None
     scopes: tuple[str, ...] = ()
 
 
@@ -322,6 +374,7 @@ AuthConfig = Annotated[
     AuthorizationCodeConfig
     | ClientCredentialsConfig
     | TokenExchangeConfig
+    | IdJagConfig
     | ApiKeyConfig
     | PassthroughConfig
     | NoneConfig

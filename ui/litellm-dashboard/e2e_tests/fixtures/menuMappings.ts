@@ -26,7 +26,8 @@ export const menuLabelToPage: Record<string, Page> = {
   "Cost Tracking": Page.CostTracking,
   "UI Theme": Page.UiTheme,
   // Experimental submenu items
-  Caching: Page.Caching,
+  "Response Cache": Page.Caching,
+  Caching: Page.Caching, // Legacy label support
   Prompts: Page.Prompts,
   Budgets: Page.Budgets,
   "API Playground": Page.TransformRequest,

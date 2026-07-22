@@ -22,7 +22,8 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
  * Helper file for calls being made to proxy
  */
 import MessageManager from "@/components/molecules/message_manager";
-import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
+import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
@@ -30,9 +31,20 @@ import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import type {
+  CoordinationRedisSettings,
+  CoordinationRedisSettingsResponse,
+  CoordinationRedisTestResponse,
+} from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import {
+  registerAuthHeaderNameGetter,
+  registerAuthTokenGetter,
+  registerBaseUrlGetter,
+  registerErrorHandler,
+} from "@/lib/http/runtime";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
 
 export { serverRootPath };
@@ -167,7 +179,7 @@ export interface PromptSpec {
 export interface PromptTemplateBase {
   litellm_prompt_id: string;
   content: string;
-  metadata?: Record<string, any> | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface PromptInfoResponse {
@@ -360,11 +372,16 @@ export function getGlobalLitellmHeaderName(): string {
   return globalLitellmHeaderName;
 }
 
-const apiClient = createApiClient({
+export const apiClient = createApiClient({
   getBaseUrl: getProxyBaseUrl,
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
 });
+
+registerBaseUrlGetter(getProxyBaseUrl);
+registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
+registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
+registerErrorHandler(handleError);
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
@@ -1929,6 +1946,7 @@ interface UiSpendLogsParams {
   api_key?: string;
   team_id?: string;
   request_id?: string;
+  session_id?: string;
   user_id?: string;
   end_user?: string;
   status_filter?: string;
@@ -2294,6 +2312,46 @@ export const testConnectionRequest = async (
     console.error("Model connection test error:", error);
     // For network errors or other exceptions, still throw
     throw error;
+  }
+};
+
+export type ModelGroupConnectionResult = { status: "success" } | { status: "error"; error: string };
+
+/**
+ * Test an existing model group by routing a minimal request through the proxy
+ * exactly as production would (by public model_group name). Unlike
+ * /health/test_connection, this needs no litellm_params resolution: the router
+ * resolves the group, credentials, and provider. Used by the auto-router Test
+ * Connection to probe each tier's model group and the embedding model.
+ */
+/**
+ * Build the minimal request that probes a model group by public name. No
+ * max_tokens: reasoning models (o1/o3/...) reject a tiny cap with "max_tokens
+ * reached" because reasoning tokens count against it, which would show a false
+ * failure for a reachable tier.
+ */
+export const buildModelGroupTestRequest = (
+  modelGroup: string,
+  mode: "chat" | "embedding",
+): { path: string; body: Record<string, unknown> } =>
+  mode === "embedding"
+    ? { path: "/v1/embeddings", body: { model: modelGroup, input: "test from litellm" } }
+    : {
+        path: "/v1/chat/completions",
+        body: { model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
+      };
+
+export const testModelGroupConnection = async (
+  accessToken: string,
+  modelGroup: string,
+  mode: "chat" | "embedding",
+): Promise<ModelGroupConnectionResult> => {
+  const { path, body } = buildModelGroupTestRequest(modelGroup, mode);
+  try {
+    await apiClient.post(path, { accessToken, body });
+    return { status: "success" };
+  } catch (error) {
+    return { status: "error", error: error instanceof Error ? error.message : String(error) };
   }
 };
 
@@ -3191,6 +3249,47 @@ export const updateCacheSettingsCall = async (accessToken: string, cacheSettings
     return data;
   } catch (error) {
     console.error("Failed to update cache settings:", error);
+    throw error;
+  }
+};
+
+export const getCoordinationRedisSettingsCall = async (
+  accessToken: string,
+): Promise<CoordinationRedisSettingsResponse> => {
+  try {
+    return await apiClient.get<CoordinationRedisSettingsResponse>(`/coordination_redis/settings`, { accessToken });
+  } catch (error) {
+    console.error("Failed to get coordination redis settings:", error);
+    throw error;
+  }
+};
+
+export const testCoordinationRedisConnectionCall = async (
+  accessToken: string,
+  settings: CoordinationRedisSettings,
+): Promise<CoordinationRedisTestResponse> => {
+  try {
+    return await apiClient.post<CoordinationRedisTestResponse>(`/coordination_redis/settings/test`, {
+      accessToken,
+      body: { settings },
+    });
+  } catch (error) {
+    console.error("Failed to test coordination redis connection:", error);
+    throw error;
+  }
+};
+
+export const updateCoordinationRedisSettingsCall = async (
+  accessToken: string,
+  settings: CoordinationRedisSettings,
+): Promise<void> => {
+  try {
+    await apiClient.post(`/coordination_redis/settings`, {
+      accessToken,
+      body: { settings },
+    });
+  } catch (error) {
+    console.error("Failed to update coordination redis settings:", error);
     throw error;
   }
 };
@@ -6128,6 +6227,7 @@ export const applyGuardrail = async (
   text: string,
   language?: string | null,
   entities?: string[] | null,
+  metadata?: Record<string, unknown> | null,
 ) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/apply_guardrail` : `/guardrails/apply_guardrail`;
@@ -6143,6 +6243,10 @@ export const applyGuardrail = async (
 
     if (entities && entities.length > 0) {
       requestBody.entities = entities;
+    }
+
+    if (metadata != null) {
+      requestBody.metadata = metadata;
     }
 
     const response = await fetch(url, {
@@ -6551,6 +6655,9 @@ export const testMCPToolsListRequest = async (
     };
     if (accessToken) {
       headers["x-litellm-api-key"] = accessToken;
+      if (globalLitellmHeaderName.toLowerCase() !== "authorization") {
+        headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
+      }
     }
     if (oauthAccessToken) {
       headers["Authorization"] = `Bearer ${oauthAccessToken}`;
@@ -6745,7 +6852,11 @@ export const exchangeMcpOAuthToken = async ({
 
   const data = await response.json();
   if (!response.ok) {
-    const errorMessage = deriveErrorMessage(data) || data?.detail || "OAuth token exchange failed";
+    const oauthErrorMessage =
+      typeof data?.error === "string" && typeof data?.error_description === "string"
+        ? `${data.error}: ${data.error_description}`
+        : undefined;
+    const errorMessage = oauthErrorMessage || deriveErrorMessage(data) || data?.detail || "OAuth token exchange failed";
     throw new Error(errorMessage);
   }
   return data;

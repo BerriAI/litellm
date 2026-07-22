@@ -10,8 +10,9 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
 import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
-import debounce from "lodash/debounce";
-import React, { useCallback, useEffect, useState } from "react";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import React, { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
@@ -30,7 +31,12 @@ import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { TagRateLimitEditor, TagRateLimitEntry, tagRowsToLimits } from "../key_team_helpers/TagRateLimitEditor";
+import {
+  excludeProxyWideSentinel,
+  getModelDisplayName,
+  hasAllModelsSentinel,
+} from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
@@ -198,11 +204,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
+  const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
   const [budgetFallbacksKey, setBudgetFallbacksKey] = useState<number>(0);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const selectedModels: string[] = Form.useWatch("models", form) ?? [];
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -218,6 +226,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
     setBudgetLimits([]);
+    setTagRateLimits([]);
     setBudgetFallbacks({});
     setBudgetFallbacksKey((k) => k + 1);
   };
@@ -239,6 +248,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
     setBudgetLimits([]);
+    setTagRateLimits([]);
     setBudgetFallbacks({});
     setBudgetFallbacksKey((k) => k + 1);
   };
@@ -538,6 +548,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         formValues.budget_limits = validWindows;
       }
 
+      // Add per-tag rate limits (only when at least one row is configured)
+      const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
+      if (Object.keys(tag_rpm_limit).length > 0) {
+        formValues.tag_rpm_limit = tag_rpm_limit;
+      }
+
       if (Object.keys(budgetFallbacks).length > 0) {
         formValues.budget_fallbacks = budgetFallbacks;
       }
@@ -562,6 +578,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       NotificationsManager.success("Virtual Key Created");
       form.resetFields();
       setBudgetLimits([]);
+      setTagRateLimits([]);
       setBudgetFallbacks({});
       setBudgetFallbacksKey((k) => k + 1);
       localStorage.removeItem("userData" + userID);
@@ -589,7 +606,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
     if (userID && userRole && accessToken) {
       fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then((models) => {
-        let allModels = Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models]));
+        const allModels = excludeProxyWideSentinel(
+          Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models])),
+        );
         setModelsToPick(allModels);
       });
     }
@@ -670,14 +689,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const debouncedSearch = useCallback(
-    debounce((text: string) => fetchUsers(text), 300),
-    [accessToken],
-  );
-
-  const handleUserSearch = (value: string): void => {
-    debouncedSearch(value);
-  };
+  const handleUserSearch = useDebouncedCallback((text: string) => fetchUsers(text), { wait: DEBOUNCE_WAIT_MS });
 
   const handleUserSelect = (_value: string, option: UserOption): void => {
     const selectedUser = option.user;
@@ -948,16 +960,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   onChange={(values) => {
                     if (values.includes("all-team-models")) {
                       form.setFieldsValue({ models: ["all-team-models"] });
+                    } else if (values.includes("all-proxy-models")) {
+                      form.setFieldsValue({ models: ["all-proxy-models"] });
                     }
                   }}
                 >
-                  {!selectedProjectId && (
+                  {!selectedProjectId && selectedCreateKeyTeam && (
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
                     </Option>
                   )}
+                  {!selectedProjectId && !selectedCreateKeyTeam && (
+                    <Option key="all-proxy-models" value="all-proxy-models">
+                      All Proxy Models
+                    </Option>
+                  )}
                   {modelsToPick.map((model: string) => (
-                    <Option key={model} value={model}>
+                    <Option key={model} value={model} disabled={hasAllModelsSentinel(selectedModels)}>
                       {getModelDisplayName(model)}
                     </Option>
                   ))}
@@ -1163,6 +1182,34 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     form={form}
                     showDetailedDescriptions={true}
                   />
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Per-Tag Rate Limits{" "}
+                        <Tooltip title="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Throttle on budget exceeded{" "}
+                        <Tooltip title="When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="throttle_on_budget_exceeded"
+                    valuePropName="checked"
+                  >
+                    <Switch checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
                   <Form.Item
                     label={
                       <span>

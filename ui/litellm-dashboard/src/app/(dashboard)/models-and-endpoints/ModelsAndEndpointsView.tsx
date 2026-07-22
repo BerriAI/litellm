@@ -9,7 +9,7 @@ import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/compon
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 import { Team } from "@/components/key_team_helpers/key_list";
-import CredentialsPanel from "@/components/model_add/credentials";
+import CredentialsPanel from "@/components/model_add/CredentialsPanel";
 import { getCallbacksCall } from "@/components/networking";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
@@ -17,6 +17,7 @@ import { transformModelData } from "./utils/modelDataTransformer";
 import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { useQueryClient } from "@tanstack/react-query";
+import type { PaginationState } from "@tanstack/react-table";
 import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import type { UploadProps } from "antd";
 import { Form } from "antd";
@@ -26,7 +27,7 @@ import HealthCheckComponent from "../../../components/model_dashboard/HealthChec
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
 import ModelInfoView from "../../../components/model_info_view";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
-import PassThroughSettings from "../../../components/pass_through_settings";
+import PassThroughSettings from "../../../components/PassThroughSettings/PassThroughSettings";
 import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
 
@@ -69,13 +70,16 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
-  const [healthCurrentPage, setHealthCurrentPage] = useState(1);
+  const [healthPagination, setHealthPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: HEALTH_PAGE_SIZE,
+  });
 
   const queryClient = useQueryClient();
   const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
   const { data: healthModelDataResponse, isLoading: isLoadingHealthModels } = useModelsInfo(
-    healthCurrentPage,
-    HEALTH_PAGE_SIZE,
+    healthPagination.pageIndex + 1,
+    healthPagination.pageSize,
   );
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { data: credentialsResponse, isLoading: isLoadingCredentials } = useCredentials();
@@ -137,14 +141,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     return transformModelData(healthModelDataResponse, getProviderFromModel);
   }, [healthModelDataResponse?.data, getProviderFromModel]);
 
-  const healthPaginationMeta = useMemo(() => {
-    return {
-      total_count: healthModelDataResponse?.total_count ?? 0,
-      current_page: healthModelDataResponse?.current_page ?? healthCurrentPage,
-      total_pages: healthModelDataResponse?.total_pages ?? 1,
-      size: healthModelDataResponse?.size ?? HEALTH_PAGE_SIZE,
-    };
-  }, [healthModelDataResponse, healthCurrentPage]);
+  const healthRowCount = healthModelDataResponse?.total_count ?? 0;
 
   const isProxyAdmin = userRole && isProxyAdminRole(userRole);
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -188,7 +185,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const handleRefreshClick = () => {
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
-    setHealthCurrentPage(1);
+    setHealthPagination((previous) => ({ ...previous, pageIndex: 0 }));
     queryClient.invalidateQueries({ queryKey: ["models", "list"] });
     refetchModels();
   };
@@ -296,7 +293,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   }
 
   return (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
           {/* Model Management Header */}
@@ -396,7 +393,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                           accessToken={accessToken}
                           userRole={userRole}
                           userID={userID}
-                          modelData={processedModelData}
                           premiumUser={premiumUser}
                         />
                       </TabPanel>
@@ -414,10 +410,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                           setSelectedModelId={setSelectedModelId}
                           teams={teams}
                           isLoading={isLoadingHealthModels}
-                          paginationMeta={healthPaginationMeta}
-                          currentPage={healthCurrentPage}
-                          pageSize={HEALTH_PAGE_SIZE}
-                          onPageChange={setHealthCurrentPage}
+                          pagination={healthPagination}
+                          onPaginationChange={setHealthPagination}
+                          rowCount={healthRowCount}
                         />
                       </TabPanel>
                     ),
