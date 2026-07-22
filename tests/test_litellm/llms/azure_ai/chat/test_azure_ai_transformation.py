@@ -111,14 +111,18 @@ def test_azure_ai_grok_stop_parameter_handling():
 
     # Test Grok model detection
     assert config._supports_stop_reason("grok-4-fast") == False
+    assert config._supports_stop_reason("grok-4.3") == False
     assert config._supports_stop_reason("grok-4") == False
     assert config._supports_stop_reason("grok-3-mini") == False
     assert config._supports_stop_reason("grok-code-fast") == False
     assert config._supports_stop_reason("gpt-4") == True
 
     # Test supported parameters for Grok models
-    grok_params = config.get_supported_openai_params("grok-4-fast")
-    assert "stop" not in grok_params, "Grok models should not support stop parameter"
+    for model in ("grok-4-fast", "grok-4.3"):
+        grok_params = config.get_supported_openai_params(model)
+        assert (
+            "stop" not in grok_params
+        ), "Grok models should not support stop parameter"
 
     # Test supported parameters for non-Grok models
     gpt_params = config.get_supported_openai_params("gpt-4")

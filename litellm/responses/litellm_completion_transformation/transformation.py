@@ -256,6 +256,9 @@ class LiteLLMCompletionResponsesConfig:
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
         }
+        if not tools:
+            litellm_completion_request.pop("tool_choice", None)
+            litellm_completion_request.pop("tools", None)
 
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
         if stream is True:
