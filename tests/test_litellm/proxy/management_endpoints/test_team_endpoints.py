@@ -3219,6 +3219,7 @@ async def test_list_team_v2_org_admin_sees_org_teams():
             organization_id=None,
             team_id=None,
             team_alias=None,
+            search=None,
             user_api_key_dict=mock_user_api_key_dict,
             page=1,
             page_size=10,
@@ -3231,9 +3232,12 @@ async def test_list_team_v2_org_admin_sees_org_teams():
         assert len(result["teams"]) == 1
         assert result["teams"][0].members_count == 1
 
-        # Verify org-scoped where clause
+        # Bare org-admin query is scoped to the admin's org via the union
+        # branch (LIT-3723). With no direct memberships the union collapses to
+        # the org-scope branch only.
         where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
-        assert where["organization_id"] == {"in": ["org_A"]}
+        assert where["OR"] == [{"organization_id": {"in": ["org_A"]}}]
+        assert "organization_id" not in where
 
 
 @pytest.mark.asyncio
@@ -3319,6 +3323,7 @@ async def test_list_team_v2_org_admin_own_user_id_sees_all_org_teams():
             organization_id=None,
             team_id=None,
             team_alias=None,
+            search=None,
             user_api_key_dict=mock_user_api_key_dict,
             page=1,
             page_size=10,
@@ -3330,9 +3335,18 @@ async def test_list_team_v2_org_admin_own_user_id_sees_all_org_teams():
         assert result["total"] == 2
         assert len(result["teams"]) == 2
 
-        # Verify the where clause scopes by org only — no team_id filter
+        # Self/bare org-admin query unions org-scoped teams with the caller's
+        # own memberships (LIT-3723). The org-scope branch still guarantees the
+        # admin sees *all* teams in their org (regression #30215); the team_id
+        # branch only widens the result and never clamps it. No top-level
+        # organization_id/team_id key that could hide an org team the admin
+        # isn't a direct member of.
         where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
-        assert where["organization_id"] == {"in": ["org_A"]}
+        assert where["OR"] == [
+            {"organization_id": {"in": ["org_A"]}},
+            {"team_id": {"in": ["team_1"]}},
+        ]
+        assert "organization_id" not in where
         assert "team_id" not in where
 
 
