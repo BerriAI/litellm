@@ -3297,10 +3297,17 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
+        if isinstance(result, ModelResponse):
+            return result
+
         httpx_response = self.model_call_details.get("httpx_response", None)
-        if httpx_response is None:
+        if httpx_response is not None:
+            dict_result = httpx_response.json()
+        elif isinstance(result, dict):
+            dict_result = result
+        else:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
-        dict_result = httpx_response.json()
+
         result = litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
             completion_response=dict_result,
             model_response=litellm.ModelResponse(),

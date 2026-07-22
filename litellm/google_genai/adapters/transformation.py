@@ -27,6 +27,31 @@ from litellm.types.utils import (
 )
 
 
+def _compute_fallback_usage(
+    collected_chunks: List[Any],
+) -> Optional[Dict[str, int]]:
+    """
+    Assemble collected streaming chunks into a full response and extract usage.
+
+    Returns the mapped Google GenAI usage dict when the assembled response
+    carries a non-zero total token count, otherwise None.
+    """
+    try:
+        from litellm.main import stream_chunk_builder
+
+        assembled = stream_chunk_builder(collected_chunks)
+        if assembled is not None and getattr(assembled, "usage", None) is not None:
+            fallback_usage = GoogleGenAIAdapter()._map_usage(assembled.usage)
+            if fallback_usage.get("totalTokenCount", 0) > 0:
+                return fallback_usage
+    except Exception:
+        verbose_logger.warning(
+            "Failed to compute fallback streaming usage for Google GenAI adapter.",
+            exc_info=True,
+        )
+    return None
+
+
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
     """
     Wrapper for streaming Google GenAI generate_content responses.
@@ -143,29 +168,101 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
     async def async_google_genai_sse_wrapper(self) -> AsyncIterator[bytes]:
         """
         Async version of google_genai_sse_wrapper.
+
+        Buffers the terminating (finishReason) chunk so that usage metadata can
+        be attached before it is emitted. This avoids sending the finishReason
+        chunk twice (once with zero usage, once with real usage), which
+        corrupts downstream per-message token persistence.
         """
         from litellm.types.utils import ModelResponseStream
 
+        adapter = GoogleGenAIAdapter()
+        collected_chunks: List[ModelResponseStream] = []
+        final_usage_metadata: Optional[Dict[str, int]] = None
+        buffered_finish_chunk: Optional[Dict[str, Any]] = None
+
+        def _payload(data: Dict[str, Any]) -> bytes:
+            return f"data: {json.dumps(data)}\n\n".encode()
+
+        def _finish_reason(chunk: Dict[str, Any]) -> Optional[str]:
+            candidates = chunk.get("candidates")
+            if candidates:
+                return candidates[0].get("finishReason")
+            return None
+
         async for chunk in self.completion_stream:
             if isinstance(chunk, dict):
-                payload = f"data: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
+                if buffered_finish_chunk is not None:
+                    yield _payload(buffered_finish_chunk)
+                    buffered_finish_chunk = None
+                yield _payload(chunk)
             elif isinstance(chunk, ModelResponseStream):
-                # Transform OpenAI streaming chunk to Google GenAI format
-                transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(chunk, self)
+                transformed_chunk = adapter.translate_streaming_completion_to_generate_content(chunk, self)
 
-                if isinstance(transformed_chunk, dict):  # Only return non-empty chunks
-                    payload = f"data: {json.dumps(transformed_chunk)}\n\n"
-                    yield payload.encode()
-                else:
-                    # For empty chunks, continue to next iteration
+                if not isinstance(transformed_chunk, dict):
                     continue
+
+                chunk_usage = transformed_chunk.get("usageMetadata")
+                if chunk_usage and chunk_usage.get("totalTokenCount", 0) > 0:
+                    final_usage_metadata = chunk_usage
+
+                finish_reason = _finish_reason(transformed_chunk)
+
+                if finish_reason:
+                    # Buffer the terminating chunk so usage can be attached
+                    # before emission. Replaces any prior buffered finish chunk
+                    # (CustomStreamWrapper may emit both a real and a synthetic
+                    # one), collapsing duplicates into a single frame.
+                    buffered_finish_chunk = transformed_chunk
+                elif chunk_usage:
+                    # Usage-only chunk: merge into the buffered finish chunk if
+                    # one is pending, otherwise emit standalone.
+                    if buffered_finish_chunk is not None:
+                        buffered_finish_chunk["usageMetadata"] = chunk_usage
+                    else:
+                        yield _payload(transformed_chunk)
+                else:
+                    # Content chunk: flush any buffered finish chunk first.
+                    if buffered_finish_chunk is not None:
+                        yield _payload(buffered_finish_chunk)
+                        buffered_finish_chunk = None
+                    yield _payload(transformed_chunk)
+
+                collected_chunks.append(chunk)
             else:
-                # For other chunk types, yield them directly
+                if buffered_finish_chunk is not None:
+                    yield _payload(buffered_finish_chunk)
+                    buffered_finish_chunk = None
                 if hasattr(chunk, "encode"):
                     yield chunk.encode()
                 else:
                     yield str(chunk).encode()
+
+        # End of stream: emit the buffered finish chunk with usage attached.
+        if buffered_finish_chunk is not None:
+            if final_usage_metadata is None:
+                fallback = _compute_fallback_usage(collected_chunks)
+                if fallback is not None:
+                    buffered_finish_chunk["usageMetadata"] = fallback
+            yield _payload(buffered_finish_chunk)
+        elif final_usage_metadata is None and collected_chunks:
+            # No finishReason chunk was seen; emit a synthetic terminating frame
+            # with fallback usage so the client still receives token counts.
+            fallback = _compute_fallback_usage(collected_chunks)
+            if fallback is not None:
+                yield _payload(
+                    {
+                        "candidates": [
+                            {
+                                "content": {"parts": [], "role": "model"},
+                                "finishReason": "STOP",
+                                "index": 0,
+                                "safetyRatings": [],
+                            }
+                        ],
+                        "usageMetadata": fallback,
+                    }
+                )
 
 
 class GoogleGenAIAdapter:
@@ -535,30 +632,27 @@ class GoogleGenAIAdapter:
             Dict in Google GenAI streaming generate_content response format
         """
 
-        # Extract the main response content from streaming chunk
         choice = response.choices[0] if response.choices else None
-        if not choice:
-            # Return empty chunk if no choices
-            return None
 
-        # Handle streaming choice
+        parts: List[Dict[str, Any]] = []
+        finish_reason = None
+
         if isinstance(choice, StreamingChoices):
             if choice.delta:
                 parts = self._transform_openai_delta_to_google_genai_parts_with_accumulation(choice.delta, wrapper)
-            else:
-                parts = []
             finish_reason = getattr(choice, "finish_reason", None)
-        else:
-            # Fallback for generic choice objects
+        elif choice is not None:
             message_content = getattr(choice, "delta", {}).get("content", "")
             parts = [{"text": message_content}] if message_content else []
             finish_reason = getattr(choice, "finish_reason", None)
 
-        # Only create response chunk if we have parts or it's the final chunk
-        if not parts and not finish_reason:
+        usage = getattr(response, "usage", None)
+
+        # Skip chunks that carry no content, finish reason, or usage data so the
+        # caller can drop them without emitting empty frames.
+        if not parts and not finish_reason and usage is None:
             return None
 
-        # Create Google GenAI streaming format response
         streaming_chunk: Dict[str, Any] = {
             "candidates": [
                 {
@@ -570,18 +664,12 @@ class GoogleGenAIAdapter:
             ]
         }
 
-        # Add usage metadata only in the final chunk (when finish_reason is present)
-        if finish_reason:
-            usage_metadata = (
-                self._map_usage(getattr(response, "usage", None))
-                if hasattr(response, "usage") and getattr(response, "usage", None)
-                else {
-                    "promptTokenCount": 0,
-                    "candidatesTokenCount": 0,
-                    "totalTokenCount": 0,
-                }
-            )
-            streaming_chunk["usageMetadata"] = usage_metadata
+        # Attach usage only when the response actually carries it. Emitting a
+        # zero-filled usageMetadata on every finish_reason chunk causes the
+        # downstream client to record {0, 0, 0} before the real usage arrives,
+        # corrupting per-message token persistence.
+        if usage is not None:
+            streaming_chunk["usageMetadata"] = self._map_usage(usage)
 
         # Add text field for convenience (common in Google GenAI responses)
         text_content = ""
