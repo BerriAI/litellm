@@ -15994,6 +15994,20 @@
         "max_tokens": 4096,
         "mode": "chat"
     },
+    "featherless_ai/WeiboAI/VibeThinker-1.5B": {
+        "litellm_provider": "featherless_ai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat"
+    },
+    "featherless_ai/WeiboAI/VibeThinker-3B": {
+        "litellm_provider": "featherless_ai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat"
+    },
     "fireworks-ai-4.1b-to-16b": {
         "input_cost_per_token": 2e-07,
         "litellm_provider": "fireworks_ai",
