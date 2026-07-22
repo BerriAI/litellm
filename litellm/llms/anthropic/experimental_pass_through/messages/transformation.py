@@ -242,7 +242,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
         if "x-api-key" not in headers and "authorization" not in headers:
-            auth_header = AnthropicModelInfo.get_auth_header(api_key)
+            auth_header = AnthropicModelInfo.get_auth_header(
+                api_key=api_key,
+                api_base=api_base if api_base is not None else litellm_params.get("api_base"),
+                use_bearer_for_custom_base=bool(litellm_params.get("use_bearer_for_custom_base", False)),
+            )
             if auth_header is not None:
                 headers.update(auth_header)
         if "anthropic-version" not in headers:
