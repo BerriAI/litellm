@@ -38,7 +38,8 @@ test.describe("Edit LLM credential", () => {
 
     const row = page.locator("tr", { hasText: credentialName });
     await expect(row).toBeVisible({ timeout: 15_000 });
-    await row.getByRole("button").first().click();
+    await row.getByTestId(`credential-actions-${credentialName}`).click();
+    await page.getByTestId("credential-action-edit").click();
 
     const modal = page.locator(".ant-modal-content").filter({ hasText: "Edit Credential" });
     await expect(modal).toBeVisible({ timeout: 10_000 });
