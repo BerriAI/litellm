@@ -4976,3 +4976,14 @@ def test_relocate_input_additional_tools() -> None:
     # string input passes through
     s_input, s_tools = relocate_input_additional_tools(input="hello", tools=None)
     assert s_input == "hello" and s_tools is None
+
+    # follow-up Codex turns re-send the item with an EMPTY tools list — the
+    # non-standard item must STILL be dropped (strict providers reject it),
+    # with the tools param left untouched
+    turn2_input = [
+        {"role": "developer", "type": "additional_tools", "tools": []},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "next"}]},
+    ]
+    t2_input, t2_tools = relocate_input_additional_tools(input=turn2_input, tools=None)
+    assert [i.get("type") for i in t2_input] == ["message"]
+    assert t2_tools is None

@@ -7478,19 +7478,30 @@ def relocate_input_additional_tools(
     the request valid AND lets filter_tools_by_allowed_types apply the
     deployment's allowlist to the merged list.
 
-    Returns ``(input, tools)``; both unchanged when there is nothing to move.
+    Follow-up Codex turns re-send the item with an EMPTY tools list (tools
+    were established earlier in the thread); the empty item is still a
+    non-standard variant strict providers reject, so it is dropped even when
+    it carries nothing to merge (Codex >= 26.707 "Responses Lite"
+    serialization; see Codex issue #32086).
+
+    Returns ``(input, tools)``; both unchanged when no additional_tools item
+    is present.
     """
     if not isinstance(input, list):
         return input, tools
+    found = False
     relocated: List[dict] = []
     kept_items = []
     for item in input:
         if isinstance(item, dict) and item.get("type") == "additional_tools":
+            found = True
             relocated.extend(item.get("tools") or [])
         else:
             kept_items.append(item)
-    if not relocated:
+    if not found:
         return input, tools
+    if not relocated:
+        return kept_items, tools
     merged = list(tools) if tools is not None else []
     merged.extend(relocated)
     return kept_items, merged
