@@ -178,17 +178,37 @@ class AmazonConverseConfig(BaseConfig):
                 new_content = []
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
-                        new_item = {"type": "guarded_text", "text": item["text"]}  # type: ignore
+                        new_item: dict = {"type": "guarded_text", "text": item["text"]}
+                        # Carry over the OpenAI-style ``cache_control`` marker so
+                        # the per-element cache-point loop in
+                        # ``_bedrock_converse_messages_pt`` still emits a
+                        # ``cachePoint`` block for this (now-guarded) text.
+                        # Without this, turning on guardrailConfig silently
+                        # drops prompt-cache breakpoints on every trailing
+                        # user message that used ``index: -1`` or had a
+                        # block-level ``cache_control`` set directly.
+                        item_cache_control = item.get("cache_control")
+                        if item_cache_control is not None:
+                            new_item["cache_control"] = item_cache_control
                         new_content.append(new_item)
                     else:
                         new_content.append(item)
 
                 messages_copy[user_message_index]["content"] = new_content  # type: ignore
             elif isinstance(content, str):
-                # If content is a string, convert it to guarded_text
-                messages_copy[user_message_index]["content"] = [  # type: ignore
-                    {"type": "guarded_text", "text": content}  # type: ignore
-                ]
+                # If content is a string, convert it to guarded_text. Promote
+                # the message-level ``cache_control`` marker to the resulting
+                # ``guarded_text`` element so the per-element cache-point loop
+                # still emits a ``cachePoint`` block. The previous rewrite
+                # dropped the marker here because the user-message branch of
+                # the prompt factory only honors message-level ``cache_control``
+                # for string content — once content becomes a list, only
+                # element-level markers are read.
+                new_item = {"type": "guarded_text", "text": content}
+                user_message_cache_control = user_message.get("cache_control")
+                if user_message_cache_control is not None:
+                    new_item["cache_control"] = user_message_cache_control
+                messages_copy[user_message_index]["content"] = [new_item]  # type: ignore
 
         return messages_copy
 

@@ -269,15 +269,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             api_key_breakdown: {},
           };
         }
-        modelSpend[model].metrics.spend += metrics.metrics.spend;
-        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
-        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        modelSpend[model].metrics.spend += metrics.metrics?.spend ?? 0;
+        modelSpend[model].metrics.prompt_tokens += metrics.metrics?.prompt_tokens ?? 0;
+        modelSpend[model].metrics.completion_tokens += metrics.metrics?.completion_tokens ?? 0;
+        modelSpend[model].metrics.total_tokens += metrics.metrics?.total_tokens ?? 0;
+        modelSpend[model].metrics.api_requests += metrics.metrics?.api_requests ?? 0;
+        modelSpend[model].metrics.successful_requests += metrics.metrics?.successful_requests ?? 0;
+        modelSpend[model].metrics.failed_requests += metrics.metrics?.failed_requests ?? 0;
+        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics?.cache_read_input_tokens ?? 0;
+        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics?.cache_creation_input_tokens ?? 0;
       });
     });
 
@@ -315,16 +315,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             api_key_breakdown: {},
           };
         }
-        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics.spend;
-        modelGroupSpend[modelGroup].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelGroupSpend[modelGroup].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics.api_requests;
-        modelGroupSpend[modelGroup].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelGroupSpend[modelGroup].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics?.spend ?? 0;
+        modelGroupSpend[modelGroup].metrics.prompt_tokens += metrics.metrics?.prompt_tokens ?? 0;
+        modelGroupSpend[modelGroup].metrics.completion_tokens += metrics.metrics?.completion_tokens ?? 0;
+        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics?.total_tokens ?? 0;
+        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics?.api_requests ?? 0;
+        modelGroupSpend[modelGroup].metrics.successful_requests += metrics.metrics?.successful_requests ?? 0;
+        modelGroupSpend[modelGroup].metrics.failed_requests += metrics.metrics?.failed_requests ?? 0;
+        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens += metrics.metrics?.cache_read_input_tokens ?? 0;
         modelGroupSpend[modelGroup].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
+          metrics.metrics?.cache_creation_input_tokens ?? 0;
       });
     });
 
@@ -363,16 +363,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             api_key_breakdown: {},
           };
         }
-        providerSpendMap[provider].metrics.spend += metrics.metrics.spend;
-        providerSpendMap[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        providerSpendMap[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        providerSpendMap[provider].metrics.total_tokens += metrics.metrics.total_tokens;
-        providerSpendMap[provider].metrics.api_requests += metrics.metrics.api_requests;
-        providerSpendMap[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        providerSpendMap[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        providerSpendMap[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        providerSpendMap[provider].metrics.spend += metrics.metrics?.spend ?? 0;
+        providerSpendMap[provider].metrics.prompt_tokens += metrics.metrics?.prompt_tokens ?? 0;
+        providerSpendMap[provider].metrics.completion_tokens += metrics.metrics?.completion_tokens ?? 0;
+        providerSpendMap[provider].metrics.total_tokens += metrics.metrics?.total_tokens ?? 0;
+        providerSpendMap[provider].metrics.api_requests += metrics.metrics?.api_requests ?? 0;
+        providerSpendMap[provider].metrics.successful_requests += metrics.metrics?.successful_requests ?? 0;
+        providerSpendMap[provider].metrics.failed_requests += metrics.metrics?.failed_requests ?? 0;
+        providerSpendMap[provider].metrics.cache_read_input_tokens += metrics.metrics?.cache_read_input_tokens ?? 0;
         providerSpendMap[provider].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
+          metrics.metrics?.cache_creation_input_tokens ?? 0;
       });
     });
 
@@ -405,21 +405,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               cache_creation_input_tokens: 0,
             },
             metadata: {
-              key_alias: metrics.metadata.key_alias,
+              key_alias: metrics.metadata?.key_alias ?? null,
               team_id: null,
-              tags: metrics.metadata.tags || [],
+              tags: metrics.metadata?.tags ?? [],
             },
           };
         }
-        keySpend[key].metrics.spend += metrics.metrics.spend;
-        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
-        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
-        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
-        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
-        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        keySpend[key].metrics.spend += metrics.metrics?.spend ?? 0;
+        keySpend[key].metrics.prompt_tokens += metrics.metrics?.prompt_tokens ?? 0;
+        keySpend[key].metrics.completion_tokens += metrics.metrics?.completion_tokens ?? 0;
+        keySpend[key].metrics.total_tokens += metrics.metrics?.total_tokens ?? 0;
+        keySpend[key].metrics.api_requests += metrics.metrics?.api_requests ?? 0;
+        keySpend[key].metrics.successful_requests += metrics.metrics?.successful_requests ?? 0;
+        keySpend[key].metrics.failed_requests += metrics.metrics?.failed_requests ?? 0;
+        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics?.cache_read_input_tokens ?? 0;
+        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics?.cache_creation_input_tokens ?? 0;
       });
     });
 
@@ -1022,12 +1022,12 @@ const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: a
         };
       }
 
-      modelData[model].total_requests += metrics.metrics.api_requests;
-      modelData[model].total_tokens += metrics.metrics.total_tokens;
+      modelData[model].total_requests += metrics.metrics?.api_requests ?? 0;
+      modelData[model].total_tokens += metrics.metrics?.total_tokens ?? 0;
       modelData[model].daily_data.push({
         date: day.date,
-        api_requests: metrics.metrics.api_requests,
-        total_tokens: metrics.metrics.total_tokens,
+        api_requests: metrics.metrics?.api_requests ?? 0,
+        total_tokens: metrics.metrics?.total_tokens ?? 0,
       });
     });
   });
