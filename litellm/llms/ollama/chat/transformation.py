@@ -277,8 +277,14 @@ class OllamaChatConfig(BaseConfig):
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))
 
+            role = cast(str, m.get("role"))
+            # Gemma models (via Ollama) expect "tool_responses" for tool result
+            # messages instead of the OpenAI-standard "tool" role. Without this,
+            # the model ignores the result and loops infinitely.
+            if role == "tool" and "gemma" in model.lower():
+                role = "tool_responses"
             ollama_message = OllamaChatCompletionMessage(
-                role=cast(str, m.get("role")),
+                role=role,
             )
             if reasoning_content is not None:
                 ollama_message["thinking"] = reasoning_content
