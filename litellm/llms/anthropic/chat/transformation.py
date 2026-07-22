@@ -480,10 +480,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
 
-        Anthropic's output_format doesn't support certain JSON schema properties:
-        - maxItems/minItems: Not supported for array types
-        - minimum/maximum: Not supported for numeric types
-        - minLength/maxLength: Not supported for string types
+        Anthropic's output_format doesn't support certain JSON schema properties.
+        These are cross-element / count constraints that cannot be enforced by the
+        constrained-decoding grammar Anthropic compiles the schema into, so the API
+        rejects them with a 400 ``invalid_request_error`` (e.g. "output_format.schema:
+        For 'array' type, property 'uniqueItems' is not supported"):
+        - maxItems/minItems/uniqueItems/contains/minContains/maxContains: array constraints
+        - minimum/maximum/exclusiveMinimum/exclusiveMaximum: numeric constraints
+        - minLength/maxLength: string constraints
+        - minProperties/maxProperties: object constraints
 
         This mirrors the transformation done by the Anthropic Python SDK.
         See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
@@ -504,16 +509,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not isinstance(schema, dict):
             return schema
 
-        # All numeric/string/array constraints not supported by Anthropic
+        # All numeric/string/array/object constraints not supported by Anthropic
         unsupported_fields = {
             "maxItems",
-            "minItems",  # array constraints
+            "minItems",
+            "uniqueItems",
+            "contains",
+            "minContains",
+            "maxContains",  # array constraints
             "minimum",
             "maximum",  # numeric constraints
             "exclusiveMinimum",
             "exclusiveMaximum",  # numeric constraints
             "minLength",
             "maxLength",  # string constraints
+            "minProperties",
+            "maxProperties",  # object constraints
         }
 
         # Build description additions from removed constraints
@@ -521,16 +532,31 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         constraint_labels = {
             "minItems": "minimum number of items: {}",
             "maxItems": "maximum number of items: {}",
+            "uniqueItems": "all array items must be unique",
+            "contains": "array must contain an item matching: {}",
+            "minContains": "minimum number of matching items: {}",
+            "maxContains": "maximum number of matching items: {}",
             "minimum": "minimum value: {}",
             "maximum": "maximum value: {}",
             "exclusiveMinimum": "exclusive minimum value: {}",
             "exclusiveMaximum": "exclusive maximum value: {}",
             "minLength": "minimum length: {}",
             "maxLength": "maximum length: {}",
+            "minProperties": "minimum number of properties: {}",
+            "maxProperties": "maximum number of properties: {}",
         }
         for field in unsupported_fields:
             if field in schema:
-                constraint_descriptions.append(constraint_labels[field].format(schema[field]))
+                value = schema[field]
+                # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
+                # real requirement, so don't add a misleading advisory note for it.
+                if isinstance(value, bool) and not value:
+                    continue
+                # Sub-schema constraints (e.g. ``contains``) are serialized as JSON so
+                # the advisory note preserves what the constraint actually required,
+                # instead of just noting that it existed.
+                note_value = json.dumps(value) if isinstance(value, (dict, list)) else value
+                constraint_descriptions.append(constraint_labels[field].format(note_value))
 
         result: Dict[str, Any] = {}
 
