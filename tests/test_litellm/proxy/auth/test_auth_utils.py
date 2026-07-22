@@ -428,6 +428,56 @@ def test_get_model_from_request_openai_deployment_route_still_works():
     )
 
 
+def test_get_model_from_request_bedrock_converse_passthrough():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/model/us.anthropic.claude-sonnet-4-6/converse",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_invoke_passthrough():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_v2_converse_stream_passthrough():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/v2/model/us.anthropic.claude-sonnet-4-6/converse-stream",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_model_id_with_slashes():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/model/aws/anthropic/model-name/invoke",
+        )
+        == "aws/anthropic/model-name"
+    )
+
+
+def test_get_model_from_request_bedrock_unparseable_endpoint_returns_none():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/agents/some-agent-route",
+        )
+        is None
+    )
+
+
 def test_get_model_from_request_includes_file_endpoint_header_model():
     assert (
         get_model_from_request(
