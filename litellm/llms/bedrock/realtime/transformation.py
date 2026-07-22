@@ -627,7 +627,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self,
         model: str,
         logging_obj: LiteLLMLoggingObj,
-        modalities: Optional[List[str]] = None,
+        modalities: list[str] | None = None,
     ) -> OpenAIRealtimeStreamSession:
         session = OpenAIRealtimeStreamSession(
             id=logging_obj.litellm_trace_id,
@@ -653,7 +653,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self,
         model: str,
         logging_obj: LiteLLMLoggingObj,
-        modalities: Optional[List[str]] = None,
+        modalities: list[str] | None = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
         """Build the OpenAI session.updated ack reflecting the client's requested modalities."""
         return OpenAIRealtimeStreamSessionEvents(

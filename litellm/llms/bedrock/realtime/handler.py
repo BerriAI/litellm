@@ -7,7 +7,7 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 import asyncio
 import contextlib
 import json
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from pydantic import TypeAdapter
 
@@ -18,7 +18,7 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
 
-_CLIENT_MODALITIES_ADAPTER: TypeAdapter[Optional[List[str]]] = TypeAdapter(Optional[List[str]])
+_CLIENT_MODALITIES_ADAPTER: TypeAdapter["list[str] | None"] = TypeAdapter(list[str] | None)
 
 
 class BedrockRealtime(BaseAWSLLM):
@@ -187,7 +187,7 @@ class BedrockRealtime(BaseAWSLLM):
         transformation_config: BedrockRealtimeConfig,
         model: str,
         session_state: dict,
-        logging_obj: Optional[LiteLLMLogging] = None,
+        logging_obj: LiteLLMLogging | None = None,
     ):
         """Forward messages from client WebSocket to Bedrock stream."""
         from aws_sdk_bedrock_runtime.models import (
@@ -220,8 +220,8 @@ class BedrockRealtime(BaseAWSLLM):
                     await send_to_bedrock(bedrock_message)
 
                 if logging_obj is not None:
-                    client_message_type: Optional[str] = None
-                    requested_modalities: Optional[List[str]] = None
+                    client_message_type: str | None = None
+                    requested_modalities: list[str] | None = None
                     with contextlib.suppress(Exception):
                         parsed_client_message = json.loads(message)
                         client_message_type = parsed_client_message.get("type")
