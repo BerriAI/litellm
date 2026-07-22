@@ -5226,3 +5226,98 @@ async def test_add_litellm_data_to_request_unions_metadata_tags_with_header_tags
     tags = updated["litellm_metadata"]["tags"]
     assert "header-tag" in tags
     assert "body-tag" in tags
+
+
+def _spend_logs_request_mock():
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.asyncio
+async def test_organization_spend_logs_metadata_is_merged():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        organization_metadata={"spend_logs_metadata": {"cost_center": "org-123"}},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=_spend_logs_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["metadata"]["spend_logs_metadata"] == {"cost_center": "org-123"}
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_metadata_precedence_request_key_team_org():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"spend_logs_metadata": {"level": "key", "from_key": "k"}},
+        team_metadata={"spend_logs_metadata": {"level": "team", "from_team": "t"}},
+        organization_metadata={"spend_logs_metadata": {"level": "org", "from_org": "o"}},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "metadata": {"spend_logs_metadata": {"level": "request", "from_request": "r"}},
+        },
+        request=_spend_logs_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    merged = updated["metadata"]["spend_logs_metadata"]
+    assert merged["level"] == "request"
+    assert merged["from_request"] == "r"
+    assert merged["from_key"] == "k"
+    assert merged["from_team"] == "t"
+    assert merged["from_org"] == "o"
+
+
+@pytest.mark.asyncio
+async def test_key_spend_logs_metadata_not_mutated_by_team_and_org():
+    key_metadata = {"spend_logs_metadata": {"from_key": "k"}}
+    team_metadata = {"spend_logs_metadata": {"from_team": "t"}}
+    organization_metadata = {"spend_logs_metadata": {"from_org": "o"}}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata=key_metadata,
+        team_metadata=team_metadata,
+        organization_metadata=organization_metadata,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=_spend_logs_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["metadata"]["spend_logs_metadata"] == {
+        "from_key": "k",
+        "from_team": "t",
+        "from_org": "o",
+    }
+    assert key_metadata["spend_logs_metadata"] == {"from_key": "k"}
+    assert team_metadata["spend_logs_metadata"] == {"from_team": "t"}
+    assert organization_metadata["spend_logs_metadata"] == {"from_org": "o"}
