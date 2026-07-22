@@ -566,10 +566,13 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
         for choice in response.choices:
-            cast(Choices, choice).message = self._handle_message_content_with_tool_calls(
-                message=cast(Choices, choice).message,
+            typed_choice = cast(Choices, choice)
+            typed_choice.message = self._handle_message_content_with_tool_calls(
+                message=typed_choice.message,
                 tool_calls=optional_params.get("tools", None),
             )
+            if typed_choice.finish_reason == "stop" and typed_choice.message.tool_calls:
+                typed_choice.finish_reason = "tool_calls"
 
         response._hidden_params = {
             "additional_headers": additional_headers,
