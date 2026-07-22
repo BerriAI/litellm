@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Annotated, Any, Callable, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -2309,7 +2309,7 @@ async def gigachat_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
