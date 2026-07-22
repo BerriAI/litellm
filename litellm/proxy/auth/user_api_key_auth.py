@@ -1798,7 +1798,7 @@ async def _user_api_key_auth_builder(
                                     fallback_spend=team_member_spend,
                                     max_budget=team_member_budget,
                                 )
-                            if team_member_spend > team_member_budget:
+                            if team_member_spend >= team_member_budget:
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,
                                     max_budget=team_member_budget,

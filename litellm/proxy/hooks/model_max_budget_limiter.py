@@ -70,7 +70,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             if (
                 _current_spend is not None
                 and _current_model_budget_info.max_budget is not None
-                and _current_spend > _current_model_budget_info.max_budget
+                and _current_spend >= _current_model_budget_info.max_budget
             ):
                 raise litellm.BudgetExceededError(
                     message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
@@ -136,7 +136,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             if (
                 _current_spend is not None
                 and _current_model_budget_info.max_budget is not None
-                and _current_spend > _current_model_budget_info.max_budget
+                and _current_spend >= _current_model_budget_info.max_budget
             ):
                 raise litellm.BudgetExceededError(
                     message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
