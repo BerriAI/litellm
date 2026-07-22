@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from litellm._logging import verbose_logger
 from litellm.exceptions import ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
+from litellm.proxy._experimental.mcp_server.faults import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
 if TYPE_CHECKING:
@@ -34,18 +35,15 @@ class SemanticToolFilterContextWindowError(Exception):
         )
 
 
-def _is_context_window_error(error: Optional[BaseException], max_depth: int = 5) -> bool:
-    """Detect a context-window overflow anywhere in an exception's cause chain."""
-    current = error
-    for _ in range(max_depth):
-        if current is None:
-            return False
-        if isinstance(current, ContextWindowExceededError):
-            return True
-        if ExceptionCheckers.is_error_str_context_window_exceeded(str(current)):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
+def _is_context_window_error(error: Optional[BaseException]) -> bool:
+    """Detect a context-window overflow anywhere in an exception's tree."""
+    if error is None:
+        return False
+    return any(
+        isinstance(current, ContextWindowExceededError)
+        or ExceptionCheckers.is_error_str_context_window_exceeded(str(current))
+        for current in iter_exception_tree(error)
+    )
 
 
 class SemanticMCPToolFilter:

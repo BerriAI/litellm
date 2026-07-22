@@ -66,6 +66,7 @@ from litellm.proxy.auth.budget_throttle import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
@@ -527,6 +528,7 @@ async def common_checks(
         request_headers=_safe_get_request_headers(request=request),
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
+        request=request,
     )
 
     if route in MODEL_DISCOVERY_ROUTES:
@@ -1676,6 +1678,13 @@ async def get_user_object(
                     new_user_params["user_email"] = user_email
                 if litellm.default_internal_user_params is not None:
                     new_user_params.update(litellm.default_internal_user_params)
+                if (
+                    new_user_params.get("budget_duration") is not None
+                    and new_user_params.get("budget_reset_at") is None
+                ):
+                    new_user_params["budget_reset_at"] = get_budget_reset_time(
+                        budget_duration=new_user_params["budget_duration"]
+                    )
 
                 response = await UserRepository(prisma_client).table.create(
                     data=new_user_params,

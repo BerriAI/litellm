@@ -2,6 +2,7 @@
 # PROMOTION NOTE: the auth cluster (~14 cells) is a candidate to promote to its own module once stable.
 - {id: other.auth.master_key.valid_allows, module: other, tier: P0, area: auth, assertions: [valid_allows], source: "user_api_key_auth.py:1569-1588", rationale: "Master key authenticates; timing-safe compare"}
 - {id: other.auth.master_key.invalid_denied, module: other, tier: P0, area: auth, assertions: [invalid_denied], source: "user_api_key_auth.py:1580", rationale: "Invalid master key rejected"}
+- {id: other.config.responses.metadata_redis_ttl_bounded, module: other, tier: P0, area: config, assertions: [ttl_bounded], source: "responses + redis cache", rationale: "Responses store+metadata must not leave TTL-unbounded Redis entries (LIT-1201)"}
 - {id: other.auth.jwt.valid_token_allows, module: other, tier: P0, area: auth, assertions: [valid_token_allows], source: "handle_jwt.py:77-150", rationale: "Valid JWT with correct issuer + claims grants access"}
 - {id: other.auth.jwt.expired_denied, module: other, tier: P0, area: auth, assertions: [expired_denied], source: "handle_jwt.py:125-135", rationale: "Expired JWT rejected even with valid signature"}
 - {id: other.auth.jwt.invalid_signature_denied, module: other, tier: P0, area: auth, assertions: [invalid_signature_denied], source: "handle_jwt.py:145-150", rationale: "Bad/missing signature fails verification"}
@@ -21,6 +22,7 @@
 - {id: other.lifecycle.startup.env_vars_resolved, module: other, tier: P1, area: lifecycle, assertions: [env_vars_resolved], source: "proxy_server.py:3984-4010", rationale: "os.environ/ refs resolved at startup"}
 - {id: other.lifecycle.background_health_check.interval_configurable, module: other, tier: P1, area: lifecycle, assertions: [interval_configurable], source: "proxy_server.py:3245-3310", rationale: "Background checks run at configurable interval"}
 - {id: other.config.runtime_update.applies_at_runtime, module: other, tier: P0, area: config, assertions: [applies_at_runtime], source: "proxy_server.py:14014-14060", rationale: "/config/update persists to DB + invalidates cache"}
+- {id: other.config.passthrough.headers_forwarded, module: other, tier: P0, area: config, assertions: [headers_forwarded], source: "passthrough/utils.py forward_headers_from_request", rationale: "Custom pass-through static headers and x-pass-* client headers reach the upstream"}
 - {id: other.config.general_settings.alert_webhook_side_effect, module: other, tier: P1, area: config, assertions: [alert_webhook_side_effect], source: "proxy_server.py:14215", rationale: "alert_to_webhook_url auto-enables slack alerting"}
 - {id: other.config.secret_resolution.kms_integration, module: other, tier: P1, area: config, assertions: [kms_integration], source: "proxy_server.py:3984-4010", rationale: "Resolves secrets from Vault/KMS at startup"}
 - {id: other.config.overrides.audit_logged, module: other, tier: P1, area: config, assertions: [audit_logged], source: "config_override_endpoints.py:67-100", rationale: "Config override mutations audit-logged, values redacted"}
