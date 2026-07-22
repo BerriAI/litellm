@@ -111,7 +111,8 @@ class BaseModelResponseIterator:
     def _handle_string_chunk(self, str_line: str) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
         stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
-        if "[DONE]" in str_line:
+        stripped_sse_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(str_line)
+        if stripped_sse_chunk is not None and stripped_sse_chunk.strip() == "[DONE]":
             return GenericStreamingChunk(
                 text="",
                 is_finished=True,
