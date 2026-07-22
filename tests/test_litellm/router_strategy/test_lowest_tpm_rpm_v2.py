@@ -2,8 +2,8 @@
 Regression tests for https://github.com/BerriAI/litellm/issues/16060
 
 When the tpm/rpm usage cache read fails (DualCache.[async_]batch_get_cache
-returns None, e.g. on a transient Redis error), usage-based-routing-v2 must
-fail open and still return a healthy deployment, instead of raising
+returns None, e.g. on a transient Redis error), usage-based-routing-v2 can
+explicitly opt into returning a healthy deployment instead of raising
 "No deployments available" (RateLimitError / 429).
 """
 
@@ -34,14 +34,35 @@ HEALTHY_DEPLOYMENTS = [
 ]
 
 
-def _handler() -> LowestTPMLoggingHandler_v2:
-    return LowestTPMLoggingHandler_v2(router_cache=DualCache())
+def _handler(*, allow_routing_on_cache_read_failure: bool = False) -> LowestTPMLoggingHandler_v2:
+    return LowestTPMLoggingHandler_v2(
+        router_cache=DualCache(),
+        routing_args={"allow_routing_on_cache_read_failure": allow_routing_on_cache_read_failure},
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_cache_read_failure_fails_closed_by_default():
+    import litellm
+
+    handler = _handler()
+    with patch.object(
+        handler.router_cache,
+        "async_batch_get_cache",
+        new=AsyncMock(return_value=None),
+    ):
+        with pytest.raises(litellm.RateLimitError):
+            await handler.async_get_available_deployments(
+                model_group=MODEL_GROUP,
+                healthy_deployments=HEALTHY_DEPLOYMENTS,
+                messages=[{"role": "user", "content": "hey"}],
+            )
 
 
 @pytest.mark.asyncio
 async def test_async_cache_read_failure_fails_open():
     """Batch cache read returning None must not fail the request."""
-    handler = _handler()
+    handler = _handler(allow_routing_on_cache_read_failure=True)
     with patch.object(
         handler.router_cache,
         "async_batch_get_cache",
@@ -58,7 +79,7 @@ async def test_async_cache_read_failure_fails_open():
 
 def test_sync_cache_read_failure_fails_open():
     """Sync path: batch cache read returning None must not fail the request."""
-    handler = _handler()
+    handler = _handler(allow_routing_on_cache_read_failure=True)
     with patch.object(handler.router_cache, "batch_get_cache", return_value=None):
         deployment = handler.get_available_deployments(
             model_group=MODEL_GROUP,
