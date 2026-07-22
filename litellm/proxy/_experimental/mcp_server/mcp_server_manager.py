@@ -71,6 +71,7 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    canonicalize_url_identity,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
@@ -262,19 +263,11 @@ def _endpoints_yield_to_issuer(
 
 
 def _normalized_authorize_endpoint(url: str) -> str:
-    """Compare authorize endpoints on scheme, host, and path only. The default port is elided and
-    the host is lowercased so ``https://IDP.example.com:443/authorize/`` and
-    ``https://idp.example.com/authorize`` are the same identity; query and trailing slash are not."""
-    parsed = urlparse(url)
-    scheme = parsed.scheme.lower()
-    host = (parsed.hostname or "").lower()
-    default_port = {"https": 443, "http": 80}.get(scheme)
-    try:
-        port = parsed.port
-    except ValueError:
-        port = None
-    authority = host if port is None or port == default_port else f"{host}:{port}"
-    return f"{scheme}://{authority}{parsed.path.rstrip('/')}"
+    """Compare authorize endpoints / issuers on scheme, host, and path only, through the shared URL
+    canonicalizer: the default port is elided and the host is lowercased so
+    ``https://IDP.example.com:443/authorize/`` and ``https://idp.example.com/authorize`` are the same
+    identity, while query, fragment and a trailing slash are dropped."""
+    return canonicalize_url_identity(url)
 
 
 def _issuer_matches(claimed_issuer: object, configured_issuer: str) -> bool:
@@ -1518,6 +1511,7 @@ class MCPServerManager:
                     "subject_token_type",
                     DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
+                upstream_resource=server_config.get("upstream_resource", None),
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
@@ -2017,6 +2011,7 @@ class MCPServerManager:
             subject_token_type=mcp_server.subject_token_type
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or DEFAULT_SUBJECT_TOKEN_TYPE,
+            upstream_resource=(credentials_dict.get("upstream_resource") if credentials_dict else None),
             # ID-JAG fields — read from credentials JSON blob
             id_jag_resource_token_endpoint=(
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None

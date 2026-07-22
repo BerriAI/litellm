@@ -8,7 +8,9 @@ import {
   getOAuthAuthorizationIdentity,
   CLEARED_ON_INVALIDATION,
   isHeldOAuthTokenStale,
+  preservedAdminCredentials,
   preservedDeclaredAppCredentials,
+  ADMIN_CONFIG_CREDENTIAL_KEYS,
   withoutMintedTokenCredentials,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
@@ -34,9 +36,9 @@ import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
+import OAuthFormFields from "./OAuthFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
-import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
 import {
   validateMCPServerUrl,
   validateMCPServerName,
@@ -194,7 +196,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         transport,
         auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
         credentials: isClientForwardedTokenMode(values.auth_type)
-          ? preservedDeclaredAppCredentials(values.credentials)
+          ? preservedAdminCredentials(values.credentials)
           : values.credentials,
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
@@ -225,7 +227,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
       const current = (form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {};
       const nextCredentials = {
-        ...(preservedDeclaredAppCredentials(current) ?? {}),
+        ...(preservedAdminCredentials(current) ?? {}),
         ...(current.scopes !== undefined && { scopes: current.scopes }),
         access_token: token.access_token,
         ...(token.refresh_token && { refresh_token: token.refresh_token }),
@@ -451,10 +453,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     resetOAuthFlow();
     // The admin-typed app is upstream-scoped config, not minted material, so it survives every
     // invalidation; only the held token is discarded. Token-shaped keys are excluded by the filter.
-    const keptAppCredentials = preservedDeclaredAppCredentials(form.getFieldValue("credentials"));
+    const keptAdminCredentials = preservedAdminCredentials(form.getFieldValue("credentials"));
     form.resetFields([...CLEARED_ON_INVALIDATION]);
-    if (keptAppCredentials) {
-      form.setFieldsValue({ credentials: keptAppCredentials });
+    if (keptAdminCredentials) {
+      form.setFieldsValue({ credentials: keptAdminCredentials });
     }
     const preserved = Object.fromEntries(
       CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
@@ -718,6 +720,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         credentialValues && typeof credentialValues === "object"
           ? Object.entries(credentialValues).reduce((acc: Record<string, any>, [key, value]) => {
               if (value === undefined || value === null || value === "") {
+                if (value === "" && (ADMIN_CONFIG_CREDENTIAL_KEYS as readonly string[]).includes(key)) {
+                  acc[key] = null;
+                }
                 return acc;
               }
               if (key === "scopes") {
@@ -928,7 +933,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       // Client-forwarded rows persist ONLY the declared app; strip any token material lingering in the
       // form (e.g. from a prior oauth2 authorize this session) so it can never reach the row.
       const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
-        ? preservedDeclaredAppCredentials(credentialsPayload)
+        ? preservedAdminCredentials(credentialsPayload)
         : credentialsPayload;
 
       if (includeCredentials && submitCredentials && Object.keys(submitCredentials).length > 0) {
@@ -1228,22 +1233,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
             {!isStdioTransport && isOAuthAuthType && (
               <>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Flow Type
-                      <Tooltip title="Machine-to-Machine (M2M) authenticates with client credentials and no user interaction. Interactive (PKCE) authorizes each user in the browser and stores per-user tokens. Servers created before this field existed have no stored value; choose one to persist it.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="oauth_flow_type"
-                >
-                  <Select placeholder="Select OAuth flow">
-                    <Select.Option value={OAUTH_FLOW.M2M}>Machine-to-Machine (M2M)</Select.Option>
-                    <Select.Option value={OAUTH_FLOW.INTERACTIVE}>Interactive (PKCE)</Select.Option>
-                  </Select>
-                </Form.Item>
                 {!oauthFlowTypeValue && !isDelegateAuth && (
                   <Alert
                     type="warning"
@@ -1253,192 +1242,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     description="Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats a machine-to-machine credential shape conservatively."
                   />
                 )}
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Client ID (optional)
-                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "client_id"]}
-                >
-                  <Input.Password
-                    placeholder="Enter OAuth client ID (leave blank to keep existing)"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Client Secret (optional)
-                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "client_secret"]}
-                >
-                  <Input.Password
-                    placeholder="Enter OAuth client secret (leave blank to keep existing)"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Scopes (optional)
-                      <Tooltip title="Add scopes to override the default scope list used for this MCP server.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "scopes"]}
-                >
-                  <Select
-                    mode="tags"
-                    tokenSeparators={[","]}
-                    placeholder="Add scopes"
-                    className="rounded-lg"
-                    size="large"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Issuer (optional)
-                      <Tooltip title="OAuth 2.0 authorization server issuer (RFC 8414). Auto-discovered on first connect; set it explicitly to pin the trust anchor so token and scope discovery is fetched from and validated against this issuer (RFC 8414 §3.3) instead of anything the resource advertises.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="issuer"
-                >
-                  <Input
-                    placeholder="https://issuer.example.com"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Authorization URL Override (optional)
-                      <Tooltip title="Optional override for the authorization endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="authorization_url"
-                >
-                  <Input
-                    placeholder="https://example.com/oauth/authorize"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Token URL Override (optional)
-                      <Tooltip title="Optional override for the token endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="token_url"
-                >
-                  <Input
-                    placeholder="https://example.com/oauth/token"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <TokenEndpointAuthMethodField isEditing />
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Registration URL Override (optional)
-                      <Tooltip title="Optional override for the dynamic client registration endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="registration_url"
-                >
-                  <Input
-                    placeholder="https://example.com/oauth/register"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                {!isM2MFlow && (
-                  <>
-                    <Form.Item
-                      label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
-                          Token Validation Rules (optional)
-                          <Tooltip title='JSON object of key-value rules checked against the OAuth token response before storing. Supports dot-notation for nested fields (e.g. {"organization": "my-org", "team.id": "123"}). Tokens that fail validation are rejected with HTTP 403.'>
-                            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                          </Tooltip>
-                        </span>
-                      }
-                      name="token_validation_json"
-                      rules={[
-                        {
-                          validator: (_: any, value: string) => {
-                            if (!value || value.trim() === "") return Promise.resolve();
-                            try {
-                              JSON.parse(value);
-                              return Promise.resolve();
-                            } catch {
-                              return Promise.reject(new Error("Must be valid JSON"));
-                            }
-                          },
-                        },
-                      ]}
-                    >
-                      <Input.TextArea
-                        placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
-                        rows={4}
-                        className="font-mono text-sm rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
-                          Token Storage TTL (seconds, optional)
-                          <Tooltip title="How long to cache each user's OAuth access token in Redis before evicting it (never longer than the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default.">
-                            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                          </Tooltip>
-                        </span>
-                      }
-                      name="token_storage_ttl_seconds"
-                    >
-                      <InputNumber min={1} placeholder="e.g. 3600" style={{ width: "100%" }} className="rounded-lg" />
-                    </Form.Item>
-                  </>
-                )}
-                <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">
-                    Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication
-                    value.
-                  </p>
-                  <Button
-                    variant="secondary"
-                    onClick={startOAuthFlow}
-                    disabled={oauthStatus === "authorizing" || oauthStatus === "exchanging"}
-                  >
-                    {oauthStatus === "authorizing"
-                      ? "Waiting for authorization..."
-                      : oauthStatus === "exchanging"
-                        ? "Exchanging authorization code..."
-                        : "Authorize & Fetch Token"}
-                  </Button>
-                  {oauthError && <p className="text-sm text-red-500">{oauthError}</p>}
-                  {oauthStatus === "success" && oauthTokenResponse?.access_token && (
-                    <p className="text-sm text-green-600">
-                      Token fetched. Expires in {oauthTokenResponse.expires_in ?? "?"} seconds.
-                    </p>
-                  )}
-                </div>
+                <OAuthFormFields
+                  isM2M={isM2MFlow}
+                  isEditing
+                  oauthFlow={{
+                    startOAuthFlow,
+                    status: oauthStatus,
+                    error: oauthError,
+                    tokenResponse: oauthTokenResponse,
+                  }}
+                />
               </>
             )}
 

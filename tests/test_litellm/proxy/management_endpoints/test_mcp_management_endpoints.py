@@ -762,6 +762,94 @@ class TestListMCPServers:
             assert result.status == "healthy"
 
     @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_preserves_upstream_resource_for_admin(self):
+        """upstream_resource is non-secret admin config, so the admin edit form must receive its real
+        value to change or clear it; secrets sharing the blob are still dropped."""
+        mock_server = generate_mock_mcp_server_db_record(server_id="server-ur", alias="UR")
+        mock_server.credentials = {"client_secret": "top-secret", "upstream_resource": "api://audience"}
+
+        mock_prisma_client = MagicMock()
+        mock_health_result = generate_mock_mcp_server_db_record(server_id="server-ur", alias="UR")
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=mock_health_result),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="server-ur",
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result.credentials == {"upstream_resource": "api://audience"}
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_strips_upstream_resource_for_non_admin(self):
+        """A non-full-admin viewer gets the whole blob nulled, including the non-secret admin config,
+        so admin-typed settings never leak to a discovery-only caller."""
+        mock_server = generate_mock_mcp_server_db_record(server_id="server-ur2", alias="UR2")
+        mock_server.credentials = {"client_secret": "top-secret", "upstream_resource": "api://audience"}
+
+        mock_prisma_client = MagicMock()
+        mock_health_result = generate_mock_mcp_server_db_record(server_id="server-ur2", alias="UR2")
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=mock_health_result),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="server-ur2",
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result.credentials is None
+
+    @pytest.mark.asyncio
     async def test_fetch_single_mcp_server_handles_missing_credentials_field(self):
         mock_server = generate_mock_mcp_server_db_record(server_id="server-2", alias="Server 2")
         # Simulate ORM object without credentials attribute (e.g., older schema)
@@ -1428,6 +1516,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_session_token = None
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
+        existing_server.upstream_resource = None
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = existing_server
@@ -1449,6 +1538,68 @@ class TestTemporaryMCPSessionEndpoints:
             "scopes": ["scope:a", "scope:b"],
         }
         mock_manager.get_mcp_server_by_id.assert_called_once_with("server-123")
+
+    @staticmethod
+    def _inherit_with(payload_credentials, **server_overrides):
+        existing_server = MagicMock()
+        existing_server.authentication_token = None
+        existing_server.client_id = "client-123"
+        existing_server.client_secret = "secret-xyz"
+        existing_server.scopes = None
+        existing_server.aws_access_key_id = None
+        existing_server.aws_secret_access_key = None
+        existing_server.aws_session_token = None
+        existing_server.aws_region_name = None
+        existing_server.aws_service_name = None
+        existing_server.upstream_resource = None
+        for key, value in server_overrides.items():
+            setattr(existing_server, key, value)
+
+        payload = NewMCPServerRequest(
+            server_id="server-123",
+            alias="Temp Server",
+            url="https://temp.example.com",
+            transport=MCPTransport.http,
+            credentials=payload_credentials,
+        )
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = existing_server
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                _inherit_credentials_from_existing_server,
+            )
+
+            return _inherit_credentials_from_existing_server(payload)
+
+    def test_admin_config_alone_does_not_suppress_credential_inheritance(self):
+        """The edit form round-trips upstream_resource, which is admin config rather than a credential.
+        Treating the blob as "credentials supplied" left the Authorize session with no declared app on
+        the exact path where this knob is configured."""
+        updated = self._inherit_with({"upstream_resource": "api://audience"})
+
+        assert updated.credentials["client_id"] == "client-123"
+        assert updated.credentials["client_secret"] == "secret-xyz"
+
+    def test_supplied_credential_still_wins_over_inheritance(self):
+        """A caller that supplies a real credential keeps it; inheritance must not overwrite it."""
+        updated = self._inherit_with({"auth_value": "caller-token"})
+
+        assert updated.credentials == {"auth_value": "caller-token"}
+
+    def test_inheritance_carries_upstream_resource_to_the_session_server(self):
+        """Without this the temporary server omits the resource indicator and the Authorize leg it
+        exists for fails as invalid_target."""
+        updated = self._inherit_with(None, upstream_resource="api://stored")
+
+        assert updated.credentials["upstream_resource"] == "api://stored"
+
+    def test_supplied_upstream_resource_wins_over_the_stored_one(self):
+        updated = self._inherit_with({"upstream_resource": "api://typed"}, upstream_resource="api://stored")
+
+        assert updated.credentials["upstream_resource"] == "api://typed"
 
     def test_cache_temporary_mcp_server_stores_entry_with_ttl(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -1686,6 +1837,7 @@ class TestTemporaryMCPSessionEndpoints:
             aws_session_token=None,
             aws_region_name=None,
             aws_service_name=None,
+            upstream_resource=None,
         )
         built_server = generate_mock_mcp_server_config_record(server_id="temp-server")
         mock_manager = MagicMock()

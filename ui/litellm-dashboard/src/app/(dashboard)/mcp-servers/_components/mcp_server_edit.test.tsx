@@ -1052,6 +1052,62 @@ describe("MCPServerEdit (interactive OAuth)", () => {
   });
 });
 
+describe("MCPServerEdit (resource indicator)", () => {
+  const RESOURCE_PLACEHOLDER = "auto, or https://mcp.example.com/mcp";
+  const serverWithResource = {
+    ...interactiveOAuthServer,
+    credentials: { upstream_resource: "api://finance-api/.default" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOauth.tokenResponse = null;
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...serverWithResource });
+  });
+
+  async function renderAndSave() {
+    render(
+      <MCPServerEdit
+        mcpServer={serverWithResource}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+    const input = await screen.findByPlaceholderText(RESOURCE_PLACEHOLDER);
+    await waitFor(() => expect(input).toHaveValue("api://finance-api/.default"));
+    return async () => {
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+      });
+      await waitFor(() => {
+        expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+      });
+      const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+      return payload;
+    };
+  }
+
+  // Regression: the edit form hand-rolled its own OAuth fields and never mounted this one, while the
+  // submit path re-added every missing admin-config key as an explicit null. Saving any unrelated
+  // change therefore wiped a configured resource indicator.
+  it("leaves an untouched resource indicator alone instead of clearing it", async () => {
+    const save = await renderAndSave();
+    const payload = await save();
+    expect(payload.credentials?.upstream_resource).toBe("api://finance-api/.default");
+  });
+
+  it("sends an explicit null when the admin empties the field, so the backend merge clears it", async () => {
+    const save = await renderAndSave();
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(RESOURCE_PLACEHOLDER), { target: { value: "" } });
+    });
+    const payload = await save();
+    expect(payload.credentials?.upstream_resource).toBeNull();
+  });
+});
+
 describe("MCPServerEdit (tool list fetch)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
