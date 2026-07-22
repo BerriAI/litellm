@@ -80,8 +80,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
             params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
         elif self.is_model_gpt_5_2_model(model):
-            azure_supported_params = ["logprobs", "top_logprobs"]
-            params.extend(azure_supported_params)
+            params.extend(p for p in ("logprobs", "top_logprobs") if p not in params)
 
         return params
 
