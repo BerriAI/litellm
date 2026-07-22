@@ -78,7 +78,7 @@ def test_streaming_tool_call_finish_reason_is_tool_calls():
     assert response1 is not None
     assert len(response1.choices) == 1
     assert response1.choices[0].delta.tool_calls is not None
-    assert response1.choices[0].finish_reason == "tool_calls"
+    assert response1.choices[0].finish_reason is None
     assert iterator.has_seen_tool_calls is True
 
     # Process chunk 2 (final chunk)
@@ -133,6 +133,7 @@ def test_streaming_no_tool_calls_finish_reason_is_stop():
     assert response1 is not None
     assert len(response1.choices) == 1
     assert iterator.has_seen_tool_calls is False
+    assert response1.choices[0].finish_reason is None
 
     # Process chunk 2
     response2 = iterator.chunk_parser(chunk_with_finish_reason)
@@ -196,7 +197,9 @@ def test_streaming_multiple_tool_calls_finish_reason():
 
     response1 = iterator.chunk_parser(chunk_tool_1)
     assert response1 is not None
+    assert len(response1.choices) == 1
     assert iterator.has_seen_tool_calls is True
+    assert response1.choices[0].finish_reason is None
 
     response2 = iterator.chunk_parser(chunk_finish)
     assert response2 is not None
@@ -295,6 +298,7 @@ def test_streaming_tool_call_finish_reason_with_empty_content_in_final_chunk():
     assert len(response1.choices) == 1
     assert response1.choices[0].delta.tool_calls is not None
     assert iterator.has_seen_tool_calls is True
+    assert response1.choices[0].finish_reason is None
 
     # Process chunk 2 (final chunk with empty content)
     response2 = iterator.chunk_parser(chunk_with_empty_content_and_finish)
@@ -338,3 +342,22 @@ def test_streaming_metadata_only_chunk_does_not_yield_empty_choices():
     assert len(response.choices) == 1
     assert response.choices[0].finish_reason is None
     assert response.choices[0].delta.content is None
+
+
+def test_check_finish_reason_streaming_returns_none_when_no_finish_reason():
+    """
+    Ensure _check_finish_reason returns None when is_streaming=True and finish_reason is None or empty,
+    even if chat_completion_message contains tool_calls or function_call.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    msg_with_tool_calls = {
+        "role": "assistant",
+        "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
+    }
+    assert VertexGeminiConfig._check_finish_reason(msg_with_tool_calls, None, is_streaming=True) is None
+    assert VertexGeminiConfig._check_finish_reason(msg_with_tool_calls, "", is_streaming=True) is None
+    # When not streaming, should still return "tool_calls" per contract
+    assert VertexGeminiConfig._check_finish_reason(msg_with_tool_calls, None, is_streaming=False) == "tool_calls"
