@@ -6947,6 +6947,141 @@ async def test_delete_team_persists_deleted_teams(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_delete_team_invalidates_cached_virtual_keys(monkeypatch):
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin-user",
+        api_key="sk-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+
+    team1 = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="test-team-1",
+        members_with_roles=[
+            Member(user_id="user-1", role="admin"),
+        ],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+    key1 = LiteLLM_VerificationToken(
+        token="hashed-token-team-1",
+        team_id="team-1",
+        user_id="user-1",
+    )
+
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team1)
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": ["team-1"]})
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[key1]
+    )
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+
+    key_cache = DualCache()
+    await key_cache.async_set_cache(
+        key="hashed-token-team-1",
+        value=UserAPIKeyAuth(token="hashed-token-team-1", team_id="team-1"),
+    )
+    await key_cache.async_set_cache(
+        key="team_id:team-1",
+        value=LiteLLM_TeamTableCachedObj(**team1.model_dump()),
+    )
+    await key_cache.async_set_cache(key="team_alias:test-team-1", value={"team_id": "team-1"})
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    proxy_logging_obj.internal_usage_cache.dual_cache = DualCache()
+    await proxy_logging_obj.internal_usage_cache.dual_cache.async_set_cache(
+        key="hashed-token-team-1",
+        value={"token": "hashed-token-team-1"},
+    )
+    await proxy_logging_obj.internal_usage_cache.dual_cache.async_set_cache(
+        key="team_id:team-1",
+        value={"team_id": "team-1"},
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.create_audit_log_for_update",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+        "admin",
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_delete",
+        AsyncMock(return_value=team1),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+
+    result = await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-1"]),
+        http_request=MagicMock(),
+        user_api_key_dict=mock_user_api_key_dict,
+        litellm_changed_by="admin-user",
+    )
+
+    assert result == {"deleted_teams": ["team-1"]}
+    assert key_cache.get_cache(key="hashed-token-team-1") is None
+    assert key_cache.get_cache(key="team_id:team-1") is None
+    assert key_cache.get_cache(key="team_alias:test-team-1") is None
+    assert (
+        proxy_logging_obj.internal_usage_cache.dual_cache.get_cache(
+            key="hashed-token-team-1"
+        )
+        is None
+    )
+    assert (
+        proxy_logging_obj.internal_usage_cache.dual_cache.get_cache(key="team_id:team-1")
+        is None
+    )
+
+
+def test_delete_team_id_from_cache_uses_prefixed_key(monkeypatch):
+    from litellm.proxy._types import DeleteTeamRequest, UpdateTeamRequest
+    from litellm.proxy.management_helpers.utils import _delete_team_id_from_cache
+
+    deleted_keys: list[str] = []
+
+    class _FakeCache:
+        def delete_cache(self, key):
+            deleted_keys.append(key)
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        _FakeCache(),
+    )
+
+    _delete_team_id_from_cache(
+        kwargs={"data": DeleteTeamRequest(team_ids=["team-abc"])}
+    )
+    assert "team_id:team-abc" in deleted_keys
+    assert "team-abc" in deleted_keys
+
+    deleted_keys.clear()
+    _delete_team_id_from_cache(
+        kwargs={"data": UpdateTeamRequest(team_id="team-xyz")}
+    )
+    assert "team_id:team-xyz" in deleted_keys
+    assert "team-xyz" in deleted_keys
+
+
+@pytest.mark.asyncio
 async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import TeamMemberDeleteRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
