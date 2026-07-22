@@ -5806,3 +5806,309 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     )
 
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
+
+
+class TestStrategyRegistryCleanupOnRemoval:
+    """upsert_deployment / delete_deployment must de-register strategy routers
+    (auto/complexity/adaptive/quality) for the removed deployment — otherwise
+    the re-add dies on the init functions' "already exists" check and the
+    model silently disappears from every listing while the stale registry
+    object keeps routing. Issue #33168."""
+
+    def _make_router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "fake-key"},
+                }
+            ]
+        )
+
+    def _complexity_deployment(self, simple_tier: str = "gpt-4o-mini"):
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        return Deployment(
+            model_name="test-auto-latest",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                complexity_router_config={
+                    "tiers": {
+                        "SIMPLE": simple_tier,
+                        "MEDIUM": simple_tier,
+                        "COMPLEX": simple_tier,
+                        "REASONING": simple_tier,
+                    }
+                },
+                complexity_router_default_model=simple_tier,
+            ),
+            model_info={"id": "complexity-registry-test-id"},
+        )
+
+    def test_upsert_updated_complexity_router_stays_listed(self):
+        router = self._make_router()
+        router.add_deployment(self._complexity_deployment())
+        assert "test-auto-latest" in router.get_model_names()
+        assert "test-auto-latest" in router.complexity_routers
+
+        # change the config -> upsert removes + re-adds the deployment
+        router.upsert_deployment(self._complexity_deployment(simple_tier="gpt-4o"))
+
+        assert "test-auto-latest" in router.get_model_names()
+        registered = router.complexity_routers["test-auto-latest"]
+        assert len(registered) == 1, "upsert must replace the registration, not accumulate"
+        assert registered[0].strategy.config.tiers["SIMPLE"] == "gpt-4o"
+
+    def test_delete_complexity_router_clears_registry_and_allows_re_add(self):
+        router = self._make_router()
+        deployment = self._complexity_deployment()
+        router.add_deployment(deployment)
+
+        router.delete_deployment(id="complexity-registry-test-id")
+
+        # ghost registration must be gone once the deployment is deleted
+        assert "test-auto-latest" not in router.complexity_routers
+
+        # and the same name must be re-addable + listed again
+        router.add_deployment(deployment)
+        assert "test-auto-latest" in router.get_model_names()
+        assert "test-auto-latest" in router.complexity_routers
+
+    def test_delete_regular_deployment_untouched_by_registry_cleanup(self):
+        router = self._make_router()
+        model_id = router.get_model_ids()[0]
+
+        deleted = router.delete_deployment(id=model_id)
+
+        assert deleted is not None
+        assert "gpt-4o-mini" not in router.get_model_names()
+
+
+class TestStrategyRegistryCleanupGuards:
+    """Guards on _remove_deployment_from_strategy_registries: only strategy
+    deployments (litellm_params.model starting with auto_router/) may evict a
+    registry entry, and adaptive-router removal must also retire the
+    deployment's AdaptiveRouterPostCallHook. Issue #33168 follow-ups."""
+
+    def test_direct_call_is_noop_for_non_strategy_model(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "backing-model",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "fake-key"},
+                }
+            ]
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        router.add_deployment(
+            Deployment(
+                model_name="shared-name",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={
+                        "tiers": {
+                            "SIMPLE": "backing-model",
+                            "MEDIUM": "backing-model",
+                            "COMPLEX": "backing-model",
+                            "REASONING": "backing-model",
+                        }
+                    },
+                    complexity_router_default_model="backing-model",
+                ),
+                model_info={"id": "strategy-row-id"},
+            )
+        )
+        assert "shared-name" in router.complexity_routers
+
+        # a NON-strategy litellm_model must not evict the registry entry
+        router._remove_deployment_from_strategy_registries(
+            model_name="shared-name", litellm_model="azure/gpt-4o"
+        )
+        assert "shared-name" in router.complexity_routers
+
+        # a strategy litellm_model does
+        router._remove_deployment_from_strategy_registries(
+            model_name="shared-name", litellm_model="auto_router/complexity_router"
+        )
+        assert "shared-name" not in router.complexity_routers
+
+    def test_deleting_regular_deployment_with_colliding_name_keeps_strategy_router(self):
+        """A regular deployment that merely SHARES a strategy router's public
+        model_name must not evict the strategy router when deleted."""
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "backing-model",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "fake-key"},
+                }
+            ]
+        )
+        router.add_deployment(
+            Deployment(
+                model_name="collide-auto-latest",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={
+                        "tiers": {
+                            "SIMPLE": "backing-model",
+                            "MEDIUM": "backing-model",
+                            "COMPLEX": "backing-model",
+                            "REASONING": "backing-model",
+                        }
+                    },
+                    complexity_router_default_model="backing-model",
+                ),
+                model_info={"id": "strategy-row"},
+            )
+        )
+        # regular deployment under the SAME public name (different tenant/id)
+        router.add_deployment(
+            Deployment(
+                model_name="collide-auto-latest",
+                litellm_params=LiteLLM_Params(model="gpt-4o-mini", api_key="fake-key"),
+                model_info={"id": "regular-row"},
+            )
+        )
+
+        router.delete_deployment(id="regular-row")
+
+        assert "collide-auto-latest" in router.complexity_routers, (
+            "deleting a regular deployment with a colliding name must not evict "
+            "the strategy router registration"
+        )
+
+    @staticmethod
+    def _count_adaptive_hooks():
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
+        )
+
+        seen = set()
+        for cb_list in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        ):
+            for cb in cb_list:
+                if isinstance(cb, AdaptiveRouterPostCallHook):
+                    seen.add(id(cb))
+        return len(seen)
+
+    def _adaptive_router(self):
+        # adaptive-router init is deferred to set_model_list, so the deployment
+        # must be part of the Router's initial model_list
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "fast",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "fake-key"},
+                },
+                {
+                    "model_name": "adaptive-test-router",
+                    "litellm_params": {
+                        "model": "auto_router/adaptive_router",
+                        "adaptive_router_config": {"available_models": ["fast"]},
+                    },
+                    "model_info": {"id": "adaptive-row"},
+                },
+            ]
+        )
+
+    def test_deleting_one_strategy_does_not_evict_same_named_other_strategy(self):
+        """model_names are only unique per registry — a complexity router and a
+        quality router may share a name; deleting one must not evict the other."""
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "backing-model",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "fake-key"},
+                }
+            ]
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        tiers = {
+            "SIMPLE": "backing-model",
+            "MEDIUM": "backing-model",
+            "COMPLEX": "backing-model",
+            "REASONING": "backing-model",
+        }
+        router.add_deployment(
+            Deployment(
+                model_name="dual-name",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={"tiers": tiers},
+                    complexity_router_default_model="backing-model",
+                ),
+                model_info={"id": "dual-complexity-row"},
+            )
+        )
+        router.add_deployment(
+            Deployment(
+                model_name="dual-name",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/quality_router",
+                    quality_router_config={
+                        "quality_tiers": {"default": "backing-model"},
+                        "default_model": "backing-model",
+                    },
+                ),
+                model_info={"id": "dual-quality-row"},
+            )
+        )
+        assert "dual-name" in router.complexity_routers
+        assert "dual-name" in router.quality_routers
+
+        router.delete_deployment(id="dual-complexity-row")
+
+        assert "dual-name" not in router.complexity_routers
+        assert "dual-name" in router.quality_routers, (
+            "deleting the complexity router must not evict the same-named quality router"
+        )
+
+    def test_adaptive_router_delete_retires_post_call_hook(self):
+        baseline = self._count_adaptive_hooks()  # tolerate hooks leaked by other tests
+        router = self._adaptive_router()
+        assert "adaptive-test-router" in router.adaptive_routers
+        assert self._count_adaptive_hooks() == baseline + 1
+
+        router.delete_deployment(id="adaptive-row")
+
+        assert "adaptive-test-router" not in router.adaptive_routers
+        assert self._count_adaptive_hooks() == baseline, "deleted adaptive router's hook must be retired"
+
+    def test_adaptive_router_upsert_applies_new_config_without_leaking_hooks(self):
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        baseline = self._count_adaptive_hooks()  # tolerate hooks leaked by other tests
+        router = self._adaptive_router()
+        original = router.adaptive_routers["adaptive-test-router"][0].strategy
+        assert self._count_adaptive_hooks() == baseline + 1
+
+        router.upsert_deployment(
+            Deployment(
+                model_name="adaptive-test-router",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/adaptive_router",
+                    adaptive_router_config={"available_models": ["fast"], "explore_rate": 0.5},
+                ),
+                model_info={"id": "adaptive-row"},
+            )
+        )
+
+        assert "adaptive-test-router" in router.get_model_names()
+        assert "adaptive-test-router" in router.adaptive_routers, (
+            "upserted adaptive deployment must still have a registered router"
+        )
+        assert router.adaptive_routers["adaptive-test-router"][0].strategy is not original, (
+            "upsert must rebuild the adaptive router with the new config"
+        )
+        assert self._count_adaptive_hooks() == baseline + 1, (
+            "exactly one hook must remain after upsert (old retired, new registered)"
+        )
