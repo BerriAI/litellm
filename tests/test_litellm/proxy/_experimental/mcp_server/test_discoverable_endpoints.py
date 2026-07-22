@@ -8148,3 +8148,117 @@ async def test_register_wall_names_the_fix_for_urlless_servers():
     detail_text = str(exc_info.value.detail)
     assert "set Authorization URL and Token URL" in detail_text
     assert "Issuer" in detail_text
+
+
+@pytest.mark.asyncio
+async def test_authorize_wall_points_at_discovery_failure_for_url_servers():
+    """LIT-4658: a server WITH a url that still has no authorization_url got here because OAuth
+    discovery against that url failed (typically a misconfigured url); the old detail blamed
+    "servers with no url", sending the operator down the wrong path. The detail must now name the
+    discovery failure and point at the proxy logs where LIT-4658's warnings carry the reason."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="typo-url-wall",
+        name="typo_wall",
+        server_name="typo_wall",
+        url="https://typo-host.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authorize_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_id="client",
+            redirect_uri="http://localhost/callback",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "may be misconfigured" in detail_text
+    assert "proxy logs" in detail_text
+    assert "Servers with no url" not in detail_text
+    assert "typo-host.example.com" not in detail_text
+
+
+@pytest.mark.asyncio
+async def test_token_wall_points_at_discovery_failure_for_url_servers():
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="typo-url-token-wall",
+        name="typo_token_wall",
+        server_name="typo_token_wall",
+        url="https://typo-host.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        authorization_url="https://idp.example.com/authorize",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="client",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "token url is not configured" in detail_text
+    assert "may be misconfigured" in detail_text
+    assert "Servers with no url" not in detail_text
+
+
+@pytest.mark.asyncio
+async def test_authorize_wall_names_the_issuer_for_anchored_servers():
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="anchored-wall",
+        name="anchored_wall",
+        server_name="anchored_wall",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        issuer="https://idp.example.com",
+        issuer_is_anchored=True,
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authorize_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_id="client",
+            redirect_uri="http://localhost/callback",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "verify the Issuer" in detail_text
+    assert "Servers with no url" not in detail_text
+    assert "idp.example.com" not in detail_text

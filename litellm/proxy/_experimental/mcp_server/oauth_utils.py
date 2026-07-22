@@ -4,7 +4,7 @@
 import os
 from ipaddress import ip_address
 from typing import Any, Dict, List, NoReturn, Optional
-from urllib.parse import ParseResult, urlparse, urlunparse
+from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
 
@@ -68,6 +68,27 @@ def _oauth_invalid_request(
 def _origin_label(scheme: str, netloc: str) -> str:
     """Human-readable origin for error messages (scheme + host[:port])."""
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
+
+
+def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
+    """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
+
+    Everything else is dropped: userinfo (``user:pass@``), the query string, the
+    fragment, and the path, because hosted MCP servers routinely embed the
+    credential in the path (e.g. ``/mcp/s/<token>``) and this value is persisted
+    in spend-log metadata that a caller who can invoke the tool can read back.
+    Returns None when the URL has no host to identify (nothing safe to log).
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if not parts.hostname:
+        return None
+    netloc = f"{parts.hostname}:{parts.port}" if parts.port else parts.hostname
+    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
 def _resolve_proxy_base_url_env() -> Optional[str]:
