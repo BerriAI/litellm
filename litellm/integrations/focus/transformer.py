@@ -119,7 +119,18 @@ class FocusTransformer:
             pl.col("model").cast(pl.String).alias("ResourceType"),
             pl.lit("AI and Machine Learning").alias("ServiceCategory"),
             pl.lit("Generative AI").alias("ServiceSubcategory"),
-            pl.col("model_group").cast(pl.String).alias("ServiceName"),
+            # Vantage requires ServiceName on every row. model_group can be
+            # null/empty (e.g. direct calls that bypass the router), so fall
+            # back to model, then to a literal placeholder.
+            pl.coalesce(
+                pl.when(pl.col("model_group").cast(pl.String).str.len_chars() > 0)
+                .then(pl.col("model_group").cast(pl.String))
+                .otherwise(None),
+                pl.when(pl.col("model").cast(pl.String).str.len_chars() > 0)
+                .then(pl.col("model").cast(pl.String))
+                .otherwise(None),
+                pl.lit("unknown"),
+            ).alias("ServiceName"),
             pl.col("team_id").cast(pl.String).alias("SubAccountId"),
             pl.col("team_alias").cast(pl.String).alias("SubAccountName"),
             none_str.alias("SubAccountType"),

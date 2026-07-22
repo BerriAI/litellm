@@ -271,6 +271,16 @@ def is_vantage_setup_in_config() -> bool:
     return False
 
 
+def _get_upstream_status_code(exception: Exception) -> int:
+    """Return the upstream HTTP status code when the export client exposes one."""
+    status_code = getattr(exception, "status_code", None)
+    if status_code is None:
+        response = getattr(exception, "response", None)
+        status_code = getattr(response, "status_code", None)
+
+    return status_code if isinstance(status_code, int) else 500
+
+
 async def is_vantage_setup() -> bool:
     """Check if Vantage is setup in either config or database."""
     try:
@@ -488,10 +498,14 @@ async def vantage_export(
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.error(f"Error performing Vantage export: {str(e)}")
+        body = getattr(e, "text", None) or getattr(
+            getattr(e, "response", None), "text", None
+        )
+        detail = f"{str(e)} | response body: {body}" if body else str(e)
+        verbose_proxy_logger.error(f"Error performing Vantage export: {detail}")
         raise HTTPException(
-            status_code=500,
-            detail={"error": f"Failed to perform Vantage export: {str(e)}"},
+            status_code=_get_upstream_status_code(e),
+            detail={"error": f"Failed to perform Vantage export: {detail}"},
         )
 
 
