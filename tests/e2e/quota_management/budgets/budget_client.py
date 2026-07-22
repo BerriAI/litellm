@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 from pydantic import AliasPath, BaseModel, Field, RootModel
 
-from proxy_client import ProxyClient
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
+from proxy_client import ProxyClient
 from models import (
     AnthropicMessagesBody,
     BudgetWindow,
+    BudgetWindowState,
     ChatBody,
     ChatMessage,
     ChatMetadata,
@@ -130,8 +132,13 @@ class TeamInfoParams(BaseModel):
     team_id: str
 
 
+class TeamInfoRow(BaseModel):
+    budget_limits: list[BudgetWindowState] | None = None
+
+
 class TeamInfoResponse(BaseModel):
     team_memberships: list[TeamMembershipRow] = []
+    team_info: TeamInfoRow | None = None
 
 
 class TagNewBody(BaseModel):
@@ -171,6 +178,10 @@ class BudgetRow(BaseModel):
 
 class BudgetInfoResponse(RootModel[list[BudgetRow]]):
     pass
+
+
+def window_reset_at(windows: list[BudgetWindowState], budget_duration: str) -> datetime | None:
+    return next((w.reset_at for w in windows if w.budget_duration == budget_duration), None)
 
 
 def is_budget_block(result: StreamingResponse) -> bool:
@@ -220,6 +231,20 @@ class BudgetClient:
 
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
+
+    def key_budget_windows(self, key: str) -> list[BudgetWindowState]:
+        """A key's budget_limits windows as /key/info stores them. Each window's
+        reset_at is advanced by the reset job in the same pass that zeroes the
+        window's spend counter, so a strictly-later value proves the wipe ran."""
+        return self.proxy.key_info(key).budget_limits or []
+
+    def team_budget_windows(self, team_id: str) -> list[BudgetWindowState]:
+        """Team analog of key_budget_windows, read from /team/info."""
+        match self._team_info(team_id):
+            case Success(data=data) if data.team_info is not None:
+                return data.team_info.budget_limits or []
+            case _:
+                return []
 
     def delete_customers(self, user_ids: list[str]) -> None:
         self.proxy.delete_customers(user_ids)
@@ -386,15 +411,18 @@ class BudgetClient:
             response_type=NoBody,
         )
 
+    def _team_info(self, team_id: str) -> Result[TeamInfoResponse]:
+        return self.proxy.transport.get(
+            "/team/info",
+            headers=self.proxy.transport.master,
+            params=TeamInfoParams(team_id=team_id),
+            response_type=TeamInfoResponse,
+        )
+
     def _wait_for_team(self, team_id: str) -> None:
         last: Result[TeamInfoResponse] | None = None
         for _ in range(_TEAM_READY_ATTEMPTS):
-            last = self.proxy.transport.get(
-                "/team/info",
-                headers=self.proxy.transport.master,
-                params=TeamInfoParams(team_id=team_id),
-                response_type=TeamInfoResponse,
-            )
+            last = self._team_info(team_id)
             match last:
                 case Success():
                     return
@@ -448,13 +476,7 @@ class BudgetClient:
         """The member's per-team budget_reset_at as /team/info reports it, or None if
         no reset is scheduled. The reset job advances this each time the window
         elapses; a job that skips the row leaves it pinned forever."""
-        result = self.proxy.transport.get(
-            "/team/info",
-            headers=self.proxy.transport.master,
-            params=TeamInfoParams(team_id=team_id),
-            response_type=TeamInfoResponse,
-        )
-        match result:
+        match self._team_info(team_id):
             case Success(data=data):
                 return next(
                     (row.budget_reset_at for row in data.team_memberships if row.user_id == user_id),

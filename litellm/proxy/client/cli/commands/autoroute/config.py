@@ -226,6 +226,24 @@ def build_generated_proxy_config(config: AutorouteConfig, master_key: str) -> di
     }
 
 
+def master_key_from_config(config: dict[str, JsonValue]) -> str | None:
+    """The master key persisted in a generated config, or None when absent or blank.
+
+    Single definition of "this config already has a usable key", shared by `up` (reuse
+    instead of minting) and the configure wizard (carry the key forward on rewrite) so the
+    two sites can never disagree on what counts as one. Returned verbatim, never stripped:
+    the proxy authenticates against the exact bytes under general_settings.master_key, so a
+    normalized copy here would diverge from what the proxy expects.
+    """
+    general_settings = config.get("general_settings")
+    if not isinstance(general_settings, dict):
+        return None
+    master_key = general_settings.get("master_key")
+    if isinstance(master_key, str) and master_key.strip():
+        return master_key
+    return None
+
+
 __all__ = [
     "AUTOROUTER_MODEL_NAME",
     "TIER_NAMES",
@@ -244,6 +262,7 @@ __all__ = [
     "build_generated_proxy_config",
     "chat_models",
     "embedding_models",
+    "master_key_from_config",
     "parse_discovered_models",
     "validate_config",
 ]
