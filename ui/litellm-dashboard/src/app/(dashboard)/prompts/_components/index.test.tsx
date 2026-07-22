@@ -1,5 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deletePromptCall, getPromptsList } from "@/components/networking";
@@ -123,6 +123,24 @@ describe("PromptsPanel toolbar", () => {
 
     await waitFor(() => expect(mockGetPromptsList).toHaveBeenLastCalledWith("sk-test", "production"));
   });
+
+  it("should show the picked environment by label and clear back to the unfiltered list", async () => {
+    // Base UI's exit animation never completes in jsdom, so the closing popup keeps
+    // pointer-events: none and blocks the second open. The clicks still dispatch.
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderPanel("Admin");
+    await screen.findByText("table-loaded");
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByText("Production"));
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("Production"));
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByText("All Environments"));
+
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("All Environments"));
+    await waitFor(() => expect(mockGetPromptsList).toHaveBeenLastCalledWith("sk-test", undefined));
+  });
 });
 
 describe("PromptsPanel delete confirmation", () => {
@@ -158,5 +176,27 @@ describe("PromptsPanel delete confirmation", () => {
 
     await waitFor(() => expect(screen.queryByText(/delete prompt: my-prompt/i)).not.toBeInTheDocument());
     expect(mockDeletePromptCall).not.toHaveBeenCalled();
+  });
+
+  it("should keep the confirmation up while the delete request is still in flight", async () => {
+    const user = userEvent.setup();
+    let finishDelete: () => void = () => {};
+    mockDeletePromptCall.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishDelete = () => resolve();
+      }) as never,
+    );
+    renderPanel("Admin");
+
+    await user.click(await screen.findByRole("button", { name: "row-delete" }));
+    await screen.findByText(/delete prompt: my-prompt/i);
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await waitFor(() => expect(mockDeletePromptCall).toHaveBeenCalledWith("sk-test", "prompt-1"));
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByText(/delete prompt: my-prompt/i)).toBeInTheDocument();
+
+    finishDelete();
+    await waitFor(() => expect(screen.queryByText(/delete prompt: my-prompt/i)).not.toBeInTheDocument());
   });
 });

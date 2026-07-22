@@ -20,11 +20,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+const ALL_ENVIRONMENTS_LABEL = "All Environments";
+
 const ENVIRONMENT_OPTIONS = [
   { label: "Development", value: "development" },
   { label: "Staging", value: "staging" },
   { label: "Production", value: "production" },
 ];
+
+// SelectValue falls back to the raw value unless the root can map it to a label.
+const ENVIRONMENT_ITEMS = [{ label: ALL_ENVIRONMENTS_LABEL, value: null }, ...ENVIRONMENT_OPTIONS];
 
 interface PromptsProps {
   accessToken: string | null;
@@ -168,14 +173,15 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
               )}
             </div>
             <Select
+              items={ENVIRONMENT_ITEMS}
               value={selectedEnvironment ?? null}
               onValueChange={(value) => setSelectedEnvironment((value as string | null) ?? undefined)}
             >
               <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="All Environments" />
+                <SelectValue placeholder={ALL_ENVIRONMENTS_LABEL} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={null}>All Environments</SelectItem>
+                <SelectItem value={null}>{ALL_ENVIRONMENTS_LABEL}</SelectItem>
                 {ENVIRONMENT_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
@@ -207,7 +213,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         <AlertDialog
           open
           onOpenChange={(open) => {
-            if (!open) handleDeleteCancel();
+            if (!open && !isDeleting) handleDeleteCancel();
           }}
         >
           <AlertDialogContent>
