@@ -462,6 +462,7 @@ describe("SSOModals", () => {
         generic_authorization_endpoint: null,
         generic_token_endpoint: null,
         generic_userinfo_endpoint: null,
+        generic_scope: null,
         proxy_base_url: null,
         user_email: null,
         sso_provider: null,
