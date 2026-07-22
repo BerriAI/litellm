@@ -904,11 +904,13 @@ class TestModelVersionAdvertisement:
         assert pt["model"]["version"] == "latest"
 
 
-class TestToolChoiceForwarding:
-    """tool_choice is no longer silently dropped.
+class TestToolChoiceDropped:
+    """SAP orchestration v2 rejects tool_choice in the request body (HTTP 400).
 
-    When tools are present it must appear in the prompt template dict.
-    Without tools it is omitted (there is nothing to choose from).
+    It is not advertised in get_supported_openai_params so callers receive
+    UnsupportedParamsError immediately.  The defensive pop in _build_prompt_module
+    ensures it never reaches the wire even if injected via fallback_sap_modules.
+    tools themselves are still forwarded normally.
     """
 
     _TOOL = {
@@ -938,30 +940,33 @@ class TestToolChoiceForwarding:
     def _prompt(self, body: dict) -> dict:
         return body["config"]["modules"]["prompt_templating"]["prompt"]
 
-    def test_tool_choice_required_forwarded_with_tools(self):
+    def test_tool_choice_not_advertised(self):
+        """tool_choice must not appear in get_supported_openai_params for any model."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        cfg = GenAIHubOrchestrationConfig()
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet", "gemini-1.5-pro", "amazon--titan"):
+            assert "tool_choice" not in cfg.get_supported_openai_params(model), (
+                f"tool_choice must not be advertised for {model}"
+            )
+
+    def test_tools_still_advertised(self):
+        """tools must still be advertised — only tool_choice is unsupported."""
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+        cfg = GenAIHubOrchestrationConfig()
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet"):
+            assert "tools" in cfg.get_supported_openai_params(model)
+
+    def test_defensive_pop_keeps_tool_choice_off_wire(self):
+        """Even if tool_choice reaches _build_prompt_module directly it is dropped."""
         body = self._transform("gpt-4o", tools=[self._TOOL], tool_choice="required")
-        prompt = self._prompt(body)
-        assert prompt.get("tool_choice") == "required"
-
-    def test_tool_choice_auto_forwarded_with_tools(self):
-        body = self._transform("gpt-4o", tools=[self._TOOL], tool_choice="auto")
-        assert self._prompt(body).get("tool_choice") == "auto"
-
-    def test_tool_choice_dict_forwarded_with_tools(self):
-        tc = {"type": "function", "function": {"name": "get_weather"}}
-        body = self._transform("gpt-4o", tools=[self._TOOL], tool_choice=tc)
-        assert self._prompt(body).get("tool_choice") == tc
-
-    def test_tool_choice_absent_without_tools(self):
-        """tool_choice without tools must not appear in the payload."""
-        body = self._transform("gpt-4o", tool_choice="required")
         assert "tool_choice" not in self._prompt(body)
+        assert "tool_choice" not in body["config"]["modules"]["prompt_templating"]["model"].get("params", {})
 
-    def test_tool_choice_not_in_model_params(self):
-        """tool_choice must never bleed into model.params."""
-        body = self._transform("gpt-4o", tools=[self._TOOL], tool_choice="required")
-        pt = body["config"]["modules"]["prompt_templating"]
-        assert "tool_choice" not in pt["model"]["params"]
+    def test_tools_still_forwarded(self):
+        """Dropping tool_choice must not also suppress the tools list."""
+        body = self._transform("gpt-4o", tools=[self._TOOL])
+        assert "tools" in self._prompt(body)
+        assert self._prompt(body)["tools"][0]["function"]["name"] == "get_weather"
 
 
 class TestTimeoutAndMaxRetries:

@@ -182,12 +182,10 @@ class GroundingModuleConfig(BaseModel):
 
 
 class Template(BaseModel):
-    model_config = ConfigDict(extra="allow")  # preserves tool_choice and future prompt-level fields
     template: list[ChatMessage]
     defaults: Optional[dict[str, str]] = None
     response_format: Optional[Union[ResponseFormat, ResponseFormatJSONSchema]] = None
     tools: Optional[list[ChatCompletionTool]] = None
-    tool_choice: Optional[Union[str, dict]] = None
 
 
 class LLMModelDetails(BaseModel):

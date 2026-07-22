@@ -50,7 +50,6 @@ from .handler import (
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {
         "tools",
-        "tool_choice",
         "stream_options",
         "fallback_sap_modules",
         "placeholder_values",
@@ -229,7 +228,11 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "tools",
-            "tool_choice",
+            # tool_choice is NOT supported by SAP orchestration v2 — the API returns
+            # 400 "Additional properties are not allowed" when it is present.
+            # Omitted here so callers receive UnsupportedParamsError immediately
+            # rather than a silent no-op.  tools still work; the model applies
+            # its own default (auto) selection.
             "function_call",
             "functions",
             "extra_headers",
@@ -248,8 +251,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             or model == "gpt-4"
         ):
             params.remove("response_format")
-        if model.startswith("gemini") or model.startswith("amazon"):
-            params.remove("tool_choice")
         if self._sap_supports_reasoning(model):
             params.extend(["reasoning_effort", "thinking"])
         return params
@@ -306,8 +307,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
         tools = {"tools": tools_} if tools_ else {}
 
-        tool_choice = params.pop("tool_choice", None)
-        tool_choice_payload: dict = {"tool_choice": tool_choice} if tool_choice is not None and tools else {}
+        # SAP orchestration v2 schema does not include tool_choice in Template;
+        # the API returns 400 if it is present.  Drop it silently here so that
+        # callers who pass tool_choice alongside tools do not receive an error.
+        params.pop("tool_choice", None)
 
         response_format = params.pop("response_format", {})
         resp_type = response_format.get("type", None)
@@ -345,7 +348,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                     "template": template_messages,
                     **placeholder_defaults,
                     **tools,
-                    **tool_choice_payload,
                     **response_format,
                 },
                 "model": model_details,
