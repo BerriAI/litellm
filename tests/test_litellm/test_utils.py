@@ -1305,6 +1305,40 @@ def test_supports_computer_use_utility():
             delattr(litellm, "model_cost")
 
 
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("gemini/gemini-2.0-flash-lite", True),
+        ("azure/gpt-realtime-whisper", False),
+        ("gpt-4o-audio-preview", True),
+    ],
+)
+def test_supports_audio_output(model, expected_bool):
+    """
+    supports_audio_output must read the supports_audio_output field, not supports_audio_input.
+    """
+    from litellm.utils import supports_audio_output
+
+    original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
+    original_model_cost = getattr(litellm, "model_cost", None)
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    try:
+        assert supports_audio_output(model=model) == expected_bool
+    finally:
+        if original_env_var is None:
+            del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
+
+        if original_model_cost is not None:
+            litellm.model_cost = original_model_cost
+        elif hasattr(litellm, "model_cost"):
+            delattr(litellm, "model_cost")
+
+
 def test_get_model_info_shows_supports_computer_use():
     """
     Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
