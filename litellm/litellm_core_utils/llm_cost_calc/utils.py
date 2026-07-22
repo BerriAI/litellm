@@ -375,6 +375,28 @@ def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: 
     return 0.0
 
 
+def _calculate_modality_token_cost(
+    model_info: ModelInfo,
+    cost_key: str,
+    tokens: int,
+    fallback_cost_per_token: float,
+) -> float:
+    """
+    Cost for a modality (audio/image/video) input token count.
+
+    Uses the modality-specific per-token rate when the model defines one, otherwise falls back to
+    the resolved input per-token rate (``fallback_cost_per_token``), which is already tier-aware
+    (e.g. long-context ``_above_200k_tokens``) and service-tier-aware. Providers like Gemini bill
+    audio/video input at the standard input rate and expose no modality-specific key, so dropping
+    these tokens (or billing them at the untiered base rate) severely undercounts multimodal spend.
+    """
+    if tokens <= 0:
+        return 0.0
+    if model_info.get(cost_key) is None:
+        return float(tokens) * fallback_cost_per_token
+    return calculate_cost_component(model_info, cost_key, tokens)
+
+
 def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: Optional[float] = 0.0) -> Optional[float]:
     # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
     cost_per_unit = model_info.get(cost_key)
@@ -579,25 +601,20 @@ def _calculate_input_cost(
     prompt_cost += float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
 
     ### AUDIO COST
-    if prompt_tokens_details["audio_tokens"]:
-        audio_cost_key = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
-        prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
+    audio_cost_key = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
+    prompt_cost += _calculate_modality_token_cost(
+        model_info, audio_cost_key, prompt_tokens_details["audio_tokens"], prompt_base_cost
+    )
 
     ### IMAGE TOKEN COST
-    if prompt_tokens_details["image_tokens"]:
-        # For image token costs:
-        # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
-        image_token_cost_key = "input_cost_per_image_token"
-        if model_info.get(image_token_cost_key) is None:
-            image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, image_token_cost_key, prompt_tokens_details["image_tokens"])
+    prompt_cost += _calculate_modality_token_cost(
+        model_info, "input_cost_per_image_token", prompt_tokens_details["image_tokens"], prompt_base_cost
+    )
 
     ### VIDEO TOKEN COST
-    if prompt_tokens_details["video_tokens"]:
-        video_token_cost_key = "input_cost_per_video_token"
-        if model_info.get(video_token_cost_key) is None:
-            video_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, video_token_cost_key, prompt_tokens_details["video_tokens"])
+    prompt_cost += _calculate_modality_token_cost(
+        model_info, "input_cost_per_video_token", prompt_tokens_details["video_tokens"], prompt_base_cost
+    )
 
     ### CACHE WRITING COST - Now uses tiered pricing
     if (

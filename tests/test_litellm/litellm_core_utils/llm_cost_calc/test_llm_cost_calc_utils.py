@@ -400,6 +400,53 @@ def test_generic_cost_per_token_above_200k_tokens():
     )
 
 
+def test_multimodal_input_tokens_use_tiered_rate_gemini_3_1_pro():
+    """Regression test for LIT-4681.
+
+    Gemini bills audio/video input at the standard input rate and exposes no
+    input_cost_per_audio_token / input_cost_per_video_token. For a >200k-token multimodal
+    request, audio tokens must not be dropped and video tokens must be billed at the
+    long-context (_above_200k_tokens) input rate, not the untiered base rate.
+    """
+    model = "gemini-3.1-pro-preview"
+    custom_llm_provider = "vertex_ai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[f"{custom_llm_provider}/{model}"]
+    assert model_cost_map.get("input_cost_per_audio_token") is None
+    assert model_cost_map.get("input_cost_per_video_token") is None
+    above_200k_rate = model_cost_map["input_cost_per_token_above_200k_tokens"]
+
+    text_tokens = 9033
+    audio_tokens = 14999
+    video_tokens = 792000
+    prompt_tokens = text_tokens + audio_tokens + video_tokens
+    completion_tokens = 4559
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            audio_tokens=audio_tokens,
+            video_tokens=video_tokens,
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert round(prompt_cost, 10) == round(prompt_tokens * above_200k_rate, 10)
+    assert round(completion_cost, 10) == round(
+        model_cost_map["output_cost_per_token_above_200k_tokens"] * completion_tokens,
+        10,
+    )
+
+
 def test_get_token_base_cost_picks_highest_crossed_tier():
     """Regression test for #30345.
 
