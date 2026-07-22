@@ -1624,13 +1624,9 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         if not isinstance(environment, str) or not environment:
             return self.standard_callback_dynamic_params
-        return cast(
-            StandardCallbackDynamicParams,
-            {
-                **self.standard_callback_dynamic_params,
-                "langfuse_environment": environment,
-            },
-        )
+        dynamic_params = self.standard_callback_dynamic_params.copy()
+        dynamic_params["langfuse_environment"] = environment
+        return dynamic_params
 
     def should_run_logging(
         self,
