@@ -170,6 +170,17 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Form.Item
             label={
               <FieldLabel
+                label="Issuer (optional)"
+                tooltip="OAuth 2.0 authorization server issuer (RFC 8414). Auto-discovered from the upstream on first connect; set it explicitly to pin the trust anchor so token and scope discovery is fetched from and validated against this issuer (RFC 8414 §3.3) instead of anything the resource advertises."
+              />
+            }
+            name="issuer"
+          >
+            <TextInput placeholder="https://issuer.example.com" className={fieldClassName} />
+          </Form.Item>
+          <Form.Item
+            label={
+              <FieldLabel
                 label="Authorization URL (optional)"
                 tooltip="Optional override for the authorization endpoint."
               />

@@ -1732,6 +1732,35 @@ def test_get_temp_budget_increase():
     assert _get_temp_budget_increase(valid_token) == 100
 
 
+def test_get_temp_budget_increase_tz_aware_expiry():
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+
+    future_expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    valid_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": future_expiry,
+        },
+    )
+    assert _get_temp_budget_increase(valid_token) == 100
+
+    past_expiry = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    expired_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": past_expiry,
+        },
+    )
+    assert _get_temp_budget_increase(expired_token) is None
+
+
 def test_update_key_budget_with_temp_budget_increase():
     from datetime import datetime, timedelta
 
@@ -1751,7 +1780,10 @@ def test_update_key_budget_with_temp_budget_increase():
             "temp_budget_expiry": expiry_in_isoformat,
         },
     )
-    assert _update_key_budget_with_temp_budget_increase(valid_token).max_budget == 200
+    result = _update_key_budget_with_temp_budget_increase(valid_token)
+    assert result.max_budget == 200
+    assert result is not valid_token
+    assert valid_token.max_budget == 100
 
 
 @pytest.mark.asyncio

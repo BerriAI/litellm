@@ -30,6 +30,7 @@ from typing import Callable, Literal, Union
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.a2a.agent_card import normalize_protocol_version
 
 A2AVersion = Literal["0.3", "1.0"]
 RequestId = Union[str, int, None]
@@ -103,16 +104,14 @@ def normalize_request_params(params: JsonDict, served: A2AVersion, *, method: st
 def _detect_card_version(card: JsonDict) -> A2AVersion:
     """Infer the wire version of an agent card dict.
 
-    ``protocolVersion`` is the authoritative indicator; fall back to presence of
-    ``supportedInterfaces`` (a 1.0-only field) only when the explicit field is absent.
-    Cards that set ``protocolVersion: "0.3"`` or carry neither signal are treated as 0.3.
+    ``protocolVersion`` is the authoritative indicator; semver values normalize to
+    their major.minor (``"0.3.0"`` -> ``"0.3"``). Fall back to presence of
+    ``supportedInterfaces`` (a 1.0-only field) only when the explicit field is
+    absent or unrecognized; cards carrying neither signal are treated as 0.3.
     """
-    pv = card.get("protocolVersion")
-    if pv == "1.0":
-        return "1.0"
-    if pv == "0.3":
-        return "0.3"
-    # No protocolVersion field: use structural heuristic.
+    normalized = normalize_protocol_version(card.get("protocolVersion"))
+    if normalized is not None:
+        return normalized
     return "1.0" if "supportedInterfaces" in card else "0.3"
 
 

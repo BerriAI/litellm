@@ -1,7 +1,7 @@
-use crate::error::{json_type_name, CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
@@ -140,7 +140,7 @@ fn document_content_item(document: &Value) -> CoreResult<Value> {
         other => {
             return Err(CoreError::InvalidRequest(format!(
                 "Unsupported document type: {other}. Expected 'image_url' or 'document_url'"
-            )))
+            )));
         }
     };
     let url = object

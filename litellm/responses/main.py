@@ -1070,11 +1070,13 @@ def responses(
             )
 
         # Get optional parameters for the responses API
+        request_drop_params = kwargs.get("drop_params")
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
+            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -1896,11 +1898,13 @@ def compact_responses(
         )
 
         # Get optional parameters for the responses API
+        request_drop_params = kwargs.get("drop_params")
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=None,
+            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
         )
 
         # Pre Call logging

@@ -53,6 +53,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
 from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
     CiscoAIDefenseGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
+    SingulrGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
     HeadroomGuardrailConfigModel,
 )
@@ -121,12 +124,15 @@ class SupportedGuardrailIntegrations(Enum):
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
+    DEEPKEEP = "deepkeep"
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
+    SINGULR = "singulr"
     HEADROOM = "headroom"
     COMPRESR = "compresr"
+    STRAIKER = "straiker"
 
 
 class Role(Enum):
@@ -550,6 +556,18 @@ class LassoGuardrailConfigModel(BaseModel):
     mask: Optional[bool] = Field(default=False, description="Enable content masking using Lasso classifix API")
 
 
+class DeepKeepGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the DeepKeep AI Firewall guardrail"""
+
+    deepkeep_firewall_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The DeepKeep Firewall ID to use for guardrail evaluation. "
+            "If not provided, the `DEEPKEEP_FIREWALL_ID` environment variable is checked."
+        ),
+    )
+
+
 class PillarGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Pillar Security guardrail"""
 
@@ -800,6 +818,21 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "so only a valid guardrail response can block or modify it."
         ),
     )
+    skip_unscannable_attachments: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
+            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
+            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+        ),
+    )
+    sanitize_error_detail: Optional[bool] = Field(
+        default=True,
+        description=(
+            "For guardrail='model_armor': omit the raw Model Armor response from "
+            "caller-facing errors and logs by default. Set False to restore verbose output."
+        ),
+    )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -906,6 +939,7 @@ class LitellmParams(
     CompresrGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
+    DeepKeepGuardrailConfigModel,
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
@@ -924,6 +958,7 @@ class LitellmParams(
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
+    SingulrGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
