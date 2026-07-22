@@ -68,7 +68,8 @@ class _FakeTokenEndpoint:
 
 
 def _with_inbound(token: str) -> Subject:
-    return Subject(tenant_id="", subject_id="alice", inbound_token=SecretStr(token))
+    """A caller presenting their own id_token (the edge classified it `external_jwt`)."""
+    return Subject(tenant_id="", subject_id="alice", inbound_token=SecretStr(token), inbound_provenance="external_jwt")
 
 
 def _idp_jwt(sub: str = "user") -> str:
@@ -258,14 +259,41 @@ _OBO = TokenExchangeConfig(
 
 
 @pytest.mark.asyncio
-async def test_token_exchange_emits_the_exchanged_bearer():
+@pytest.mark.parametrize("external_provenance", ["external_jwt", "external_opaque"])
+async def test_token_exchange_emits_the_exchanged_bearer(external_provenance):
+    """OBO exchanges what was presented for the caller's own external token, JWT or opaque; the
+    id_token-only restriction is id_jag's, not OBO's."""
     exchanger = _FakeExchanger(Ok(OAuthToken(access_token="exchanged-at")))
-    subject = Subject(tenant_id="acme", subject_id="alice", inbound_token=SecretStr("caller-jwt"))
+    subject = Subject(
+        tenant_id="acme",
+        subject_id="alice",
+        inbound_token=SecretStr("caller-jwt"),
+        inbound_provenance=external_provenance,
+    )
     result = await UpstreamCredentialProvider(token_exchanger=exchanger).resolve_credentials(subject, _spec(_OBO))
     assert isinstance(result, Ok)
     assert _emitted(result.ok)["Authorization"] == "Bearer exchanged-at"
     # The arm hands the unwrapped caller token AND the tenant to the exchanger, never the upstream.
     assert exchanger.calls == [("caller-jwt", "acme", "s")]
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_refuses_a_gateway_credential_subject_token():
+    """OBO keeps exchange-what-was-presented for the caller's own external token, but a
+    gateway-issued credential (the edge classified it `gateway_credential`) is refused with a
+    401 and never disclosed to the external token endpoint."""
+    exchanger = _FakeExchanger(Ok(OAuthToken(access_token="never")))
+    subject = Subject(
+        tenant_id="acme",
+        subject_id="alice",
+        inbound_token=SecretStr("sk-a-gateway-admission-key"),
+        inbound_provenance="gateway_credential",
+    )
+    result = await UpstreamCredentialProvider(token_exchanger=exchanger).resolve_credentials(subject, _spec(_OBO))
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+    # The gateway credential is never handed to the exchanger.
+    assert exchanger.calls == []
 
 
 @pytest.mark.asyncio
@@ -697,26 +725,46 @@ async def test_id_jag_prefers_the_presented_idp_jwt_over_the_stored_assertion():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "internal_token",
-    ["sk-litellm-admission-key", "llm_session_abc.def.ghi", "llm_srefresh_abc.def.ghi", "opaque-not-a-jwt", "abc.def.ghi"],
-)
-async def test_id_jag_never_exchanges_a_gateway_internal_or_non_jwt_inbound_token(internal_token):
-    """The admission credential rides the same Authorization header the subject token is read
-    from; a gateway-minted or non-JWT bearer must fall through to the stored assertion, never
-    reach an external IdP."""
+async def test_id_jag_never_exchanges_a_gateway_credential_inbound_token():
+    """A gateway-issued bearer that rode the Authorization header (the edge classified it
+    `gateway_credential`) must fall through to the stored assertion, never reach an external
+    IdP, no matter that a token happens to be present."""
+    gateway_bearer = "sk-litellm-admission-key"
     endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
     source = _FakeAssertionSource(_usable_assertion())
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertions=source)
 
-    subject = Subject(tenant_id="", subject_id="alice", inbound_token=SecretStr(internal_token))
+    subject = Subject(
+        tenant_id="", subject_id="alice", inbound_token=SecretStr(gateway_bearer), inbound_provenance="gateway_credential"
+    )
     result = await provider.resolve_credentials(subject, _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     assert source.asked == ["alice"]
     _, _, leg1_params = endpoint.calls[0]
     assert leg1_params["subject_token"] == "hdr.stored-id-token.sig"
-    assert all(internal_token not in str(call) for call in endpoint.calls)
+    assert all(gateway_bearer not in str(call) for call in endpoint.calls)
+
+
+@pytest.mark.asyncio
+async def test_id_jag_never_forwards_an_opaque_inbound_token():
+    """The ID-JAG exchange takes an id_token (a JWT). An opaque non-gateway bearer is not an
+    id_token, so id_jag sources the stored assertion and never forwards the opaque value."""
+    opaque_bearer = "abc.def.ghi"
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    source = _FakeAssertionSource(_usable_assertion())
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertions=source)
+
+    subject = Subject(
+        tenant_id="", subject_id="alice", inbound_token=SecretStr(opaque_bearer), inbound_provenance="external_opaque"
+    )
+    result = await provider.resolve_credentials(subject, _spec(_id_jag_config()))
+
+    assert isinstance(result, Ok)
+    assert source.asked == ["alice"]
+    _, _, leg1_params = endpoint.calls[0]
+    assert leg1_params["subject_token"] == "hdr.stored-id-token.sig"
+    assert all(opaque_bearer not in str(call) for call in endpoint.calls)
 
 
 @pytest.mark.asyncio

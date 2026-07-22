@@ -358,6 +358,34 @@ def test_to_subject_maps_principal_fields():
     assert subject.tenant_id == "org1"
     assert subject.subject_id == "user1"
     assert subject.inbound_token is None
+    assert subject.inbound_provenance == "absent"
+
+
+def test_to_subject_classifies_an_external_jwt_as_id_token_candidate():
+    import jwt as pyjwt
+
+    external_jwt = pyjwt.encode({"iss": "https://idp.example.com", "sub": "alice"}, "idp-key", algorithm="HS256")
+    subject = to_subject(SimpleNamespace(org_id="", team_id="", user_id="alice"), external_jwt)
+    assert subject.inbound_provenance == "external_jwt"
+
+
+def test_to_subject_classifies_an_opaque_inbound_token_as_external_opaque():
+    subject = to_subject(SimpleNamespace(org_id="", team_id="", user_id="alice"), "opaque-not-a-jwt-token")
+    assert subject.inbound_provenance == "external_opaque"
+
+
+def test_to_subject_classifies_a_gateway_credential_inbound_token(monkeypatch):
+    """The edge is where a gateway-issued bearer that rode Authorization is recognized, so the
+    resolver core never has to; a virtual key is stamped `gateway_credential`."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master-adapter-test")
+    subject = to_subject(SimpleNamespace(org_id="", team_id="", user_id="alice"), "sk-a-caller-virtual-key")
+    assert subject.inbound_provenance == "gateway_credential"
+
+
+def test_to_subject_absent_token_classifies_absent():
+    assert to_subject(SimpleNamespace(org_id="", team_id="", user_id="alice"), None).inbound_provenance == "absent"
 
 
 @pytest.mark.parametrize(

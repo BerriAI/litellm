@@ -547,6 +547,35 @@ async def test_source_dead_grant_is_negative_cached_one_post_per_window():
 
 
 @pytest.mark.asyncio
+async def test_source_relogin_within_the_negative_window_is_honored_immediately():
+    """The 401 challenge tells the user to re-login; the fresh row must be served the moment it
+    lands, even while a negative verdict is still memoized (no clock advance, same pod). The
+    negative memo may only bound re-POST thrash for a row that is genuinely still expired; it must
+    never mask the authoritative read, or the recovery the challenge asks for silently fails."""
+    posts: list[dict] = []
+    state = {"stored": _stored(-100)}
+
+    async def fetch(user_id: str):
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        state["stored"] = assertion
+
+    async def post(url, form):
+        posts.append(dict(form))
+        return SsoRefreshRejected(status_code=400)
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    assert len(posts) == 1
+
+    state["stored"] = _stored(3600)  # re-login lands in the same negative window, no clock advance
+    lookup = await source.fetch_usable("alice")
+    assert isinstance(lookup, UsableSsoAssertion)
+    assert len(posts) == 1  # the fresh usable row short-circuits before any refresh POST
+
+
+@pytest.mark.asyncio
 async def test_source_waiter_of_an_expired_winner_does_not_respend_the_grant():
     """The hand-off channel carries negative verdicts too: a waiter behind a winner whose
     refresh was rejected reads the memoized Expired instead of re-POSTing the spent token."""
@@ -767,16 +796,32 @@ async def test_source_waiter_gets_the_winners_token_when_persist_failed():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "status_code,expected_type",
-    [(400, SsoRefreshRejected), (401, SsoRefreshRejected), (502, SsoRefreshUnreachable)],
+    "status_code,body,expected_type",
+    [
+        (400, {"error": "invalid_grant"}, SsoRefreshRejected),
+        (401, {"error": "invalid_client"}, SsoRefreshRejected),
+        (429, {"error": "rate_limited"}, SsoRefreshUnreachable),
+        (400, "not-json-object", SsoRefreshUnreachable),
+        (400, None, SsoRefreshUnreachable),
+        (502, {"error": "invalid_grant"}, SsoRefreshUnreachable),
+    ],
 )
-async def test_post_helper_splits_rejection_from_outage(status_code, expected_type, monkeypatch):
+async def test_post_helper_rejection_requires_a_proven_oauth_verdict(status_code, body, expected_type, monkeypatch):
+    """Rejected needs proof: a non-429 4xx carrying an RFC 6749 error code. A rate limit, a 4xx
+    without the error object (an intermediary, not the token endpoint), or any 5xx proves
+    nothing about the grant and must not send the user to re-login."""
+    import json as _json
+
     import httpx
 
     from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
 
     response = MagicMock()
     response.status_code = status_code
+    if body is None:
+        response.json.side_effect = _json.JSONDecodeError("x", "y", 0)
+    else:
+        response.json.return_value = body
     response.raise_for_status.side_effect = httpx.HTTPStatusError(
         "err", request=MagicMock(), response=response
     )
@@ -787,6 +832,27 @@ async def test_post_helper_splits_rejection_from_outage(status_code, expected_ty
     )
     outcome = await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
     assert isinstance(outcome, expected_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [None, [], "string", 42])
+async def test_post_helper_2xx_non_object_body_is_unreachable_not_a_crash(body, monkeypatch):
+    """A 2xx whose body is not a JSON object must read Unreachable; letting it construct a
+    Granted outcome detonates downstream validation into the broad catch, which misreads the
+    state as Absent and misdirects the user to a 412 instead of a retryable failure."""
+    client = MagicMock()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    response.json.return_value = body
+    client.post = AsyncMock(return_value=response)
+    monkeypatch.setattr(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
+
+    outcome = await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
+    assert isinstance(outcome, SsoRefreshUnreachable)
 
 
 @pytest.mark.asyncio

@@ -21,8 +21,6 @@ import hashlib
 from functools import partial
 from typing import Protocol
 
-import jwt
-
 import httpx
 from typing_extensions import assert_never
 
@@ -83,28 +81,15 @@ _TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
 _JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 _ID_JAG_REQUESTED_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:id-jag"
 
-# Gateway-minted credential shapes. Admission leaves the caller's Authorization header on the
-# request, so the admission credential itself can arrive as the inbound token; none of these is
-# an IdP identity assertion, and sending one to an external IdP would leak a live gateway
-# credential, so they are structurally excluded from ID-JAG subject sourcing.
-_GATEWAY_INTERNAL_TOKEN_PREFIXES = ("llm_session_", "llm_srefresh_", "sk-")
 
-
-def _exchangeable_inbound_token(subject: Subject) -> str | None:
-    """The inbound bearer when it is plausibly an enterprise IdP identity assertion (a decodable
-    JWT and not a gateway-minted credential), else None so sourcing falls to the stored
-    assertion. A real decode, not a shape check: an opaque bearer that happens to contain two
-    dots must never be disclosed to an external token endpoint."""
-    if subject.inbound_token is None:
+def _inbound_id_token(subject: Subject) -> str | None:
+    """The inbound bearer when it is the caller's own presented id_token, else None so id_jag
+    sourcing falls to the stored assertion. The ID-JAG exchange takes an id_token (a JWT), so the
+    inbound is used only when the edge classified it ``external_jwt``: a gateway-issued credential
+    and an opaque (non-JWT) bearer are both rejected here and resolve through the store instead."""
+    if subject.inbound_token is None or subject.inbound_provenance != "external_jwt":
         return None
-    token = subject.inbound_token.get_secret_value()
-    if token.startswith(_GATEWAY_INTERNAL_TOKEN_PREFIXES):
-        return None
-    try:
-        jwt.decode(token, options={"verify_signature": False})
-    except Exception:  # noqa: BLE001  # any decode failure means not a JWT; fall to the stored assertion
-        return None
-    return token
+    return subject.inbound_token.get_secret_value()
 
 
 class SsoAssertionSource(Protocol):
@@ -219,14 +204,15 @@ class UpstreamCredentialProvider:
         assert_never(config.key_source)
 
     async def _id_jag_subject_token(self, subject: Subject) -> Result[str, CredError]:
-        """The ONE sourcing rule for the ID-JAG subject token, shared by resolve and invalidate:
-        the caller's presented IdP assertion when the inbound bearer is exchangeable (it is the
-        live, freshest identity evidence), else the stored SSO assertion for the user (renewed
-        when expired), else fail closed. An expired-and-unrenewable stored assertion is a 401
-        re-login challenge, never a silent fall-through: the user HAS connected and the only fix
-        is theirs to perform. A gateway-internal inbound bearer (session token, admission key)
-        is never exchangeable, so those callers resolve through the store or not at all."""
-        inbound = _exchangeable_inbound_token(subject)
+        """The ONE sourcing rule for the ID-JAG subject token, shared by resolve and invalidate.
+        The ID-JAG exchange takes an id_token, so the subject is the caller's presented id_token
+        when the inbound bearer is one (the live, freshest identity evidence), else the stored SSO
+        assertion (itself an id_token, renewed when expired), else fail closed. Anything that is
+        not an id_token, a gateway-issued credential or an opaque bearer, is never forwarded: it
+        resolves through the store or not at all. An expired-and-unrenewable stored assertion is a
+        401 re-login challenge, never a silent fall-through: the user HAS connected and the only
+        fix is theirs to perform."""
+        inbound = _inbound_id_token(subject)
         if inbound is not None:
             return Ok(inbound)
         lookup = await self._sso_assertions.fetch_usable(subject.subject_id)
@@ -335,12 +321,26 @@ class UpstreamCredentialProvider:
         No inbound token means there is nothing to exchange, so the arm fails closed with a 401 rather
         than falling through to a weaker source (§1.5); the exchanger handles the IdP round-trip and
         caching and returns the upstream token or a typed error.
+
+        The arm keeps its exchange-what-was-presented contract for the caller's own external token,
+        but a gateway-issued credential (an admission key, session token, or gateway-signed JWT that
+        arrived on Authorization) is never disclosed to the external token endpoint; it fails closed
+        with the same 401 as a missing token so a misdirected gateway credential is refused, not
+        forwarded.
         """
         inbound = subject.inbound_token
         if inbound is None:
             return Error(
                 CredError.of_unauthorized(
                     "Token exchange requires a caller token to exchange (OBO).",
+                    www_authenticate='Bearer error="invalid_request"',
+                )
+            )
+        if subject.inbound_provenance == "gateway_credential":
+            return Error(
+                CredError.of_unauthorized(
+                    "Token exchange refuses a gateway-issued credential as the subject token; "
+                    "present the caller's own identity token to exchange (OBO).",
                     www_authenticate='Bearer error="invalid_request"',
                 )
             )

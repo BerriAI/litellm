@@ -1274,6 +1274,7 @@ class MCPServerManager:
                 mcp_auth_header=None,
                 extra_headers=extra_headers,
                 stdio_env=None,
+                user_api_key_auth=None,  # internal path (cache warm-up / health check): no caller identity
             )
 
             async def _noop(_session):
@@ -2773,8 +2774,20 @@ class MCPServerManager:
         the inbound bearer, and every surface (tools call and list, prompts, resources) resolves
         it here so no surface can diverge (an id_jag caller presenting a fresh IdP JWT must see
         the same sourcing on list as on call). Other modes return None to avoid forwarding it.
+
+        For id_jag the bearer must additionally BE the credential that authenticated the caller:
+        admission prefers the explicit litellm key header, so when that header is present the
+        Authorization bearer is an unvalidated free rider bound to nobody, and exchanging it
+        would let a caller act upstream under any identity whose token they hold. Binding is
+        admission's job, so the rule is structural (was this the admission credential), never a
+        claims comparison re-deriving what admission already decided. Such callers resolve
+        through the stored assertion, which is bound to the authenticated user by construction.
+        The OBO mode keeps its documented exchange-what-was-presented semantics; its identical
+        free-rider shape predates this seam and is tracked as a follow-up.
         """
         if server.auth_type not in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag):
+            return None
+        if server.auth_type == MCPAuth.oauth2_id_jag and MCPRequestHandler.authorization_is_free_rider(raw_headers):
             return None
         return self._extract_bearer_token(oauth2_headers, raw_headers)
 
@@ -3385,6 +3398,7 @@ class MCPServerManager:
         extra_headers: Optional[dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[Prompt]:
         """
         Helper method to get prompts from a single MCP server with prefixed names.
@@ -3417,6 +3431,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             prompts = await client.list_prompts()
@@ -3436,6 +3451,7 @@ class MCPServerManager:
         extra_headers: Optional[dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[Resource]:
         """Fetch available resources from a single MCP server."""
 
@@ -3459,6 +3475,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             resources = await client.list_resources()
@@ -3478,6 +3495,7 @@ class MCPServerManager:
         extra_headers: Optional[dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[ResourceTemplate]:
         """Fetch available resource templates from a single MCP server."""
 
@@ -3501,6 +3519,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             resource_templates = await client.list_resource_templates()
@@ -3522,6 +3541,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, dict[str, str]]] = None,
         extra_headers: Optional[dict[str, str]] = None,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
@@ -3542,6 +3562,7 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         return await client.read_resource(url)
@@ -3554,6 +3575,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, dict[str, str]]] = None,
         extra_headers: Optional[dict[str, str]] = None,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
@@ -3574,6 +3596,7 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         get_prompt_request_params = GetPromptRequestParams(
@@ -4650,7 +4673,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[dict[str, str]] = None,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -5053,7 +5076,7 @@ class MCPServerManager:
 
         subject_token: str | None = None
         if isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
-            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+            subject_token = self._subject_bearer_token(mcp_server, raw_headers, oauth2_headers=oauth2_headers)
         elif isinstance(spec.config, PassthroughConfig):
             inbound_token, forwarded_headers = _take_forwarded_authorization(forwarded_headers)
             per_server_token = _passthrough_token_from_mcp_auth_header(mcp_auth_header)
@@ -5715,6 +5738,7 @@ class MCPServerManager:
                 mcp_auth_header=None,
                 extra_headers=extra_headers,
                 stdio_env=None,
+                user_api_key_auth=None,  # internal path (cache warm-up / health check): no caller identity
             )
 
             try:
@@ -5807,7 +5831,7 @@ class MCPServerManager:
 
     async def get_all_allowed_mcp_servers(
         self,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[LiteLLM_MCPServerTable]:
         """
         Get all MCP servers that the user has access to.
