@@ -898,6 +898,8 @@ class RealTimeStreaming:
                 self._collect_user_input_from_backend_event(cast(dict, event))
                 self.store_message(event_str)
                 await self._send_event_to_client(event, event_str)
+                if not self._has_audio_transcription_guardrails():
+                    continue
                 blocked = await self.run_realtime_guardrails(
                     cast(str, transcript),
                     item_id=cast(Optional[str], event.get("item_id")),
@@ -947,6 +949,8 @@ class RealTimeStreaming:
             # trigger response.create.
             if self._is_transcription_session:
                 self._capture_transcription_usage(event_obj)
+                return True
+            if not self._has_audio_transcription_guardrails():
                 return True
 
             blocked = await self.run_realtime_guardrails(
