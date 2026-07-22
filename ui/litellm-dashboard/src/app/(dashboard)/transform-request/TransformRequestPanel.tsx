@@ -131,22 +131,22 @@ ${formattedBody}
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden p-2">
+    <div className="p-2">
       <h1 className="text-lg font-medium text-foreground">Playground</h1>
       <p className="text-sm text-muted-foreground">
         See how LiteLLM transforms your request for the specified provider.
       </p>
-      <div className="mt-4 flex min-h-0 min-w-0 flex-1 gap-4 overflow-hidden">
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Original Request Panel */}
-        <Card className="min-h-0 min-w-0 flex-1">
+        <Card>
           <CardHeader>
             <CardTitle className="text-2xl font-bold">Original Request</CardTitle>
             <CardDescription>The request you would send to LiteLLM /chat/completions endpoint.</CardDescription>
           </CardHeader>
 
-          <CardContent className="flex min-h-0 flex-1 flex-col">
+          <CardContent>
             <Textarea
-              className="min-h-60 flex-1 resize-none overflow-auto p-4 font-mono text-sm field-sizing-fixed"
+              className="h-72 resize-none p-4 font-mono text-sm field-sizing-fixed"
               value={originalRequestJSON}
               onChange={(e) => setOriginalRequestJSON(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -163,16 +163,16 @@ ${formattedBody}
         </Card>
 
         {/* Transformed Request Panel */}
-        <Card className="min-h-0 min-w-0 flex-1">
+        <Card>
           <CardHeader>
             <CardTitle className="text-2xl font-bold">Transformed Request</CardTitle>
             <CardDescription>How LiteLLM transforms your request for the specified provider.</CardDescription>
             <p className="mt-2 text-xs text-muted-foreground">Note: Sensitive headers are not shown.</p>
           </CardHeader>
 
-          <CardContent className="flex min-h-0 flex-1 flex-col">
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-md bg-muted">
-              <pre className="flex-1 overflow-auto p-4 font-mono text-sm">
+          <CardContent>
+            <div className="relative rounded-md bg-muted">
+              <pre className="h-72 overflow-auto p-4 font-mono text-sm">
                 {transformedResponse ||
                   `curl -X POST \\
   https://api.openai.com/v1/chat/completions \\
@@ -206,7 +206,7 @@ ${formattedBody}
           </CardContent>
         </Card>
       </div>
-      <div className="mt-4 w-full text-right">
+      <div className="mt-4 text-right">
         <p className="text-sm text-muted-foreground">
           Found an error? File an issue{" "}
           <a
