@@ -44,6 +44,11 @@ _ASSERTION_EXPIRY_BUFFER_SECONDS = 30
 # bounds how long a re-login on another pod goes unseen (the superseded assertion stays valid).
 _ASSERTION_MEMO_TTL_SECONDS = 60.0
 
+# How long a definitive-negative or unavailable renewal verdict is served from the memo: bounds
+# a dead grant at one token-endpoint POST per pod per window (instead of one per egress call)
+# while keeping the post-re-login recovery latency on a warm pod within this window.
+_ASSERTION_NEGATIVE_MEMO_TTL_SECONDS = 30.0
+
 
 class SSOIdentityAssertion(BaseModel):
     """The IdP material an EMA exchange needs: ``id_token`` is the RFC 8693 subject token,
@@ -226,17 +231,54 @@ class NoSsoAssertion(BaseModel):
 
 
 class ExpiredSsoAssertion(BaseModel):
-    """A stored assertion exists but is expired and could not be renewed; only a fresh
-    interactive sign-in can produce a new one, so the caller owes the user a re-login
-    challenge rather than a missing-precondition error."""
+    """A stored assertion exists but is definitively unrenewable (no refresh token, the IdP
+    rejected the grant, or the renewed token was already dead); only a fresh interactive
+    sign-in can produce a new one, so the caller owes the user a re-login challenge."""
 
     model_config = ConfigDict(frozen=True)
     state: Literal["expired"] = "expired"
 
 
-SsoAssertionLookup = UsableSsoAssertion | NoSsoAssertion | ExpiredSsoAssertion
+class UnavailableSsoAssertion(BaseModel):
+    """Renewal could not be ATTEMPTED to completion: the IdP was unreachable or errored, or
+    the SSO client env is not set. Nothing is known about the assertion itself, so telling
+    the user to re-login would be the wrong remediation; the caller surfaces a retryable
+    unavailability instead."""
 
-SsoTokenEndpointPost = Callable[[str, dict[str, str]], Awaitable[dict[str, object] | None]]
+    model_config = ConfigDict(frozen=True)
+    state: Literal["unavailable"] = "unavailable"
+
+
+SsoAssertionLookup = UsableSsoAssertion | NoSsoAssertion | ExpiredSsoAssertion | UnavailableSsoAssertion
+
+
+class SsoRefreshGranted(BaseModel):
+    """The token endpoint answered 2xx; ``body`` still needs field-level validation."""
+
+    model_config = ConfigDict(frozen=True)
+    outcome: Literal["granted"] = "granted"
+    body: dict[str, object]
+
+
+class SsoRefreshRejected(BaseModel):
+    """The token endpoint answered 4xx: a definitive verdict on the grant (spent, revoked,
+    mismatched), never a transient fault."""
+
+    model_config = ConfigDict(frozen=True)
+    outcome: Literal["rejected"] = "rejected"
+    status_code: int
+
+
+class SsoRefreshUnreachable(BaseModel):
+    """Transport failure, 5xx, or a non-JSON answer: no verdict on the grant."""
+
+    model_config = ConfigDict(frozen=True)
+    outcome: Literal["unreachable"] = "unreachable"
+
+
+SsoRefreshOutcome = SsoRefreshGranted | SsoRefreshRejected | SsoRefreshUnreachable
+
+SsoTokenEndpointPost = Callable[[str, dict[str, str]], Awaitable[SsoRefreshOutcome]]
 
 
 class _SsoRefreshClient(BaseModel):
@@ -269,23 +311,32 @@ def _assertion_is_expired(assertion: SSOIdentityAssertion, now: datetime) -> boo
     return assertion.expires_at <= now + timedelta(seconds=_ASSERTION_EXPIRY_BUFFER_SECONDS)
 
 
-async def _post_sso_token_endpoint(url: str, form: dict[str, str]) -> dict[str, object] | None:
+async def _post_sso_token_endpoint(url: str, form: dict[str, str]) -> SsoRefreshOutcome:
+    import httpx  # noqa: PLC0415
+
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # http_handler is untyped
     )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415
 
-    # A failed refresh is a miss, never a raise; the caller maps it onto the 401 challenge.
+    # A 4xx is a definitive verdict on the grant; anything else says nothing about it.
     try:
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)  # pyright: ignore[reportUnknownVariableType]  # http_handler is untyped
         response = await client.post(url, headers={"Accept": "application/json"}, data=form)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # httpx handler partially typed
         response.raise_for_status()  # pyright: ignore[reportUnknownMemberType]  # httpx handler partially typed
         body: dict[str, object] = response.json()  # pyright: ignore[reportUnknownMemberType]  # validated field-by-field by the caller
-    except Exception as exc:  # noqa: BLE001  # any transport/status failure = refresh miss
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        if 400 <= status_code < 500:
+            verbose_proxy_logger.warning("SSO assertion refresh was rejected with status %s", status_code)
+            return SsoRefreshRejected(status_code=status_code)
+        verbose_proxy_logger.warning("SSO assertion refresh failed upstream with status %s", status_code)
+        return SsoRefreshUnreachable()
+    except Exception as exc:  # noqa: BLE001  # transport/parse failure carries no verdict on the grant
         verbose_proxy_logger.warning("SSO assertion refresh request failed: %s", exc)
-        return None
+        return SsoRefreshUnreachable()
     else:
-        return body
+        return SsoRefreshGranted(body=body)
 
 
 class LiveSsoAssertionSource:
@@ -321,7 +372,7 @@ class LiveSsoAssertionSource:
         self._getenv = getenv
         self._now = now
         self._memo_ttl_seconds = memo_ttl_seconds
-        self._usable_memo: dict[str, tuple[UsableSsoAssertion, datetime]] = {}
+        self._memo: dict[str, tuple[SsoAssertionLookup, datetime]] = {}
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     async def fetch_usable(self, user_id: str) -> SsoAssertionLookup:
@@ -331,22 +382,19 @@ class LiveSsoAssertionSource:
         if memoized is not None:
             return memoized
         try:
-            lookup = await self._fetch_usable_uncached(user_id)
+            return await self._fetch_usable_uncached(user_id)
         except Exception as exc:  # noqa: BLE001  # a store outage fails closed as absent, never a 500
             verbose_proxy_logger.warning(
                 "SSO assertion store read failed for user_id=%s; treating as absent: %s", user_id, exc
             )
             return NoSsoAssertion()
-        if isinstance(lookup, UsableSsoAssertion):
-            self._memoize(user_id, lookup)
-        return lookup
 
     async def _fetch_usable_uncached(self, user_id: str) -> SsoAssertionLookup:
         stored = await self._fetch(user_id)
         if stored is None:
             return NoSsoAssertion()
         if not _assertion_is_expired(stored, self._now()):
-            return UsableSsoAssertion(assertion=stored)
+            return self._memoize(user_id, UsableSsoAssertion(assertion=stored))
         async with self._lock(user_id):
             handed_off = self._memoized(user_id)
             if handed_off is not None:
@@ -355,62 +403,81 @@ class LiveSsoAssertionSource:
             if rechecked is None:
                 return NoSsoAssertion()
             if not _assertion_is_expired(rechecked, self._now()):
-                return UsableSsoAssertion(assertion=rechecked)
-            refreshed = await self._refresh(user_id, rechecked)
-            if refreshed is None:
-                return ExpiredSsoAssertion()
-            lookup = self._guarded_lookup(refreshed)
-            if isinstance(lookup, UsableSsoAssertion):
-                self._memoize(user_id, lookup)
-            return lookup
+                return self._memoize(user_id, UsableSsoAssertion(assertion=rechecked))
+            return self._memoize(user_id, await self._refresh(user_id, rechecked))
 
-    def _guarded_lookup(self, assertion: SSOIdentityAssertion) -> SsoAssertionLookup:
-        """The ONE construction gate for ``Usable``: every assertion, stored or freshly
-        refreshed, passes the same expiry predicate. An IdP handing back an already-expired
-        id_token therefore reads Expired (the 401 re-login challenge) instead of being sent
-        to an exchange that will reject it."""
-        if _assertion_is_expired(assertion, self._now()):
-            return ExpiredSsoAssertion()
-        return UsableSsoAssertion(assertion=assertion)
-
-    def _memoized(self, user_id: str) -> UsableSsoAssertion | None:
-        entry = self._usable_memo.get(user_id)
+    def _memoized(self, user_id: str) -> SsoAssertionLookup | None:
+        entry = self._memo.get(user_id)
         if entry is None:
             return None
         lookup, valid_until = entry
         if self._now() >= valid_until:
-            self._usable_memo.pop(user_id, None)
+            self._memo.pop(user_id, None)
             return None
         return lookup
 
-    def _memoize(self, user_id: str, lookup: UsableSsoAssertion) -> None:
-        horizon = self._now() + timedelta(seconds=self._memo_ttl_seconds)
-        expires_at = lookup.assertion.expires_at
-        if expires_at is not None:
-            horizon = min(horizon, expires_at - timedelta(seconds=_ASSERTION_EXPIRY_BUFFER_SECONDS))
-        if horizon > self._now():
-            self._usable_memo[user_id] = (lookup, horizon)
+    def _memoize(
+        self, user_id: str, lookup: UsableSsoAssertion | ExpiredSsoAssertion | UnavailableSsoAssertion
+    ) -> SsoAssertionLookup:
+        """Record a terminal lookup in the one in-process result channel and return it.
 
-    async def _refresh(self, user_id: str, stored: SSOIdentityAssertion) -> SSOIdentityAssertion | None:
+        Every terminal state is memoized: Usable so egress calls stop paying a DB read and the
+        single-flight winner can hand its token to waiters independent of the write-back;
+        Expired so a dead refresh grant costs one token-endpoint POST per pod per negative TTL
+        instead of one per egress call; Unavailable so a down IdP is not hammered. Absent is
+        NEVER memoized, so a fresh login (a new row) is visible immediately. The Usable horizon
+        is capped by the assertion's remaining life; the negative horizon is short so a
+        re-login is honored within seconds even on a pod holding a negative entry.
+        """
+        if isinstance(lookup, UsableSsoAssertion):
+            horizon = self._now() + timedelta(seconds=self._memo_ttl_seconds)
+            expires_at = lookup.assertion.expires_at
+            if expires_at is not None:
+                horizon = min(horizon, expires_at - timedelta(seconds=_ASSERTION_EXPIRY_BUFFER_SECONDS))
+        else:
+            horizon = self._now() + timedelta(seconds=_ASSERTION_NEGATIVE_MEMO_TTL_SECONDS)
+        if horizon > self._now():
+            self._memo[user_id] = (lookup, horizon)
+        return lookup
+
+    async def _refresh(
+        self, user_id: str, stored: SSOIdentityAssertion
+    ) -> UsableSsoAssertion | ExpiredSsoAssertion | UnavailableSsoAssertion:
+        """One renewal attempt, its result classified by what the failure actually proves.
+
+        A definitive verdict on the grant (no refresh token, a 4xx rejection, or a renewed
+        token that is itself dead) reads Expired: only a re-login fixes it. A failure that
+        proves nothing about the grant (IdP unreachable or 5xx, SSO client env missing) reads
+        Unavailable: retrying or fixing the deployment fixes it, and a re-login instruction
+        would be wrong. A rotated refresh token is persisted before the expiry verdict so a
+        one-time rotation is never lost, and the persist is best-effort so a write-back
+        failure cannot discard the renewed in-hand token.
+        """
         if stored.refresh_token is None:
-            return None
+            return ExpiredSsoAssertion()
         client = _sso_refresh_client_from_env(self._getenv)
         if client is None:
             verbose_proxy_logger.warning(
                 "Stored SSO assertion for user_id=%s is expired and the SSO client env "
-                "(GENERIC_CLIENT_ID/GENERIC_TOKEN_ENDPOINT) is not set; cannot refresh.",
+                "(GENERIC_CLIENT_ID/GENERIC_TOKEN_ENDPOINT) is not set; renewal is unavailable "
+                "until the deployment restores it.",
                 user_id,
             )
-            return None
+            return UnavailableSsoAssertion()
         form = {
             "grant_type": "refresh_token",
             "refresh_token": stored.refresh_token.get_secret_value(),
             "client_id": client.client_id,
             **({"client_secret": client.client_secret.get_secret_value()} if client.client_secret else {}),
         }
-        body = await self._post(client.token_endpoint, form)
-        if body is None:
-            return None
+        outcome = await self._post(client.token_endpoint, form)
+        match outcome:
+            case SsoRefreshRejected():
+                return ExpiredSsoAssertion()
+            case SsoRefreshUnreachable():
+                return UnavailableSsoAssertion()
+            case SsoRefreshGranted(body=body):
+                pass
         rotated = body.get("refresh_token")
         carried_refresh = rotated if isinstance(rotated, str) and rotated else stored.refresh_token.get_secret_value()
         refreshed = assertion_from_sso_login(body.get("id_token"), carried_refresh)
@@ -418,7 +485,7 @@ class LiveSsoAssertionSource:
             verbose_proxy_logger.warning(
                 "SSO assertion refresh for user_id=%s returned no usable id_token; treating as expired.", user_id
             )
-            return None
+            return ExpiredSsoAssertion()
         try:
             await self._persist(user_id, refreshed)
         except Exception as exc:  # noqa: BLE001  # a write-back failure must not discard the in-hand token
@@ -429,7 +496,9 @@ class LiveSsoAssertionSource:
                 user_id,
                 exc,
             )
-        return refreshed
+        if _assertion_is_expired(refreshed, self._now()):
+            return ExpiredSsoAssertion()
+        return UsableSsoAssertion(assertion=refreshed)
 
     def _lock(self, user_id: str) -> asyncio.Lock:
         lock = self._locks.get(user_id)

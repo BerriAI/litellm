@@ -791,3 +791,23 @@ async def test_id_jag_empty_subject_id_with_null_source_stays_precondition_requi
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_unavailable_renewal_is_503_not_a_relogin_challenge():
+    """An unreachable IdP during renewal proves nothing about the stored assertion, so the
+    caller gets a retryable upstream_unavailable, never the re-login challenge."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+        UnavailableSsoAssertion,
+    )
+
+    endpoint = _FakeTokenEndpoint([])
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint, sso_assertions=_FakeAssertionSource(UnavailableSsoAssertion())
+    )
+
+    result = await provider.resolve_credentials(_no_inbound(), _spec(_id_jag_config()))
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+    assert endpoint.calls == []

@@ -48,6 +48,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
     ExpiredSsoAssertion,
     NoSsoAssertion,
     SsoAssertionLookup,
+    UnavailableSsoAssertion,
     UsableSsoAssertion,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
@@ -248,6 +249,13 @@ class UpstreamCredentialProvider:
                     CredError.of_precondition_required(
                         "ID-JAG requires a caller identity token; it asserts the calling "
                         "user's identity upstream and cannot use a static credential."
+                    )
+                )
+            case UnavailableSsoAssertion():
+                return Error(
+                    CredError.of_upstream_unavailable(
+                        "the stored identity assertion is expired and could not be renewed because "
+                        "the identity provider was unreachable; retry shortly"
                     )
                 )
         assert_never(lookup)
