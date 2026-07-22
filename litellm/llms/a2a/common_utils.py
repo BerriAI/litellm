@@ -80,7 +80,8 @@ def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_d
     text_parts: List[str] = []
 
     for part in parts:
-        if part.get("kind") == "text":
+        kind = part.get("kind")
+        if kind == "text" or (kind is None and "text" in part):
             text_parts.append(part.get("text", ""))
         # Handle nested parts if they exist
         elif "parts" in part:

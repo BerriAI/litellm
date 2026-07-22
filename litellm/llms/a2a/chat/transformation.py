@@ -19,6 +19,8 @@ from ..common_utils import (
 )
 from .streaming_iterator import A2AModelResponseIterator
 
+A2A_PROTOCOL_VERSION_PARAM = "a2a_protocol_version"
+
 
 class A2AConfig(BaseConfig):
     """
@@ -66,9 +68,10 @@ class A2AConfig(BaseConfig):
 
             agent = global_agent_registry.get_agent_by_name(agent_name)
             if agent:
-                # Get api_base from agent card URL
-                if api_base is None and agent.agent_card_params:
-                    api_base = agent.agent_card_params.get("url")
+                # Get api_base from the agent card
+                if agent.agent_card_params:
+                    if api_base is None:
+                        api_base = agent.agent_card_params.get("url")
 
                 # Get api_key, headers, and other params from litellm_params
                 if agent.litellm_params:
@@ -225,20 +228,84 @@ class A2AConfig(BaseConfig):
             "messageId": str(uuid.uuid4()),
         }
 
-        # Build JSON-RPC 2.0 request
-        # For A2A protocol, the method is "message/send" for non-streaming
-        # and "message/stream" for streaming
         stream = optional_params.get("stream", False)
-        method = "message/stream" if stream else "message/send"
+        protocol_version = (
+            optional_params.get(A2A_PROTOCOL_VERSION_PARAM)
+            or litellm_params.get(A2A_PROTOCOL_VERSION_PARAM)
+            or self._pinned_protocol_version_from_registry(model)
+        )
+
+        if str(protocol_version) == "1.0":
+            method = "SendStreamingMessage" if stream else "SendMessage"
+            params = self._build_v1_send_params(a2a_message)
+        else:
+            method = "message/stream" if stream else "message/send"
+            params = {"message": a2a_message}
 
         request_data = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
-            "params": {"message": a2a_message},
+            "params": params,
         }
 
         return request_data
+
+    @staticmethod
+    def _pinned_protocol_version_from_registry(model: str) -> Optional[str]:
+        """Look up the agent's pinned ``protocolVersion`` from the proxy registry.
+
+        The completion bridge injects the agent's URL as ``api_base`` and passes the
+        bare agent name as ``model`` (the ``a2a/`` prefix is stripped upstream), so
+        the pinned version is not otherwise threaded through to request building.
+        The registry is the single source of truth; it is only importable in a proxy
+        context, so this returns ``None`` when running as a plain SDK.
+        """
+        agent_name = model[len("a2a/") :] if model.startswith("a2a/") else model
+        try:
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+            )
+        except ImportError:
+            return None
+
+        agent = global_agent_registry.get_agent_by_name(agent_name)
+        if agent is None or not agent.agent_card_params:
+            return None
+        version = agent.agent_card_params.get("protocolVersion")
+        return str(version) if version is not None else None
+
+    @staticmethod
+    def _build_v1_send_params(a2a_message: Dict[str, Any]) -> Dict[str, Any]:
+        """Build A2A 1.0 JSON-RPC ``params`` (protobuf-JSON) from a 0.3 message dict.
+
+        Mirrors how the a2a-sdk 1.x JSON-RPC transport serializes a
+        ``SendMessageRequest``, so 1.0-only agents receive the envelope they expect.
+        """
+        try:
+            from a2a.compat.v0_3.conversions import (
+                MessageToDict,
+                to_core_send_message_request,
+            )
+            from a2a.compat.v0_3.types import MessageSendParams, SendMessageRequest
+        except ImportError as e:
+            raise A2AError(
+                status_code=500,
+                message=(
+                    "The 'a2a-sdk' package is required to call an A2A agent pinned to "
+                    "protocolVersion '1.0'. Install it with: pip install a2a-sdk"
+                ),
+            ) from e
+
+        request = SendMessageRequest(
+            id=str(uuid.uuid4()),
+            params=MessageSendParams.model_validate({"message": a2a_message}),
+        )
+        params: Dict[str, Any] = MessageToDict(
+            to_core_send_message_request(request),
+            preserving_proto_field_name=False,
+        )
+        return params
 
     def transform_response(
         self,
