@@ -19,6 +19,20 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
+    def _normalize_azure_model_for_lookup(cls, model: str) -> str:
+        """Normalize Azure model strings so ``_supports_factory`` resolves to the
+        ``azure/<name>`` entry in model_prices_and_context_window.json.
+
+        Strips the ``gpt5_series/`` routing prefix and ensures an ``azure/``
+        provider prefix.
+        """
+        if model.startswith(cls.GPT5_SERIES_ROUTE):
+            return "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
+        if not model.startswith("azure/"):
+            return "azure/" + model
+        return model
+
+    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Override to handle gpt5_series/ prefix used for Azure routing.
 
@@ -27,11 +41,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         entry. Strip the prefix and prepend ``azure/`` so the lookup finds
         ``azure/gpt-5.1`` in model_prices_and_context_window.json.
         """
-        if model.startswith(cls.GPT5_SERIES_ROUTE):
-            model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
-        elif not model.startswith("azure/"):
-            model = "azure/" + model
-        return super()._supports_reasoning_effort_level(model, level)
+        return super()._supports_reasoning_effort_level(
+            cls._normalize_azure_model_for_lookup(model), level
+        )
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
@@ -67,12 +79,22 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         - Azure returns logprobs successfully despite Microsoft's general
           documentation stating reasoning models don't support it.
         """
-        params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
+        params = OpenAIGPT5Config.get_supported_openai_params(
+            self, model=self._normalize_azure_model_for_lookup(model)
+        )
 
         # Azure supports tool_choice for GPT-5 deployments, but the base GPT-5 config
         # can drop it when the deployment name isn't in the OpenAI model registry.
         if "tool_choice" not in params:
             params.append("tool_choice")
+
+        # Azure OpenAI supports the "user" param for GPT-5 deployments, but the
+        # grandparent OpenAIGPTConfig only adds it when the model is in
+        # litellm.open_ai_chat_completion_models. Normalizing to "azure/<name>"
+        # for capability lookups above causes that check to miss, so add it
+        # back here.
+        if "user" not in params:
+            params.append("user")
 
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure

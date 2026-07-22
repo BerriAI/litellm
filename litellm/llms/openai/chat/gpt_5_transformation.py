@@ -174,13 +174,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         non_supported_params = [
             "presence_penalty",
             "frequency_penalty",
-            "stop",
             "logit_bias",
             "modalities",
             "prediction",
             "audio",
             "web_search_options",
         ]
+
+        if not _supports_factory(
+            model=model, custom_llm_provider=None, key="supports_stop"
+        ):
+            non_supported_params.append("stop")
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort="none"
         if not self._supports_reasoning_effort_level(model, "none"):
