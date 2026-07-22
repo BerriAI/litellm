@@ -3337,7 +3337,7 @@ if MCP_AVAILABLE:
         try:
             data = json.loads(body)
             return isinstance(data, dict) and data.get("method") == "initialize"
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
             return False
 
     async def _read_request_body_for_routing(
@@ -4153,7 +4153,7 @@ if MCP_AVAILABLE:
                             "MCP: detected JSON-RPC response POST (id=%s), skipping session lock to avoid deadlock",
                             _peeked.get("id"),
                         )
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
                     # Peek cap truncated the body, so it can't be fully parsed.
                     # Scan the top-level keys (depth-aware) instead of a flat
                     # substring search: a response's result payload may nest a

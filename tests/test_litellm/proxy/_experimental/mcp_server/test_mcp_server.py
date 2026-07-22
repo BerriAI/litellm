@@ -1690,6 +1690,103 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
 
 
 @pytest.mark.asyncio
+async def test_mcp_routing_utf8_split_at_peek_boundary_reaches_stateless_handler():
+    """
+    A large non-initialize POST whose routing peek ends in a partial UTF-8
+    sequence should route as a normal stateless request instead of returning 500.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    peek_cap = mcp_server._MCP_ROUTING_PEEK_MAX_BYTES
+    prefix = (
+        b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":'
+        b'{"name":"render","arguments":{"html":"'
+    )
+    multibyte_char = "é".encode("utf-8")
+    filler = b"a" * (peek_cap - len(prefix) - 1)
+    suffix = b'"}}}'
+    request_body = prefix + filler + multibyte_char + suffix
+
+    assert request_body[:peek_cap][-1:] == multibyte_char[:1]
+    assert request_body[peek_cap : peek_cap + 1] == multibyte_char[1:]
+
+    messages = [
+        {
+            "type": "http.request",
+            "body": request_body[:peek_cap],
+            "more_body": True,
+        },
+        {
+            "type": "http.request",
+            "body": request_body[peek_cap:],
+            "more_body": False,
+        },
+    ]
+    receive_calls = {"count": 0}
+
+    async def receive():
+        idx = receive_calls["count"]
+        receive_calls["count"] += 1
+        return messages[idx]
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/progress_test",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    send = AsyncMock()
+    stateless_received_chunks = []
+
+    async def stateless_handle(s, r, se):
+        while True:
+            msg = await r()
+            if msg.get("type") != "http.request":
+                break
+            stateless_received_chunks.append(msg.get("body", b"") or b"")
+            if not msg.get("more_body", False):
+                break
+
+    async def stateful_handle(s, r, se):
+        raise AssertionError("non-initialize POST should not reach stateful manager")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(session_manager_stateless, "handle_request", side_effect=stateless_handle),
+        patch.object(session_manager_stateful, "handle_request", side_effect=stateful_handle),
+        patch.object(session_manager_stateless, "_server_instances", {}),
+        patch.object(session_manager_stateful, "_server_instances", {}),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert b"".join(stateless_received_chunks) == request_body
+    response_starts = [
+        call.args[0] for call in send.await_args_list if call.args[0].get("type") == "http.response.start"
+    ]
+    assert response_starts == []
+
+
+@pytest.mark.asyncio
 async def test_enforce_stateful_session_cap_evicts_oldest_idle_then_rejects():
     """
     A caller at the per-owner session cap should have its own oldest *idle*
