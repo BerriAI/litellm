@@ -83,11 +83,13 @@ def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
         return None
     try:
         parts = urlsplit(url)
+        hostname = parts.hostname
+        port = parts.port
     except ValueError:
         return None
-    if not parts.hostname:
+    if not hostname:
         return None
-    netloc = f"{parts.hostname}:{parts.port}" if parts.port else parts.hostname
+    netloc = f"{hostname}:{port}" if port else hostname
     return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
