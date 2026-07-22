@@ -87,6 +87,24 @@ class TestDecryptResponseId:
             assert user_id == "user-456"
             assert team_id == "team-789"
 
+    def test_decrypt_response_id_legacy_without_team_id(self, responses_id_security):
+        """Legacy encrypted response IDs did not always include team_id."""
+        import litellm.proxy.hooks.responses_id_security as responses_module
+
+        with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
+            mock_decrypt.return_value = (
+                f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}"
+                "response_id:resp_original_123;user_id:user-456"
+            )
+
+            original_id, user_id, team_id = responses_id_security._decrypt_response_id(
+                "resp_encrypted_value"
+            )
+
+            assert original_id == "resp_original_123"
+            assert user_id == "user-456"
+            assert team_id is None
+
     def test_decrypt_response_id_no_encryption(self, responses_id_security):
         """Test decrypting a non-encrypted response ID"""
         # Patch at the module level where it's imported
