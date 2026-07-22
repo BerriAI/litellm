@@ -75,6 +75,17 @@ const SettingValueEditor: React.FC<{
       />
     );
   }
+  if (setting.field_type === "Dollar") {
+    return (
+      <InputNumber
+        min={0.01}
+        step={0.25}
+        prefix="$"
+        value={setting.field_value}
+        onChange={(newValue) => onChange(setting.field_name, newValue)}
+      />
+    );
+  }
   if (setting.field_type === "Select") {
     return (
       <AntdSelect

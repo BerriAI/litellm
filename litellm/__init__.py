@@ -427,7 +427,9 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
-max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
+max_ui_session_budget: Optional[float] = (
+    1.0  # USD budget for each dashboard login session (playground, test connection)
+)
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
