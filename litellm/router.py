@@ -307,16 +307,18 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
-_HTTP_FRAMING_HEADERS: frozenset[str] = frozenset({
-    "content-length",
-    "transfer-encoding",
-    "content-encoding",
-    "content-type",
-    "set-cookie",
-    "cookie",
-    "proxy-authenticate",
-    "proxy-authorization",
-})
+_HTTP_FRAMING_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-length",
+        "transfer-encoding",
+        "content-encoding",
+        "content-type",
+        "set-cookie",
+        "cookie",
+        "proxy-authenticate",
+        "proxy-authorization",
+    }
+)
 
 
 def _strip_http_framing_headers(exc: BaseException) -> None:
