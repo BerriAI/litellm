@@ -10663,6 +10663,20 @@ class Router:
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
+            # Run async pre-routing hooks (e.g. complexity_router) so that router
+            # model names are resolved to the correct downstream model before
+            # deployment selection, even when a non-async routing strategy is used.
+            pre_routing_hook_response = await self.async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+            if pre_routing_hook_response is not None:
+                model = pre_routing_hook_response.model
+                if pre_routing_hook_response.messages is not None:
+                    messages = pre_routing_hook_response.messages
             return self.get_available_deployment(
                 model=model,
                 messages=messages,
