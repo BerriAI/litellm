@@ -35,6 +35,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
@@ -1640,6 +1641,89 @@ async def test_itpm_reservation_accounts_for_image_content_not_just_text(rate_li
         "Expected the image content to push the ITPM reservation over the "
         "50-token limit; if this doesn't raise, the estimate is undercounting "
         "non-text content again."
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_api_not_misclassified_as_embedding_for_output_estimate(rate_limiter):
+    """
+    Regression for a High-severity review finding: the Responses API also
+    puts its prompt in data["input"], the same field embeddings use, so the
+    output-token estimate treated every Responses call as an embedding and
+    reserved zero output tokens. call_type now disambiguates the two: the
+    same input-only payload gets zero output tokens for an embedding call
+    but a real floor for a Responses API call.
+    """
+    handler, _cache = rate_limiter
+
+    data = {"input": "describe this image in detail"}
+
+    _, embedding_output_estimate = handler._estimate_input_and_output_tokens(data=data, call_type="aembedding")
+    assert embedding_output_estimate == 0
+
+    _, responses_output_estimate = handler._estimate_input_and_output_tokens(data=data, call_type="aresponses")
+    assert responses_output_estimate > 0, (
+        "Responses API call was misclassified as an embedding and reserved zero output tokens"
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_api_usage_reconciles_using_input_output_tokens_fields(rate_limiter):
+    """
+    Regression for the other half of the same finding: ResponseAPIUsage
+    exposes input_tokens/output_tokens, not prompt_tokens/completion_tokens.
+    Before this fix, _resolve_io_token_reconcile_usage couldn't resolve
+    Responses API usage at all, so the reservation was silently kept as-is
+    instead of being trued up to the much larger actual usage.
+    """
+    handler, _cache = rate_limiter
+
+    itpm_scope = ("model_per_project_itpm", "proj-responses:model")
+    otpm_scope = ("model_per_project_otpm", "proj-responses:model")
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                ITPM_RESERVED_TOKENS_KEY: 10,
+                ITPM_RESERVED_SCOPES_KEY: [list(itpm_scope)],
+                OTPM_RESERVED_TOKENS_KEY: 10,
+                OTPM_RESERVED_SCOPES_KEY: [list(otpm_scope)],
+            }
+        },
+    }
+
+    mock_response = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=int(datetime.now().timestamp()),
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=80, output_tokens=400, total_tokens=480),
+    )
+
+    increments = []
+
+    async def mock_increment(increment_list, **kwargs):
+        for op in increment_list:
+            increments.append({"key": op["key"], "increment": op["increment_value"]})
+
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_increment
+
+    await handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    itpm_adjustments = [i for i in increments if "model_per_project_itpm" in i["key"]]
+    otpm_adjustments = [i for i in increments if "model_per_project_otpm" in i["key"]]
+
+    # delta = 80 actual input - 10 reserved = +70
+    assert any(i["increment"] == 70 for i in itpm_adjustments), (
+        f"ITPM reservation was never trued up to actual Responses API usage: {itpm_adjustments}"
+    )
+    # delta = 400 actual output - 10 reserved = +390
+    assert any(i["increment"] == 390 for i in otpm_adjustments), (
+        f"OTPM reservation was never trued up to actual Responses API usage: {otpm_adjustments}"
     )
 
 
