@@ -93,6 +93,9 @@ async def test_size_limit_aborts_mid_stream():
 
     with pytest.raises(FilePartTooLarge):
         await _drain(parsed.stream())
+    # sticky: a retry via getvalue() must re-raise, not silently return the truncated prefix
+    with pytest.raises(FilePartTooLarge):
+        await parsed.getvalue()
 
 
 @pytest.mark.asyncio
@@ -104,3 +107,6 @@ async def test_field_after_file_raises_order_error():
     parsed = await open_transcription_multipart(chunked(body, 128), BOUNDARY, max_file_bytes=None)
     with pytest.raises(MultipartOrderError):
         await _drain(parsed.stream())
+    # sticky: a retry via getvalue() must re-raise, not return a truncated prefix
+    with pytest.raises(MultipartOrderError):
+        await parsed.getvalue()

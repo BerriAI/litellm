@@ -1108,3 +1108,17 @@ async def test_audio_transcription_multipart_streams_and_stashes_upload():
     assert upload.started is False  # file part still un-consumed, ready to stream
     streamed = b"".join([chunk async for chunk in upload.stream()])
     assert streamed == audio
+
+
+@pytest.mark.asyncio
+async def test_audio_translation_multipart_is_not_streamed():
+    # /audio/translations is not wired for streaming; it must still use request.form() so its
+    # route (which does not read the stashed upload) receives an intact body.
+    from litellm.proxy.common_utils.http_parsing_utils import _is_streaming_audio_upload_path
+
+    req = MagicMock()
+    req.url.path = "/v1/audio/translations"
+    assert _is_streaming_audio_upload_path(req) is False
+
+    req.url.path = "/v1/audio/transcriptions"
+    assert _is_streaming_audio_upload_path(req) is True

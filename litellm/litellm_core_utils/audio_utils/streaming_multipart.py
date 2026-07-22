@@ -54,6 +54,7 @@ class StreamingMultipartUpload:
         self._body = body.__aiter__()
         self._buffer = bytearray()
         self._gen: AsyncIterator[bytes] | None = None
+        self._error: Exception | None = None
         self._pending: list[bytes] = []  # mutable-ok: per-write file segments drained by the tee
         self._file_started = False
         self._file_ended = False
@@ -164,6 +165,10 @@ class StreamingMultipartUpload:
         return self._gen
 
     async def getvalue(self) -> bytes:
+        # If a prior stream() already failed, re-raise rather than returning a truncated prefix,
+        # so a router retry fails cleanly instead of sending partial audio.
+        if self._error is not None:
+            raise self._error
         async for _ in self.stream():
             pass
         return bytes(self._buffer)
@@ -173,13 +178,15 @@ class StreamingMultipartUpload:
             for seg in self._pending:
                 self._buffer += seg
                 if self.max_file_bytes is not None and len(self._buffer) > self.max_file_bytes:
-                    raise FilePartTooLarge(
+                    self._error = FilePartTooLarge(
                         f"Uploaded file exceeds the maximum allowed size of {self.max_file_bytes} bytes"
                     )
+                    raise self._error
                 yield seg
             self._pending = []
             if self._trailing_field:
-                raise MultipartOrderError("A form field appeared after the file part; cannot stream")
+                self._error = MultipartOrderError("A form field appeared after the file part; cannot stream")
+                raise self._error
             if self._file_ended or self._ended:
                 break
             chunk = await self._next()

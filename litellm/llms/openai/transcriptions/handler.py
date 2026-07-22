@@ -22,6 +22,7 @@ from litellm.llms.openai.transcriptions.streaming_upload import (
     new_boundary,
     stream_multipart_body,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import FileTypes
 from litellm.utils import (
     TranscriptionResponse,
@@ -270,6 +271,10 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         headers = {"Content-Type": multipart_content_type(boundary)}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        # Match the OpenAI SDK, which sends the org header when configured.
+        organization = litellm.organization or get_secret_str("OPENAI_ORGANIZATION")
+        if organization:
+            headers["OpenAI-Organization"] = organization
 
         logging_obj.pre_call(
             input=None,

@@ -44,7 +44,7 @@ def _is_json_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) == "application/json"
 
 
-_STREAMING_AUDIO_SUFFIXES = ("/audio/transcriptions", "/audio/translations")
+_STREAMING_AUDIO_SUFFIXES = ("/audio/transcriptions",)
 
 
 def _is_streaming_audio_upload_path(request: Request | None) -> bool:

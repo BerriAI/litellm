@@ -18,8 +18,16 @@ from litellm.litellm_core_utils.audio_utils.streaming_multipart import (
 FormValue = str | int | float | bool | list
 
 
+def _escape_header_param(value: str) -> str:
+    """Escape a multipart Content-Disposition param the way httpx does, so a client-controlled
+    name/filename with a quote or newline can't break out of the header."""
+    return value.replace("\\", "\\\\").replace('"', "%22").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def _field_part(boundary: str, name: str, value: str) -> bytes:
-    return (f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n').encode()
+    return (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{_escape_header_param(name)}"\r\n\r\n{value}\r\n'
+    ).encode()
 
 
 def _encode_field(boundary: str, name: str, value: FormValue) -> bytes:
@@ -46,7 +54,7 @@ async def stream_multipart_body(
     yield _field_parts(boundary, fields)
     yield (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f'Content-Disposition: form-data; name="file"; filename="{_escape_header_param(filename)}"\r\n'
         f"Content-Type: {file_content_type or 'application/octet-stream'}\r\n\r\n"
     ).encode()
     async for chunk in upload.stream():

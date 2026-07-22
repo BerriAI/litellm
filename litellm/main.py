@@ -7486,7 +7486,10 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
             supports_streaming = (
                 custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers
             )
-            if not supports_streaming or file.started:
+            # A caller-supplied client carries custom transport/headers the streaming httpx path can't
+            # honor, so buffer and let the SDK path use it. Also buffer for unsupported providers and on
+            # any retry after the stream was already started.
+            if not supports_streaming or file.started or kwargs.get("client") is not None:
                 buffered = io.BytesIO(await file.getvalue())
                 buffered.name = file.filename or "audio"
                 kwargs["file"] = buffered
