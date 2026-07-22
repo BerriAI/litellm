@@ -20,6 +20,9 @@ from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
+from litellm.types.integrations.compression_interception import (
+    CompressionSavingsMetadata,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1011,10 +1014,10 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_tool_search_enabled: Optional[bool] = None
 
 
+from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 from litellm.types.object_permission import (  # noqa: E402
     ObjectPermissionDict as ObjectPermissionDict,
 )
-from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -2122,6 +2125,8 @@ class ConfigList(LiteLLMPydanticObjectBase):
     field_default_value: Any
     premium_field: bool = False
     nested_fields: Optional[List[FieldDetail]] = None  # For nested dictionary or Pydantic fields
+    field_options: Optional[list[str]] = None  # Allowed values, for field_type == "Select"
+    field_tab: Optional[str] = None  # Admin UI sub-tab this field renders under; None groups it with the rest
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -2291,6 +2296,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_response_size_mb: Optional[int] = Field(
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
+    )
+    proxy_config_reload_interval_seconds: int = Field(
+        30,
+        gt=0,
+        description="how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup",
     )
     cancel_on_disconnect: Optional[bool] = Field(
         None,
@@ -3240,6 +3250,7 @@ class SpendLogsMetadata(TypedDict):
     attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    compression_savings: CompressionSavingsMetadata | None
 
 
 class SpendLogsPayload(TypedDict):
@@ -4041,6 +4052,7 @@ class JWTAuthBuilderResult(TypedDict):
     token: str
     team_id: Optional[str]
     user_id: Optional[str]
+    user_email: str | None
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]
@@ -4459,6 +4471,11 @@ class BaseDailySpendTransaction(TypedDict):
     completion_tokens: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    compression_saved_tokens: int
+
+    # cost-savings metrics (dollars, priced per request before aggregation)
+    compression_savings_spend: float
+    prompt_caching_savings_spend: float
 
     # request level metrics
     spend: float

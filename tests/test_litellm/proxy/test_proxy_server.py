@@ -752,6 +752,97 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
+    """
+    The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
+    deployments in sync must be scheduled at the configured
+    proxy_config_reload_interval_seconds, not a hardcoded value.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    mock_scheduler = MagicMock()
+
+    configured_interval = 47
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config_reload_interval_seconds",
+            configured_interval,
+        ),
+        patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=mock_scheduler),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    scheduled_seconds = {
+        job_call.kwargs["id"]: job_call.kwargs.get("seconds")
+        for job_call in mock_scheduler.add_job.call_args_list
+        if "id" in job_call.kwargs
+    }
+    assert scheduled_seconds["add_deployment_job"] == configured_interval
+    assert scheduled_seconds["get_credentials_job"] == configured_interval
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_interval(monkeypatch):
+    """
+    A non-positive proxy_config_reload_interval_seconds (misconfig via env/config/DB) would
+    make APScheduler reject the job and crash startup, so the scheduler must fall back to the
+    30s default instead of forwarding the bad value.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+    mock_scheduler = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch("litellm.proxy.proxy_server.proxy_config_reload_interval_seconds", 0),
+        patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=mock_scheduler),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    scheduled_seconds = {
+        job_call.kwargs["id"]: job_call.kwargs.get("seconds")
+        for job_call in mock_scheduler.add_job.call_args_list
+        if "id" in job_call.kwargs
+    }
+    assert scheduled_seconds["add_deployment_job"] == 30
+    assert scheduled_seconds["get_credentials_job"] == 30
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_false(monkeypatch):
     """
     Regression (LIT-4128): MCP servers created via the UI are persisted to the DB
@@ -922,6 +1013,102 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
         "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
         "GENERIC_LOGGER_HEADERS": "Auth: token",
     }
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+)
+def test_get_config_callbacks_fall_back_to_process_env(mock_env_vars, monkeypatch):
+    """A callback configured purely via process env vars is surfaced.
+
+    An IaC deployment sets LANGFUSE_* on the gateway and never touches the UI,
+    so nothing is stored in the config environment_variables overlay. The read
+    endpoint must still report the live values instead of blanks.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env-only")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env-only")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+    config_data = {
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "general_settings": {},
+        "environment_variables": {},
+    }
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    langfuse_cb = next(
+        (cb for cb in response.json()["callbacks"] if cb["name"] == "langfuse"), None
+    )
+    assert langfuse_cb is not None
+    assert langfuse_cb["variables"] == {
+        "LANGFUSE_PUBLIC_KEY": "pk-env-only",
+        "LANGFUSE_SECRET_KEY": "sk-env-only",
+        "LANGFUSE_HOST": "https://cloud.langfuse.com",
+    }
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+)
+def test_get_config_callback_env_secrets_redacted_for_non_admin(mock_env_vars, monkeypatch):
+    """Surfacing env vars must not widen who can read secret values.
+
+    The callback role gate redacts sensitive keys for anyone below full admin,
+    and that must hold whether the value came from the stored config or the
+    process env. A non-secret var (LANGFUSE_HOST) still resolves for context.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env-only-secret")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+    config_data = {
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "general_settings": {},
+        "environment_variables": {},
+    }
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user"
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    langfuse_cb = next(
+        (cb for cb in response.json()["callbacks"] if cb["name"] == "langfuse"), None
+    )
+    assert langfuse_cb is not None
+    assert langfuse_cb["variables"]["LANGFUSE_SECRET_KEY"] == "REDACTED"
+    assert langfuse_cb["variables"]["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
 
 
 def test_get_config_returns_email_settings(monkeypatch):
@@ -8982,6 +9169,261 @@ async def test_update_config_field_throttle_persists_to_litellm_settings(monkeyp
 
     assert litellm.budget_exceeded_throttle_percentage == 0.1
     assert saved["litellm_settings"]["budget_exceeded_throttle_percentage"] == 0.1
+
+
+def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
+    """The auto prompt caching flag and its ttl are litellm_settings globals surfaced on the
+    General Settings table, so an admin can turn caching on without hand-writing config. The
+    ttl is a Select and must ship its allowed values, or the table renders no editor for it."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", "1h")
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+
+        assert fields["enable_anthropic_prompt_caching"]["field_type"] == "Boolean"
+        assert fields["enable_anthropic_prompt_caching"]["field_value"] is True
+
+        assert fields["anthropic_prompt_caching_ttl"]["field_type"] == "Select"
+        assert fields["anthropic_prompt_caching_ttl"]["field_value"] == "1h"
+        assert fields["anthropic_prompt_caching_ttl"]["field_options"] == ["5m", "1h"]
+
+        # Both caching fields carry their sub-tab so the Admin UI can render them on a
+        # dedicated Prompt Caching tab, while ungrouped fields stay on General.
+        assert fields["enable_anthropic_prompt_caching"]["field_tab"] == "prompt_caching"
+        assert fields["anthropic_prompt_caching_ttl"]["field_tab"] == "prompt_caching"
+        assert fields["budget_exceeded_throttle_percentage"]["field_tab"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_general_settings_ui_fields_are_db_overridable():
+    """Every field the Admin UI can edit is a `litellm.<attr>` set via setattr on the handling
+    worker (`_persist_general_settings_ui_litellm_field`). Unless it is also in
+    LITELLM_SETTINGS_SAFE_DB_OVERRIDES, a config reload on a peer worker merges the DB value but
+    never applies it to the live attribute, so peer workers stay on their startup value.
+
+    This invariant is the guard against the two registries drifting: adding a UI-editable field
+    without enrolling it in the DB-override allowlist silently breaks cross-worker propagation.
+    """
+    from litellm.constants import LITELLM_SETTINGS_SAFE_DB_OVERRIDES
+    from litellm.proxy.proxy_server import _GENERAL_SETTINGS_UI_LITELLM_FIELDS
+
+    missing = set(_GENERAL_SETTINGS_UI_LITELLM_FIELDS) - set(LITELLM_SETTINGS_SAFE_DB_OVERRIDES)
+    assert not missing, (
+        f"UI-editable litellm_settings fields missing from LITELLM_SETTINGS_SAFE_DB_OVERRIDES: {sorted(missing)}. "
+        "Add them, or they will not propagate to other workers when changed from the UI."
+    )
+
+
+@pytest.mark.parametrize(
+    "field_name, db_value",
+    [
+        ("enable_anthropic_prompt_caching", True),
+        ("anthropic_prompt_caching_ttl", "1h"),
+    ],
+)
+def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_name, db_value):
+    """A UI toggle on one worker persists to the DB; a peer worker picks it up only when the
+    config reload applies the safe-override allowlist. Regression for the fields being absent
+    from that allowlist, which left peer workers stale."""
+    import litellm.proxy.proxy_server as ps
+
+    # peer worker booted with the opposite/absent value
+    monkeypatch.setattr(litellm, field_name, False if isinstance(db_value, bool) else None)
+
+    pc = ps.ProxyConfig()
+    pc._update_config_fields(
+        current_config={"litellm_settings": {}},
+        param_name="litellm_settings",
+        db_param_value={field_name: db_value},
+    )
+
+    assert getattr(litellm, field_name) == db_value
+
+
+def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
+    """The flag defaults to False rather than None, so a plain 'is not None' check would
+    report the default as 'In Config' and imply an admin had set it."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert fields["enable_anthropic_prompt_caching"]["stored_in_db"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    "field_name, field_value",
+    [
+        ("enable_anthropic_prompt_caching", True),
+        ("enable_anthropic_prompt_caching", False),
+        ("anthropic_prompt_caching_ttl", "5m"),
+        ("anthropic_prompt_caching_ttl", "1h"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_config_field_prompt_caching_persists_to_litellm_settings(monkeypatch, field_name, field_value):
+    """Toggling either row must set litellm.<attr> live and persist under litellm_settings,
+    so the running proxy caches immediately and still does after a restart."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, field_name, None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(field_name=field_name, field_value=field_value, config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    assert getattr(litellm, field_name) == field_value
+    assert saved["litellm_settings"][field_name] == field_value
+
+
+@pytest.mark.parametrize(
+    "field_name, bad_value",
+    [
+        ("enable_anthropic_prompt_caching", "yes"),
+        ("enable_anthropic_prompt_caching", 1),
+        ("anthropic_prompt_caching_ttl", "10m"),
+        ("anthropic_prompt_caching_ttl", "1H"),
+        ("anthropic_prompt_caching_ttl", 3600),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_config_field_prompt_caching_rejects_invalid(monkeypatch, field_name, bad_value):
+    """An unsupported ttl must be refused here rather than reaching Anthropic verbatim."""
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldUpdate,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    async def fake_get_config():
+        return {"litellm_settings": {}}
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, field_name, None)
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as exc:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(field_name=field_name, field_value=bad_value, config_type="general_settings"),
+            user_api_key_dict=admin,
+        )
+    assert exc.value.status_code == 400
+    assert getattr(litellm, field_name) is None
+
+
+@pytest.mark.parametrize(
+    "field_name, expected_default",
+    [
+        ("enable_anthropic_prompt_caching", False),
+        ("anthropic_prompt_caching_ttl", None),
+        ("budget_exceeded_throttle_percentage", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reset_config_field_restores_type_default(monkeypatch, field_name, expected_default):
+    """Reset must restore each field's own default. Blanket None would leave the boolean flag
+    set to None, which is not a bool and would read as neither on nor off."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import (
+        ConfigFieldDelete,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.proxy_server import delete_config_general_settings
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {"litellm_settings": {field_name: "stale"}}
+
+    async def fake_save_config(new_config=None):
+        saved.update(new_config or {})
+
+    monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
+    monkeypatch.setattr(ps.proxy_config, "save_config", fake_save_config)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    monkeypatch.setattr(litellm, field_name, "stale")
+
+    admin = UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(field_name=field_name, config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    assert getattr(litellm, field_name) is expected_default
+    assert field_name not in saved["litellm_settings"]
 
 
 @pytest.mark.parametrize("bad_value", [0, -0.1, 1.5, True])

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy._experimental.mcp_server.tool_search import (
     MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
@@ -381,7 +382,7 @@ class TestCallToolRestApiVirtualTools:
         with patch(
             "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
             new_callable=AsyncMock,
-            return_value=[mock_tool],
+            return_value=AggregateToolListing(tools=[mock_tool], outcomes={}),
         ):
             result = await self._get_call_fn()(
                 request=request,
@@ -508,7 +509,7 @@ class TestCallToolRestApiVirtualTools:
             patch(
                 "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
                 new_callable=AsyncMock,
-                return_value=[],
+                return_value=AggregateToolListing(tools=[], outcomes={}),
             ) as mock_list,
         ):
             await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)

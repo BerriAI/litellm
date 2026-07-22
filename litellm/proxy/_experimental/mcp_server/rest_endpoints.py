@@ -19,12 +19,20 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    classify_list_exception,
+    list_fault_http_status,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
+    get_server_prefix,
     merge_mcp_headers,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -626,6 +634,16 @@ if MCP_AVAILABLE:
             # matching status code and WWW-Authenticate challenge; that is what
             # lets standards-compliant MCP clients run the upstream OAuth flow.
             raise
+        except MCPServerListError as e:
+            fault = classify_list_exception(e)
+            verbose_logger.info(f"Listing tools from {server.name} failed with a {fault.tag} fault")
+            raise HTTPException(
+                status_code=list_fault_http_status(fault),
+                detail={
+                    "error": fault.tag,
+                    "message": f"Failed to list tools from server {get_server_prefix(server)}",
+                },
+            ) from e
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -837,7 +855,11 @@ if MCP_AVAILABLE:
                         list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                        errors.append(f"{server.name}: {str(e)}")
+                        errors.append(
+                            f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
+                            if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
+                            else f"{get_server_prefix(server)}: {str(e)}"
+                        )
                         continue
 
                 if errors and not list_tools_result:
@@ -857,7 +879,10 @@ if MCP_AVAILABLE:
                 request_path=request.scope.get("_original_path") or request.url.path,
             )
         except HTTPException as http_exc:
-            if http_exc.status_code == status.HTTP_404_NOT_FOUND:
+            if http_exc.status_code == status.HTTP_404_NOT_FOUND or server_id:
+                # Single-server requests relay the truthful status (a 502/504 upstream fault must
+                # not masquerade as a 200 empty-success body); only the multi-server aggregate
+                # keeps the legacy error-dict response shape below.
                 raise
             # Internal access/IP 403s keep the legacy error-dict response shape
             # so the existing contract stays intact.

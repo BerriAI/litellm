@@ -41,6 +41,8 @@ def _summarize(rows: list[SpendLogRow]) -> list[dict[str, object]]:
         "spend",
         "status",
         "cache_hit",
+        "call_type",
+        "custom_llm_provider",
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
@@ -122,7 +124,77 @@ def test_streaming_chat_completion_tracks_spend(
     assert (row.total_tokens or 0) == prompt + completion
 
 
+@pytest.mark.covers("quota_management.spend_tracking.messages_bridge.logs_cost")
+def test_streaming_messages_via_responses_bridge_tracks_spend(
+    client: SpendClient, scoped_key: str
+) -> None:
+    """A streaming anthropic-format /v1/messages request served by an openai-provider
+    model is bridged through litellm's anthropic-messages -> Responses adapter, and
+    consuming the whole SSE stream writes exactly one costed spend row.
+
+    The deployment is a Responses-only OpenAI model (gpt-5.3-codex, exposed only on
+    /v1/responses), so a served call could not have taken the chat-completions bridge:
+    that path would 404 at OpenAI on an endpoint the model does not have. The row
+    proving the Responses path carries custom_llm_provider "openai" (the openai
+    backend served it) under a call_type that keeps the /v1/messages billing identity
+    (never a chat call_type), with nonzero cost and prompt/completion tokens that the
+    bridge must aggregate out of the consumed stream.
+    """
+    result = client.messages_stream(
+        scoped_key,
+        "openai-responses-codex",
+        f"reply with exactly one word {unique_marker()}",
+        max_tokens=64,
+    )
+    assert (
+        result.ok
+    ), f"bridged /v1/messages stream failed (status {result.status_code}): {result.body[:300]}"
+    assert result.is_streaming, (
+        f"expected an SSE stream from /v1/messages, got content-type "
+        f"{result.content_type!r}"
+    )
+    assert result.chunks > 0, "no SSE events were consumed from the /v1/messages stream"
+    assert (
+        result.stream_error is None
+    ), f"the /v1/messages stream carried an error event: {result.stream_error}"
+
+    def is_bridged_costed(row: SpendLogRow) -> bool:
+        return (row.spend or 0) > 0 and "anthropic_messages" in (row.call_type or "")
+
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(is_bridged_costed(r) for r in rs)
+    )
+    costed = [r for r in rows if (r.spend or 0) > 0]
+    bridged = [r for r in costed if is_bridged_costed(r)]
+    assert bridged == costed, (
+        f"a costed row was not billed as a /v1/messages call (wrong call_type); "
+        f"the bridge must keep the messages billing identity: {_summarize(rows)}"
+    )
+    assert len(bridged) == 1, (
+        f"expected exactly one costed row for the bridged stream, saw {_summarize(rows)}"
+    )
+
+    row = bridged[0]
+    assert row.custom_llm_provider == "openai", (
+        f"bridged row not attributed to the openai Responses backend "
+        f"(custom_llm_provider {row.custom_llm_provider!r}): {_summarize(rows)}"
+    )
+    assert "codex" in (row.model or ""), (
+        f"row model {row.model!r} is not the Responses-only codex deployment"
+    )
+
+    prompt = row.prompt_tokens or 0
+    completion = row.completion_tokens or 0
+    assert (
+        prompt > 0 and completion > 0
+    ), f"bridged stream tokens not tracked: {_summarize(rows)}"
+    assert (row.total_tokens or 0) == prompt + completion, (
+        f"token arithmetic broken on the bridged row: {_summarize(rows)}"
+    )
+
+
 @pytest.mark.covers("quota_management.spend_tracking.embeddings.logs_cost")
+@pytest.mark.covers("llm.embeddings.openai.basic.nonstream.cost_logged")
 def test_embedding_writes_nonzero_spend_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -475,12 +547,12 @@ def test_spend_logs_endpoint_returns_spend(
         )
     )
 
-    gateway = client.gateway
-    deadline = time.monotonic() + gateway.poll_timeout
+    proxy = client.proxy
+    deadline = time.monotonic() + proxy.poll_timeout
     while True:
-        result = gateway.transport.get(
+        result = proxy.transport.get(
             "/spend/logs",
-            headers=gateway.transport.master,
+            headers=proxy.transport.master,
             params=SpendLogsParams(api_key=scoped_key),
             response_type=SpendLogs,
         )
@@ -493,4 +565,4 @@ def test_spend_logs_endpoint_returns_spend(
                 f"/spend/logs never surfaced the key's spend before the deadline; "
                 f"saw {_summarize(rows)}"
             )
-        time.sleep(gateway.poll_interval)
+        time.sleep(proxy.poll_interval)

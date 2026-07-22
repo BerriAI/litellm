@@ -3,7 +3,7 @@ import re
 import sys
 from functools import lru_cache
 from logging import Logger
-from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, FrozenSet, Iterator, List, Mapping, Optional, Tuple, Union
 
 from fastapi import HTTPException, Request, status
 
@@ -12,7 +12,12 @@ from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+from litellm.litellm_core_utils.url_utils import (
+    SSRFError,
+    is_url_destination_allowed_by_host,
+    provider_url_destination_candidates,
+    validate_url,
+)
 from litellm.proxy._types import *
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
@@ -273,6 +278,7 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     # re-route the request's retention and accounting to any project
     # reachable with the deployment's shared AWS credentials.
     "aws_bedrock_project_id",
+    "bedrock_tags",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
     # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
@@ -289,6 +295,7 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "use_ssl",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
+    "vertex_ai_credentials",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration
@@ -341,6 +348,60 @@ def _check_banned_params(
         )
 
 
+_FALLBACK_FIELDS: tuple[str, ...] = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
+
+
+def _iter_fallback_field_values(request_body: Mapping[str, object]) -> Iterator[object]:
+    override = request_body.get("router_settings_override")
+    for source in (request_body, override):
+        if isinstance(source, Mapping):
+            for field in _FALLBACK_FIELDS:
+                yield source.get(field)
+
+
+def _iter_fallback_targets(value: object, depth: int) -> Iterator[str | Mapping[str, object]]:
+    if depth > 2 * litellm.ROUTER_MAX_FALLBACKS:
+        raise ValueError("Rejected Request: fallback nesting exceeds the allowed validation depth.")
+    if not isinstance(value, list):
+        return
+    for item in value:
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, Mapping):
+            values = tuple(item.values())
+            if not (values and all(isinstance(v, list) for v in values)):
+                yield item
+            if isinstance(item.get("model"), str):
+                for field in _FALLBACK_FIELDS:
+                    yield from _iter_fallback_targets(item.get(field), depth + 1)
+            else:
+                for target_list in values:
+                    yield from _iter_fallback_targets(target_list, depth + 1)
+
+
+def iter_request_fallback_targets(request_body: Mapping[str, object]) -> Iterator[str | Mapping[str, object]]:
+    for value in _iter_fallback_field_values(request_body):
+        yield from _iter_fallback_targets(value, 0)
+
+
+def _reject_url_valued_fallback_target(value: str) -> None:
+    allowed_hosts = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
+    for candidate in provider_url_destination_candidates(value):
+        if not candidate.lower().startswith(("http://", "https://")):
+            continue
+        if is_url_destination_allowed_by_host(candidate, allowed_hosts):
+            continue
+        raise ValueError(
+            f"Rejected Request: URL-valued fallback destination '{value}' is not allowed. "
+            "Configure custom endpoints with api_base instead, or add the destination host to "
+            "`provider_url_destination_allowed_hosts` in litellm_settings."
+        )
+
+
 def is_request_body_safe(request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str) -> bool:
     """
     Check if the request body is safe.
@@ -378,6 +439,14 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+    for target in iter_request_fallback_targets(request_body):
+        if isinstance(target, dict):
+            _check_banned_params(target, general_settings, llm_router, model)
+            target_model = target.get("model")
+            if isinstance(target_model, str):
+                _reject_url_valued_fallback_target(target_model)
+        elif isinstance(target, str):
+            _reject_url_valued_fallback_target(target)
     litellm_params = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
         litellm_params_metadata = _coerce_metadata_to_dict(litellm_params.get("metadata"))

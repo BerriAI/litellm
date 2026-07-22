@@ -19,7 +19,10 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     iter_client_callback_metadata_dicts,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
+from litellm.litellm_core_utils.url_utils import (
+    is_url_destination_allowed_by_host,
+    provider_url_destination_candidates,
+)
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -45,6 +48,7 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+_ANTHROPIC_SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
 def _sanitize_for_log(value: Any) -> str:
@@ -226,23 +230,26 @@ def _reject_url_valued_destinations(data: Dict[str, Any]) -> None:
     allowed_hosts = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
     for field in _URL_DESTINATION_REQUEST_FIELDS:
         value = data.get(field)
-        if not isinstance(value, str) or not value.startswith(("http://", "https://")):
+        if not isinstance(value, str):
             continue
-        if is_url_destination_allowed_by_host(value, allowed_hosts):
-            continue
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "param": field,
-                "message": (
-                    f"URL-valued '{field}' is not allowed. Configure custom "
-                    "endpoints with api_base instead, or add the destination "
-                    "host to `provider_url_destination_allowed_hosts` in "
-                    "litellm_settings."
-                ),
-            },
-        )
+        for candidate in provider_url_destination_candidates(value):
+            if not candidate.lower().startswith(("http://", "https://")):
+                continue
+            if is_url_destination_allowed_by_host(candidate, allowed_hosts):
+                continue
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_request",
+                    "param": field,
+                    "message": (
+                        f"URL-valued '{field}' is not allowed. Configure custom "
+                        "endpoints with api_base instead, or add the destination "
+                        "host to `provider_url_destination_allowed_hosts` in "
+                        "litellm_settings."
+                    ),
+                },
+            )
 
 
 def _strip_untrusted_request_header_controls(
@@ -426,18 +433,50 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     )
 
 
+def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+
+    user_id = metadata.get("user_id")
+    if isinstance(user_id, dict):
+        session_id = user_id.get("session_id")
+        if isinstance(session_id, str) and _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+            return session_id
+        return None
+    if not isinstance(user_id, str):
+        return None
+
+    session_marker = "_session_"
+    session_marker_index = user_id.rfind(session_marker)
+    if session_marker_index == -1:
+        return None
+
+    session_id = user_id[session_marker_index + len(session_marker) :]
+    if not session_id or not _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
+        return None
+    return session_id
+
+
 def is_claude_code_user_agent(user_agent: str) -> bool:
     """Claude Code identifies itself as ``claude-cli/<version> ...``; the IDE
     extensions and the Agent SDK run through the same CLI and share that prefix."""
     return user_agent.startswith("claude-cli/")
 
 
-def should_auto_drop_params_for_claude_code(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
-    """drop_params defaults to on for Claude Code so its Anthropic-specific
-    params (e.g. thinking) don't fail requests routed to non-Anthropic
-    providers. An explicit drop_params from the caller or in the operator's
-    ``litellm_settings`` always wins over this default."""
-    if not is_claude_code_user_agent(user_agent):
+def is_codex_user_agent(user_agent: str) -> bool:
+    """Codex identifies itself as ``codex_cli_rs/<version> ...`` (TUI),
+    ``codex_exec/<version> ...`` (exec mode), or ``codex_vscode/<version> ...``
+    (IDE extension); all share the ``codex_`` prefix."""
+    return user_agent.startswith("codex_")
+
+
+def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
+    """drop_params defaults to on for agentic CLIs so their client-specific
+    params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
+    requests routed to providers that reject them. An explicit drop_params
+    from the caller or in the operator's ``litellm_settings`` always wins
+    over this default."""
+    if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
     if "drop_params" in data:
         return False
@@ -935,6 +974,15 @@ class LiteLLMProxyRequestSetup:
             data["litellm_session_id"] = chain_id
             data["litellm_trace_id"] = chain_id
             verbose_proxy_logger.debug(f"Extracted chain_id from header (trace-id/session-id): {chain_id}")
+        else:
+            body_metadata = data.get("metadata")
+            session_id = _get_anthropic_session_id_from_metadata(body_metadata)
+            if session_id:
+                metadata_from_headers["session_id"] = session_id
+                data["litellm_session_id"] = session_id
+                if isinstance(body_metadata, dict) and isinstance(body_metadata.get("user_id"), dict):
+                    body_metadata["user_id"] = session_id
+                verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
@@ -1653,7 +1701,7 @@ async def add_litellm_data_to_request(
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    if should_auto_drop_params_for_claude_code(user_agent, data, proxy_config):
+    if should_auto_drop_params_for_agentic_cli(user_agent, data, proxy_config):
         data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)

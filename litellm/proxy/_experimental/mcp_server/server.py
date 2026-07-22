@@ -348,6 +348,7 @@ if MCP_AVAILABLE:
         CallToolResult,
         EmbeddedResource,
         ImageContent,
+        ListToolsResult,
         Prompt,
         TextContent,
     )
@@ -355,6 +356,14 @@ if MCP_AVAILABLE:
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
+    )
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+        SERVER_OUTCOMES_META_KEY,
+        AggregateToolListing,
+        ServerListOk,
+        ServerOutcome,
+        classify_list_exception,
+        outcome_wire_value,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
@@ -367,6 +376,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
         _request_extra_headers,
+        _request_resolved_auth_headers,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -664,9 +674,12 @@ if MCP_AVAILABLE:
     ########################################################
 
     @server.list_tools()
-    async def handle_list_tools() -> List[Tool]:
+    async def handle_list_tools() -> "ListToolsResult | List[Tool]":
         """
-        List all available tools.
+        List all available tools, with each server's listing outcome attached to the result's
+        ``_meta`` (SERVER_OUTCOMES_META_KEY) so a broken upstream is distinguishable from a healthy
+        server with no tools. Returning a ListToolsResult (rather than a bare list) makes the MCP SDK
+        pass the result through unwrapped, which is what lets the ``_meta`` survive to the client.
         Also captures the active session for propagation to callbacks.
         """
         from mcp.server.lowlevel.server import request_ctx
@@ -709,7 +722,7 @@ if MCP_AVAILABLE:
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
-            tools = await _list_mcp_tools(
+            listing = await _list_mcp_tools(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
@@ -719,8 +732,15 @@ if MCP_AVAILABLE:
                 log_list_tools_to_spendlogs=True,
                 list_tools_log_source="mcp_protocol",
             )
-            verbose_logger.info(f"MCP list_tools - Successfully returned {len(tools)} tools")
-            return tools
+            verbose_logger.info(f"MCP list_tools - Successfully returned {len(listing.tools)} tools")
+            if not listing.outcomes:
+                return listing.tools
+            outcome_meta = {
+                SERVER_OUTCOMES_META_KEY: {
+                    key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()
+                }
+            }
+            return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
         except Exception as e:
             verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
             # Return empty list instead of failing completely
@@ -1746,6 +1766,13 @@ if MCP_AVAILABLE:
             _mcp_gateway_initialize_instructions.reset(instructions_token)
             _mcp_gateway_server_name.reset(server_name_token)
 
+    def _aggregate_server_key(server: MCPServer) -> str:
+        """The client-visible key for a server in listing outcomes and spend metadata: the same
+        display prefix (alias, or the short prefix when that mode is enabled) the caller already
+        sees on the tool names. Canonical internal server names never key a caller-readable
+        surface; when the display naming deliberately hides them, the outcome keys must too."""
+        return get_server_prefix(server) or "unknown"
+
     async def _get_tools_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
@@ -1758,7 +1785,7 @@ if MCP_AVAILABLE:
         litellm_trace_id: Optional[str] = None,
         request_tags: Optional[list[str]] = None,
         client_ip: Optional[str] = None,
-    ) -> List[MCPTool]:
+    ) -> AggregateToolListing:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
 
@@ -1770,10 +1797,11 @@ if MCP_AVAILABLE:
             oauth2_headers: Optional dict of oauth2 headers
 
         Returns:
-            List[MCPTool]: Combined list of tools from filtered servers
+            AggregateToolListing: Combined tools from filtered servers plus each server's
+            classified listing outcome
         """
         if not MCP_AVAILABLE:
-            return []
+            return AggregateToolListing(tools=[], outcomes={})
 
         list_tools_start_time = datetime.now()
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = None
@@ -1858,10 +1886,12 @@ if MCP_AVAILABLE:
 
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
-            ) -> List[MCPTool]:
-                """Fetch and filter tools from a single server with error handling."""
+            ) -> "tuple[List[MCPTool], ServerOutcome]":
+                """Fetch and filter tools from a single server, classifying any failure into that
+                server's outcome so the aggregate can keep serving the healthy subset without a
+                broken server masquerading as an empty one."""
                 if server is None:
-                    return []
+                    return [], ServerListOk(tool_count=0)
 
                 server_auth_header, extra_headers = _prepare_mcp_server_headers(
                     server=server,
@@ -1931,8 +1961,8 @@ if MCP_AVAILABLE:
                     verbose_logger.debug(
                         f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                     )
-                    return filtered_tools
-                except MCPUpstreamAuthError:
+                    return filtered_tools, ServerListOk(tool_count=len(filtered_tools))
+                except MCPUpstreamAuthError as e:
                     # Absorb so one unauthenticated server does not empty every other server's
                     # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
                     # intentionally not done here: raising from this list handler cannot produce a
@@ -1940,31 +1970,30 @@ if MCP_AVAILABLE:
                     # error). Single-server routes surface it via the request-scope preemptive
                     # check in _raise_preemptive_401_for_unauthenticated_servers instead.
                     verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
-                    return []
+                    return [], classify_list_exception(e)
                 except Exception as e:
                     verbose_logger.exception(f"Error getting tools from server {server.name}: {str(e)}")
-                    return []
+                    return [], classify_list_exception(e)
 
             # Fetch tools from all servers in parallel
             tasks = [_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers]
             results = await asyncio.gather(*tasks)
 
             # Flatten results into single list
-            all_tools: List[MCPTool] = [tool for tools in results for tool in tools]
+            all_tools: List[MCPTool] = [tool for tools, _ in results for tool in tools]
+            server_outcomes: Dict[str, ServerOutcome] = {
+                _aggregate_server_key(server): outcome
+                for server, (_, outcome) in zip(allowed_mcp_servers, results)
+                if server is not None
+            }
 
             # If logging is enabled, enrich spend_logs_metadata with counts
             if litellm_logging_obj:
-                per_server_tool_counts: Dict[str, int] = {}
-                for server, server_tools in zip(allowed_mcp_servers, results):
-                    if server is None:
-                        continue
-                    server_key = (
-                        getattr(server, "server_name", None)
-                        or getattr(server, "alias", None)
-                        or getattr(server, "name", None)
-                        or "unknown"
-                    )
-                    per_server_tool_counts[str(server_key)] = len(server_tools)
+                per_server_tool_counts: Dict[str, int] = {
+                    _aggregate_server_key(server): len(server_tools)
+                    for server, (server_tools, _) in zip(allowed_mcp_servers, results)
+                    if server is not None
+                }
 
                 metadata_dict = litellm_logging_obj.model_call_details.get("metadata")
                 if isinstance(metadata_dict, dict):
@@ -1975,6 +2004,9 @@ if MCP_AVAILABLE:
                     spend_meta["allowed_server_count"] = len(allowed_mcp_servers)
                     spend_meta["tool_count_total"] = len(all_tools)
                     spend_meta["per_server_tool_counts"] = per_server_tool_counts
+                    spend_meta["per_server_list_outcomes"] = {
+                        key: outcome_wire_value(outcome) for key, outcome in server_outcomes.items()
+                    }
 
                 end_time = datetime.now()
                 try:
@@ -1995,7 +2027,7 @@ if MCP_AVAILABLE:
 
             verbose_logger.info(f"Successfully fetched {len(all_tools)} tools total from all MCP servers")
 
-            return all_tools
+            return AggregateToolListing(tools=all_tools, outcomes=server_outcomes)
         except Exception as e:
             # Only fire failure hook if logging was requested for this list-tools execution
             if log_list_tools_to_spendlogs and user_api_key_auth is not None:
@@ -2228,7 +2260,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         client_ip: Optional[str] = None,
-    ) -> List[MCPTool]:
+    ) -> AggregateToolListing:
         """
         List all available MCP tools.
 
@@ -2240,15 +2272,14 @@ if MCP_AVAILABLE:
             client_ip: Client IP for IP-based server access control
 
         Returns:
-            List[MCPTool]: Combined list of tools from all accessible servers
+            AggregateToolListing: Combined tools from all accessible servers plus each server's
+            classified listing outcome
         """
         if not MCP_AVAILABLE:
-            return []
+            return AggregateToolListing(tools=[], outcomes={})
 
-        # Get tools from managed MCP servers with error handling
-        managed_tools = []
         try:
-            managed_tools = await _get_tools_from_mcp_servers(
+            listing = await _get_tools_from_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
@@ -2259,12 +2290,12 @@ if MCP_AVAILABLE:
                 list_tools_log_source=list_tools_log_source,
                 client_ip=client_ip,
             )
-            verbose_logger.debug(f"Successfully fetched {len(managed_tools)} tools from managed MCP servers")
+            verbose_logger.debug(f"Successfully fetched {len(listing.tools)} tools from managed MCP servers")
+            return listing
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from managed MCP servers: {str(e)}")
-            # Continue with empty managed tools list instead of failing completely
-
-        return managed_tools
+            # Continue with an empty listing instead of failing completely
+            return AggregateToolListing(tools=[], outcomes={})
 
     async def _list_mcp_prompts(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -2755,13 +2786,29 @@ if MCP_AVAILABLE:
                             forwarded_headers = {}
                         forwarded_headers[header_name] = value
 
+            resolved_auth_headers: dict[str, str] | None = None
+            if mcp_server:
+                (
+                    resolved_auth_headers,
+                    forwarded_headers,
+                ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
+                    mcp_server=mcp_server,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    mcp_auth_header=mcp_auth_header,
+                    user_api_key_auth=user_api_key_auth,
+                    forwarded_headers=forwarded_headers,
+                )
+
             _auth_token = _request_auth_header.set(auth_header_value)
             _extra_token = _request_extra_headers.set(forwarded_headers)
+            _resolved_token = _request_resolved_auth_headers.set(resolved_auth_headers)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
                 _request_extra_headers.reset(_extra_token)
+                _request_resolved_auth_headers.reset(_resolved_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
