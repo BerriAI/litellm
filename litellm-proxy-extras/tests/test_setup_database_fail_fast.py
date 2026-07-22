@@ -240,3 +240,151 @@ def test_v2_does_not_call_resolve_all_migrations(monkeypatch, tmp_path):
     ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
     assert ok is True
     assert resolve_called["n"] == 0, "v2 must not invoke the diff-and-force recovery"
+
+
+def test_v2_uses_direct_url_when_set(monkeypatch, tmp_path):
+    """v2: `prisma migrate deploy` must use DIRECT_URL when set, to sidestep
+    pooler-mode advisory-lock orphaning (Neon pooler, Supabase pgbouncer,
+    RDS Proxy, etc.)."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@pooler.x.neon.tech:5432/db")
+    monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@direct.x.neon.tech:5432/db")
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+
+    captured_env = {}
+
+    class FakeResult:
+        stdout = "No pending migrations to apply\n"
+        stderr = ""
+
+    def fake_run(cmd, *args, env=None, **kwargs):
+        captured_env.update(env or {})
+        return FakeResult()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
+    assert (
+        captured_env.get("DATABASE_URL")
+        == "postgresql://u:p@direct.x.neon.tech:5432/db"
+    )
+
+
+def test_v2_no_direct_url_passthrough(monkeypatch, tmp_path):
+    """v2: when DIRECT_URL is unset, DATABASE_URL is passed through unchanged."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@pooler.x.neon.tech:5432/db")
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+
+    captured_env = {}
+
+    class FakeResult:
+        stdout = "No pending migrations to apply\n"
+        stderr = ""
+
+    def fake_run(cmd, *args, env=None, **kwargs):
+        captured_env.update(env or {})
+        return FakeResult()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
+    assert (
+        captured_env.get("DATABASE_URL")
+        == "postgresql://u:p@pooler.x.neon.tech:5432/db"
+    )
+
+
+def test_v2_p1002_retries_then_succeeds(monkeypatch, tmp_path):
+    """v2: P1002 advisory-lock contention is caught, the loop sleeps and
+    retries, and a later success returns True. The retry mechanism is the
+    sleep itself — Prisma's 10s advisory-lock timeout is not configurable —
+    so we verify (1) a retry occurred and (2) the second-attempt subprocess
+    env still carries DATABASE_URL (no env corruption between attempts)."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    monkeypatch.setattr("time.sleep", lambda *a, **kw: None)
+
+    advisory_lock_stderr = (
+        "Error: P1002\nThe database server was reached but timed out.\n"
+        "Context: Timed out trying to acquire a postgres advisory lock "
+        "(SELECT pg_advisory_lock(72707369)). Elapsed: 10000ms."
+    )
+
+    calls = {"n": 0}
+    envs_seen = []
+
+    class FakeResult:
+        stdout = "No pending migrations to apply\n"
+        stderr = ""
+
+    def fake_run(cmd, *args, env=None, **kwargs):
+        calls["n"] += 1
+        envs_seen.append(env or {})
+        if calls["n"] == 1:
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=cmd,
+                stderr=advisory_lock_stderr,
+                output="",
+            )
+        return FakeResult()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
+    assert calls["n"] == 2, "should retry once after the lock contention"
+    # Both attempts must have received the deploy env with DATABASE_URL set —
+    # asserting on the env passed to subprocess.run (not on os.environ) so
+    # that future refactors which compute the env outside the loop are still
+    # caught.
+    assert len(envs_seen) == 2
+    assert all(
+        e.get("DATABASE_URL") == "postgresql://u:p@localhost:9/x" for e in envs_seen
+    )
+
+
+def test_v2_p1002_terminal_raises_with_remediation_hint(monkeypatch, tmp_path):
+    """v2: 4 consecutive P1002 advisory-lock failures must raise a
+    RuntimeError whose message names the stale-lock case and includes the
+    inspection / pg_terminate_backend SQL plus the DIRECT_URL pointer."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    monkeypatch.setattr("time.sleep", lambda *a, **kw: None)
+
+    advisory_lock_stderr = (
+        "Error: P1002\nContext: Timed out trying to acquire a postgres "
+        "advisory lock (SELECT pg_advisory_lock(72707369)). Elapsed: 10000ms."
+    )
+
+    with patch(
+        "subprocess.run",
+        side_effect=_fake_migrate_deploy_failure(1, advisory_lock_stderr),
+    ):
+        with pytest.raises(RuntimeError) as excinfo:
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    msg = str(excinfo.value)
+    assert "pg_locks" in msg
+    assert "pg_terminate_backend" in msg
+    assert "objid = 72707369" in msg
+    assert "DIRECT_URL" in msg
+    assert "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK" in msg

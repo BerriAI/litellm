@@ -491,12 +491,15 @@ class ProxyExtrasDBManager:
 
         sorted_hostile = sorted(hostile)
         logger.warning(
-            "Database has %d migration(s) applied that are NEWER than any "
-            "migration this LiteLLM version ships. This usually means the "
-            "database was migrated by a newer LiteLLM deployment. Some API "
-            "endpoints may fail because this proxy's Prisma client does not "
-            "know about those schema changes. Consider upgrading this "
-            "deployment. Unknown: %s",
+            "Database has %d migration(s) applied that this build doesn't "
+            "ship: %s. If the names end with `_baseline_diff` these are "
+            "usually developer-named diff captures from a different feature "
+            "branch and are safe to ignore (the schema state they describe "
+            "is either already merged into this build under a different "
+            "filename, or extra harmless tables). If a non-`_baseline_diff` "
+            "migration appears here, the DB was likely migrated by a newer "
+            "LiteLLM deployment — upgrade this proxy or expect endpoints "
+            "touching the new schema to fail.",
             len(hostile),
             ", ".join(sorted_hostile[:5]) + (" ..." if len(sorted_hostile) > 5 else ""),
         )
@@ -546,8 +549,19 @@ class ProxyExtrasDBManager:
 
         original_dir = os.getcwd()
         os.chdir(migrations_dir)
+        last_was_advisory_lock = False
         try:
             for attempt in range(4):
+                # Prefer DIRECT_URL when set, mirroring _resolve_all_migrations.
+                # Pooler URLs (e.g. Neon `-pooler`, Supabase pgbouncer) run in
+                # transaction mode, which orphans the session-scoped advisory
+                # lock that `prisma migrate deploy` acquires — using a direct
+                # connection sidesteps the lock-orphaning class of failures.
+                deploy_env = _get_prisma_env()
+                direct_url = os.getenv("DIRECT_URL")
+                if direct_url:
+                    deploy_env["DATABASE_URL"] = direct_url
+
                 try:
                     result = subprocess.run(
                         [_get_prisma_command(), "migrate", "deploy"],
@@ -555,7 +569,7 @@ class ProxyExtrasDBManager:
                         check=True,
                         capture_output=True,
                         text=True,
-                        env=_get_prisma_env(),
+                        env=deploy_env,
                     )
                     logger.info(f"prisma migrate deploy stdout: {result.stdout}")
                     return True
@@ -569,6 +583,24 @@ class ProxyExtrasDBManager:
 
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
+
+                    if "P1002" in stderr and "advisory lock" in stderr:
+                        last_was_advisory_lock = True
+                        # Prisma's advisory-lock timeout is hardcoded at 10s
+                        # (see https://www.prisma.io/docs/orm/prisma-migrate/workflows/development-and-production#advisory-locking).
+                        # The mechanism that actually helps is the back-off
+                        # sleep: it gives a stale orphan lock time to be
+                        # reaped by the pooler, or a peer migration time to
+                        # finish and release.
+                        logger.warning(
+                            "Advisory-lock contention on attempt %d "
+                            "(Prisma key 72707369). Backing off before retry.",
+                            attempt + 1,
+                        )
+                        time.sleep(random.randrange(5, 15))
+                        continue
+
+                    last_was_advisory_lock = False
 
                     if "P3005" in stderr and "database schema is not empty" in stderr:
                         logger.info(
@@ -667,6 +699,30 @@ class ProxyExtrasDBManager:
                         f"Manual intervention required.\n\nPrisma error:\n{stderr}"
                     ) from e
 
+            if last_was_advisory_lock:
+                raise RuntimeError(
+                    "Advisory lock 72707369 could not be acquired after 4 "
+                    "attempts. If only one proxy is starting, this is almost "
+                    "certainly a stale lock from a prior `prisma migrate "
+                    "deploy` that was killed before releasing it.\n\n"
+                    "Inspect lock holders:\n"
+                    "  SELECT pid, mode, granted FROM pg_locks "
+                    "WHERE locktype = 'advisory' AND objid = 72707369;\n\n"
+                    "Clear the orphan lock (terminates the connection "
+                    "holding it):\n"
+                    "  SELECT pg_terminate_backend(pid) FROM pg_locks "
+                    "WHERE locktype = 'advisory' AND objid = 72707369;\n\n"
+                    "If your DATABASE_URL points at a connection pooler "
+                    "(e.g. Neon `-pooler`, Supabase pgbouncer, RDS Proxy), "
+                    "set DIRECT_URL to a non-pooled URL — pooled connections "
+                    "in transaction mode can orphan session-scoped advisory "
+                    "locks. v2 will use DIRECT_URL automatically when set.\n\n"
+                    "Last resort: set PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK=true "
+                    "to bypass advisory locking entirely. Only safe when "
+                    "concurrent `prisma migrate deploy` runs are otherwise "
+                    "serialized; two pods racing without the lock will "
+                    "corrupt the migration ledger."
+                )
             raise RuntimeError(
                 "Database migration failed after 4 attempts (retry loop "
                 "exhausted by timeouts or repeated idempotent-recovery "
