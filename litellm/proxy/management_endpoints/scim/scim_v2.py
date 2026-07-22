@@ -1516,6 +1516,13 @@ def _apply_patch_ops(
     return update_data, final_team_set
 
 
+def _is_user_not_in_team_error(exc: HTTPException) -> bool:
+    """True when team_member_delete reports the user was already absent from the
+    team, which is the idempotent no-op case for a removal."""
+    detail = exc.detail
+    return isinstance(detail, dict) and detail.get("error") == "User not found in team"
+
+
 async def patch_team_membership(
     user_id: str,
     teams_ids_to_add_user_to: List[str],
@@ -1526,10 +1533,11 @@ async def patch_team_membership(
     Add or remove user from teams
 
     Handles duplicate membership gracefully (idempotent operation).
-    If a user is already in a team, that's fine - we don't treat it as an error.
+    A user already being in a team (on add) or already absent from it (on
+    remove) is treated as a no-op, not an error.
 
-    When ``raise_on_error`` is True a genuine add failure (anything other than
-    the user already being in the team) propagates instead of being swallowed,
+    When ``raise_on_error`` is True a genuine add or remove failure (anything
+    other than those idempotent no-ops) propagates instead of being swallowed,
     so a caller can avoid persisting a teams array the roster never received.
     """
     for _team_id in teams_ids_to_add_user_to:
@@ -1560,7 +1568,16 @@ async def patch_team_membership(
                 data=TeamMemberDeleteRequest(team_id=_team_id, user_id=user_id),
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
             )
+        except HTTPException as e:
+            if _is_user_not_in_team_error(e):
+                verbose_proxy_logger.debug(f"User {user_id} is not in team {_team_id}, skipping remove")
+            elif raise_on_error:
+                raise
+            else:
+                verbose_proxy_logger.exception(f"Error removing user from team {_team_id}: {e}")
         except Exception as e:
+            if raise_on_error:
+                raise
             verbose_proxy_logger.exception(f"Error removing user from team {_team_id}: {e}")
 
     return True

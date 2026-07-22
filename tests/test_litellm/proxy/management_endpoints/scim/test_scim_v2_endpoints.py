@@ -775,6 +775,91 @@ async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(m
 
 
 @pytest.mark.asyncio
+async def test_handle_existing_user_by_email_roster_remove_failure_blocks_teams_write(mocker):
+    """A genuine roster removal failure must propagate and must not persist the teams array,
+    symmetrically with add failures, so user.teams cannot drop a team the roster still holds."""
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "uid"
+    existing_user.user_email = "member@example.com"
+    existing_user.user_alias = "Member"
+    existing_user.teams = ["old-team"]
+    existing_user.metadata = {}
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+
+    mock_team_member_delete = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        AsyncMock(side_effect=HTTPException(status_code=500, detail={"error": "No db connected"})),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="uid",
+        user_email="member@example.com",
+        user_alias="Member",
+        teams=[],
+        metadata={},
+        auto_create_key=False,
+    )
+
+    with pytest.raises(HTTPException):
+        await UserProvisionerHelpers.handle_existing_user_by_email(
+            prisma_client=mock_prisma_client, new_user_request=new_user_request
+        )
+
+    mock_team_member_delete.assert_awaited_once()
+    assert mock_prisma_client.db.litellm_usertable.update.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_roster_remove_already_absent_is_noop(mocker):
+    """A user already absent from the team is the idempotent removal no-op even under the
+    strict path: the upsert succeeds and the deduped teams array is still persisted."""
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "uid"
+    existing_user.user_email = "member@example.com"
+    existing_user.user_alias = "Member"
+    existing_user.teams = ["old-team"]
+    existing_user.metadata = {}
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+
+    mock_team_member_delete = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        AsyncMock(side_effect=HTTPException(status_code=400, detail={"error": "User not found in team"})),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=None),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="uid",
+        user_email="member@example.com",
+        user_alias="Member",
+        teams=[],
+        metadata={},
+        auto_create_key=False,
+    )
+
+    await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client, new_user_request=new_user_request
+    )
+
+    mock_team_member_delete.assert_awaited_once()
+    update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
+    assert len(update_calls) == 1
+    assert update_calls[0].kwargs["data"]["teams"] == []
+
+
+@pytest.mark.asyncio
 async def test_handle_team_membership_changes_no_changes(mocker):
     """Should not call patch_team_membership when existing teams equal new teams"""
     mock_patch_team_membership = mocker.patch(
