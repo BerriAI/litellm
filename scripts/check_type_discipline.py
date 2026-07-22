@@ -209,18 +209,26 @@ def scan_comments(path: Path, source: str) -> tuple[Comments, tuple[Violation, .
 # --------------------------------------------------------------------------- #
  
  
-def mutable_names_in(annotation: ast.expr) -> Iterator[str]:
-    """Yield mutable-collection names anywhere inside an annotation expression.
+class MutableRef(NamedTuple):
+    name: str
+    line: int
+
+
+def mutable_names_in(annotation: ast.expr) -> Iterator[MutableRef]:
+    """Yield each mutable-collection name inside an annotation, with its source line.
 
     Matches bare names (`dict`, `MutableMapping`) and dotted access (`typing.Dict`,
     `collections.deque`, `collections.abc.MutableMapping`), descends through nesting
     (`Mapping[str, list[int]]`, `tuple[set[int], ...]`) and string forward references.
+    Each name carries its own line so a violation in a multi-line annotation is reported
+    where the name sits -- not on the annotation's first line -- and a `# mutable-ok` on
+    that line suppresses it.
     """
     for node in ast.walk(annotation):
         if isinstance(node, ast.Name) and node.id in MUTABLE_COLLECTIONS:
-            yield node.id
+            yield MutableRef(node.id, node.lineno)
         elif isinstance(node, ast.Attribute) and node.attr in MUTABLE_COLLECTIONS:
-            yield node.attr
+            yield MutableRef(node.attr, node.lineno)
         elif isinstance(node, ast.Constant):
             value: object = node.value  # forward references arrive as string constants
             if isinstance(value, str):
@@ -228,7 +236,9 @@ def mutable_names_in(annotation: ast.expr) -> Iterator[str]:
                     inner = ast.parse(value, mode="eval").body
                 except SyntaxError:
                     continue
-                yield from mutable_names_in(inner)
+                # The inner parse numbers lines from 1 inside the string, so anchor every
+                # name it yields to the forward-ref string's own line in the file.
+                yield from (MutableRef(ref.name, node.lineno) for ref in mutable_names_in(inner))
  
  
 def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
@@ -243,11 +253,15 @@ def _mutable_ann(path: Path, line: int, name: str, where: str) -> Violation:
 
 
 def _annotation_violations(
-    path: Path, annotation: ast.expr | None, line: int, where: str, ok_lines: frozenset[int]
+    path: Path, annotation: ast.expr | None, where: str, ok_lines: frozenset[int]
 ) -> Iterator[Violation]:
-    if annotation is None or line in ok_lines:
+    if annotation is None:
         return
-    yield from (_mutable_ann(path, line, name, where) for name in mutable_names_in(annotation))
+    yield from (
+        _mutable_ann(path, ref.line, ref.name, where)
+        for ref in mutable_names_in(annotation)
+        if ref.line not in ok_lines
+    )
  
  
 def _function_violations(
@@ -257,14 +271,14 @@ def _function_violations(
     args = node.args
     for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
         yield from _annotation_violations(
-            path, arg.annotation, arg.lineno, f"parameter `{arg.arg}` of `{node.name}`", mutable_ok
+            path, arg.annotation, f"parameter `{arg.arg}` of `{node.name}`", mutable_ok
         )
 
     # *args is allowed when typed (it's just a tuple); ruff ANN002 forces the
     # annotation, so here we only add the LIT001 mutable-collection check on the element type.
     if args.vararg is not None:
         yield from _annotation_violations(
-            path, args.vararg.annotation, args.vararg.lineno, f"`*args` of `{node.name}`", mutable_ok
+            path, args.vararg.annotation, f"`*args` of `{node.name}`", mutable_ok
         )
 
     # **kwargs is banned outright (LIT008): it erases the keyword contract and forces
@@ -281,7 +295,7 @@ def _function_violations(
 
     if node.returns is not None:
         yield from _annotation_violations(
-            path, node.returns, node.returns.lineno, f"return type of `{node.name}`", mutable_ok
+            path, node.returns, f"return type of `{node.name}`", mutable_ok
         )
  
  
@@ -296,8 +310,7 @@ def iter_annotation_violations(path: Path, tree: ast.AST, comments: Comments) ->
         elif isinstance(node, ast.AnnAssign):
             target = node.target.id if isinstance(node.target, ast.Name) else "<target>"
             yield from _annotation_violations(
-                path, node.annotation, node.lineno,
-                f"the type of `{target}`", comments.mutable_ok_lines,
+                path, node.annotation, f"the type of `{target}`", comments.mutable_ok_lines,
             )
 
 

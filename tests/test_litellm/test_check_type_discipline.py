@@ -25,6 +25,12 @@ def _codes(tmp_path, source):
     return [v.code for v in checker.check_file(f)]
 
 
+def _lines(tmp_path, source, code):
+    f = tmp_path / "snippet.py"
+    f.write_text(source, encoding="utf-8")
+    return sorted(v.line for v in checker.check_file(f) if v.code == code)
+
+
 # --------------------------------------------------------------------------- #
 # Comment scanning (the readline path) — LIT003 / LIT004 / LIT005
 # --------------------------------------------------------------------------- #
@@ -156,6 +162,52 @@ def test_mutable_ok_with_reason_suppresses_both_rules(tmp_path):
     codes = _codes(tmp_path, "x: dict[str, int] = {}  # mutable-ok: in-place buffer mutated hot path\n")
     assert "LIT001" not in codes
     assert "LIT002" not in codes
+
+
+def test_multiline_annotation_is_reported_at_the_name_not_the_first_line(tmp_path):
+    # The mutable name sits three lines below where the annotation opens. The violation must
+    # point at the name's own line so the message, the PR-diff gate's "introduced here" hint,
+    # and any `# mutable-ok` all land where the name actually is.
+    src = (
+        "from collections.abc import Mapping\n"  # 1
+        "def f() -> Mapping[\n"                   # 2
+        "    str,\n"                              # 3
+        "    list[int],\n"                        # 4  <- the mutable name lives here
+        "]:\n"                                    # 5
+        "    ...\n"                               # 6
+    )
+    assert _lines(tmp_path, src, "LIT001") == [4]
+
+
+def test_mutable_ok_on_the_name_line_of_a_multiline_annotation_suppresses(tmp_path):
+    # Suppression must be honored on the line carrying the mutable name, not on the
+    # annotation's opening line; the latter is where a developer would never think to put it.
+    src = (
+        "x: Mapping[\n"
+        "    str,\n"
+        "    list[int],  # mutable-ok: in-place buffer mutated on the hot path\n"
+        "] = make()\n"
+    )
+    assert "LIT001" not in _codes(tmp_path, src)
+
+
+def test_mutable_ok_on_the_opening_line_no_longer_blankets_a_later_name(tmp_path):
+    # The opening line carries the suppression but the mutable name is two lines down, so the
+    # name is still flagged: suppression is per-name-line, never a blanket over the whole span.
+    src = (
+        "x: dict[  # mutable-ok: only meant to cover this line\n"
+        "    str,\n"
+        "    list[int],\n"
+        "] = make()\n"
+    )
+    assert _lines(tmp_path, src, "LIT001") == [3]
+
+
+def test_forward_ref_violation_anchors_to_the_string_line(tmp_path):
+    # A forward-ref string is parsed on its own, numbering lines from 1 inside the quotes;
+    # the violation must still report the string's line in the file, not line 1.
+    src = "a = 1\nb = 2\nx: 'dict[str, int]'\n"
+    assert _lines(tmp_path, src, "LIT001") == [3]
 
 
 # --------------------------------------------------------------------------- #
