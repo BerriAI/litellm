@@ -6,8 +6,12 @@ through _hidden_params to the x-litellm-callback-duration-ms response header.
 """
 
 import datetime
+import uuid
 from unittest.mock import MagicMock
 
+import pytest
+
+import litellm
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
 import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -17,7 +21,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
 
 
 class TestCallbackDurationMs:
@@ -232,6 +236,72 @@ class TestDetailedTiming:
 
         assert "x-litellm-timing-llm-api-ms" not in headers
         assert "x-litellm-timing-pre-processing-ms" not in headers
+
+
+class TestPerSecondCostUsesActualDuration:
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/20228 as it
+    affects standard chat completions priced with input_cost_per_second.
+
+    set_hidden_params triggers the real cost calculator, which for
+    input_cost_per_second models multiplies the rate by
+    completion_response._response_ms. That attribute is only assigned inside
+    set_timing_metrics, so calling set_hidden_params first makes the cost
+    calculator read a duration of 0 and the proxy permanently caches a
+    response_cost of 0.0 for that response.
+    """
+
+    def _make_logging_obj(self, model: str) -> Logging:
+        logging_obj = Logging(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id=str(uuid.uuid4()),
+            function_id="1",
+        )
+        logging_obj.update_environment_variables(
+            model=model,
+            optional_params={},
+            litellm_params={},
+            # Bypass the explicit per-provider branches in cost_per_token (e.g.
+            # the OpenAI one, which unprefixed model names resolve to by
+            # default) so the lookup reaches the generic input_cost_per_second
+            # fallback this test is exercising.
+            custom_llm_provider="custom",
+        )
+        return logging_obj
+
+    def test_update_response_metadata_charges_for_actual_duration(self):
+        model = f"per-second-test-model-{uuid.uuid4()}"
+        litellm.model_cost[model] = {
+            "input_cost_per_second": 0.01,
+            "output_cost_per_token": 0,
+            "input_cost_per_token": 0,
+            "litellm_provider": "custom",
+            "mode": "chat",
+        }
+        try:
+            logging_obj = self._make_logging_obj(model)
+            result = ModelResponse(usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+
+            start = datetime.datetime(2025, 1, 1, 0, 0, 0)
+            end = datetime.datetime(2025, 1, 1, 0, 0, 2)  # 2 second call
+
+            update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs={},
+                start_time=start,
+                end_time=end,
+            )
+
+            response_cost = result._hidden_params.get("response_cost")
+            assert response_cost == pytest.approx(0.02), f"expected 0.01/sec * 2 sec = 0.02, got {response_cost}"
+        finally:
+            litellm.model_cost.pop(model, None)
 
 
 class TestLoggingInitCallbackDuration:
