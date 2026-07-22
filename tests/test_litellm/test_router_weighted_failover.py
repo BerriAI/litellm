@@ -769,3 +769,90 @@ async def test_failover_falls_through_to_external_fallback_when_remaining_in_coo
         )
 
     assert response._hidden_params["model_id"] == "fallback"
+
+
+# ---------------------------------------------------------------------------
+# Regression: generic API path (used by /v1/messages, image_edit, etc.)
+# must also stamp failed_deployment_id for weighted failover to work
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generic_api_path_sets_failed_deployment_id():
+    """_ageneric_api_call_with_fallbacks_helper (used by /v1/messages and
+    other factory_function endpoints) did not call
+    _set_failed_deployment_id_on_exception, so weighted failover always
+    bailed out. Verify the attribute is now stamped."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("region down"),
+                    "weight": 1,
+                },
+                "model_info": {"id": "dep-A"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=0,
+        enable_weighted_failover=True,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="test-model",
+            original_generic_function=router._acompletion,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert getattr(exc_info.value, "failed_deployment_id", None) == "dep-A"
+
+
+@pytest.mark.asyncio
+async def test_weighted_failover_works_on_generic_api_path():
+    """End-to-end: weighted failover via _ageneric_api_call_with_fallbacks
+    (used by /v1/messages, image_edit, generate_content, etc.) should
+    re-pick a healthy sibling in the same model group before falling back
+    to a cross-group fallback.
+
+    Exercises the generic path directly with _acompletion (which supports
+    mock_response) to validate that the fix in
+    _ageneric_api_call_with_fallbacks_helper propagates through the full
+    async_function_with_fallbacks retry chain."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("region-A down"),
+                    "weight": 1,
+                },
+                "model_info": {"id": "A"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "ok from B",
+                    "weight": 0,
+                },
+                "model_info": {"id": "B"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=0,
+        enable_weighted_failover=True,
+    )
+
+    response = await router._ageneric_api_call_with_fallbacks(
+        model="test-model",
+        original_function=router._acompletion,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert response._hidden_params["model_id"] == "B"
