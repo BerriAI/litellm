@@ -232,6 +232,7 @@ async def image_edit_api(
     image_array: Optional[List[UploadFile]] = File(None, alias="image[]"),
     mask: Optional[List[UploadFile]] = File(None),
     mask_array: Optional[List[UploadFile]] = File(None, alias="mask[]"),
+    style_image: Optional[List[UploadFile]] = File(None),
     model: Optional[str] = None,
 ):
     """
@@ -282,10 +283,13 @@ async def image_edit_api(
     data = await _read_request_body(request=request)
     image_files = await batch_to_bytesio(image)
     mask_files = await batch_to_bytesio(mask)
+    style_image_files = await batch_to_bytesio(style_image)
     if image_files:
         data["image"] = image_files
     if mask_files:
         data["mask"] = mask_files
+    if style_image_files:
+        data["style_image"] = style_image_files
 
     for _field in ("image", "mask"):
         if _field in data and isinstance(data[_field], str):
