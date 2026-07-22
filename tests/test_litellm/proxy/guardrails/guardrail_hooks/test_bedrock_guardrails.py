@@ -3499,3 +3499,118 @@ class TestBedrockOnlyScanNewMessages:
             assert mock_api.call_count == 1
             scanned = mock_api.call_args.kwargs["messages"]
             assert [m["content"] for m in scanned] == ["blocked prompt"]
+
+
+class TestBedrockIncrementalFlagInteractions:
+    """Regression coverage for only_scan_new_messages combined with the other
+    Bedrock guardrail flags, from the PR #33278 live validation. Live evidence:
+    each of these was reproduced against a real Bedrock ApplyGuardrail first;
+    the mocks here encode the wire payloads observed there.
+    """
+
+    def _guardrail(self, **overrides):
+        params = dict(
+            guardrail_name="bedrock-incremental-flags",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+            only_scan_new_messages=True,
+        )
+        params.update(overrides)
+        return BedrockGuardrail(**params)
+
+    @pytest.mark.asyncio
+    async def test_edited_history_segment_rescans_only_that_segment(self):
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-flags-edit"}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1", "a1", "q2"]}, request_data=session, input_type="request"
+            )
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1 EDITED", "a1", "q2"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == ["q1 EDITED"]
+
+    @pytest.mark.asyncio
+    async def test_same_content_different_session_rescans_everything(self):
+        guardrail = self._guardrail()
+        texts = ["shared question", "shared answer"]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": list(texts)}, request_data={"litellm_session_id": "sess-x1"}, input_type="request"
+            )
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": list(texts)}, request_data={"litellm_session_id": "sess-x2"}, input_type="request"
+            )
+            assert mock_api.call_count == 1
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == texts
+
+    @pytest.mark.asyncio
+    async def test_litellm_masking_flag_disables_incremental_single_full_scan(self):
+        """mask_request_content must fall back to exactly ONE full scan per turn
+        and never persist hashes (verified live: 1 call/turn, no cache writes)."""
+        guardrail = self._guardrail(mask_request_content=True)
+        session = {"litellm_session_id": "sess-flags-mask"}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1, "masking mode must re-scan every turn, exactly once"
+
+    @pytest.mark.asyncio
+    async def test_server_side_anonymize_falls_back_full_scan_and_never_persists(self):
+        """A guardrail that rewrites content (Bedrock-side ANONYMIZE) must fall back
+        to the full scan so masking applies, and record no session state. Live
+        validation showed this costs 2 provider calls per turn; the count is
+        asserted here as documentation of that intended-tradeoff behavior."""
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-flags-anon"}
+        masked = {"action": "NONE", "output": [{"text": "MASKED q1"}], "outputs": [{"text": "MASKED q1"}]}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = masked
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["q1"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 2, "incremental attempt + full-scan fallback"
+            assert result["texts"] == ["MASKED q1"], "masked content must be applied"
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 2, "no hashes persisted, so the double scan repeats"
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        reason="PR #33278 known gap: incremental path bypasses _select_messages_for_apply_guardrail, "
+        "so experimental_use_latest_role_message_only is silently ignored. Intended semantics "
+        "(pending DRI decision): incremental mode defers to the latest-role selection.",
+        strict=False,
+    )
+    async def test_latest_role_only_is_respected_with_incremental(self):
+        guardrail = self._guardrail(experimental_use_latest_role_message_only=True)
+        session = {"litellm_session_id": "sess-flags-latestrole"}
+        structured = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "q1"},
+        ]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["sys", "q1"], "structured_messages": structured},
+                request_data=session,
+                input_type="request",
+            )
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["q1"], "latest-role selection must exclude the system prompt"
