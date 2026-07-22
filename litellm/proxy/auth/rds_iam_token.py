@@ -5,7 +5,7 @@ from typing import Any, Optional, Union
 import httpx
 
 
-def _get_secret(secret_name: str, default_value: Optional[str] = None) -> Optional[str]:
+def _get_secret(secret_name: str, default_value: str | None = None) -> str | None:
     env_key = secret_name.replace("os.environ/", "", 1)
     env_value = os.getenv(env_key)
     if env_value is not None:

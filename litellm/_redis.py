@@ -241,7 +241,7 @@ def create_azure_ad_redis_connect_func(
     azure_client_id: Optional[str] = None,
     azure_tenant_id: Optional[str] = None,
     azure_client_secret: Optional[str] = None,
-    username: Optional[str] = None,
+    username: str | None = None,
 ) -> Callable:
     """
     Creates a custom Redis connection function for Azure AD authentication.
@@ -296,13 +296,13 @@ def create_azure_ad_redis_connect_func(
     return ad_connect
 
 
-def _get_azure_ad_redis_username(redis_kwargs: dict) -> Optional[str]:
+def _get_azure_ad_redis_username(redis_kwargs: dict) -> str | None:
     username = redis_kwargs.get("username") or os.environ.get("REDIS_USERNAME")
     return str(username) if username is not None else None
 
 
 def _get_credential_provider_from_connect_func(
-    redis_connect_func: Optional[Callable],
+    redis_connect_func: Callable | None,
     redis_kwargs: dict,
 ):
     if redis_connect_func is None:

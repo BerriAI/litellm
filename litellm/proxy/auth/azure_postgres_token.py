@@ -1,14 +1,14 @@
 import os
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import quote
 
 AZURE_POSTGRES_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"
 
 
 def _build_azure_postgres_credential(
-    azure_client_id: Optional[str] = None,
-    azure_tenant_id: Optional[str] = None,
-    azure_client_secret: Optional[str] = None,
+    azure_client_id: str | None = None,
+    azure_tenant_id: str | None = None,
+    azure_client_secret: str | None = None,
 ) -> Any:
     try:
         from azure.identity import (
@@ -41,10 +41,10 @@ def _build_azure_postgres_credential(
 
 
 def generate_azure_postgres_auth_token(
-    credential: Optional[Any] = None,
-    azure_client_id: Optional[str] = None,
-    azure_tenant_id: Optional[str] = None,
-    azure_client_secret: Optional[str] = None,
+    credential: Any | None = None,
+    azure_client_id: str | None = None,
+    azure_tenant_id: str | None = None,
+    azure_client_secret: str | None = None,
 ) -> str:
     if credential is None:
         credential = _build_azure_postgres_credential(
