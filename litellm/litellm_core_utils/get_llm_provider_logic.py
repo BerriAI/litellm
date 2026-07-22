@@ -343,6 +343,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
+                    elif endpoint == "https://api.trustedrouter.com/v1":
+                        custom_llm_provider = "trustedrouter"
+                        dynamic_api_key = get_secret_str("TRUSTEDROUTER_API_KEY")
                     elif endpoint == "https://pinstripes.io/v1":
                         custom_llm_provider = "pinstripes"
                         dynamic_api_key = get_secret_str("PINSTRIPES_API_KEY")

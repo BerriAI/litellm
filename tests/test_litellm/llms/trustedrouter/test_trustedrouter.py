@@ -57,3 +57,15 @@ def test_trustedrouter_provider_detection_by_prefix():
     assert model == "zdr"
     assert provider == "trustedrouter"
     assert api_base == TRUSTEDROUTER_API_BASE
+
+
+def test_trustedrouter_provider_detection_by_api_base():
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    with patch.dict(os.environ, {"TRUSTEDROUTER_API_KEY": "test-key"}):
+        model, provider, dynamic_api_key, api_base = get_llm_provider("auto", api_base=TRUSTEDROUTER_API_BASE)
+
+    assert model == "auto"
+    assert provider == "trustedrouter"
+    assert api_base == TRUSTEDROUTER_API_BASE
+    assert dynamic_api_key == "test-key"
