@@ -5395,6 +5395,59 @@ class TestMCPServerTimestamps:
         assert mcp_server.updated_at == updated
 
     @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_resolves_os_environ_in_stdio_env(self, monkeypatch):
+        """DB/API-registered stdio servers must resolve os.environ/ in the env map (#32677).
+
+        A literal os.environ/VAR reaching the subprocess is the bug: upstream auth fails
+        because the child sees the placeholder string instead of the secret.
+        """
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret_value")
+        manager = MCPServerManager()
+
+        record = LiteLLM_MCPServerTable(
+            server_id="stdio-osenviron-1",
+            server_name="stdio_osenviron",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-github"],
+            env={
+                "GITHUB_PERSONAL_ACCESS_TOKEN": "os.environ/GITHUB_TOKEN",
+                "PLAIN": "literal-value",
+            },
+        )
+
+        server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert server.env == {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_secret_value",
+            "PLAIN": "literal-value",
+        }
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_drops_unset_os_environ_stdio_env(self, monkeypatch):
+        """An os.environ/ reference to an unset variable is dropped, never forwarded as the literal placeholder."""
+        monkeypatch.delenv("DEFINITELY_UNSET_MCP_VAR", raising=False)
+        manager = MCPServerManager()
+
+        record = LiteLLM_MCPServerTable(
+            server_id="stdio-osenviron-2",
+            server_name="stdio_osenviron_unset",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-github"],
+            env={
+                "MISSING": "os.environ/DEFINITELY_UNSET_MCP_VAR",
+                "PLAIN": "literal-value",
+            },
+        )
+
+        server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert server.env == {"PLAIN": "literal-value"}
+
+    @pytest.mark.asyncio
     async def test_build_mcp_server_from_table_reads_token_endpoint_auth_method(self):
         """token_endpoint_auth_method stored in the credentials JSON is loaded onto the MCPServer (LIT-4091)."""
         manager = MCPServerManager()

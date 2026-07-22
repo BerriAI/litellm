@@ -133,6 +133,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helpe
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.utils import ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import (
@@ -804,6 +805,29 @@ def _deserialize_json_dict(data: Any) -> Optional[dict[str, str]]:
     else:
         # Already a dictionary
         return data
+
+
+def _resolve_os_environ_in_stdio_env(
+    env: Optional[dict[str, str]],
+) -> Optional[dict[str, str]]:
+    """Resolve ``os.environ/VAR`` references in a DB/API-registered stdio ``env`` map.
+
+    config.yaml MCP servers resolve ``os.environ/`` at load via the proxy config
+    loader, but DB-backed servers deserialize ``env`` verbatim, so without this the
+    literal ``os.environ/...`` string reaches the subprocess and upstream auth fails.
+    A reference to an unset variable is dropped rather than forwarded as the literal
+    placeholder.
+    """
+    if not env:
+        return env
+
+    def _resolve(value: str) -> Optional[str]:
+        if value.startswith("os.environ/"):
+            return get_secret_str(value)
+        return value
+
+    resolved = ((key, _resolve(value)) for key, value in env.items())
+    return {key: value for key, value in resolved if value is not None}
 
 
 def _deserialize_json_list(data: Any) -> Optional[list[dict[str, Any]]]:
@@ -1722,7 +1746,7 @@ class MCPServerManager:
         persist_discovered_endpoints: bool = True,
     ) -> MCPServer:
         _mcp_info: MCPInfo = mcp_server.mcp_info or {}
-        env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
+        env_dict = _resolve_os_environ_in_stdio_env(_deserialize_json_dict(getattr(mcp_server, "env", None)))
         static_headers_dict = _deserialize_json_dict(getattr(mcp_server, "static_headers", None))
         env_vars_list = self._resolve_env_vars_list(
             mcp_server,
