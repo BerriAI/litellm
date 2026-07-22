@@ -10,7 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
@@ -58,6 +58,11 @@ async def create_credential(
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
     try:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Only proxy admins can manage credentials"},
+            )
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -231,6 +236,11 @@ async def delete_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Only proxy admins can manage credentials"},
+            )
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -302,6 +312,11 @@ async def update_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Only proxy admins can manage credentials"},
+            )
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
