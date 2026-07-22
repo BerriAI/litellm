@@ -246,7 +246,7 @@ class LiteLLMCompletionResponsesConfig:
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
             "max_tokens": responses_api_request.get("max_output_tokens"),
             "stream": stream,
-            "metadata": kwargs.get("metadata"),
+            "metadata": responses_api_request.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
