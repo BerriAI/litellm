@@ -20,6 +20,9 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
+from litellm.proxy.management_helpers.object_permission_utils import (
+    handle_update_object_permission_common,
+)
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
@@ -665,27 +668,13 @@ async def update_project(
                 update_data.pop(field, None)
 
         # Handle object permissions
-        if "object_permission" in update_data:
-            object_permission_data = update_data.pop("object_permission")
-            if object_permission_data:
-                if existing_project.object_permission_id:
-                    # Update existing permission
-                    await prisma_client.db.litellm_objectpermissiontable.update(
-                        where={
-                            "object_permission_id": existing_project.object_permission_id
-                        },
-                        data=object_permission_data,
-                    )
-                else:
-                    # Create new permission
-                    created_permission = (
-                        await prisma_client.db.litellm_objectpermissiontable.create(
-                            data=object_permission_data,
-                        )
-                    )
-                    update_data["object_permission_id"] = (
-                        created_permission.object_permission_id
-                    )
+        object_permission_id = await handle_update_object_permission_common(
+            data_json=update_data,
+            existing_object_permission_id=existing_project.object_permission_id,
+            prisma_client=prisma_client,
+        )
+        if object_permission_id is not None:
+            update_data["object_permission_id"] = object_permission_id
 
         # Handle metadata fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
