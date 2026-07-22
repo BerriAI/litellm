@@ -95,6 +95,13 @@ def _flatten_chat_tools_for_responses(tools: list) -> list:
     return [_flatten_chat_tool_for_responses(tool) for tool in tools]
 
 
+def _is_chat_completions_body(data: dict) -> bool:
+    messages = data.get("messages")
+    if isinstance(messages, list) and len(messages) > 0:
+        return True
+    return "messages" in data and "input" not in data
+
+
 def _flatten_chat_tool_choice_for_responses(tool_choice: object) -> object:
     if not isinstance(tool_choice, dict):
         return tool_choice
@@ -456,9 +463,11 @@ async def cursor_chat_completions(
 
     data = await _read_request_body(request=request)
 
-    if "messages" in data:
+    if _is_chat_completions_body(data):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
-        # already fixed); delegate so behavior matches /chat/completions exactly
+        # already fixed); delegate so behavior matches /chat/completions exactly.
+        # Keyed on messages CONTENT, not key presence: Cursor can send a null or
+        # empty messages stub alongside a real agent-mode input array
         tools = data.get("tools")
         tool_choice = data.get("tool_choice")
         normalized: dict = {}
