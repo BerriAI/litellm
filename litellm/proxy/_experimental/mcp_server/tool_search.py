@@ -12,16 +12,54 @@ if TYPE_CHECKING:
 
 MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
 MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
+DEFAULT_MCP_TOOL_SEARCH_TOP_K: int = 5
 
 
-def coerce_top_k(value: Any, default: int = 5) -> int:
+def _get_litellm_settings() -> dict[str, Any]:
+    try:
+        from litellm.proxy.proxy_server import proxy_config
+
+        return proxy_config.get_config_state().get("litellm_settings") or {}
+    except Exception:
+        return {}
+
+
+def get_mcp_tool_search_default_top_k(
+    user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+) -> int:
+    """Resolve the default top_k for mcp_tool_search (per-key, then global, then 5)."""
+    if user_api_key_dict is not None:
+        object_permission = getattr(user_api_key_dict, "object_permission", None)
+        if object_permission is not None:
+            key_top_k = getattr(object_permission, "mcp_tool_search_top_k", None)
+            if key_top_k is not None:
+                return coerce_top_k(key_top_k, default=DEFAULT_MCP_TOOL_SEARCH_TOP_K)
+
+    global_top_k = _get_litellm_settings().get("mcp_tool_search_default_top_k")
+    if global_top_k is not None:
+        return coerce_top_k(global_top_k, default=DEFAULT_MCP_TOOL_SEARCH_TOP_K)
+
+    return DEFAULT_MCP_TOOL_SEARCH_TOP_K
+
+
+def resolve_mcp_tool_search_top_k(
+    explicit_top_k: Any,
+    user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+) -> int:
+    default_top_k = get_mcp_tool_search_default_top_k(user_api_key_dict)
+    if explicit_top_k is None:
+        return default_top_k
+    return coerce_top_k(explicit_top_k, default=default_top_k)
+
+
+def coerce_top_k(value: Any, default: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
 
 
-def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
+def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K) -> list[dict[str, Any]]:
     if not query:
         return []
     tokens = query.lower().split()
@@ -34,7 +72,9 @@ def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> lis
     return [tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]]
 
 
-def get_virtual_tool_definitions() -> list[dict[str, Any]]:
+def get_virtual_tool_definitions(
+    default_top_k: int = DEFAULT_MCP_TOOL_SEARCH_TOP_K,
+) -> list[dict[str, Any]]:
     return [
         {
             "name": MCP_TOOL_SEARCH_TOOL_NAME,
@@ -49,7 +89,7 @@ def get_virtual_tool_definitions() -> list[dict[str, Any]]:
                     "top_k": {
                         "type": "integer",
                         "description": "Maximum number of results to return.",
-                        "default": 5,
+                        "default": default_top_k,
                     },
                 },
                 "required": ["query"],

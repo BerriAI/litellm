@@ -20,8 +20,11 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import Aggregat
 from litellm.proxy._experimental.mcp_server.tool_search import (
     MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
+    DEFAULT_MCP_TOOL_SEARCH_TOP_K,
     coerce_top_k,
+    get_mcp_tool_search_default_top_k,
     get_virtual_tool_definitions,
+    resolve_mcp_tool_search_top_k,
     search_tools,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -71,6 +74,58 @@ class TestCoerceTopK:
 
     def test_custom_default(self) -> None:
         assert coerce_top_k("nope", default=10) == 10
+
+
+class TestMcpToolSearchDefaultTopK:
+    def test_builtin_default(self) -> None:
+        assert get_mcp_tool_search_default_top_k() == DEFAULT_MCP_TOOL_SEARCH_TOP_K
+
+    def test_per_key_override(self) -> None:
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(mcp_tool_search_top_k=10),
+        )
+        assert get_mcp_tool_search_default_top_k(uak) == 10
+
+    def test_global_litellm_settings_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_config = MagicMock()
+        mock_config.get_config_state.return_value = {
+            "litellm_settings": {"mcp_tool_search_default_top_k": 12}
+        }
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config",
+            mock_config,
+        )
+        assert get_mcp_tool_search_default_top_k() == 12
+
+    def test_per_key_beats_global(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_config = MagicMock()
+        mock_config.get_config_state.return_value = {
+            "litellm_settings": {"mcp_tool_search_default_top_k": 12}
+        }
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config",
+            mock_config,
+        )
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(mcp_tool_search_top_k=8),
+        )
+        assert get_mcp_tool_search_default_top_k(uak) == 8
+
+    def test_resolve_uses_explicit_top_k(self) -> None:
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(mcp_tool_search_top_k=10),
+        )
+        assert resolve_mcp_tool_search_top_k(3, uak) == 3
+
+    def test_resolve_uses_default_when_omitted(self) -> None:
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(mcp_tool_search_top_k=10),
+        )
+        assert resolve_mcp_tool_search_top_k(None, uak) == 10
 
 
 class TestSearchTools:
@@ -139,6 +194,11 @@ class TestGetVirtualToolDefinitions:
         assert "tool_name" in props
         assert "arguments" in props
         assert "tool_name" in call_tool["inputSchema"]["required"]
+
+    def test_mcp_tool_search_schema_top_k_default(self) -> None:
+        tools = get_virtual_tool_definitions(default_top_k=10)
+        search_tool = next(t for t in tools if t["name"] == MCP_TOOL_SEARCH_TOOL_NAME)
+        assert search_tool["inputSchema"]["properties"]["top_k"]["default"] == 10
 
     def test_all_tools_have_description(self) -> None:
         for tool in get_virtual_tool_definitions():
