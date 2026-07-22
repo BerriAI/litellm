@@ -52,6 +52,15 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"(?<=://)[^\s'\"]*:[^\s'\"@]+(?=@)",
         # Databricks personal access tokens
         r"dapi[0-9a-f]{32}",
+        # GitHub personal access tokens (classic ghp_ and fine-grained github_pat_)
+        # LiteLLM supports the `github/` model provider, so these tokens can
+        # surface in config dumps / error traces and must be scrubbed.
+        r"ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}",
+        # Slack tokens (xoxb- bot, xoxp- user, xoxa- app, xoxr- refresh, xoxs- session,
+        # xapp- app-level, xoxe- config refresh). LiteLLM ships a Slack alerting
+        # integration; bare tokens are not covered by the slack_webhook_url
+        # key-name pattern above.
+        r"(?:xox[abprs]-|xapp-|xoxe(?:\.xox[bp])?-)[A-Za-z0-9-]{10,}",
         # Module-level provider keys logged as litellm.<provider>_key=<value>
         r"litellm\.[A-Za-z0-9_]*_key['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+",
         # ── Key-name-based redaction ──
