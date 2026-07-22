@@ -27,6 +27,7 @@ from typing import (
     Generator,
     List,
     Optional,
+    Set,
     Tuple,
     Union,
 )
@@ -121,6 +122,20 @@ def _should_defer_streaming_cache_hit_callbacks(*, kwargs: Dict[str, Any]) -> bo
     spend and callback records.
     """
     return kwargs.get("stream", False) is True
+
+
+# Strong references to fire-and-forget cache-write tasks. asyncio only keeps a
+# weak reference to a task created with create_task, so without this a cache
+# write could be garbage-collected before it completes, silently dropping the
+# entry. Tasks remove themselves from the set on completion.
+_background_cache_tasks: Set["asyncio.Task[Any]"] = set()
+
+
+def _track_cache_task(task: "asyncio.Task[Any]") -> "asyncio.Task[Any]":
+    """Retain a strong reference to a background cache-write task until done."""
+    _background_cache_tasks.add(task)
+    task.add_done_callback(_background_cache_tasks.discard)
+    return task
 
 
 class LLMCachingHandler:
@@ -989,21 +1004,31 @@ class LLMCachingHandler:
                     and litellm.cache is not None
                     and not isinstance(litellm.cache.cache, S3Cache)  # s3 doesn't support bulk writing. Exclude.
                 ):
-                    asyncio.create_task(
-                        litellm.cache.async_add_cache_pipeline(
-                            result, dynamic_cache_object=self.dual_cache, **new_kwargs
+                    _track_cache_task(
+                        asyncio.create_task(
+                            litellm.cache.async_add_cache_pipeline(
+                                result,
+                                dynamic_cache_object=self.dual_cache,
+                                **new_kwargs,
+                            )
                         )
                     )
                 else:
-                    asyncio.create_task(
-                        litellm.cache.async_add_cache(
-                            result.model_dump_json(),
-                            dynamic_cache_object=self.dual_cache,
-                            **new_kwargs,
+                    _track_cache_task(
+                        asyncio.create_task(
+                            litellm.cache.async_add_cache(
+                                result.model_dump_json(),
+                                dynamic_cache_object=self.dual_cache,
+                                **new_kwargs,
+                            )
                         )
                     )
             else:
-                asyncio.create_task(litellm.cache.async_add_cache(result, **new_kwargs))
+                _track_cache_task(
+                    asyncio.create_task(
+                        litellm.cache.async_add_cache(result, **new_kwargs)
+                    )
+                )
 
     def sync_set_cache(
         self,
