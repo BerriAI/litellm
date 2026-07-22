@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _google_genai_streaming_hidden_params,
+    _merge_extra_body_preserving_model,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -264,6 +265,100 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+
+
+def test_response_api_handler_extra_body_cannot_override_model():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.transform_responses_api_request.return_value = {
+        "model": "gpt-5.3-codex",
+        "input": "hi",
+        "stream": True,
+    }
+    config.sign_request.return_value = ({}, None)
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+    logging_obj = Mock()
+
+    handler.response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        extra_body={"model": "attacker-model", "passthrough": "kept"},
+        client=client,
+    )
+
+    sent_body = client.post.call_args.kwargs["json"]
+    assert sent_body["model"] == "gpt-5.3-codex"
+    assert sent_body["passthrough"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_extra_body_cannot_override_model():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    config.transform_responses_api_request.return_value = {
+        "model": "gpt-5.3-codex",
+        "input": "hi",
+        "stream": True,
+    }
+    config.sign_request.return_value = ({}, None)
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+    logging_obj = Mock()
+
+    await handler.async_response_api_handler(
+        model="gpt-5.3-codex",
+        input="hi",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        extra_body={"model": "attacker-model", "passthrough": "kept"},
+        client=client,
+    )
+
+    sent_body = client.post.call_args.kwargs["json"]
+    assert sent_body["model"] == "gpt-5.3-codex"
+    assert sent_body["passthrough"] == "kept"
+
+
+def test_merge_extra_body_preserving_model_blocks_model_override():
+    merged = _merge_extra_body_preserving_model(
+        {"model": "authorized", "messages": []},
+        {"model": "attacker", "passthrough": "kept"},
+    )
+    assert merged["model"] == "authorized"
+    assert merged["passthrough"] == "kept"
+
+
+def test_merge_extra_body_preserving_model_passes_through_when_no_model():
+    merged = _merge_extra_body_preserving_model(
+        {"input": "hi"},
+        {"model": "from-extra-body", "extra": "kept"},
+    )
+    assert merged["model"] == "from-extra-body"
+    assert merged["extra"] == "kept"
+    assert merged["input"] == "hi"
 
 
 def test_get_agentic_loop_settings_defaults_and_overrides():

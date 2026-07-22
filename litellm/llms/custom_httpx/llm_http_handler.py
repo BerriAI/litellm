@@ -13,6 +13,7 @@ from typing import (
     Iterator,
     List,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     Union,
@@ -208,6 +209,15 @@ def _google_genai_streaming_hidden_params(
 @lru_cache(maxsize=None)
 def _responses_api_optional_request_param_names() -> frozenset[str]:
     return frozenset(get_type_hints(ResponsesAPIOptionalRequestParams).keys())
+
+
+def _merge_extra_body_preserving_model(
+    transformed_body: Mapping[str, object], extra_body: Mapping[str, object]
+) -> dict[str, object]:
+    merged = {**transformed_body, **extra_body}
+    if "model" in transformed_body:
+        return {**merged, "model": transformed_body["model"]}
+    return merged
 
 
 def _custom_logger_callbacks(logging_obj: Any) -> list[Any]:
@@ -483,7 +493,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_body is not None:
-            data = {**data, **extra_body}
+            data = _merge_extra_body_preserving_model(data, extra_body)
 
         headers, signed_json_body = provider_config.sign_request(
             headers=headers,
@@ -2537,7 +2547,7 @@ class BaseLLMHTTPHandler:
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
-            data.update(extra_body)
+            data = _merge_extra_body_preserving_model(data, extra_body)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2714,7 +2724,7 @@ class BaseLLMHTTPHandler:
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
-            data.update(extra_body)
+            data = _merge_extra_body_preserving_model(data, extra_body)
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
