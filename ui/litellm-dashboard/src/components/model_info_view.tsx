@@ -43,7 +43,7 @@ import {
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { getProviderLogoAndName } from "./provider_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
@@ -660,30 +660,7 @@ export default function ModelInfoView({
               <Card>
                 <Text>Provider</Text>
                 <div className="mt-2 flex items-center space-x-2">
-                  {modelData.provider && (
-                    <img
-                      src={getProviderLogoAndName(modelData.provider).logo}
-                      alt={`${modelData.provider} logo`}
-                      className="w-4 h-4"
-                      onError={(e) => {
-                        const target = e.currentTarget as HTMLImageElement;
-                        const parent = target.parentElement;
-                        if (!parent || !parent.contains(target)) {
-                          return;
-                        }
-
-                        try {
-                          const fallbackDiv = document.createElement("div");
-                          fallbackDiv.className =
-                            "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                          fallbackDiv.textContent = modelData.provider?.charAt(0) || "-";
-                          parent.replaceChild(fallbackDiv, target);
-                        } catch (error) {
-                          console.error("Failed to replace provider logo fallback:", error);
-                        }
-                      }}
-                    />
-                  )}
+                  {modelData.provider && <Logo provider={modelData.provider} className="w-4 h-4" />}
                   <Title>{modelData.provider || "Not Set"}</Title>
                 </div>
               </Card>

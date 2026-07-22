@@ -19,6 +19,21 @@ const capturingFetch = (response: Response) => {
   return { fetch, requests };
 };
 
+const spyOnRequestConstruction = () => {
+  const NativeRequest = globalThis.Request;
+  const inits: Array<RequestInit | Request | undefined> = [];
+  class SpyingRequest extends NativeRequest {
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
+      inits.push(init);
+      super(input, init);
+    }
+  }
+  vi.stubGlobal("Request", SpyingRequest);
+  const streamBodiedInits = () =>
+    inits.filter((init) => (init instanceof NativeRequest ? init.body !== null : init?.body instanceof ReadableStream));
+  return { streamBodiedInits };
+};
+
 describe("typed api client middleware", () => {
   beforeEach(() => {
     registerBaseUrlGetter(() => "");
@@ -29,6 +44,7 @@ describe("typed api client middleware", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("injects the bearer token under the registered auth header name", async () => {
@@ -60,6 +76,35 @@ describe("typed api client middleware", () => {
     expect(url.origin).toBe("https://proxy.example.com");
     expect(url.pathname).toBe("/model_group/info");
     expect(url.searchParams.get("model_group")).toBe("gpt-4o");
+  });
+
+  it("sends a POST body as bytes, never as a ReadableStream (Chromium rejects stream uploads over HTTP/1.1)", async () => {
+    registerAuthTokenGetter(() => "sk-test");
+    const { streamBodiedInits } = spyOnRequestConstruction();
+    const { fetch, requests } = capturingFetch(jsonResponse(200, { key: "sk-new" }));
+
+    await fetchClient.POST("/key/generate", { fetch, body: { key_alias: "my-key" } });
+
+    expect(streamBodiedInits()).toEqual([]);
+    expect(requests[0].headers.get("Authorization")).toBe("Bearer sk-test");
+    expect(await requests[0].text()).toBe(JSON.stringify({ key_alias: "my-key" }));
+  });
+
+  it("keeps the POST body as bytes when rebasing onto a runtime base url", async () => {
+    registerBaseUrlGetter(() => "https://proxy.example.com");
+    registerAuthTokenGetter(() => "sk-test");
+    const { streamBodiedInits } = spyOnRequestConstruction();
+    const { fetch, requests } = capturingFetch(jsonResponse(200, { key: "sk-new" }));
+
+    await fetchClient.POST("/key/generate", { fetch, body: { key_alias: "my-key" } });
+
+    expect(streamBodiedInits()).toEqual([]);
+    const sent = requests[0];
+    expect(new URL(sent.url).origin).toBe("https://proxy.example.com");
+    expect(sent.method).toBe("POST");
+    expect(sent.headers.get("Authorization")).toBe("Bearer sk-test");
+    expect(sent.headers.get("Content-Type")).toBe("application/json");
+    expect(await sent.text()).toBe(JSON.stringify({ key_alias: "my-key" }));
   });
 
   it("maps a non-2xx response to an ApiError carrying status and the derived message", async () => {
