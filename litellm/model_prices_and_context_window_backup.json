@@ -33465,6 +33465,61 @@
         "supports_function_calling": true,
         "supports_system_messages": true
     },
+    "stepfun/step-3.5-flash": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "stepfun",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "source": "https://platform.stepfun.ai/docs/en/guides/pricing/details.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "stepfun/step-3.5-flash-2603": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "stepfun",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "source": "https://platform.stepfun.ai/docs/en/guides/pricing/details.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "stepfun/step-3.7-flash": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "stepfun",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 1.15e-06,
+        "source": "https://platform.stepfun.ai/docs/en/guides/pricing/details.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "stability/sd3": {
         "litellm_provider": "stability",
         "mode": "image_generation",
