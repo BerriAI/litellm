@@ -3274,3 +3274,122 @@ async def test_chat_completion_modify_response_exception_streaming_logging_obj_n
     # CustomStreamWrapper would raise AttributeError inside __init__ and this
     # call would never reach here.
     assert response is not None
+
+
+class TestBedrockGuardrailOutputScope:
+    """Regression for #33671: ApplyGuardrail must honor a configured outputScope.
+
+    AWS ApplyGuardrail accepts outputScope=FULL to return the entire assessed
+    output (detected and non-detected entries) for observability; the default
+    INTERVENTIONS only returns intervened content. The hook must send the
+    configured value and omit it when unset.
+    """
+
+    @staticmethod
+    def _mock_bedrock_response() -> MagicMock:
+        mock = MagicMock()
+        mock.status_code = 200
+        mock.json.return_value = {"action": "NONE", "outputs": []}
+        return mock
+
+    @staticmethod
+    def _mock_credentials() -> MagicMock:
+        mock = MagicMock()
+        mock.access_key = "test-access-key"
+        mock.secret_key = "test-secret-key"
+        mock.token = None
+        return mock
+
+    @pytest.mark.asyncio
+    async def test_output_scope_full_is_sent_in_request_body(self):
+        guardrail = BedrockGuardrail(
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            outputScope="FULL",
+        )
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        with (
+            patch.object(
+                guardrail.async_handler, "post", new_callable=AsyncMock
+            ) as mock_post,
+            patch.object(
+                guardrail,
+                "_load_credentials",
+                return_value=(self._mock_credentials(), "us-east-1"),
+            ),
+            patch.object(
+                guardrail, "_prepare_request", return_value=MagicMock()
+            ) as mock_prepare_request,
+        ):
+            mock_post.return_value = self._mock_bedrock_response()
+
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+            sent_body = mock_prepare_request.call_args.kwargs["data"]
+            assert sent_body["outputScope"] == "FULL"
+
+    @pytest.mark.asyncio
+    async def test_output_scope_absent_when_not_configured(self):
+        guardrail = BedrockGuardrail(
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+        )
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        with (
+            patch.object(
+                guardrail.async_handler, "post", new_callable=AsyncMock
+            ) as mock_post,
+            patch.object(
+                guardrail,
+                "_load_credentials",
+                return_value=(self._mock_credentials(), "us-east-1"),
+            ),
+            patch.object(
+                guardrail, "_prepare_request", return_value=MagicMock()
+            ) as mock_prepare_request,
+        ):
+            mock_post.return_value = self._mock_bedrock_response()
+
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+            sent_body = mock_prepare_request.call_args.kwargs["data"]
+            assert "outputScope" not in sent_body
+
+    @pytest.mark.asyncio
+    async def test_output_scope_invalid_value_raises(self):
+        with pytest.raises(ValueError, match="outputScope"):
+            BedrockGuardrail(
+                guardrailIdentifier="test-guardrail",
+                guardrailVersion="DRAFT",
+                outputScope="EVERYTHING",  # type: ignore[arg-type]
+            )
+
+    def test_output_scope_warns_when_checks_mode_active(self):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.verbose_proxy_logger.warning"
+        ) as mock_warning:
+            BedrockGuardrail(
+                checks={"contentFilter": {"type": "SEXUAL"}},
+                outputScope="FULL",
+            )
+            mock_warning.assert_any_call(
+                "Bedrock Guardrail: outputScope has no effect with 'checks' "
+                "(InvokeGuardrailChecks does not accept outputScope; it is only "
+                "used by the ApplyGuardrail API)."
+            )
