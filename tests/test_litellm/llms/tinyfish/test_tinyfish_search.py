@@ -47,7 +47,9 @@ def _make_mock_response(
 
     mock = MagicMock()
     mock.status_code = status_code
-    mock.headers = headers or {}
+    # httpx.Headers normalizes keys to lowercase — mirror production so tests
+    # assert what callers actually see.
+    mock.headers = httpx.Headers(headers or {})
     if json_data is not None:
         mock.json.return_value = json_data
         mock.text = text if text is not None else _json.dumps(json_data)
@@ -222,7 +224,7 @@ class TestTransformSearchRequest:
             assert param not in result["_tinyfish_params"]
 
     def test_arbitrary_param_passed_through(self):
-        # `fetch` is a TinyFish-specific param (JSON-encoded tf-fetch config).
+        # `fetch` is a TinyFish-specific param (JSON-encoded fetch config).
         # The passthrough loop should forward it verbatim without LiteLLM needing
         # to know about it.
         config = TinyfishSearchConfig()
@@ -237,26 +239,49 @@ class TestTransformSearchRequest:
         config = TinyfishSearchConfig()
         result = config.transform_search_request(
             query="test",
-            optional_params={"fetch": {"format": "html", "fetch_path": "fast"}},
+            optional_params={"fetch": {"format": "html"}},
         )
-        assert (
-            result["_tinyfish_params"]["fetch"]
-            == '{"format":"html","fetch_path":"fast"}'
-        )
+        assert result["_tinyfish_params"]["fetch"] == '{"format":"html"}'
 
     def test_bool_param_serialized_as_lowercase(self):
-        # urlencode renders Python bool as capitalized "True"/"False"; ux-labs
-        # rejects those (e.g. include_thumbnail must be literal "true"/"false").
-        # Normalize before passing through.
+        # urlencode renders Python bool as capitalized "True"/"False"; TinyFish
+        # Search's bool params require lowercase "true"/"false" strings on the
+        # wire. Normalize before passing through.
         config = TinyfishSearchConfig()
         true_result = config.transform_search_request(
-            query="test", optional_params={"include_thumbnail": True}
+            query="test", optional_params={"some_bool_param": True}
         )
         false_result = config.transform_search_request(
-            query="test", optional_params={"include_thumbnail": False}
+            query="test", optional_params={"some_bool_param": False}
         )
-        assert true_result["_tinyfish_params"]["include_thumbnail"] == "true"
-        assert false_result["_tinyfish_params"]["include_thumbnail"] == "false"
+        assert true_result["_tinyfish_params"]["some_bool_param"] == "true"
+        assert false_result["_tinyfish_params"]["some_bool_param"] == "false"
+
+    def test_float_param_passes_through(self):
+        # Float values pass the urlencode adapter and land on the wire as
+        # their decimal string form. If TinyFish's server rejects a float
+        # for a param it expects as int, the server's 400 response is
+        # attributed via _wrap_error (`TinyFish Search: ...`) — better than
+        # a client-side pydantic ValidationError with no context.
+        config = TinyfishSearchConfig()
+        result = config.transform_search_request(
+            query="test",
+            optional_params={"some_float_param": 0.5},
+        )
+        assert result["_tinyfish_params"]["some_float_param"] == 0.5
+
+    def test_list_param_auto_json_encoded(self):
+        # TinyFish Search's JSON-array params arrive on the wire as JSON-
+        # encoded strings. Accept the natural Python list form and serialize
+        # so the caller doesn't have to pre-stringify. Params whose wire
+        # format is a plain comma-separated string are the caller's
+        # responsibility to pass as a Python str.
+        config = TinyfishSearchConfig()
+        result = config.transform_search_request(
+            query="test",
+            optional_params={"some_list_param": ["a.example", "b.example"]},
+        )
+        assert result["_tinyfish_params"]["some_list_param"] == '["a.example","b.example"]'
 
     def test_pre_stringified_param_passed_unchanged(self):
         # If the caller already JSON-encoded, don't re-encode.
@@ -422,10 +447,104 @@ class TestTransformSearchResponse:
         assert getattr(first, "position", None) == 1
         assert getattr(first, "site_name", None) == "tinyfish.ai"
 
+    def test_top_level_extras_flow_through(self):
+        # TinyFish returns `query`, `total_results`, `page` at the envelope
+        # level. These must ride through to the caller via SearchResponse's
+        # extra="allow" so pagination logic, echo checks, etc. work.
+        config = TinyfishSearchConfig()
+        mock_response = _make_mock_response(MOCK_TINYFISH_RESPONSE)
+        result = config.transform_search_response(
+            raw_response=mock_response, logging_obj=None
+        )
+        assert getattr(result, "query", None) == "web automation tools"
+        assert getattr(result, "total_results", None) == 2
+        assert getattr(result, "page", None) == 0
+
+    def test_top_level_future_extras_flow_through(self):
+        # Any future TinyFish top-level field must ride through unchanged
+        # (design contract: no LiteLLM code change needed for new fields).
+        config = TinyfishSearchConfig()
+        body = {
+            "results": [
+                {"title": "x", "url": "https://x", "snippet": "x"},
+            ],
+            "query": "test",
+            "example_int_extra": 123,  # hypothetical future field
+            "example_str_extra": "value",  # hypothetical future field
+            "example_id_extra": "abc-def",  # hypothetical future field
+        }
+        result = config.transform_search_response(
+            raw_response=_make_mock_response(body), logging_obj=None
+        )
+        assert getattr(result, "example_int_extra", None) == 123
+        assert getattr(result, "example_str_extra", None) == "value"
+        assert getattr(result, "example_id_extra", None) == "abc-def"
+
+    def test_response_headers_stashed_on_hidden_params(self):
+        # TinyFish Search sets X-Request-ID on every success response. Confirm it
+        # lands on both `_hidden_params["headers"]` (raw) and
+        # `_hidden_params["additional_headers"]` (sanitized/prefixed).
+        # httpx.Headers lowercases every key, so assertions use lowercase.
+        config = TinyfishSearchConfig()
+        mock_response = _make_mock_response(
+            MOCK_TINYFISH_RESPONSE,
+            headers={"X-Request-ID": "req-abc-123", "Content-Type": "application/json"},
+        )
+        result = config.transform_search_response(
+            raw_response=mock_response, logging_obj=None
+        )
+        # Raw copy — httpx has normalized keys to lowercase.
+        assert result._hidden_params["headers"]["x-request-id"] == "req-abc-123"
+        # process_response_headers prefixes non-OpenAI-standard keys with "llm_provider-".
+        assert result._hidden_params["additional_headers"]["llm_provider-x-request-id"] == "req-abc-123"
+
+    def test_response_headers_future_headers_flow_through(self):
+        # "Accept extra": any header TinyFish Search adds later must ride
+        # through without a LiteLLM code change.
+        config = TinyfishSearchConfig()
+        mock_response = _make_mock_response(
+            MOCK_TINYFISH_RESPONSE,
+            headers={
+                "X-Request-ID": "req-1",
+                "X-Example-Header-A": "value-a",  # hypothetical future header
+                "X-Example-Header-B": "value-b",  # hypothetical future header
+            },
+        )
+        result = config.transform_search_response(
+            raw_response=mock_response, logging_obj=None
+        )
+        raw = result._hidden_params["headers"]
+        # httpx lowercases header names on read.
+        assert raw["x-example-header-a"] == "value-a"
+        assert raw["x-example-header-b"] == "value-b"
+
+    def test_response_headers_strips_x_litellm_spoof(self):
+        # A provider setting `x-litellm-*` in its response must not be able to
+        # spoof LiteLLM-internal markers via _hidden_params["additional_headers"].
+        # The raw copy preserves the header (opt-in debug view); the sanitized
+        # copy prefixes it with `llm_provider-` so bare `x-litellm-*` markers
+        # can't be spoofed (values still survive under the prefixed key for
+        # observability).
+        config = TinyfishSearchConfig()
+        mock_response = _make_mock_response(
+            MOCK_TINYFISH_RESPONSE,
+            headers={"x-litellm-attempted-fallbacks": "spoofed", "X-Request-ID": "r1"},
+        )
+        result = config.transform_search_response(
+            raw_response=mock_response, logging_obj=None
+        )
+        # Raw view still has the spoof.
+        assert result._hidden_params["headers"]["x-litellm-attempted-fallbacks"] == "spoofed"
+        # Sanitized view: the spoof survives only under the llm_provider- prefix
+        # (never under the bare x-litellm-* key that LiteLLM downstream trusts).
+        additional = result._hidden_params["additional_headers"]
+        assert "x-litellm-attempted-fallbacks" not in additional
+        assert additional.get("llm_provider-x-litellm-attempted-fallbacks") == "spoofed"
+
     def test_fetch_field_rides_through_to_search_result(self):
-        # Mirrors browser-search's per-result `fetch` nested object (see
-        # api/src/parser.rs SearchResult.fetch). Confirms `fetch=...` requests
-        # surface their content to LiteLLM callers without provider changes.
+        # Mirrors TinyFish Search's per-result `fetch` nested object.
+        # Confirms `fetch=...` requests surface their content to LiteLLM
+        # callers without provider changes.
         config = TinyfishSearchConfig()
         fetched = {
             "results": [
@@ -568,7 +687,7 @@ class TestTransformSearchResponse:
 
 class TestErrorHandling:
     def test_4xx_response_raises_with_attribution_and_unwrapped_message(self):
-        # Reproduces ux-labs' error envelope shape for an INVALID_INPUT response.
+        # Reproduces TinyFish Search's error envelope shape for an INVALID_INPUT response.
         config = TinyfishSearchConfig()
         body = {
             "error": {
@@ -590,7 +709,7 @@ class TestErrorHandling:
 
     def test_429_preserves_status_code_and_headers(self):
         config = TinyfishSearchConfig()
-        body = {"error": {"code": "RATE_LIMIT_EXCEEDED", "message": "60 rpm"}}
+        body = {"error": {"code": "RATE_LIMIT_EXCEEDED", "message": "rate limit exceeded"}}
         mock_response = _make_mock_response(
             body, status_code=429, headers={"Retry-After": "60"}
         )
@@ -600,10 +719,12 @@ class TestErrorHandling:
             )
         assert getattr(exc_info.value, "status_code", None) == 429
         headers = getattr(exc_info.value, "headers", {}) or {}
-        assert headers.get("Retry-After") == "60"
+        # httpx lowercases; the exception carries the same dict shape.
+        assert headers.get("retry-after") == "60"
 
-    def test_5xx_with_non_ux_labs_body_falls_back_to_raw_text(self):
-        # Cloudflare-style JSON or any other envelope: unwrap fails, fall back to raw.
+    def test_5xx_with_non_tinyfish_envelope_shape_falls_back_to_raw_text(self):
+        # A JSON body that doesn't match TinyFish Search's error envelope shape:
+        # unwrap fails, fall back to the raw body text.
         config = TinyfishSearchConfig()
         body = {"errors": [{"code": "10000", "message": "Internal"}]}
         mock_response = _make_mock_response(body, status_code=502)
