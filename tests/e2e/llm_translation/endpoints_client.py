@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from proxy_client import ProxyClient
-from e2e_http import StreamingResponse
+from e2e_http import BinaryStream, Result, StreamingResponse
 from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
 
 __all__ = [
@@ -108,6 +108,16 @@ class ImageRequest(BaseModel):
     prompt: str
     n: int = 1
     size: str = "1024x1024"
+
+
+class TranscriptionForm(BaseModel):
+    model: str
+    response_format: str = "json"
+
+
+class ModerationRequest(BaseModel):
+    model: str
+    input: str
 
 
 class ResponsesOutputContent(BaseModel):
@@ -213,6 +223,27 @@ class ImagesResult(BaseModel):
     data: list[ImageItem] = []
 
 
+class TranscriptionResult(BaseModel):
+    text: str = ""
+
+
+class ModerationResultItem(BaseModel):
+    flagged: bool
+    categories: dict[str, bool] = {}
+
+    @property
+    def flagged_categories(self) -> tuple[str, ...]:
+        return tuple(name for name, hit in self.categories.items() if hit)
+
+
+class ModerationResult(BaseModel):
+    results: list[ModerationResultItem] = []
+
+    @property
+    def first(self) -> ModerationResultItem | None:
+        return self.results[0] if self.results else None
+
+
 @dataclass(frozen=True, slots=True)
 class EndpointsClient:
     proxy: ProxyClient
@@ -312,6 +343,36 @@ class EndpointsClient:
     ) -> StreamingResponse:
         return self._send(
             "/v1/audio/speech", key, SpeechRequest(model=model, input=text, voice=voice)
+        )
+
+    def audio_speech_stream(
+        self, key: str, model: str, text: str, *, voice: str = "alloy"
+    ) -> BinaryStream:
+        return self.proxy.transport.stream_binary(
+            "/v1/audio/speech",
+            headers=self.proxy.transport.bearer(key),
+            json=SpeechRequest(model=model, input=text, voice=voice),
+        )
+
+    def transcribe(
+        self, key: str, model: str, *, filename: str, content: bytes
+    ) -> Result[TranscriptionResult]:
+        return self.proxy.transport.upload(
+            "/v1/audio/transcriptions",
+            headers=self.proxy.transport.bearer(key),
+            form=TranscriptionForm(model=model),
+            filename=filename,
+            content=content,
+            file_content_type="audio/wav",
+            response_type=TranscriptionResult,
+        )
+
+    def moderations(self, key: str, model: str, text: str) -> Result[ModerationResult]:
+        return self.proxy.transport.post(
+            "/v1/moderations",
+            headers=self.proxy.transport.bearer(key),
+            json=ModerationRequest(model=model, input=text),
+            response_type=ModerationResult,
         )
 
     def images(self, key: str, model: str, prompt: str) -> StreamingResponse:
