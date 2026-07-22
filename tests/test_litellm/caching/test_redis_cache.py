@@ -282,6 +282,36 @@ async def test_async_rpush_pipeline_raises_on_redis_error(monkeypatch, redis_no_
 
 
 @pytest.mark.asyncio
+async def test_async_set_cache_failures_trip_circuit_breaker(
+    monkeypatch, redis_no_ping
+):
+    """async_set_cache must propagate Redis errors so its circuit breaker guard
+    can see the failure and open after enough consecutive failures -- if the
+    error is swallowed instead, the guard always records a success and the
+    breaker can never open."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.set = AsyncMock(side_effect=ConnectionError("Redis down"))
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        for _ in range(redis_cache._circuit_breaker.failure_threshold):
+            with pytest.raises(ConnectionError, match="Redis down"):
+                await redis_cache.async_set_cache("key", "value")
+
+        assert redis_cache._circuit_breaker.is_open()
+
+        # Once open, further calls must fast-fail without touching Redis.
+        mock_redis_instance.set.reset_mock()
+        with pytest.raises(Exception, match="circuit breaker is open"):
+            await redis_cache.async_set_cache("key", "value")
+        mock_redis_instance.set.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_async_lpop_pipeline_single_round_trip(monkeypatch, redis_no_ping):
     """Verify that multiple lpop ops are batched into a single pipeline execute"""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
