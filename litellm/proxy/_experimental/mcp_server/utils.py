@@ -22,6 +22,9 @@ import importlib
 import os
 from urllib.parse import quote
 
+import litellm
+from litellm._logging import verbose_proxy_logger
+
 # Constants
 #
 # NOTE: The environment-backed values below are read once, when this module is
@@ -590,6 +593,47 @@ def build_env_var_setup_url(server_id: str) -> str:
     base = os.environ.get("PROXY_BASE_URL", "").rstrip("/")
     path = f"/ui/?page=mcp-servers&fill_env_vars={quote(server_id, safe='')}"
     return f"{base}{path}" if base else path
+
+
+def resolve_static_header_env_vars(
+    headers: Optional[Mapping[str, str]],
+    *,
+    allow_env_var_resolution: bool = True,
+) -> Optional[dict[str, str]]:
+    """Resolve ``os.environ/VAR`` values in MCP static headers.
+
+    YAML config gets this treatment from ``ProxyConfig._check_for_os_environ_vars``.
+    MCP servers loaded from the DB or tested directly from the UI need the same
+    handling after their ``static_headers`` are materialized.
+    """
+    if not headers:
+        return None
+
+    resolved: dict[str, str] = {}
+    for key, value in headers.items():
+        if isinstance(value, str) and value.startswith("os.environ/"):
+            env_var_name = value.removeprefix("os.environ/")
+            if not allow_env_var_resolution:
+                verbose_proxy_logger.warning(
+                    "MCP static header '%s' references proxy env var '%s', but env "
+                    "resolution is disabled for this MCP server. Dropping the header.",
+                    key,
+                    env_var_name,
+                )
+                continue
+            secret_value = litellm.get_secret(value)
+            if secret_value is None:
+                verbose_proxy_logger.warning(
+                    "MCP static header '%s' references missing env var '%s'. Leaving the header value unresolved.",
+                    key,
+                    env_var_name,
+                )
+                resolved[key] = value
+            else:
+                resolved[key] = str(secret_value)
+        else:
+            resolved[key] = str(value)
+    return resolved
 
 
 def merge_mcp_headers(

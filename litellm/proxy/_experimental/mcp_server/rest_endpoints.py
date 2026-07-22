@@ -34,6 +34,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
     get_server_prefix,
     merge_mcp_headers,
+    resolve_static_header_env_vars,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -1220,7 +1221,7 @@ if MCP_AVAILABLE:
 
             merged_headers = merge_mcp_headers(
                 extra_headers=(None if preview_cred_provider else effective_oauth2_headers),
-                static_headers=request.static_headers,
+                static_headers=resolve_static_header_env_vars(request.static_headers),
             )
 
             client = await global_mcp_server_manager._create_mcp_client(

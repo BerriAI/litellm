@@ -21,6 +21,11 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
 
+try:
+    from builtins import BaseExceptionGroup
+except ImportError:  # pragma: no cover - Python < 3.11 compatibility
+    from exceptiongroup import BaseExceptionGroup
+
 
 def _build_request(
     headers: Optional[Dict[str, str]] = None,
@@ -150,6 +155,56 @@ class TestExecuteWithMcpClient:
         assert captured["extra_headers"] == {
             "X-OAuth": "1",
             "Authorization": "STATIC token",
+        }
+
+    @pytest.mark.asyncio
+    async def test_resolves_static_header_env_vars(self, monkeypatch):
+        """UI test calls resolve os.environ/ static header values before forwarding."""
+        captured: dict = {}
+        monkeypatch.setenv("MCP_STATIC_HEADER_SECRET", "resolved-secret")
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured["extra_headers"] = kwargs.get("extra_headers")
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=MCPAuth.none,
+            static_headers={
+                "Authorization": "os.environ/MCP_STATIC_HEADER_SECRET",
+                "X-Static": "literal",
+            },
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+        )
+
+        assert result["status"] == "ok"
+        assert captured["extra_headers"] == {
+            "Authorization": "resolved-secret",
+            "X-Static": "literal",
         }
 
     @pytest.mark.asyncio
@@ -2468,7 +2523,7 @@ class TestPreviewOpenAPITools:
     async def test_preview_sanitizes_slash_in_operation_id(self, monkeypatch):
         import re
 
-        async def fake_load_spec(spec_path):  # noqa: ANN001
+        async def fake_load_spec(spec_path):
             return {
                 "paths": {
                     "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
@@ -2545,7 +2600,7 @@ class TestPreviewOpenAPITools:
             }
         }
 
-        async def fake_load_spec(spec_path):  # noqa: ANN001
+        async def fake_load_spec(spec_path):
             return spec
 
         monkeypatch.setattr(
@@ -2573,7 +2628,7 @@ class TestPreviewOpenAPITools:
 
         registered_summary_to_name: dict = {}
 
-        def fake_create_tool_function(path, method, operation, base_url):  # noqa: ANN001
+        def fake_create_tool_function(path, method, operation, base_url):
             def _f():
                 return None
 
@@ -2586,7 +2641,7 @@ class TestPreviewOpenAPITools:
         )
 
         class _StubRegistry:
-            def register_tool(self, name, description, input_schema, handler):  # noqa: ANN001
+            def register_tool(self, name, description, input_schema, handler):
                 registered_summary_to_name[description] = name
 
         monkeypatch.setattr(

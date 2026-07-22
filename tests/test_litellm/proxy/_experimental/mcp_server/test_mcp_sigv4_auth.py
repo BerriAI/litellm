@@ -912,6 +912,177 @@ class TestSigV4BuildFromTable:
         assert server.aws_region_name is None
         assert server.aws_service_name is None
 
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_resolves_static_header_env_vars(
+        self, monkeypatch
+    ):
+        """MCP servers loaded from DB resolve os.environ/ static header values."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        monkeypatch.setenv("MCP_STATIC_HEADER_SECRET", "resolved-secret")
+
+        table_record = MagicMock()
+        table_record.server_id = "test-header-server"
+        table_record.server_name = "header_server"
+        table_record.alias = None
+        table_record.description = None
+        table_record.url = "https://example.com/mcp"
+        table_record.spec_path = None
+        table_record.transport = "http"
+        table_record.auth_type = "none"
+        table_record.mcp_info = {"server_name": "header_server"}
+        table_record.credentials = None
+        table_record.extra_headers = None
+        table_record.static_headers = json.dumps(
+            {
+                "Authorization": "os.environ/MCP_STATIC_HEADER_SECRET",
+                "X-Static": "literal",
+            }
+        )
+        table_record.command = None
+        table_record.args = []
+        table_record.env = None
+        table_record.env_vars = None
+        table_record.mcp_access_groups = []
+        table_record.allowed_tools = []
+        table_record.disallowed_tools = None
+        table_record.allow_all_keys = False
+        table_record.available_on_public_internet = True
+        table_record.authorization_url = None
+        table_record.token_url = None
+        table_record.registration_url = None
+        table_record.created_at = None
+        table_record.updated_at = None
+        table_record.client_id = None
+        table_record.client_secret = None
+        table_record.tool_name_to_display_name = None
+        table_record.tool_name_to_description = None
+        table_record.byok_api_key_help_url = None
+        table_record.oauth2_flow = None
+        table_record.instructions = None
+        table_record.source_url = None
+        table_record.submitted_by = None
+        table_record.token_exchange_endpoint = None
+        table_record.audience = None
+        table_record.subject_token_type = None
+        table_record.token_exchange_profile = None
+        table_record.timeout = None
+        table_record.max_concurrent_requests = None
+
+        manager = MCPServerManager()
+
+        server = await manager.build_mcp_server_from_table(table_record)
+
+        assert server.static_headers == {
+            "Authorization": "resolved-secret",
+            "X-Static": "literal",
+        }
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_user_submission_drops_static_header_env_vars(
+        self, monkeypatch, caplog
+    ):
+        """User-submitted MCP servers must not resolve proxy env vars in static headers."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        monkeypatch.setenv("MCP_STATIC_HEADER_SECRET", "resolved-secret")
+        caplog.set_level("WARNING", logger="LiteLLM Proxy")
+
+        table_record = MagicMock()
+        table_record.server_id = "submitted-header-server"
+        table_record.server_name = "submitted_header_server"
+        table_record.alias = None
+        table_record.description = None
+        table_record.url = "https://example.com/mcp"
+        table_record.spec_path = None
+        table_record.transport = "http"
+        table_record.auth_type = "none"
+        table_record.mcp_info = {"server_name": "submitted_header_server"}
+        table_record.credentials = None
+        table_record.extra_headers = None
+        table_record.static_headers = json.dumps(
+            {
+                "Authorization": "os.environ/MCP_STATIC_HEADER_SECRET",
+                "X-Static": "literal",
+            }
+        )
+        table_record.command = None
+        table_record.args = []
+        table_record.env = None
+        table_record.env_vars = None
+        table_record.mcp_access_groups = []
+        table_record.allowed_tools = []
+        table_record.disallowed_tools = None
+        table_record.allow_all_keys = False
+        table_record.available_on_public_internet = True
+        table_record.authorization_url = None
+        table_record.token_url = None
+        table_record.registration_url = None
+        table_record.created_at = None
+        table_record.updated_at = None
+        table_record.client_id = None
+        table_record.client_secret = None
+        table_record.tool_name_to_display_name = None
+        table_record.tool_name_to_description = None
+        table_record.byok_api_key_help_url = None
+        table_record.oauth2_flow = None
+        table_record.instructions = None
+        table_record.source_url = None
+        table_record.submitted_by = "user-submitter"
+        table_record.token_exchange_endpoint = None
+        table_record.audience = None
+        table_record.subject_token_type = None
+        table_record.token_exchange_profile = None
+        table_record.timeout = None
+        table_record.max_concurrent_requests = None
+
+        manager = MCPServerManager()
+
+        server = await manager.build_mcp_server_from_table(table_record)
+
+        assert server.static_headers == {"X-Static": "literal"}
+        assert (
+            "MCP static header 'Authorization' references proxy env var "
+            "'MCP_STATIC_HEADER_SECRET'" in caplog.text
+        )
+        assert "Dropping the header." in caplog.text
+
+    def test_resolve_static_header_env_vars_warns_when_env_missing(
+        self, monkeypatch, caplog
+    ):
+        """Missing os.environ/ header values are left unresolved with a warning."""
+        from litellm.proxy._experimental.mcp_server.utils import (
+            resolve_static_header_env_vars,
+        )
+
+        monkeypatch.delenv("MCP_MISSING_STATIC_HEADER_SECRET", raising=False)
+        caplog.set_level("WARNING", logger="LiteLLM Proxy")
+
+        result = resolve_static_header_env_vars(
+            {"Authorization": "os.environ/MCP_MISSING_STATIC_HEADER_SECRET"}
+        )
+
+        assert result == {
+            "Authorization": "os.environ/MCP_MISSING_STATIC_HEADER_SECRET"
+        }
+        assert (
+            "MCP static header 'Authorization' references missing env var "
+            "'MCP_MISSING_STATIC_HEADER_SECRET'" in caplog.text
+        )
+
+    def test_resolve_static_header_env_vars_keeps_empty_headers_none(self):
+        """Empty static headers stay unset instead of becoming an empty dict."""
+        from litellm.proxy._experimental.mcp_server.utils import (
+            resolve_static_header_env_vars,
+        )
+
+        assert resolve_static_header_env_vars(None) is None
+        assert resolve_static_header_env_vars({}) is None
+
 
 class TestDecryptCredentials:
     """Test decrypt_credentials helper."""
