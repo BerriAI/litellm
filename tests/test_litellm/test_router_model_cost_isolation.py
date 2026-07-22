@@ -1046,3 +1046,74 @@ async def test_pre_call_checks_route_when_deployment_absent_from_cost_map():
     finally:
         litellm.model_cost = original_model_cost
         _invalidate_model_cost_lowercase_map()
+
+
+def test_prepare_custom_model_info_merges_pricing_and_inherits_cache():
+    """Direct unit test of the helper backing deployment registration and the
+    cost-map reload restore: the deployment model_info is merged with custom
+    pricing declared in litellm_params, and missing cache pricing is inherited
+    from the backend model's built-in entry.
+    """
+    backend_model = "anthropic/claude-sonnet-4-5-20250929"
+    builtin_info = litellm.get_model_info(model=backend_model)
+    builtin_cache_read = builtin_info["cache_read_input_token_cost"]
+    assert builtin_cache_read is not None and builtin_cache_read > 0
+
+    deployment = Deployment(
+        model_name="claude-prepare",
+        litellm_params=LiteLLM_Params(
+            model=backend_model,
+            api_key="fake-key",
+            input_cost_per_token=0.000003,
+        ),
+        model_info=ModelInfo(id="lit4675-prepare-1", max_input_tokens=40000),
+    )
+
+    prepared = Router._prepare_custom_model_info(deployment)
+
+    assert prepared["id"] == "lit4675-prepare-1"
+    assert prepared["max_input_tokens"] == 40000
+    assert prepared["input_cost_per_token"] == 0.000003
+    assert prepared["cache_read_input_token_cost"] == builtin_cache_read
+
+
+def test_register_deployment_model_cost_writes_id_and_shared_backend_keys():
+    """Direct unit test of the helper used on deployment creation and again
+    after a cost-map reload: the full model_info lands under the unique model
+    id, while the provider-qualified backend key gets only cost-map schema
+    fields with custom pricing and per-deployment metadata stripped.
+    """
+    model_id = "lit4675-register-1"
+    model_name = "lit4675-register-backend-model"
+    provider = "hosted_vllm"
+    shared_key = f"{provider}/{model_name}"
+    model_info = {
+        "id": model_id,
+        "max_input_tokens": 40000,
+        "max_output_tokens": 4000,
+        "input_cost_per_token": 0.000001,
+        "additionalProp1": {"restricted": True},
+    }
+
+    model_keys = {key: litellm.model_cost.get(key) for key in (model_id, shared_key)}
+    try:
+        Router._register_deployment_model_cost(
+            model_id=model_id,
+            model_name=model_name,
+            custom_llm_provider=provider,
+            model_info=model_info,
+        )
+
+        id_entry = litellm.model_cost[model_id]
+        assert id_entry["max_input_tokens"] == 40000
+        assert id_entry["input_cost_per_token"] == 0.000001
+        assert id_entry["additionalProp1"] == {"restricted": True}
+
+        shared_entry = litellm.model_cost[shared_key]
+        assert shared_entry["max_input_tokens"] == 40000
+        assert shared_entry["max_output_tokens"] == 4000
+        assert "id" not in shared_entry
+        assert "additionalProp1" not in shared_entry
+        assert "input_cost_per_token" not in shared_entry
+    finally:
+        _restore_model_cost_entries(model_keys)
