@@ -4,6 +4,8 @@ Unit tests for claude_code_marketplace.py source validation.
 Covers the git-subdir source type added alongside the existing github and url types.
 """
 
+import json
+
 import pytest
 from fastapi import HTTPException
 from unittest.mock import AsyncMock, MagicMock
@@ -11,9 +13,13 @@ from unittest.mock import AsyncMock, MagicMock
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import LitellmUserRoles
-from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
+from litellm.types.proxy.claude_code_endpoints import (
+    RegisterPluginRequest,
+    UpdatePluginRequest,
+)
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
     register_plugin,
+    update_plugin,
 )
 
 
@@ -68,18 +74,14 @@ _GIT_SUBDIR_SOURCE = {
 @pytest.fixture(autouse=True)
 def _patch_proxy_globals(monkeypatch):
     """Scope prisma_client/master_key mutations to each test via monkeypatch."""
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma()
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
 
 
 @pytest.mark.asyncio
 async def test_register_plugin_git_subdir_success():
     """git-subdir with both url and path fields registers successfully."""
-    request = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE
-    )
+    request = RegisterPluginRequest(name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE)
 
     response = await register_plugin(request=request, user_api_key_dict=_USER)
 
@@ -89,21 +91,127 @@ async def test_register_plugin_git_subdir_success():
     assert response["plugin"]["source"]["path"] == "plugins/my-plugin"
 
 
-@pytest.mark.asyncio
-async def test_register_plugin_git_subdir_update():
-    """Registering the same git-subdir plugin twice returns action=updated."""
-    request = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0"
-    )
-    await register_plugin(request=request, user_api_key_dict=_USER)
+async def _read_stored_manifest(name: str) -> dict:
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    record = await table.find_unique(where={"name": name})
+    return json.loads(record.manifest_json)
 
-    request2 = RegisterPluginRequest(
-        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE, version="2.0.0"
+
+@pytest.mark.asyncio
+async def test_register_plugin_duplicate_name_conflicts():
+    """A second POST with an existing name returns 409 and leaves the stored plugin untouched."""
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
     )
-    response = await register_plugin(request=request2, user_api_key_dict=_USER)
+
+    stored_before = await _read_stored_manifest(name)
+    assert stored_before["version"] == "1.0.0"
+
+    conflicting = RegisterPluginRequest(
+        name=name,
+        source={
+            "source": "git-subdir",
+            "url": "https://github.com/org/other.git",
+            "path": "plugins/other-plugin",
+        },
+        version="2.0.0",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await register_plugin(request=conflicting, user_api_key_dict=_USER)
+
+    assert exc_info.value.status_code == 409
+    assert "already exists" in exc_info.value.detail["error"]
+
+    stored_after = await _read_stored_manifest(name)
+    assert stored_after == stored_before
+    assert stored_after["version"] == "1.0.0"
+    assert stored_after["source"]["url"] == "https://github.com/org/monorepo.git"
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_replaces_existing_source():
+    """PUT updates an existing plugin: action=updated and the stored source is replaced."""
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    new_source = {"source": "github", "repo": "org/replacement"}
+    response = await update_plugin(
+        plugin_name=name,
+        request=UpdatePluginRequest(source=new_source, version="2.0.0", description="updated"),
+        user_api_key_dict=_USER,
+    )
 
     assert response["status"] == "success"
     assert response["action"] == "updated"
+    assert response["plugin"]["version"] == "2.0.0"
+    assert response["plugin"]["source"] == new_source
+
+    stored = await _read_stored_manifest(name)
+    assert stored["source"] == new_source
+    assert stored["version"] == "2.0.0"
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_not_found():
+    """PUT on a name that does not exist raises HTTP 404."""
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name="does-not-exist",
+            request=UpdatePluginRequest(source=_GIT_SUBDIR_SOURCE),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_register_plugin_create_race_maps_unique_violation_to_409():
+    """A concurrent insert that slips past the find_unique pre-check (create raises
+    the unique-constraint error) is mapped to 409, not surfaced as a 500."""
+    from prisma.errors import UniqueViolationError
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    table.create = AsyncMock(side_effect=UniqueViolationError({}, message="duplicate name"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_plugin(
+            request=RegisterPluginRequest(name="racy-plugin", source=_GIT_SUBDIR_SOURCE),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "already exists" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_db_error_maps_to_structured_500():
+    """A data-layer failure during the update (e.g. a dropped DB connection) is caught and
+    returned as a structured 500, not swallowed silently or leaked as an unhandled error."""
+    from prisma.errors import PrismaError
+
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    table.update = AsyncMock(side_effect=PrismaError("connection lost"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name=name,
+            request=UpdatePluginRequest(source={"source": "github", "repo": "org/replacement"}),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "connection lost" in exc_info.value.detail["error"]
 
 
 @pytest.mark.asyncio

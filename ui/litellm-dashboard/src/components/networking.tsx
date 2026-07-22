@@ -7312,7 +7312,8 @@ export const getClaudeCodePluginDetails = async (accessToken: string, pluginName
 };
 
 /**
- * Register or update a Claude Code plugin (admin only)
+ * Register a new Claude Code plugin (admin only). Create-only: the proxy returns
+ * 409 if a plugin with the same name already exists.
  * @param accessToken - Admin access token
  * @param pluginData - Plugin registration data
  */

@@ -58,6 +58,18 @@ describe("createApiClient", () => {
     expect(onError).toHaveBeenCalledWith("no access");
   });
 
+  it("unwraps an object-shaped detail ({detail:{error}}) rather than dumping the JSON envelope (FastAPI HTTPException shape)", async () => {
+    const conflict = "A skill named 'gitlab' already exists. Update the existing skill instead of adding it again.";
+    const fetchImpl = vi.fn(async () => errorResponse(409, { detail: { error: conflict } }));
+    const onError = vi.fn();
+    const client = createApiClient({ getBaseUrl: () => "", onError, fetchImpl });
+
+    const promise = client.get("/claude-code/plugins", { accessToken: "sk" });
+
+    await expect(promise).rejects.toMatchObject({ message: conflict, status: 409 });
+    expect(onError).toHaveBeenCalledWith(conflict);
+  });
+
   it("falls back to the raw text body when a non-2xx response is not JSON (e.g. an HTML 502)", async () => {
     const fetchImpl = vi.fn(async () => rawErrorResponse(502, "<html>Bad Gateway</html>"));
     const onError = vi.fn();

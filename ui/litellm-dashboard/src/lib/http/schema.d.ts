@@ -1451,11 +1451,15 @@ export interface paths {
         put?: never;
         /**
          * Register Plugin
-         * @description Register a plugin in the LiteLLM marketplace.
+         * @description Register a new plugin in the LiteLLM marketplace.
          *
          *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
          *     GitHub/GitLab/Bitbucket. Claude Code will clone from the git source
          *     when users install.
+         *
+         *     This endpoint is create-only and never overwrites. If a plugin with
+         *     the same name already exists it returns 409 Conflict; use
+         *     PUT /claude-code/plugins/{plugin_name} to update an existing plugin.
          *
          *     Parameters:
          *         - name: Plugin name (kebab-case)
@@ -1468,7 +1472,7 @@ export interface paths {
          *         - category: Plugin category (optional)
          *
          *     Returns:
-         *         Registration status and plugin information.
+         *         Registration status (action is always "created") and plugin information.
          *
          *     Example:
          *         ```bash
@@ -1508,7 +1512,45 @@ export interface paths {
          *         Plugin details including source and metadata.
          */
         get: operations["get_plugin_claude_code_plugins__plugin_name__get"];
-        put?: never;
+        /**
+         * Update Plugin
+         * @description Update an existing plugin in the LiteLLM marketplace.
+         *
+         *     The plugin is identified by its name in the path, which is the resource
+         *     identity and cannot be changed here. This is a full replace, not a merge:
+         *     the manifest is rebuilt from the request body, so any optional field left
+         *     out is reset to its default (e.g. an omitted version is cleared, not kept).
+         *     Send the full desired state.
+         *
+         *     Returns 404 if no plugin with the given name exists; use
+         *     POST /claude-code/plugins to create a new plugin.
+         *
+         *     Parameters:
+         *         - plugin_name: Name of the plugin to update (path parameter)
+         *         - source: Git source reference (github, url, or git-subdir format)
+         *         - version: Semantic version (optional)
+         *         - description: Plugin description (optional)
+         *         - author: Author information (optional)
+         *         - homepage: Plugin homepage URL (optional)
+         *         - keywords: Search keywords (optional)
+         *         - category: Plugin category (optional)
+         *
+         *     Returns:
+         *         Update status (action is always "updated") and plugin information.
+         *
+         *     Example:
+         *         ```bash
+         *         curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \
+         *           -H "Authorization: Bearer sk-..." \
+         *           -H "Content-Type: application/json" \
+         *           -d '{
+         *             "source": {"source": "github", "repo": "org/my-plugin"},
+         *             "version": "2.0.0",
+         *             "description": "My awesome plugin"
+         *           }'
+         *         ```
+         */
+        put: operations["update_plugin_claude_code_plugins__plugin_name__put"];
         post?: never;
         /**
          * Delete Plugin
@@ -32215,6 +32257,64 @@ export interface components {
             model_names?: string[] | null;
         };
         /**
+         * UpdatePluginRequest
+         * @description Request body for replacing an existing plugin.
+         *
+         *     The plugin name is the resource identity and is supplied as the path
+         *     parameter, so it cannot be changed here. This is a full replace: omitted
+         *     fields reset to their defaults, so version is cleared rather than
+         *     defaulting to the create-time "1.0.0".
+         */
+        UpdatePluginRequest: {
+            /** @description Plugin author */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Plugin category
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Plugin description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Skill domain (e.g., 'Productivity')
+             */
+            domain?: string | null;
+            /**
+             * Homepage
+             * @description Plugin homepage URL
+             */
+            homepage?: string | null;
+            /**
+             * Keywords
+             * @description Search keywords
+             */
+            keywords?: string[] | null;
+            /**
+             * Namespace
+             * @description Skill namespace within domain (e.g., 'workflows')
+             */
+            namespace?: string | null;
+            /**
+             * Source
+             * @description Git source reference. Supported formats:
+             *     - GitHub: {'source': 'github', 'repo': 'org/repo'}
+             *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
+             *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
+             */
+            source: {
+                [key: string]: string;
+            };
+            /**
+             * Version
+             * @description Semantic version; cleared if omitted
+             */
+            version?: string | null;
+        };
+        /**
          * UpdateProjectRequest
          * @description Request model for POST /project/update
          */
@@ -36130,6 +36230,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_plugin_claude_code_plugins__plugin_name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePluginRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

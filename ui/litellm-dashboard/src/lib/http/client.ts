@@ -50,7 +50,9 @@ export const deriveErrorMessage = (errorData: any): string => {
     ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
     : typeof detail === "string"
       ? detail
-      : undefined;
+      : detail && typeof detail === "object"
+        ? (typeof detail.error === "string" ? detail.error : detail.error?.message) || detail.message
+        : undefined;
   return (
     (errorData?.error &&
       (errorData.error.message || (typeof errorData.error === "string" ? errorData.error : undefined))) ||
