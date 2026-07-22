@@ -947,6 +947,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             },
                             "input_cost_per_token": {"type": "number"},
                             "output_cost_per_token": {"type": "number"},
+                            "cache_creation_input_token_cost": {"type": "number"},
                             "cache_read_input_token_cost": {"type": "number"},
                             "output_cost_per_reasoning_token": {"type": "number"},
                             "max_results_range": {
@@ -964,6 +965,23 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "additionalProperties": False,
         },
     }
+
+    validate(
+        {
+            "tiered-cache-creation-regression": {
+                "tiered_pricing": [
+                    {
+                        "range": [0, 128000],
+                        "input_cost_per_token": 0.0000008,
+                        "output_cost_per_token": 0.000002,
+                        "cache_creation_input_token_cost": 0.000001,
+                        "cache_read_input_token_cost": 0.0000002,
+                    }
+                ],
+            }
+        },
+        INTENDED_SCHEMA,
+    )
 
     prod_json = os.path.join(
         os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json"
