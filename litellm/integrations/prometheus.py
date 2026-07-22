@@ -7,6 +7,7 @@ import asyncio
 import math
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
@@ -63,10 +64,27 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from fastapi import FastAPI
+    from starlette.types import ASGIApp, Receive, Scope, Send
 else:
     AsyncIOScheduler = Any
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class _MetricsASGIApp:
+    """Adapts a raw ASGI app so Starlette's ``Route`` treats it as ASGI.
+
+    ``Route`` wraps plain functions as ``func(request) -> response`` endpoints;
+    an instance sidesteps that so the Prometheus ASGI app is served directly at
+    the exact ``/metrics`` path without a trailing-slash redirect.
+    """
+
+    app: ASGIApp
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.app(scope, receive, send)
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -3930,18 +3948,24 @@ class PrometheusLogger(CustomLogger):
             )
 
     @staticmethod
-    def _mount_metrics_endpoint():
+    def _mount_metrics_endpoint(app: FastAPI | None = None) -> None:
         """
-        Mount the Prometheus metrics endpoint with optional authentication.
+        Register the Prometheus metrics endpoint on the proxy app.
 
-        Args:
-            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
-                                        Defaults to False.
+        The exact ``/metrics`` path is served directly so a scrape of the
+        canonical endpoint returns 200 instead of a 307 redirect to
+        ``/metrics/``; the Mount continues to serve ``/metrics/`` for scrapers
+        configured with the trailing slash.
         """
         from prometheus_client import make_asgi_app
+        from starlette.routing import Route
 
         from litellm._logging import verbose_proxy_logger
-        from litellm.proxy.proxy_server import app
+
+        if app is None:
+            from litellm.proxy.proxy_server import app as proxy_app
+
+            app = proxy_app
 
         # Create metrics ASGI app
         if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
@@ -3953,7 +3977,14 @@ class PrometheusLogger(CustomLogger):
         else:
             metrics_app = make_asgi_app()
 
-        # Mount the metrics app to the app
+        app.router.routes.insert(
+            0,
+            Route(
+                "/metrics",
+                endpoint=_MetricsASGIApp(metrics_app),
+                include_in_schema=False,
+            ),
+        )
         app.mount("/metrics", metrics_app)
         verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
 
