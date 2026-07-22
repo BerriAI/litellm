@@ -531,6 +531,94 @@ async def test_bulk_update_admin_role_requires_premium(monkeypatch):
     assert "premium feature" in str(exc_info.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_bulk_update_without_db_connection_raises_500(monkeypatch):
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bulk_update_team_members(
+            team_id="team-1234",
+            data=BulkTeamMemberUpdateRequest(
+                user_ids=["user-1"],
+                update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+            ),
+            http_request=_bulk_request(),
+            user_api_key_dict=_ADMIN,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "No db connected" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_missing_team_raises_400(monkeypatch):
+    db, _upsert_mock, _refresh_mock, _cache = _bulk_setup(monkeypatch, team_row=None, memberships=[])
+
+    async def _find_none(where):
+        return None
+
+    db.litellm_teamtable = types.SimpleNamespace(find_unique=_find_none)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bulk_update_team_members(
+            team_id="team-1234",
+            data=BulkTeamMemberUpdateRequest(
+                user_ids=["user-1"],
+                update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+            ),
+            http_request=_bulk_request(),
+            user_api_key_dict=_ADMIN,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "does not exist" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_non_admin_caller_forbidden_raises_403(monkeypatch):
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1234",
+        members_with_roles=[Member(user_id="user-1", role="user")],
+    )
+    _bulk_setup(monkeypatch, team_row, memberships=[])
+    monkeypatch.setattr(team_endpoints, "_is_user_org_admin_for_team", AsyncMock(return_value=False))
+
+    outsider = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER.value, user_id="outsider")
+    with pytest.raises(HTTPException) as exc_info:
+        await bulk_update_team_members(
+            team_id="team-1234",
+            data=BulkTeamMemberUpdateRequest(
+                user_ids=["user-1"],
+                update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+            ),
+            http_request=_bulk_request(),
+            user_api_key_dict=outsider,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "not proxy admin OR team admin" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_exceeding_max_batch_size_raises_400(monkeypatch):
+    team_row = LiteLLM_TeamTable(team_id="team-1234", members_with_roles=[])
+    _bulk_setup(monkeypatch, team_row, memberships=[])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bulk_update_team_members(
+            team_id="team-1234",
+            data=BulkTeamMemberUpdateRequest(
+                user_ids=[f"user-{i}" for i in range(501)],
+                update_fields=TeamMemberBulkUpdateFields(tpm_limit=42),
+            ),
+            http_request=_bulk_request(),
+            user_api_key_dict=_ADMIN,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Maximum 500 team members" in str(exc_info.value.detail)
+
+
 def test_bulk_team_member_update_requires_exactly_one_member_selector():
     with pytest.raises(ValueError, match="either user_ids or all_members_in_team"):
         BulkTeamMemberUpdateRequest(
