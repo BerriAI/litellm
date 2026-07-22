@@ -255,7 +255,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                     .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
                     .map((value, index) => (
                       <TableRow key={index}>
-                        <TableCell>
+                        <TableCell className="max-w-md whitespace-normal align-top">
                           <Text>{value.field_name}</Text>
                           <p
                             style={{
@@ -263,7 +263,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                               color: "#808080",
                               fontStyle: "italic",
                             }}
-                            className="mt-1"
+                            className="mt-1 whitespace-normal break-words"
                           >
                             {value.field_description}
                           </p>
