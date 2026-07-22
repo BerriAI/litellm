@@ -45421,5 +45421,41 @@
                 }
             }
         ]
+    },
+    "dashscope/multimodal-embedding-v1": {
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_image_token": 1.5e-07,
+        "litellm_provider": "dashscope",
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://bailian.console.aliyun.com/cn-beijing/?tab=model#/model-market/detail/multimodal-embedding-v1",
+        "supports_embedding_image_input": true
+    },
+    "dashscope/tongyi-embedding-vision-plus": {
+        "input_cost_per_token": 9e-08,
+        "input_cost_per_image_token": 9e-08,
+        "litellm_provider": "dashscope",
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://modelstudio.console.alibabacloud.com/ap-southeast-1?tab=doc#/doc/?type=model&modelId=tongyi-embedding-vision-plus",
+        "supports_embedding_image_input": true
+    },
+    "dashscope/tongyi-embedding-vision-flash": {
+        "input_cost_per_token": 9e-08,
+        "input_cost_per_image_token": 3e-08,
+        "litellm_provider": "dashscope",
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://modelstudio.console.alibabacloud.com/ap-southeast-1?tab=doc#/doc/?type=model&modelId=tongyi-embedding-vision-flash",
+        "supports_embedding_image_input": true
+    },
+    "dashscope/qwen3-vl-embedding": {
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_image_token": 3e-07,
+        "litellm_provider": "dashscope",
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "source": "https://bailian.console.aliyun.com/cn-beijing/?tab=model#/model-market/detail/qwen3-vl-embedding",
+        "supports_embedding_image_input": true
     }
 }
