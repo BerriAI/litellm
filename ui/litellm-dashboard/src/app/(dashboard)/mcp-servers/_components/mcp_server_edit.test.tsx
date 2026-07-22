@@ -393,6 +393,48 @@ describe("MCPServerEdit (auth type switch)", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps the stored ID-JAG client-auth method when saved without expressing a choice", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      auth_type: "oauth2_id_jag",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          auth_type: "oauth2_id_jag",
+          token_exchange_endpoint: "https://org.example.com/oauth2/v1/token",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-org.okta.com/oauth2/v1/token")).toBeInTheDocument();
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.auth_type).toBe("oauth2_id_jag");
+    const credentials = payload.credentials ?? {};
+    expect(credentials.client_private_key).toBeUndefined();
+    expect(credentials.client_private_key_id).toBeUndefined();
+    expect(credentials.client_assertion_signing_alg).toBeUndefined();
+    expect(credentials.client_secret).toBeUndefined();
+  });
+
   it("renders the ID-JAG arm on edit and nulls its shared fields when switching away", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
       ...interactiveOAuthServer,

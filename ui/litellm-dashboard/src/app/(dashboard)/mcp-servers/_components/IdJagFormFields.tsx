@@ -20,9 +20,11 @@ const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, toolt
 const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
   const form = Form.useFormInstance();
-  const clientAuthMethod =
-    (Form.useWatch("id_jag_client_auth_method", form) as "client_secret" | "private_key_jwt" | undefined) ??
-    "client_secret";
+  const watchedMethod = Form.useWatch("id_jag_client_auth_method", form) as
+    | "client_secret"
+    | "private_key_jwt"
+    | undefined;
+  const clientAuthMethod = watchedMethod ?? (isEditing ? undefined : "client_secret");
 
   return (
     <>
@@ -72,12 +74,14 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
           />
         }
         name="id_jag_client_auth_method"
-        initialValue="client_secret"
+        {...(isEditing ? {} : { initialValue: "client_secret" })}
         preserve={false}
       >
         <Select<"client_secret" | "private_key_jwt">
           className="rounded-lg"
           size="large"
+          allowClear={isEditing}
+          placeholder={isEditing ? "Keep existing method" : undefined}
           options={[
             { value: "client_secret", label: <span className="font-medium">Client Secret</span> },
             { value: "private_key_jwt", label: <span className="font-medium">Private Key JWT</span> },
