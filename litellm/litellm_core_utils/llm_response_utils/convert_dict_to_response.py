@@ -531,12 +531,9 @@ class LiteLLMResponseObjectHandler:
 
 
 def _should_convert_tool_call_to_json_mode(
-    tool_calls: Optional[
-        Union[
-            List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]],
-            List[DatabricksTool],
-        ]
-    ] = None,
+    tool_calls: (
+        list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | list[DatabricksTool] | None
+    ) = None,
     convert_tool_call_to_json_mode: Optional[bool] = None,
 ) -> bool:
     """
