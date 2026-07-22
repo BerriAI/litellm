@@ -74,6 +74,7 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
@@ -3962,7 +3963,8 @@ if MCP_AVAILABLE:
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
-            path = scope.get("path", "")
+            request = StarletteRequest(scope)
+            path = get_request_route(request)
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -4282,7 +4284,8 @@ if MCP_AVAILABLE:
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         try:
-            path = scope.get("path", "")
+            request = StarletteRequest(scope)
+            path = get_request_route(request)
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -4294,7 +4297,7 @@ if MCP_AVAILABLE:
             scoped_server_endpoint = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
-            _sse_client_ip = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
+            _sse_client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
             verbose_logger.debug(f"MCP request mcp_servers (header/path): {mcp_servers}")
             verbose_logger.debug(
