@@ -5710,6 +5710,25 @@ def test_client_metadata_stripped_from_anthropic_request():
     assert "client_metadata" not in result
 
 
+def test_transform_request_strips_vector_store_ids():
+    """vector_store_ids injected by proxy vector store hooks must not reach the Anthropic payload."""
+    config = AnthropicConfig()
+    result = config.transform_request(
+        model="claude-3-5-haiku-20241022",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "max_tokens": 10,
+            "vector_store_ids": ["vs_abc123"],
+            "vector_store_id": "vs_abc123",
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "vector_store_ids" not in result
+    assert "vector_store_id" not in result
+    assert result["max_tokens"] == 10
+
+
 @pytest.mark.parametrize(
     "model",
     ["claude-fable-5", "claude-opus-4-7", "claude-opus-4-8-20260120"],

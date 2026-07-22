@@ -1897,8 +1897,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params.pop("metadata")
 
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
-        optional_params.pop("is_vertex_request", None)
-        optional_params.pop("client_metadata", None)
+        for internal_param in (
+            "is_vertex_request",
+            "client_metadata",
+            "vector_store_ids",
+            "vector_store_id",
+        ):
+            optional_params.pop(internal_param, None)
 
         # ``top_k`` is a provider-specific kwarg that bypasses
         # ``map_openai_params``; gate it here, the single boundary shared by
