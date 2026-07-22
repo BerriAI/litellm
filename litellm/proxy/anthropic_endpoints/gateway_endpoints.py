@@ -268,22 +268,21 @@ async def managed_settings(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers={"ETag": etag})
 
 
-async def _accept_otlp(request: Request) -> Response:
+def _accept_otlp() -> Response:
     ensure_gateway_enabled()
-    await request.body()
     return Response(status_code=200)
 
 
 @router.post("/v1/metrics", include_in_schema=False, dependencies=[Depends(user_api_key_auth)])
-async def otlp_metrics(request: Request) -> Response:
-    return await _accept_otlp(request)
+async def otlp_metrics() -> Response:
+    return _accept_otlp()
 
 
 @router.post("/v1/logs", include_in_schema=False, dependencies=[Depends(user_api_key_auth)])
-async def otlp_logs(request: Request) -> Response:
-    return await _accept_otlp(request)
+async def otlp_logs() -> Response:
+    return _accept_otlp()
 
 
 @router.post("/v1/traces", include_in_schema=False, dependencies=[Depends(user_api_key_auth)])
-async def otlp_traces(request: Request) -> Response:
-    return await _accept_otlp(request)
+async def otlp_traces() -> Response:
+    return _accept_otlp()
