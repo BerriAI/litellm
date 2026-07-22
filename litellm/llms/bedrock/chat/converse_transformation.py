@@ -101,6 +101,76 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
 ]
 
 
+def _bedrock_tool_choice_type(tool_choice: Any) -> str:
+    """Map an OpenAI tool_choice to the Anthropic ``tool_choice.type`` used in the
+    Bedrock parallel-tool-use config: ``required`` -> ``any``, a named-function
+    dict -> ``tool``, everything else (incl. ``auto`` / unset) -> ``auto``.
+
+    Derives the type from an explicit tool_choice so the parallel-tool-use config
+    does not override the caller's intent with ``auto``.
+    """
+    if tool_choice == "required":
+        return "any"
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        return "tool"
+    return "auto"
+
+
+def _bedrock_parallel_tool_choice(tool_choice: Any, disable_parallel: bool) -> dict:
+    """Build the Anthropic-on-Bedrock ``tool_choice`` payload for the
+    parallel-tool-use config.
+
+    Derives ``type`` from an explicit tool_choice (see
+    ``_bedrock_tool_choice_type``) and carries the ``disable_parallel_tool_use``
+    flag this config exists to set. For a named-function choice (``type ==
+    "tool"``) it also forwards the function ``name`` — mirroring the native
+    Anthropic transform (``_tool_choice["name"] = _tool_name``). Without the
+    name, ``_apply_parallel_tool_use_config`` drops the native ``toolChoice``
+    that carried it, so Bedrock would receive ``type="tool"`` with no tool named
+    and reject the request.
+    """
+    payload: dict = {
+        "type": _bedrock_tool_choice_type(tool_choice),
+        "disable_parallel_tool_use": disable_parallel,
+    }
+    if payload["type"] == "tool" and isinstance(tool_choice, dict):
+        name = tool_choice.get("function", {}).get("name")
+        if name:
+            payload["name"] = name
+    return payload
+
+
+def _apply_parallel_tool_use_config(
+    parallel_tool_use_config: dict,
+    additional_request_params: dict,
+    inference_params: dict,
+) -> None:
+    """Merge the parallel-tool-use config into ``additionalModelRequestFields``.
+
+    The disable-parallel flag can only ride on the Anthropic-passthrough
+    ``tool_choice`` (Bedrock's native ``toolConfig.toolChoice`` has no such
+    field). When an explicit tool_choice was ALSO mapped into the native
+    channel, sending both makes Bedrock reject the request ("The additional
+    field tool_choice/type conflicts with the existing field
+    toolConfig.toolChoice.<type>"). The passthrough already carries the
+    equivalent type (any/auto/tool), so drop the native toolChoice to leave a
+    single, non-conflicting directive.
+    """
+    for key, value in parallel_tool_use_config.items():
+        if (
+            key in additional_request_params
+            and isinstance(additional_request_params[key], dict)
+            and isinstance(value, dict)
+        ):
+            additional_request_params[key].update(value)
+        else:
+            additional_request_params[key] = value
+
+    passthrough_tool_choice = parallel_tool_use_config.get("tool_choice")
+    if isinstance(passthrough_tool_choice, dict) and "type" in passthrough_tool_choice:
+        inference_params.pop("tool_choice", None)
+
+
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -895,9 +965,13 @@ class AmazonConverseConfig(BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "parallel_tool_calls":
-                disable_parallel = not value
+                # ``tool_choice`` forwarded to the Anthropic-on-Bedrock validator
+                # requires a ``type`` (matches the native Anthropic transform,
+                # which sets disable_parallel_tool_use on the existing choice and
+                # defaults to ``type="auto"`` only when none was given). Without a
+                # ``type`` Bedrock Converse returns 400 "missing field `type`".
                 optional_params["_parallel_tool_use_config"] = {
-                    "tool_choice": {"disable_parallel_tool_use": disable_parallel}
+                    "tool_choice": _bedrock_parallel_tool_choice(non_default_params.get("tool_choice"), not value)
                 }
             if param == "thinking":
                 if (
@@ -1276,15 +1350,7 @@ class AmazonConverseConfig(BaseConfig):
         # Handle parallel_tool_calls configuration
         parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
         if parallel_tool_use_config is not None and bedrock_converse_supports_parallel_tool_use_config(model):
-            for key, value in parallel_tool_use_config.items():
-                if (
-                    key in additional_request_params
-                    and isinstance(additional_request_params[key], dict)
-                    and isinstance(value, dict)
-                ):
-                    additional_request_params[key].update(value)
-                else:
-                    additional_request_params[key] = value
+            _apply_parallel_tool_use_config(parallel_tool_use_config, additional_request_params, inference_params)
 
         additional_request_params.pop("parallel_tool_calls", None)
 
