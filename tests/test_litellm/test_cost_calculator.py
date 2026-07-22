@@ -3479,3 +3479,37 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+# ---------------------------------------------------------------------------
+# Tests for fix: get_replicate_completion_pricing mixed seconds / milliseconds
+# causing 1000x undercharge when total_time is passed in seconds (fixes #33328)
+# ---------------------------------------------------------------------------
+
+
+def test_replicate_pricing_seconds_passed_directly():
+    """Caller passes total_time in seconds (documented API) — cost must be correct."""
+    from litellm.constants import DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND
+    from litellm.cost_calculator import get_replicate_completion_pricing
+
+    seconds = 2.0
+    actual = get_replicate_completion_pricing({}, total_time=seconds)
+    expected = DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * seconds
+    assert actual == pytest.approx(expected), (
+        f"Expected {expected}, got {actual} — likely still dividing seconds by 1000"
+    )
+
+
+def test_replicate_pricing_timestamp_fallback():
+    """When total_time=0 the function falls back to end_time - start_time (seconds)."""
+    import time
+    from litellm.constants import DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND
+    from litellm.cost_calculator import get_replicate_completion_pricing
+
+    now = time.time()
+    response = {"created": now - 3.0, "ended": now}
+    actual = get_replicate_completion_pricing(response, total_time=0.0)
+    expected = DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND * 3.0
+    assert actual == pytest.approx(expected, rel=0.01), (
+        f"Expected ~{expected}, got {actual}"
+    )

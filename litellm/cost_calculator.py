@@ -699,12 +699,12 @@ def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     a100_80gb_price_per_second_public = (
         DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND  # assume all calls sent to A100 80GB for now
     )
-    if total_time == 0.0:  # total time is in ms
+    if total_time == 0.0:  # total_time is in seconds; fallback derives it from timestamps
         start_time = completion_response.get("created", time.time())
         end_time = getattr(completion_response, "ended", time.time())
-        total_time = end_time - start_time
+        total_time = end_time - start_time  # wall-clock seconds
 
-    return a100_80gb_price_per_second_public * total_time / 1000
+    return a100_80gb_price_per_second_public * total_time
 
 
 def has_hidden_params(obj: Any) -> bool:
@@ -1283,7 +1283,7 @@ def completion_cost(
                         prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
                         cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
 
-                    total_time = getattr(completion_response, "_response_ms", 0)
+                    total_time = getattr(completion_response, "_response_ms", 0) / 1000  # convert ms -> s
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
