@@ -27,6 +27,7 @@ else:
 
 class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
+    allow_routing_on_cache_read_failure: bool = False
 
 
 class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
@@ -383,6 +384,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         """
 
         if tpm_values is None or rpm_values is None:
+            if not self.routing_args.allow_routing_on_cache_read_failure:
+                return None
             verbose_router_logger.warning(
                 "usage-based-routing-v2: tpm/rpm cache read failed for model_group=%s - "
                 "falling back to routing without usage data for this request",
