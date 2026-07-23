@@ -135,7 +135,11 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
         assert call_kwargs["allowed_fails_override"] == 3
         assert call_kwargs["cache_key_suffix"] == "generic"
 
-    def test_no_policy_and_no_dep_allowed_fails_defaults_to_zero(self):
+    def test_no_policy_and_no_dep_allowed_fails_defers_to_router_level(self):
+        """When neither a deployment policy nor a deployment-wide allowed_fails covers
+        this exception, defer to router-level behavior instead of forcing an
+        immediate cooldown (allowed_fails_override=0 would trip on the first failure
+        of any exception type the deployment's config doesn't mention)."""
         exc = litellm.InternalServerError("500", "openai", "gpt-4")
         router = self._make_router({"litellm_params": {}, "model_info": {}})
 
@@ -146,7 +150,26 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
             _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, None, None)
 
         call_kwargs = mock_sc.call_args[1]
-        assert call_kwargs["allowed_fails_override"] == 0
+        assert call_kwargs["allowed_fails_override"] is None
+        assert call_kwargs["cache_key_suffix"] is None
+
+    def test_partial_policy_without_dep_allowed_fails_defers_for_uncovered_exception(self):
+        """A deployment that only sets RateLimitErrorAllowedFails must not force a
+        zero-fail threshold on an unrelated TimeoutError; it should defer to
+        router-level behavior for exception types its policy doesn't mention."""
+        policy = {"RateLimitErrorAllowedFails": 0}
+        exc = litellm.Timeout("timed out", "openai", "gpt-4")
+        router = self._make_router({"litellm_params": {}, "model_info": {}})
+
+        with patch(
+            "litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy"
+        ) as mock_sc:
+            mock_sc.return_value = False
+            _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, policy, dep_allowed_fails=None)
+
+        call_kwargs = mock_sc.call_args[1]
+        assert call_kwargs["allowed_fails_override"] is None
+        assert call_kwargs["cache_key_suffix"] is None
 
     def test_cooldown_time_from_litellm_params_passed_through(self):
         exc = litellm.RateLimitError("429", "openai", "gpt-4")

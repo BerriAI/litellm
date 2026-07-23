@@ -38,11 +38,12 @@ else:
 
 
 _EXCEPTION_POLICY_FIELDS: tuple[tuple[type, str], ...] = (
+    # ContentPolicyViolationError subclasses BadRequestError, so it must be checked first.
+    (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),
     (litellm.BadRequestError, "BadRequestErrorAllowedFails"),
     (litellm.AuthenticationError, "AuthenticationErrorAllowedFails"),
     (litellm.Timeout, "TimeoutErrorAllowedFails"),
     (litellm.RateLimitError, "RateLimitErrorAllowedFails"),
-    (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),
     (litellm.InternalServerError, "InternalServerErrorAllowedFails"),
     (litellm.ServiceUnavailableError, "ServiceUnavailableErrorAllowedFails"),
     (litellm.BadGatewayError, "BadGatewayErrorAllowedFails"),
@@ -103,14 +104,22 @@ def _should_cooldown_based_on_deployment_policy(
     dep_policy: dict[str, int] | None,
     dep_allowed_fails: int | None,
 ) -> bool:
-    """Resolve deployment-level allowed-fails and delegate to the shared counting logic."""
+    """Resolve deployment-level allowed-fails and delegate to the shared counting logic.
+
+    When the deployment's policy doesn't cover *original_exception*'s type and no
+    deployment-wide `allowed_fails` is set either, defer to router-level behavior
+    instead of forcing an immediate cooldown.
+    """
     allowed_fails_from_policy = _resolve_allowed_fails_from_policy(dep_policy, original_exception)
     if allowed_fails_from_policy is not None:
-        allowed_fails_override: int = allowed_fails_from_policy
-        cache_key_suffix: str = type(original_exception).__name__
-    else:
-        allowed_fails_override = dep_allowed_fails if dep_allowed_fails is not None else 0
+        allowed_fails_override: int | None = allowed_fails_from_policy
+        cache_key_suffix: str | None = type(original_exception).__name__
+    elif dep_allowed_fails is not None:
+        allowed_fails_override = dep_allowed_fails
         cache_key_suffix = "generic"
+    else:
+        allowed_fails_override = None
+        cache_key_suffix = None
 
     dep = litellm_router_instance.get_model_info(id=deployment)
     cooldown_time_override: float | None = None
