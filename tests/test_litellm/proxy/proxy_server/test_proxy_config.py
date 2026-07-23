@@ -8,6 +8,7 @@ Pins covered:
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 from types import SimpleNamespace
@@ -325,6 +326,24 @@ def test_ProxyConfig__load_yaml_file_raises_on_missing_file():
         pc._load_yaml_file("/no/such/file.yaml")
 
 
+def _open_with_ascii_default(real_open):
+    def opener(file, mode="r", *args, encoding=None, **kwargs):
+        if "b" not in mode and encoding is None:
+            encoding = "ascii"
+        return real_open(file, mode, *args, encoding=encoding, **kwargs)
+
+    return opener
+
+
+def test_ProxyConfig__load_yaml_file_reads_utf8_under_non_utf8_locale(tmp_path, monkeypatch):
+    f = tmp_path / "c.yaml"
+    f.write_text('general_settings:\n  alerting_args:\n    daily_report_note: "Pākīhi – café"\n', encoding="utf-8")
+    monkeypatch.setattr(builtins, "open", _open_with_ascii_default(open))
+    pc = ProxyConfig()
+    result = pc._load_yaml_file(str(f))
+    assert result == {"general_settings": {"alerting_args": {"daily_report_note": "Pākīhi – café"}}}
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._get_config_from_file
 # ---------------------------------------------------------------------------
@@ -348,6 +367,19 @@ async def test_ProxyConfig__get_config_from_file_missing_path_raises():
     pc = ProxyConfig()
     with pytest.raises(Exception):
         await pc._get_config_from_file(config_file_path="/no/such/file.yaml")
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_config_from_file_reads_utf8_under_non_utf8_locale(tmp_path, monkeypatch):
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        'model_list:\n  - model_name: "summariser – bāsic"\n    litellm_params:\n      model: gpt-4o\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(builtins, "open", _open_with_ascii_default(open))
+    pc = ProxyConfig()
+    result = await pc._get_config_from_file(config_file_path=str(f))
+    assert result == {"model_list": [{"model_name": "summariser – bāsic", "litellm_params": {"model": "gpt-4o"}}]}
 
 
 # ---------------------------------------------------------------------------
