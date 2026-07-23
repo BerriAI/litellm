@@ -68,6 +68,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
+                api_base=litellm_params.get("api_base", None),
                 tools=tools,
                 system=system,
             )
