@@ -43,9 +43,7 @@ class RequestyConfig(OpenrouterConfig):
         if non_default_params.get("reasoning_effort") == "max":
             non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
 
-        return super(OpenrouterConfig, self).map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        return super(OpenrouterConfig, self).map_openai_params(non_default_params, optional_params, model, drop_params)
 
     def transform_request(
         self,
@@ -62,7 +60,12 @@ class RequestyConfig(OpenrouterConfig):
         response = super(OpenrouterConfig, self).transform_request(
             model, messages, optional_params, litellm_params, headers
         )
-        response.update(extra_body)
+        # `extra_body` is client-controlled. Do not let it overwrite the canonical
+        # request fields that have already been resolved and authorized (e.g. `model`,
+        # `messages`), otherwise a caller could route to an unauthorized model after
+        # model-authorization and request-inspection checks have run.
+        protected_fields = {"model", "messages"}
+        response.update({key: value for key, value in extra_body.items() if key not in protected_fields})
         return response
 
     def get_error_class(
