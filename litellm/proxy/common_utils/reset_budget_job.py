@@ -26,6 +26,7 @@ from litellm.repositories.table_repositories import (
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -771,6 +772,29 @@ class ResetBudgetJob:
                     )
         except Exception as e:
             verbose_proxy_logger.exception("Failed to reset budget windows for teams: %s", e)
+
+        # --- Users ---
+        try:
+            user_rows = await self.prisma_client.db.query_raw(
+                'SELECT user_id, budget_limits FROM "LiteLLM_UserTable" WHERE budget_limits IS NOT NULL'
+            )
+            for row in user_rows:
+                raw = row["budget_limits"]
+                if not raw:
+                    continue
+                windows = raw if isinstance(raw, list) else json.loads(raw)
+                changed = False
+                for window in windows:
+                    counter_key = f"spend:user:{row['user_id']}:window:{window['budget_duration']}"
+                    if await ResetBudgetJob._reset_expired_window(window, counter_key, spend_counter_cache, now):
+                        changed = True
+                if changed:
+                    await UserRepository(self.prisma_client).table.update(
+                        where={"user_id": row["user_id"]},
+                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                    )
+        except Exception as e:
+            verbose_proxy_logger.exception("Failed to reset budget windows for users: %s", e)
 
     @staticmethod
     async def _reset_budget_common(
