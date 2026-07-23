@@ -224,6 +224,69 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result["input"] == input_clean
 
+    def test_transform_preserves_cache_control_for_custom_openai_endpoint(self):
+        """When the openai provider targets a non-openai.com api_base (a LiteLLM
+        proxy, vLLM, an OpenAI-compatible gateway), those endpoints understand
+        cache_control, so it must survive the transformation instead of being
+        stripped. Stripping here is what broke prompt caching for gpt-5 models
+        routed to such an endpoint.
+        """
+        input_with_cache_control = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_with_cache_control,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(
+                custom_llm_provider="openai",
+                api_base="https://my-proxy.example.com/v1",
+            ),
+            headers={},
+        )
+
+        assert result["input"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_transform_strips_cache_control_for_real_openai_endpoint(self):
+        """Real OpenAI rejects cache_control on input content blocks, so it must
+        still be stripped when the api_base is an openai.com host.
+        """
+        input_with_cache_control = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_with_cache_control,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(
+                custom_llm_provider="openai",
+                api_base="https://api.openai.com/v1",
+            ),
+            headers={},
+        )
+
+        assert "cache_control" not in result["input"][0]["content"][0]
+
     def test_transform_streaming_response(self):
         """Test streaming response transformation"""
         # Test with a text delta event

@@ -18,7 +18,7 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, should_preserve_cache_control_for_endpoint
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS = 16
 
@@ -152,9 +152,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
-        input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        if tools is not None:
-            response_api_optional_request_params["tools"] = tools
+        resolved_params = dict(litellm_params)
+        if not should_preserve_cache_control_for_endpoint(
+            resolved_params.get("custom_llm_provider"), resolved_params.get("api_base")
+        ):
+            input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
+            if tools is not None:
+                response_api_optional_request_params["tools"] = tools
         final_request_params = dict(
             ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params)
         )
@@ -619,9 +623,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         input = self._validate_input_param(input)
         tools = response_api_optional_request_params.get("tools")
-        input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        if tools is not None:
-            response_api_optional_request_params["tools"] = tools
+        resolved_params = dict(litellm_params)
+        if not should_preserve_cache_control_for_endpoint(
+            resolved_params.get("custom_llm_provider"), resolved_params.get("api_base")
+        ):
+            input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
+            if tools is not None:
+                response_api_optional_request_params["tools"] = tools
         data = dict(ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params))
 
         return url, data

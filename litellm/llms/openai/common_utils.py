@@ -18,6 +18,7 @@ from typing import (
     Tuple,
     Union,
 )
+from urllib.parse import urlparse
 
 import httpx
 import openai
@@ -42,6 +43,27 @@ def _get_client_init_params(cls: type) -> Tuple[str, ...]:
 
 _OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(OpenAI)
 _AZURE_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(AzureOpenAI)
+
+
+def should_preserve_cache_control_for_endpoint(
+    custom_llm_provider: str | None,
+    api_base: str | None,
+) -> bool:
+    """
+    The generic `openai` provider also reaches OpenAI-compatible endpoints
+    (a LiteLLM proxy, vLLM, an Anthropic-compatible gateway) via a custom
+    api_base. Those can understand cache_control, so it must survive there.
+    Real OpenAI cannot, so it is still stripped for an openai.com host.
+    """
+    if custom_llm_provider != "openai":
+        return False
+    resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    if not resolved_api_base:
+        return False
+    hostname = urlparse(resolved_api_base).hostname
+    if hostname is None:
+        return False
+    return hostname != "openai.com" and not hostname.endswith(".openai.com")
 
 
 class OpenAIError(BaseLLMException):
