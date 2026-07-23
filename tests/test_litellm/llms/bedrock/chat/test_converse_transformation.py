@@ -624,6 +624,15 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
             optional_params={},
             drop_params=False,
         )
+        optional_params["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
 
         data = config._transform_request_helper(
             model="anthropic.claude-sonnet-5",
@@ -642,6 +651,53 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_parallel_tool_use_config_dropped_when_no_tools():
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            model="anthropic.claude-sonnet-5",
+            non_default_params={"parallel_tool_calls": False},
+            optional_params={},
+            drop_params=False,
+        )
+
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-5",
+            system_content_blocks=[],
+            optional_params=optional_params,
+            messages=None,
+        )
+
+        assert "tool_choice" not in data.get("additionalModelRequestFields", {})
+        assert "tool_choice" not in data["inferenceConfig"]
+        assert "toolConfig" not in data
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_tool_choice_dropped_when_no_tools():
+    config = AmazonConverseConfig()
+    optional_params = {"tool_choice": {"auto": {}}}
+
+    data = config._transform_request_helper(
+        model="anthropic.claude-sonnet-5",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    assert "toolConfig" not in data
+    assert "tool_choice" not in data["inferenceConfig"]
 
 
 def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
