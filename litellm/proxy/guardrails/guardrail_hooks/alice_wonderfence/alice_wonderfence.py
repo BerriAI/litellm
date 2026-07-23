@@ -358,8 +358,21 @@ class WonderFenceGuardrail(CustomGuardrail):
             recovered = reconstruct(pieces, verdict.masked_text or "")
             if recovered is None:
                 logger.warning(
-                    "Alice WonderFence (apply_guardrail request): MASK reconstruction failed "
-                    "(a joiner or part boundary landed inside a masked span); failing closed. guardrail=%s correlation_id=%s",
+                    "Alice WonderFence (apply_guardrail request): MASK reconstruction unavailable "
+                    "(document too large, or a joiner / part boundary landed inside a masked span); "
+                    "failing closed. guardrail=%s correlation_id=%s",
+                    self.guardrail_name,
+                    correlation_id,
+                )
+                raise WonderFenceBlockedError(block_detail([verdict], self.guardrail_name, self.block_message))
+            if recovered[n_text:] != pieces[n_text:]:
+                # The mask redacted a detection-only piece (tool-call args or a
+                # tool / function description). Those are not maskable in place
+                # (the joined form is not the wire format), so we cannot forward
+                # the original unredacted value; fail closed rather than leak it.
+                logger.warning(
+                    "Alice WonderFence (apply_guardrail request): MASK landed in a detection-only "
+                    "piece (tool-call args / tool or function description); failing closed. guardrail=%s correlation_id=%s",
                     self.guardrail_name,
                     correlation_id,
                 )

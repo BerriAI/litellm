@@ -44,11 +44,11 @@ async def test_apply_guardrail_blocks_on_tool_call_arguments(guardrail_and_clien
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_request_tool_call_args_are_detection_only(guardrail_and_client, make_request_data):
-    """On the request side, tool-call args are rendered into the joined document
-    as detection-only pieces: they can BLOCK/DETECT but a MASK is never spliced
-    back into the arguments string (the joined form is not the wire format).
-    Message text still masks; the args survive untouched."""
+async def test_apply_guardrail_request_tool_call_args_mask_fails_closed(guardrail_and_client, make_request_data):
+    """On the request side, tool-call args are detection-only pieces in the join.
+    A MASK that redacts an arg cannot be spliced back into the wire-format
+    arguments string, so forwarding the original unredacted value would leak it;
+    the request fails closed (block) instead."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
@@ -65,14 +65,13 @@ async def test_apply_guardrail_request_tool_call_args_are_detection_only(guardra
         "texts": ["benign"],
         "tool_calls": [_tool_call('{"body": "secret value"}')],
     }
-    out = await guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=make_request_data(),
-        input_type="request",
-    )
-    assert out["tool_calls"][0]["function"]["arguments"] == '{"body": "secret value"}'
-    assert out["texts"] == ["benign"]
-    client.evaluate_prompt.assert_awaited_once()
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -211,9 +210,10 @@ async def test_apply_guardrail_blocks_on_tool_parameter_description(guardrail_an
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_tool_definitions_are_detection_only(guardrail_and_client, make_request_data):
-    """Tool definitions are scanned detection-only (they can BLOCK/DETECT) but a
-    MASK is never written back into the schema; the description survives."""
+async def test_apply_guardrail_tool_definition_mask_fails_closed(guardrail_and_client, make_request_data):
+    """Tool definitions are detection-only; a MASK that would redact a
+    description cannot be spliced back into the schema, so the request fails
+    closed rather than forward the original unredacted description."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
@@ -230,8 +230,9 @@ async def test_apply_guardrail_tool_definitions_are_detection_only(guardrail_and
         "texts": ["hi"],
         "tools": [_tool_def(description="contains secret stuff")],
     }
-    out = await guardrail.apply_guardrail(inputs=inputs, request_data=make_request_data(), input_type="request")
-    assert out["tools"][0]["function"]["description"] == "contains secret stuff"
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(inputs=inputs, request_data=make_request_data(), input_type="request")
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -366,9 +367,9 @@ async def test_apply_guardrail_legacy_function_detect_does_not_mutate(guardrail_
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_legacy_function_definitions_are_detection_only(guardrail_and_client, make_request_data):
-    """Legacy functions[] descriptions are scanned detection-only; a MASK is
-    never spliced back into request_data['functions']."""
+async def test_apply_guardrail_legacy_function_definition_mask_fails_closed(guardrail_and_client, make_request_data):
+    """Legacy functions[] descriptions are detection-only; a MASK that would
+    redact one fails closed rather than forward the original unredacted value."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
@@ -382,9 +383,11 @@ async def test_apply_guardrail_legacy_function_definitions_are_detection_only(gu
     client.evaluate_prompt.side_effect = evaluate
 
     request_data = make_request_data(functions=[_legacy_function(description="contains secret stuff")])
-    await guardrail.apply_guardrail(
-        inputs={"texts": ["hi"]},
-        request_data=request_data,
-        input_type="request",
-    )
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"]},
+            request_data=request_data,
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
     assert request_data["functions"][0]["description"] == "contains secret stuff"

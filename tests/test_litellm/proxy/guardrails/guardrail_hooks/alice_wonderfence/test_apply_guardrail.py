@@ -498,3 +498,37 @@ async def test_apply_guardrail_cap_is_not_bypassed_by_fail_open(make_guardrail, 
     assert exc.value.status_code == 400
     assert exc.value.detail["limit"] == "max_scan_chars"
     client.evaluate_prompt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_mask_on_oversized_document_fails_closed(make_guardrail, make_request_data):
+    """A MASK on a document too large to reconstruct within the bounded
+    alignment cost fails closed (block) rather than run the quadratic
+    SequenceMatcher on the event loop or forward unmasked content."""
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing import (
+        RECONSTRUCT_MAX_CHARS,
+    )
+
+    # Keep the char cap high enough to reach scanning, but exceed the
+    # reconstruction bound so MASK cannot be applied.
+    guardrail, client = make_guardrail(max_scan_chars=RECONSTRUCT_MAX_CHARS * 2)
+    guardrail._client_cache["default-api-key"] = client
+    big = "a " * RECONSTRUCT_MAX_CHARS  # > RECONSTRUCT_MAX_CHARS chars
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "MASK"
+        r.action_text = "[REDACTED]"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [big]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400

@@ -10,13 +10,21 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-from .chunked_evaluation import SegmentVerdict
+from .chunked_evaluation import MAX_PROMPT_CHARS, SegmentVerdict
 from .credentials import get_metadata
 from .exceptions import WonderFenceBlockedError, WonderFenceScanBudgetExceeded
 
 logger = verbose_proxy_logger.getChild("alice_wonderfence")
 
 JOINER = "\n"
+
+# Upper bound on the document ``reconstruct`` will align. ``SequenceMatcher`` is
+# O(n*m) worst case and runs synchronously on the event loop, so a large
+# repetitive MASK-triggering prompt could otherwise wedge it. MASK on a document
+# larger than this fails closed (block) rather than run the quadratic alignment;
+# non-MASK requests of any size are unaffected. Two chunks' worth keeps the
+# worst case sub-second while still covering ordinary multi-message chats.
+RECONSTRUCT_MAX_CHARS = 2 * MAX_PROMPT_CHARS
 
 
 def build_analysis_context(
@@ -195,18 +203,21 @@ def reconstruct(parts: list[str], masked: str) -> list[str] | None:
     document. We align original-vs-masked with ``difflib.SequenceMatcher`` (no
     sentinel injected) and map each part's char range through the alignment.
 
-    Fails closed (returns ``None``) when the structure is not recoverable: every
-    ``JOINER`` between parts must survive the mask as an unmodified ``\\n`` (a
-    mask spanning a joiner would merge parts), and no part boundary may land
-    inside a changed block. Returns one masked string per input part, in order;
-    ``[]`` for no parts. Assumes masking is span substitution that preserves the
-    non-masked characters; if the service reflows whitespace the joiner-survival
-    check trips and we fail closed rather than misassign.
+    Fails closed (returns ``None``) when the structure is not recoverable: the
+    document exceeds ``RECONSTRUCT_MAX_CHARS`` (bounds the quadratic alignment
+    cost); any ``JOINER`` between parts does not survive the mask as an
+    unmodified ``\\n`` (a mask spanning a joiner would merge parts); or a part
+    boundary lands inside a changed block. Returns one masked string per input
+    part, in order; ``[]`` for no parts. Assumes masking is span substitution
+    that preserves the non-masked characters; if the service reflows whitespace
+    the joiner-survival check trips and we fail closed rather than misassign.
     """
     if not parts:
         return []
 
     original = JOINER.join(parts)
+    if len(original) > RECONSTRUCT_MAX_CHARS or len(masked) > RECONSTRUCT_MAX_CHARS:
+        return None
     starts = [0, *accumulate(len(p) + len(JOINER) for p in parts)][: len(parts)]
     ranges = [(s, s + len(p)) for s, p in zip(starts, parts)]
     joiners = [end for (_s, end) in ranges[:-1]]

@@ -11,6 +11,7 @@ from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.exceptions impor
 )
 from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing import (
     JOINER,
+    RECONSTRUCT_MAX_CHARS,
     apply_response_verdicts,
     check_scan_budget,
     function_definition_segments,
@@ -61,6 +62,14 @@ def test_reconstruct_fails_closed_when_mask_spans_a_joiner():
 
 def test_reconstruct_empty_parts_is_empty_list():
     assert reconstruct([], "") == []
+
+
+def test_reconstruct_fails_closed_when_document_exceeds_bound():
+    """Reconstruction is bounded to avoid the quadratic SequenceMatcher cost
+    blocking the event loop; an over-bound document fails closed (None) instead
+    of running the alignment."""
+    big = "a" * (RECONSTRUCT_MAX_CHARS + 1)
+    assert reconstruct([big], big) is None
 
 
 # --------------- check_scan_budget (total-work cap) ---------------
