@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
+    hash_token,
 )
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -48,6 +49,18 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _non_reversible_key_hash(api_key: str) -> str:
+    """UserAPIKeyAuth only hashes sk- keys and JWTs; custom-auth credentials arrive
+    raw, and raw auth material must never be forwarded to the provider."""
+    if _SHA256_HEX_RE.fullmatch(api_key) or api_key.startswith("hashed-jwt-"):
+        return api_key
+    return hash_token(api_key)
+
+
 _ANTHROPIC_SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
@@ -1448,7 +1461,7 @@ async def add_litellm_data_to_request(
             data["user"] = user
 
     if litellm.overwrite_user_with_key_hash is True and user_api_key_dict.api_key is not None:
-        data["user"] = user_api_key_dict.api_key
+        data["user"] = _non_reversible_key_hash(user_api_key_dict.api_key)
 
     data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
 

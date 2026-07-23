@@ -5297,3 +5297,49 @@ async def test_overwrite_user_with_key_hash_disabled_preserves_caller_user():
     )
 
     assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_never_forwards_raw_custom_credential(monkeypatch):
+    """Custom-auth credentials are not sk-prefixed or JWTs, so UserAPIKeyAuth
+    stores them raw; forwarding them upstream would leak auth material."""
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_credential = "my-custom-auth-credential-abc123"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_credential)
+    assert user_api_key_dict.api_key == raw_credential
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == hash_token(raw_credential)
+    assert updated_data["user"] != raw_credential
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_preserves_hashed_jwt_identifier(monkeypatch):
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    hashed_jwt = f"hashed-jwt-{hash_token('some-jwt-token')}"
+    user_api_key_dict = UserAPIKeyAuth(api_key=hashed_jwt)
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == hashed_jwt
