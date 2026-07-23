@@ -88,6 +88,12 @@ describe("ModelsAndEndpointsLayout", () => {
   });
 
   it("redirects to the base models path when the tab path is not permitted for the role", async () => {
+    const replaceMock = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { replace: replaceMock, assign: vi.fn(), href: "http://localhost/", pathname: "/", search: "" },
+    });
     mockUseAuthorized.mockReturnValue({
       accessToken: "123",
       token: "123",
@@ -99,7 +105,8 @@ describe("ModelsAndEndpointsLayout", () => {
     await act(async () => {
       renderLayout();
     });
-    expect(mockReplace).toHaveBeenCalledWith(expect.stringMatching(/\/models-and-endpoints\/$/));
+    expect(replaceMock).toHaveBeenCalledWith(expect.stringMatching(/\/models-and-endpoints\/$/));
+    Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
   });
 
   it("renders the model detail overlay from ?model and hides the tabs and page content", () => {

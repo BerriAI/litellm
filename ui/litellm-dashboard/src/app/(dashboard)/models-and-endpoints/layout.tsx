@@ -65,16 +65,13 @@ export default function ModelsAndEndpointsLayout({ children }: { children: React
   const activeKey = isKnownSlug ? activeSlug || BASE_TAB_KEY : BASE_TAB_KEY;
 
   useEffect(() => {
-    // Wait until the async inputs to tab visibility (teams, ui settings) have
-    // loaded; otherwise a team admin hard-loading /add is redirected to the base
-    // before their team membership resolves.
     if (teamsLoading || uiSettingsLoading) {
       return;
     }
     if (activeSlug !== "" && !isKnownSlug) {
-      router.replace(modelTabHref(""));
+      window.location.replace(modelTabHref(""));
     }
-  }, [activeSlug, isKnownSlug, teamsLoading, uiSettingsLoading, router]);
+  }, [activeSlug, isKnownSlug, teamsLoading, uiSettingsLoading]);
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
   const tabItems = visibleSlugs.map((slug) => {

@@ -9,12 +9,6 @@ export interface ModelDetailRouting {
   close: () => void;
 }
 
-/**
- * The dashboard is a static export served under /ui by the proxy, a prefix the
- * Next router (basePath "") does not know about. A router.push to the current
- * pathname with only the query changed is deduped and never re-renders, so the
- * detail overlay is driven by real browser navigation instead.
- */
 function navigateWithParams(mutate: (params: URLSearchParams) => void): void {
   const params = new URLSearchParams(window.location.search);
   mutate(params);
