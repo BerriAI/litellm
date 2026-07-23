@@ -59,6 +59,8 @@ UNCODED = "<uncoded>"
 # fails once it clears this many errors.
 DEFAULT_LIMIT = 10
 
+BASE_PASS_ATTEMPTS = 2
+
 
 class Breach(NamedTuple):
     code: str
@@ -107,6 +109,10 @@ def _run(cmd: list[str], cwd: Path = REPO_ROOT) -> str:
     return proc.stdout
 
 
+def _merge_base(base_ref: str) -> str:
+    return _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+
+
 @contextlib.contextmanager
 def _temp_worktree(ref: str) -> Iterator[Path]:
     parent = Path(tempfile.mkdtemp(prefix="bpr_base_"))
@@ -124,6 +130,24 @@ def _temp_worktree(ref: str) -> Iterator[Path]:
         shutil.rmtree(parent, ignore_errors=True)
 
 
+def run_base_pass(
+    run: Callable[[], "subprocess.CompletedProcess[str]"],
+    attempts: int = BASE_PASS_ATTEMPTS,
+) -> "subprocess.CompletedProcess[str]":
+    for attempt in range(1, attempts + 1):
+        proc = run()
+        if proc.returncode in (0, 1):
+            return proc
+        sys.stderr.write(
+            f"basedpyright base pass exited {proc.returncode} "
+            f"(attempt {attempt}/{attempts}); stderr tail:\n{proc.stderr[-2000:]}\n"
+        )
+    raise SystemExit(
+        f"basedpyright base pass crashed {attempts} times; its exit code and "
+        f"stderr are above"
+    )
+
+
 def base_counts(ref: str) -> dict[str, int]:
     """basedpyright error counts per rule for the merge-base tree. The head
     config is copied in so the base is judged by today's rules, and the run uses
@@ -131,8 +155,10 @@ def base_counts(ref: str) -> dict[str, int]:
     exe = shutil.which("basedpyright") or "basedpyright"
     with _temp_worktree(ref) as worktree:
         shutil.copy(PYRIGHT_CONFIG, worktree / "pyrightconfig.json")
-        proc = subprocess.run(
-            [exe, "--outputjson"], cwd=worktree, capture_output=True, text=True
+        proc = run_base_pass(
+            lambda: subprocess.run(
+                [exe, "--outputjson"], cwd=worktree, capture_output=True, text=True
+            )
         )
         return count_basedpyright(proc.stdout, root=worktree)
 
@@ -295,7 +321,7 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     by exactly what they cleared since it diverged, and limits never rise.
     """
     budget = json.loads(BUDGET_PATH.read_text()) if BUDGET_PATH.exists() else {}
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    base_point = _merge_base(base_ref)
     updated = ratcheted_budget(budget, current, base_counts_cached(base_point))
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
@@ -305,13 +331,19 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     )
 
 
-def cmd_check(base_ref: str) -> None:
-    budget = json.loads(BUDGET_PATH.read_text())
-    head = count_basedpyright(sys.stdin.read())
+def cmd_check(
+    base_ref: str,
+    head_payload: Callable[[], str] = sys.stdin.read,
+    base_counts_for: Callable[[str], dict[str, int]] = base_counts_cached,
+    merge_base: Callable[[str], str] = _merge_base,
+    budget_path: Path = BUDGET_PATH,
+) -> None:
+    budget = json.loads(budget_path.read_text())
+    head = count_basedpyright(head_payload())
     if is_vacuous_run(head, budget):
         expected = sum(spec["limit"] for spec in budget.values())
         print(
-            f"FAIL: basedpyright produced no errors, but {BUDGET_PATH.name} allows "
+            f"FAIL: basedpyright produced no errors, but {budget_path.name} allows "
             f"up to ~{expected}. The type checker almost certainly crashed or emitted "
             f"nothing; refusing to certify a vacuous run."
         )
@@ -321,8 +353,8 @@ def cmd_check(base_ref: str) -> None:
             f"OK: every rule is within its basedpyright limit ({sum(head.values())} errors total)"
         )
         return
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
-    base = base_counts_cached(base_point)
+    base_point = merge_base(base_ref)
+    base = base_counts_for(base_point)
     if is_vacuous_run(base, budget):
         print(
             f"FAIL: basedpyright produced no errors for the base tree at "
