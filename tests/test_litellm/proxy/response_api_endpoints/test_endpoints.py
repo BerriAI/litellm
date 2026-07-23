@@ -911,10 +911,11 @@ def test_cursor_models_route_delegates_to_model_list():
 
 class TestNestFlatChatTools:
     def test_flat_custom_tool_is_nested(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
-        result = _nest_flat_chat_tool(
-            {"type": "custom", "name": "ApplyPatch", "description": "V4A patch", "format": {"type": "text"}}
+        result = _convert_tool_envelope(
+            {"type": "custom", "name": "ApplyPatch", "description": "V4A patch", "format": {"type": "text"}},
+            to_chat=True,
         )
         assert result == {
             "type": "custom",
@@ -922,10 +923,11 @@ class TestNestFlatChatTools:
         }
 
     def test_flat_function_tool_is_nested(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
-        result = _nest_flat_chat_tool(
-            {"type": "function", "name": "read_file", "description": "d", "parameters": {"type": "object"}}
+        result = _convert_tool_envelope(
+            {"type": "function", "name": "read_file", "description": "d", "parameters": {"type": "object"}},
+            to_chat=True,
         )
         assert result == {
             "type": "function",
@@ -933,7 +935,7 @@ class TestNestFlatChatTools:
         }
 
     def test_already_nested_and_unrecognized_tools_pass_through_unchanged(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
         tools = [
             {"type": "custom", "custom": {"name": "already_nested"}},
@@ -946,7 +948,7 @@ class TestNestFlatChatTools:
             None,
             42,
         ]
-        assert [_nest_flat_chat_tool(tool) for tool in tools] == tools
+        assert [_convert_tool_envelope(tool, to_chat=True) for tool in tools] == tools
 
 
 class TestCursorMessagesArmToolNormalization:
@@ -1010,7 +1012,7 @@ class TestCursorMessagesArmToolNormalization:
                 },
             },
         ]
-        assert seen["body"]["tool_choice"] == {"type": "custom", "name": "ApplyPatch"}
+        assert seen["body"]["tool_choice"] == {"type": "custom", "custom": {"name": "ApplyPatch"}}
         assert seen["body"]["messages"] == [{"role": "user", "content": "use ApplyPatch"}]
 
     @pytest.mark.asyncio
@@ -1048,21 +1050,23 @@ class TestCursorMessagesArmToolNormalization:
         assert seen["body"]["messages"] == body["messages"]
 
 
-class TestNestFlatChatToolShapeMatrix:
+class TestToolEnvelopeConversionMatrix:
     """
     Cursor mixes Responses API shapes into chat bodies PER LEVEL, independently
     (live-captured: a pre-nested custom envelope carrying a flat grammar format).
-    Every cell of envelope x format must land on the canonical chat shape.
+    Tool definitions and tool_choice share one envelope rule, so every cell of
+    direction x envelope x format must land on that direction's canonical shape.
     """
 
     FLAT_GRAMMAR = {"type": "grammar", "definition": "start: patch", "syntax": "lark"}
     NESTED_GRAMMAR = {"type": "grammar", "grammar": {"definition": "start: patch", "syntax": "lark"}}
     TEXT = {"type": "text"}
 
+    @pytest.mark.parametrize("to_chat", [True, False])
     @pytest.mark.parametrize("envelope", ["flat", "nested"])
     @pytest.mark.parametrize("format_shape", ["absent", "text", "flat_grammar", "nested_grammar"])
-    def test_every_envelope_and_format_combination_lands_canonical(self, envelope, format_shape):
-        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool
+    def test_every_direction_envelope_and_format_lands_canonical(self, to_chat, envelope, format_shape):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
         format_value = {
             "absent": None,
@@ -1077,109 +1081,114 @@ class TestNestFlatChatToolShapeMatrix:
 
         canonical_payload = {"name": "ApplyPatch", "description": "V4A patch"}
         if format_shape in ("flat_grammar", "nested_grammar"):
-            canonical_payload["format"] = self.NESTED_GRAMMAR
+            canonical_payload["format"] = self.NESTED_GRAMMAR if to_chat else self.FLAT_GRAMMAR
         elif format_shape == "text":
             canonical_payload["format"] = self.TEXT
+        expected = (
+            {"type": "custom", "custom": canonical_payload} if to_chat else {"type": "custom", **canonical_payload}
+        )
 
-        assert _nest_flat_chat_tool(tool) == {"type": "custom", "custom": canonical_payload}
+        assert _convert_tool_envelope(tool, to_chat=to_chat) == expected
 
     def test_nested_envelope_with_flat_grammar_matches_live_cursor_capture(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
-        cursor_tool = {
+        cursor_tool = {"type": "custom", "custom": {"name": "ApplyPatch", "format": self.FLAT_GRAMMAR}}
+        assert _convert_tool_envelope(cursor_tool, to_chat=True) == {
             "type": "custom",
-            "custom": {
-                "name": "ApplyPatch",
-                "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"},
-            },
-        }
-        assert _nest_flat_chat_tool(cursor_tool) == {
-            "type": "custom",
-            "custom": {
-                "name": "ApplyPatch",
-                "format": {
-                    "type": "grammar",
-                    "grammar": {"definition": "start: patch", "syntax": "lark"},
-                },
-            },
+            "custom": {"name": "ApplyPatch", "format": self.NESTED_GRAMMAR},
         }
 
-    def test_canonical_nested_tool_is_returned_equal(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _nest_flat_chat_tool
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_conversion_is_idempotent(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
-        canonical = {
-            "type": "custom",
-            "custom": {"name": "A", "format": {"type": "grammar", "grammar": {"definition": "d", "syntax": "lark"}}},
-        }
-        assert _nest_flat_chat_tool(canonical) == canonical
+        once = _convert_tool_envelope({"type": "custom", "name": "A", "format": self.FLAT_GRAMMAR}, to_chat=to_chat)
+        assert _convert_tool_envelope(once, to_chat=to_chat) == once
 
-
-class TestFlattenChatToolsForResponsesInputArm:
-    """
-    Mirror of TestNestFlatChatToolShapeMatrix for the input arm: chat-nested shapes in a
-    Responses-shaped body must flatten to the Responses dialect, per level, idempotently.
-    """
-
-    FLAT_GRAMMAR = {"type": "grammar", "definition": "start: patch", "syntax": "lark"}
-    NESTED_GRAMMAR = {"type": "grammar", "grammar": {"definition": "start: patch", "syntax": "lark"}}
-
-    @pytest.mark.parametrize("envelope", ["flat", "nested"])
-    @pytest.mark.parametrize("format_shape", ["absent", "text", "flat_grammar", "nested_grammar"])
-    def test_every_envelope_and_format_combination_lands_flat(self, envelope, format_shape):
-        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tool_for_responses
-
-        format_value = {
-            "absent": None,
-            "text": {"type": "text"},
-            "flat_grammar": self.FLAT_GRAMMAR,
-            "nested_grammar": self.NESTED_GRAMMAR,
-        }[format_shape]
-        payload = {"name": "ApplyPatch", "description": "V4A patch"}
-        if format_value is not None:
-            payload["format"] = format_value
-        tool = {"type": "custom", "custom": payload} if envelope == "nested" else {"type": "custom", **payload}
-
-        canonical = {"type": "custom", "name": "ApplyPatch", "description": "V4A patch"}
-        if format_shape in ("flat_grammar", "nested_grammar"):
-            canonical["format"] = self.FLAT_GRAMMAR
-        elif format_shape == "text":
-            canonical["format"] = {"type": "text"}
-
-        assert _flatten_chat_tool_for_responses(tool) == canonical
-
-    def test_nested_function_tool_is_flattened_and_flat_passes_through(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tool_for_responses
+    def test_nested_function_tool_flattens_and_flat_passes_through(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
         nested = {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}
         flat = {"type": "function", "name": "read_file", "parameters": {"type": "object"}}
-        assert _flatten_chat_tool_for_responses(nested) == flat
-        assert _flatten_chat_tool_for_responses(flat) == flat
+        assert _convert_tool_envelope(nested, to_chat=False) == flat
+        assert _convert_tool_envelope(flat, to_chat=False) == flat
 
-    def test_unrecognized_entries_pass_through(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tool_for_responses
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_unrecognized_entries_pass_through(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
-        entries = [{"type": "web_search"}, {"type": "custom"}, "junk", None, {}]
-        assert [_flatten_chat_tool_for_responses(entry) for entry in entries] == entries
+        entries = [{"type": "web_search"}, {"type": "custom"}, "junk", None, {}, 42, {"type": "auto"}]
+        assert [_convert_tool_envelope(entry, to_chat=to_chat) for entry in entries] == entries
 
 
-class TestFlattenChatToolChoiceForResponsesInputArm:
-    def test_nested_custom_and_function_tool_choice_flatten(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tool_choice_for_responses
+class TestToolChoiceSharesTheToolEnvelopeRule:
+    """
+    tool_choice carries the same {"type": T, T: {...}} chat envelope as a tool
+    definition, so it converts through the same function in both directions.
+    OpenAI requires the nested key on chat (SDK ChatCompletionNamedToolChoiceParam
+    and ChatCompletionNamedToolChoiceCustomParam both mark it Required).
+    """
 
-        assert _flatten_chat_tool_choice_for_responses({"type": "custom", "custom": {"name": "ApplyPatch"}}) == {
-            "type": "custom",
+    @pytest.mark.parametrize("choice_type", ["custom", "function"])
+    def test_flat_tool_choice_is_nested_for_chat(self, choice_type):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        assert _convert_tool_envelope({"type": choice_type, "name": "ApplyPatch"}, to_chat=True) == {
+            "type": choice_type,
+            choice_type: {"name": "ApplyPatch"},
+        }
+
+    @pytest.mark.parametrize("choice_type", ["custom", "function"])
+    def test_nested_tool_choice_is_flattened_for_responses(self, choice_type):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        assert _convert_tool_envelope({"type": choice_type, choice_type: {"name": "ApplyPatch"}}, to_chat=False) == {
+            "type": choice_type,
             "name": "ApplyPatch",
         }
-        assert _flatten_chat_tool_choice_for_responses({"type": "function", "function": {"name": "f"}}) == {
-            "type": "function",
-            "name": "f",
-        }
 
-    def test_flat_and_string_tool_choice_pass_through(self):
-        from litellm.proxy.response_api_endpoints.endpoints import _flatten_chat_tool_choice_for_responses
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_sentinel_and_malformed_tool_choice_pass_through(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
 
-        for unchanged in ("auto", "required", None, {"type": "custom", "name": "x"}, {"type": "auto"}, 42):
-            assert _flatten_chat_tool_choice_for_responses(unchanged) == unchanged
+        for unchanged in ("auto", "required", "none", None, {"type": "auto"}, 42):
+            assert _convert_tool_envelope(unchanged, to_chat=to_chat) == unchanged
+
+
+class TestNormalizeToolDialectCoversBothFields:
+    """
+    The regression that motivated one normalizer: tools were converted while
+    tool_choice was left flat, so OpenAI rejected the request. Both fields move
+    together in a single call, on both arms.
+    """
+
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_tools_and_tool_choice_convert_together(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _normalize_tool_dialect
+
+        flat = {"type": "custom", "name": "ApplyPatch"}
+        nested = {"type": "custom", "custom": {"name": "ApplyPatch"}}
+        source = flat if to_chat else nested
+        expected = nested if to_chat else flat
+
+        out = _normalize_tool_dialect({"messages": [], "tools": [source], "tool_choice": source}, to_chat=to_chat)
+        assert out["tools"] == [expected]
+        assert out["tool_choice"] == expected
+
+    def test_body_needing_no_conversion_is_returned_by_identity(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _normalize_tool_dialect
+
+        data = {"messages": [], "tools": [{"type": "function", "function": {"name": "f"}}], "tool_choice": "auto"}
+        assert _normalize_tool_dialect(data, to_chat=True) is data
+
+    def test_absent_tool_fields_are_not_invented(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _normalize_tool_dialect
+
+        data = {"messages": [{"role": "user", "content": "hi"}]}
+        result = _normalize_tool_dialect(data, to_chat=True)
+        assert result == data
+        assert "tools" not in result and "tool_choice" not in result
 
 
 class TestCursorInputArmFlattening:
