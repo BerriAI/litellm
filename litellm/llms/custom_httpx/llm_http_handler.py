@@ -543,6 +543,7 @@ class BaseLLMHTTPHandler:
                     json_mode=json_mode,
                     optional_params=optional_params,
                     signed_json_body=signed_json_body,
+                    shared_session=shared_session,
                 )
 
             else:
@@ -734,6 +735,7 @@ class BaseLLMHTTPHandler:
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         if provider_config.has_custom_stream_wrapper is True:
             return await provider_config.get_async_custom_stream_wrapper(
@@ -765,6 +767,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             json_mode=json_mode,
             signed_json_body=signed_json_body,
+            shared_session=shared_session,
         )
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -791,6 +794,7 @@ class BaseLLMHTTPHandler:
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> tuple[object, httpx.Headers]:
         """
         Helper function for making an async call with stream.
@@ -801,6 +805,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
