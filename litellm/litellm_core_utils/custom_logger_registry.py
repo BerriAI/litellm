@@ -32,6 +32,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from litellm.integrations.gitlab import GitLabPromptManager
 from litellm.integrations.humanloop import HumanloopLogger
+from litellm.integrations.agentcogs import AgentCOGSLogger
 from litellm.integrations.lago import LagoLogger
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
@@ -61,6 +62,7 @@ class CustomLoggerRegistry:
     """
 
     CALLBACK_CLASS_STR_TO_CLASS_TYPE = {
+        "agentcogs": AgentCOGSLogger,
         "lago": LagoLogger,
         "openmeter": OpenMeterLogger,
         "braintrust": BraintrustLogger,
