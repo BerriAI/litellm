@@ -233,10 +233,12 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
+    filters = retrieval_config.get("retrieval_filter") or retrieval_config.get("filters")
     with _suppressed_sub_call_billing():
         search_response = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
+            filters=filters,
             max_num_results=retrieval_config.get("top_k", 10),
             custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
             **kwargs,
