@@ -20,6 +20,8 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import MidStreamFallbackError
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
@@ -35,6 +37,25 @@ if TYPE_CHECKING:
 
 
 _STREAMING_DELTA_TYPES = frozenset(get_args(StreamingContentBlockDeltaType))
+
+
+def _error_status_and_message(exc: Exception) -> tuple[int, str]:
+    if isinstance(exc, (BaseLLMException, MidStreamFallbackError)):
+        return exc.status_code, exc.message
+    return 500, str(exc) or "Upstream stream ended before completion"
+
+
+def _mid_stream_error_sse_event(exc: Exception) -> bytes:
+    from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
+        AnthropicExceptionMapping,
+    )
+
+    status_code, message = _error_status_and_message(exc)
+    error_response = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code,
+        raw_message=message,
+    )
+    return f"event: error\ndata: {json.dumps(error_response)}\n\n".encode()
 
 
 def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
@@ -824,14 +845,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
-        async for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+        try:
+            async for chunk in self:
+                if isinstance(chunk, dict):
+                    event_type: str = str(chunk.get("type", "message"))
+                    payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                    yield payload.encode()
+                else:
+                    yield chunk
+        except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
+            verbose_logger.exception("Anthropic Adapter - mid-stream error, emitting Anthropic error event: %s", e)
+            yield _mid_stream_error_sse_event(e)
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
