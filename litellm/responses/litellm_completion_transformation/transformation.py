@@ -989,9 +989,18 @@ class LiteLLMCompletionResponsesConfig:
                                     "image_url": {"url": image_url_val},
                                 }
                             )
+                    elif part_type in ("input_file", "file"):
+                        file_item = LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                            part
+                        )
+                        if file_item.get("file"):
+                            normalized_blocks.append(file_item)
 
-                # Prefer structured blocks if we have images; otherwise return a string.
-                if any(b.get("type") == "image_url" for b in normalized_blocks):
+                # Prefer structured blocks if we have any non-text part
+                # (images or files); otherwise return a string.
+                if any(
+                    b.get("type") in ("image_url", "file") for b in normalized_blocks
+                ):
                     # Ensure we include any accumulated text as text blocks too
                     return normalized_blocks
                 if text_acc:
