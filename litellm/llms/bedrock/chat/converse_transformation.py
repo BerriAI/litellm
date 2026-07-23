@@ -899,6 +899,12 @@ class AmazonConverseConfig(BaseConfig):
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
             if param == "thinking":
+                optional_params["thinking"] = value
+                AnthropicConfig._translate_legacy_thinking_for_adaptive_model(
+                    model=model,
+                    optional_params=optional_params,
+                    custom_llm_provider="bedrock",
+                )
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
@@ -919,8 +925,7 @@ class AmazonConverseConfig(BaseConfig):
                         optional_params["thinking"] = capped
                     else:
                         litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
-                else:
-                    optional_params["thinking"] = value
+                        optional_params.pop("thinking", None)
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
