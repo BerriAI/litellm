@@ -3680,6 +3680,28 @@ async def test_pre_call_hook_skips_chat_traffic_when_configured_for_pre_mcp_call
     mock_post.assert_not_called()
 
 
+def test_process_response_with_none_metadata_does_not_crash():
+    """Regression: batch routes normalize ``data["metadata"]`` to ``None`` (present key,
+    ``None`` value), so ``request_data.get("metadata", {})`` returns ``None`` and the
+    post_call ``_process_response`` used to raise ``'NoneType' object has no attribute 'get'``
+    (issue #34390, a v1.93.0 regression that 500'd every ``/v1/batches`` create with a
+    ``post_call`` Model Armor guardrail).
+    """
+    guardrail = _make_guardrail()
+    response = {"id": "batch_123", "status": "validating"}
+    request_data = {"model": "gemini-2.5-flash", "metadata": None}
+
+    result = guardrail._process_response(
+        response=response,
+        request_data=request_data,
+        event_type=GuardrailEventHooks.post_call,
+    )
+
+    assert result is response
+    assert isinstance(request_data["metadata"], dict)
+    assert "standard_logging_guardrail_information" in request_data["metadata"]
+
+
 @pytest.mark.asyncio
 async def test_moderation_hook_scans_mcp_tool_call_when_configured_for_during_mcp_call():
     """A guardrail configured with mode `during_mcp_call` must scan MCP tool calls.
