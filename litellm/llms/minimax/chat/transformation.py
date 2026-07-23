@@ -2,10 +2,16 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
-from typing import List, Optional, Tuple
+from typing import Any, Iterator, List, Optional, Tuple, Union
 
 import litellm
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _concat_reasoning_details,
+)
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
@@ -96,3 +102,38 @@ class MinimaxChatConfig(OpenAIGPTConfig):
             pass
 
         return base_params + additional_params
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], Any],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return MinimaxStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class MinimaxStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    """
+    Streaming handler for MiniMax that maps reasoning_details to reasoning_content.
+
+    MiniMax returns reasoning in delta.reasoning_details (an array of {"text": "..."})
+    when reasoning_split=True. This handler concatenates the text fields into
+    delta.reasoning_content for litellm's standard format.
+    """
+
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        choices = super()._map_reasoning_to_reasoning_content(choices)
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning_details" in delta:
+                details = delta.pop("reasoning_details")
+                # Don't overwrite if reasoning_content already set (e.g. by parent)
+                if "reasoning_content" not in delta:
+                    text = _concat_reasoning_details(details)
+                    if text:
+                        delta["reasoning_content"] = text
+        return choices

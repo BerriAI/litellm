@@ -1486,6 +1486,22 @@ def convert_prefix_message_to_non_prefix_messages(
     return new_messages
 
 
+def _concat_reasoning_details(details: list) -> Optional[str]:
+    """
+    Concatenate a reasoning_details array into a single string.
+
+    MiniMax returns reasoning as an array of {"text": "..."} objects
+    when reasoning_split=True is set. This helper joins them.
+
+    Returns:
+        The concatenated text, or None if empty/invalid.
+    """
+    if not isinstance(details, list):
+        return None
+    text = "".join(d.get("text", "") for d in details if isinstance(d, dict))
+    return text or None
+
+
 def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
     """
     Extract reasoning content and main content from a message.
@@ -1501,6 +1517,11 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
         return message["reasoning_content"], message_content
     elif "reasoning" in message:
         return message["reasoning"], message_content
+    elif "reasoning_details" in message:
+        text = _concat_reasoning_details(message["reasoning_details"])
+        if text:
+            return text, message_content
+        return None, message_content
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content
