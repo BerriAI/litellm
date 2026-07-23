@@ -2,6 +2,8 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
@@ -117,3 +119,40 @@ class TestCohereV2Transform:
         )
 
         assert optional_params["max_tokens"] == 256
+
+    @pytest.mark.parametrize("config", [CohereChatConfig(), CohereV2ChatConfig()])
+    def test_n_equals_one_does_not_send_num_generations(self, config):
+        """Regression for https://github.com/BerriAI/litellm/issues/34111
+
+        Cohere's chat API rejects num_generations ("unknown field"). n=1 is a
+        no-op, so it must be accepted without forwarding num_generations.
+        """
+        result = config.map_openai_params(
+            non_default_params={"n": 1},
+            optional_params={},
+            model="command-r7b-12-2024",
+            drop_params=False,
+        )
+
+        assert "num_generations" not in result
+
+    @pytest.mark.parametrize("config", [CohereChatConfig(), CohereV2ChatConfig()])
+    def test_n_greater_than_one_raises_without_drop_params(self, config):
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"n": 3},
+                optional_params={},
+                model="command-r7b-12-2024",
+                drop_params=False,
+            )
+
+    @pytest.mark.parametrize("config", [CohereChatConfig(), CohereV2ChatConfig()])
+    def test_n_greater_than_one_dropped_with_drop_params(self, config):
+        result = config.map_openai_params(
+            non_default_params={"n": 3},
+            optional_params={},
+            model="command-r7b-12-2024",
+            drop_params=True,
+        )
+
+        assert "num_generations" not in result
