@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy._types import (
     UI_TEAM_ID,
     CallbackDelete,
@@ -7364,6 +7365,7 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors = _should_include_fallback_errors(request_data)
+        streaming_response = MockResponseIterator(response) if isinstance(response, ModelResponse) else response
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -7385,11 +7387,11 @@ async def async_data_generator(
         if needs_iterator_wrap:
             stream_iterator = proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
-                response=response,
+                response=streaming_response,
                 request_data=request_data,
             )
         else:
-            stream_iterator = response
+            stream_iterator = streaming_response
 
         async for chunk in stream_iterator:
             if needs_per_chunk_hook:
