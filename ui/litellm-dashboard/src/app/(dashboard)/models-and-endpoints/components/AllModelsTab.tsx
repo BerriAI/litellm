@@ -11,7 +11,7 @@ import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
 import { PaginationState, SortingState } from "@tanstack/react-table";
 import { useQueryClient } from "@tanstack/react-query";
-import { Grid, TabPanel } from "@tremor/react";
+import { Grid } from "@tremor/react";
 import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
@@ -232,7 +232,7 @@ const AllModelsTab = ({
   };
 
   return (
-    <TabPanel>
+    <div className="w-full">
       <Grid>
         <div className="flex flex-col space-y-4">
           <div className="bg-white rounded-lg shadow-sm">
@@ -600,7 +600,7 @@ const AllModelsTab = ({
         onCancel={() => setIsModelSettingsModalVisible(false)}
         onSuccess={() => setIsModelSettingsModalVisible(false)}
       />
-    </TabPanel>
+    </div>
   );
 };
 
