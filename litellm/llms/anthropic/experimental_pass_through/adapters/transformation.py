@@ -1216,13 +1216,18 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_content
 
-    def _translate_openai_finish_reason_to_anthropic(self, openai_finish_reason: str) -> AnthropicFinishReason:
+    def _translate_openai_finish_reason_to_anthropic(
+        self, openai_finish_reason: Optional[str]
+    ) -> AnthropicFinishReason:
         if openai_finish_reason == "stop":
             return "end_turn"
         elif openai_finish_reason == "length":
             return "max_tokens"
         elif openai_finish_reason == "tool_calls":
             return "tool_use"
+        # ``None`` reaches this branch when an upstream response arrives with
+        # ``choices=[]`` (issue #30761); fall through to ``end_turn`` as the
+        # safe Anthropic-shaped default rather than raising.
         return "end_turn"
 
     @staticmethod
@@ -1326,8 +1331,16 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_content.insert(0, polyfill_result.compaction_block)  # type: ignore[arg-type]
 
         ## extract finish reason
+        # Upstream non-streaming responses normally always have a choice, but
+        # OpenAI-compatible backends occasionally return an empty list when the
+        # request was rejected mid-flight (e.g. policy filter). Fall back to
+        # ``None`` so the translator emits an unknown stop_reason instead of
+        # raising ``IndexError`` (issue #30761).
+        openai_finish_reason = (
+            response.choices[0].finish_reason if response.choices else None  # type: ignore[attr-defined]
+        )
         anthropic_finish_reason = self._translate_openai_finish_reason_to_anthropic(
-            openai_finish_reason=response.choices[0].finish_reason  # type: ignore
+            openai_finish_reason=openai_finish_reason
         )
         # extract usage
         usage: Usage = getattr(response, "usage")
@@ -1476,7 +1489,9 @@ class LiteLLMAnthropicMessagesAdapter:
         applied_edits: Optional[List[AppliedEdit]] = None,
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
-        if response.choices[0].finish_reason is not None:
+        # Usage-only / metadata chunks have no choices; they're never the
+        # final chunk and fall through to the non-final branch below.
+        if response.choices and response.choices[0].finish_reason is not None:
             delta = MessageDelta(
                 stop_reason=self._translate_openai_finish_reason_to_anthropic(response.choices[0].finish_reason),
             )
