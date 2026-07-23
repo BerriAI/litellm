@@ -38,34 +38,15 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
         return default_headers
 
-    def _camel_to_snake(self, camel_str: str) -> str:
-        """Convert camelCase to snake_case"""
-        import re
-
-        return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
-
     def map_generate_content_optional_params(
         self,
-        generate_content_config_dict,
+        generate_content_config_dict: dict[str, Any],
         model: str,
-    ):
-        """
-        Map Google GenAI parameters to provider-specific format.
-
-        Args:
-            generate_content_optional_params: Optional parameters for generate content
-            model: The model name
-
-        Returns:
-            Mapped parameters for the provider
-        """
-
-        _generate_content_config_dict: Dict = {}
-
-        for param, value in generate_content_config_dict.items():
-            camel_case_key = self._camel_to_snake(param)
-            _generate_content_config_dict[camel_case_key] = value
-        return _generate_content_config_dict
+    ) -> dict[str, Any]:
+        return super().map_generate_content_optional_params(
+            generate_content_config_dict=generate_content_config_dict,
+            model=model,
+        )
 
     def transform_generate_content_request(
         self,

@@ -22,14 +22,25 @@ class SpeechToCompletionBridgeTransformationHandler:
     ) -> dict:
         passed_optional_params = {}
         for op in optional_params:
-            if op in OPENAI_CHAT_COMPLETION_PARAMS:
+            if op != "response_format" and op in OPENAI_CHAT_COMPLETION_PARAMS:
                 passed_optional_params[op] = optional_params[op]
 
         if voice is not None:
+            audio_params = None
             if isinstance(voice, str):
-                passed_optional_params["audio"] = {"voice": voice}
+                audio_params = {"voice": voice}
+            elif isinstance(voice, dict):
+                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                    normalize_gemini_speech_config,
+                )
+
+                speech_config = voice.get("speechConfig", voice.get("speech_config", voice))
+                if isinstance(speech_config, dict):
+                    audio_params = {"speech_config": normalize_gemini_speech_config(speech_config)}
+            if audio_params is not None:
                 if "response_format" in optional_params:
-                    passed_optional_params["audio"]["format"] = optional_params["response_format"]
+                    audio_params["format"] = "pcm16"
+                passed_optional_params["audio"] = audio_params
 
         return_kwargs = {
             "model": model,

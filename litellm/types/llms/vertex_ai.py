@@ -226,8 +226,18 @@ class VoiceConfig(TypedDict):
     prebuiltVoiceConfig: PrebuiltVoiceConfig
 
 
+class SpeakerVoiceConfig(TypedDict):
+    speaker: str
+    voiceConfig: VoiceConfig
+
+
+class MultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: List[SpeakerVoiceConfig]
+
+
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    multiSpeakerVoiceConfig: MultiSpeakerVoiceConfig
     languageCode: str
 
 
