@@ -2649,7 +2649,7 @@ if MCP_AVAILABLE:
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
+                    detail="User not allowed to call this tool.",
                 )
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = _get_standard_logging_mcp_tool_call(
