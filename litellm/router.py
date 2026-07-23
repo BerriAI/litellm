@@ -9423,7 +9423,12 @@ class Router:
             return None
 
         # Strategy 1: Check if model_id directly matches a model_name or deployment ID
-        if model_id in self.model_names or self.has_model_id(model_id):
+        if model_id in self.model_names:
+            return model_id
+        if self.has_model_id(model_id):
+            deployment = self.get_deployment(model_id=model_id)
+            if deployment is not None and deployment.model_name:
+                return deployment.model_name
             return model_id
 
         # Strategy 2: Search through router's model_list to find by litellm_params.model
