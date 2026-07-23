@@ -228,6 +228,87 @@ class TestResponsesAPIRequestUtils:
         assert decoded.get("custom_llm_provider") == "azure"
         assert decoded.get("response_id") == "cntr_x"
 
+    def test_normalize_call_id_strips_thought_signature_for_non_gemini(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        call_id = f"call_abc123{THOUGHT_SIGNATURE_SEPARATOR}sig_xyz"
+        result = ResponsesAPIRequestUtils._normalize_call_id_for_provider(
+            call_id=call_id,
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        assert result == "call_abc123"
+
+    def test_normalize_call_id_preserves_thought_signature_for_gemini(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        call_id = f"call_abc123{THOUGHT_SIGNATURE_SEPARATOR}sig_xyz"
+        result = ResponsesAPIRequestUtils._normalize_call_id_for_provider(
+            call_id=call_id,
+            model="gemini-2.5-flash",
+            custom_llm_provider="gemini",
+        )
+        assert result == call_id
+
+    def test_normalize_function_call_item_id_rewrites_for_openai(self):
+        result = ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+            item_id="call_abc123",
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        assert result == "fc_abc123"
+
+        result_tooluse = (
+            ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+                item_id="tooluse_abc123",
+                model="gpt-4o",
+                custom_llm_provider="openai",
+            )
+        )
+        assert result_tooluse == "fc_abc123"
+
+    def test_normalize_function_call_item_id_no_rewrite_for_anthropic(self):
+        result = ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+            item_id="call_abc123",
+            model="claude-3-5-sonnet",
+            custom_llm_provider="anthropic",
+        )
+        assert result == "call_abc123"
+
+    def test_normalize_function_call_ids_in_input(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        request_input = [
+            {
+                "type": "function_call",
+                "id": "tooluse_xyz",
+                "call_id": f"call_abc{THOUGHT_SIGNATURE_SEPARATOR}sig",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": f"call_abc{THOUGHT_SIGNATURE_SEPARATOR}sig",
+                "output": "sunny",
+            },
+        ]
+
+        result = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+            request_input=request_input,
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+
+        assert result[0]["id"] == "fc_xyz"
+        assert result[0]["call_id"] == "call_abc"
+        assert result[1]["call_id"] == "call_abc"
+
 
 class TestResponseAPILoggingUtils:
     def test_is_response_api_usage_true(self):
