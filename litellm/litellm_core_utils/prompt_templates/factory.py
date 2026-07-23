@@ -1573,6 +1573,23 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     return sanitized
 
 
+def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
+    """
+    Sanitize tool_use_id to satisfy AWS Bedrock Converse API constraints:
+    pattern ^[a-zA-Z0-9_-]+$ and max length 64 characters.
+
+    Models without a dedicated litellm registry entry (e.g. bedrock/zai.glm-5)
+    pass their own, often long, tool_call ids straight through, which Bedrock
+    rejects with a 400 once they exceed 64 chars. This mirrors
+    _sanitize_anthropic_tool_use_id's character filtering and additionally
+    truncates to Bedrock's length limit.
+    """
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", tool_use_id)
+    if not sanitized:
+        sanitized = "tool_use_id"
+    return sanitized[:64]
+
+
 _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES = {"application/pdf", "text/plain"}
 
 
@@ -3671,7 +3688,7 @@ def _convert_to_bedrock_tool_call_invoke(
         _parts_list: List[BedrockContentBlock] = []
         for tool in tool_calls:
             if "function" in tool:
-                tool_id = tool["id"]
+                tool_id = _sanitize_bedrock_tool_use_id(tool["id"])
                 name = make_valid_bedrock_tool_name(tool["function"].get("name", ""))
                 arguments = tool["function"].get("arguments", "")
 
@@ -3880,7 +3897,7 @@ def _convert_to_bedrock_tool_call_result(
     tool_result_content_blocks, used_search_results = _build_bedrock_tool_result_content_blocks(message)
 
     message.get("name", "")
-    id = str(message.get("tool_call_id", str(uuid.uuid4())))
+    id = _sanitize_bedrock_tool_use_id(str(message.get("tool_call_id", str(uuid.uuid4()))))
 
     tool_result = BedrockToolResultBlock(content=tool_result_content_blocks, toolUseId=id)
     if used_search_results:
