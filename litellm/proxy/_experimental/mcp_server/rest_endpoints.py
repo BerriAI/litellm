@@ -900,7 +900,44 @@ if MCP_AVAILABLE:
                 "message": f"An unexpected error occurred: {str(e)}",
             }
 
-    @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
+    @router.post(
+        "/tools/call",
+        dependencies=[Depends(user_api_key_auth)],
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "server_id": {
+                                    "type": "string",
+                                    "description": "ID of the MCP server that owns the tool. Required unless calling a virtual tool (mcp_tool_search or mcp_tool_call).",
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": "Name of the MCP tool to invoke.",
+                                },
+                                "arguments": {
+                                    "type": "object",
+                                    "description": "Key-value arguments forwarded to the tool.",
+                                    "additionalProperties": True,
+                                    "default": {},
+                                },
+                            },
+                        },
+                        "example": {
+                            "server_id": "17a4490465f74d3696caf12b30220166",
+                            "name": "places_api-getPlaces",
+                            "arguments": {"query": "coffee shops in London"},
+                        },
+                    }
+                },
+            }
+        },
+    )
     async def call_tool_rest_api(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
