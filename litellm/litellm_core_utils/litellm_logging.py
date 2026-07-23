@@ -3826,6 +3826,15 @@ def _init_custom_logger_compatible_class(
             cloudzero_logger = CloudZeroLogger()
             _in_memory_loggers.append(cloudzero_logger)
             return cloudzero_logger  # type: ignore
+        elif logging_integration == "faros":
+            from litellm.integrations.faros.faros_logger import FarosLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, FarosLogger):
+                    return callback  # type: ignore
+            faros_logger = FarosLogger()
+            _in_memory_loggers.append(faros_logger)
+            return faros_logger  # type: ignore
         elif logging_integration == "focus":
             from litellm.integrations.focus.focus_logger import FocusLogger
 
@@ -4227,6 +4236,12 @@ def get_custom_logger_compatible_class(
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, CloudZeroLogger):
+                    return callback
+        elif logging_integration == "faros":
+            from litellm.integrations.faros.faros_logger import FarosLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, FarosLogger):
                     return callback
         elif logging_integration == "focus":
             from litellm.integrations.focus.focus_logger import FocusLogger
