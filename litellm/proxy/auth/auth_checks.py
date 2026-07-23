@@ -3626,34 +3626,46 @@ async def _virtual_key_soft_budget_check(
     Triggers a budget alert if the token is over it's soft budget.
 
     """
+    if valid_token.soft_budget is None:
+        return
 
-    if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
-        verbose_proxy_logger.debug(
-            "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
-            valid_token.token,
-            valid_token.spend,
-            valid_token.soft_budget,
-        )
-        call_info = CallInfo(
-            token=valid_token.token,
-            spend=valid_token.spend,
-            max_budget=valid_token.max_budget,
-            soft_budget=valid_token.soft_budget,
-            user_id=valid_token.user_id,
-            team_id=valid_token.team_id,
-            team_alias=valid_token.team_alias,
-            organization_id=valid_token.org_id,
-            user_email=user_obj.user_email if user_obj else None,
-            key_alias=valid_token.key_alias,
-            event_group=Litellm_EntityType.KEY,
-        )
+    from litellm.proxy.proxy_server import get_current_spend
 
-        asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="soft_budget",
-                user_info=call_info,
-            )
+    spend = await get_current_spend(
+        counter_key=f"spend:key:{valid_token.token}",
+        fallback_spend=valid_token.spend or 0.0,
+        max_budget=valid_token.soft_budget,
+    )
+
+    if spend < valid_token.soft_budget:
+        return
+
+    verbose_proxy_logger.debug(
+        "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+        valid_token.token,
+        spend,
+        valid_token.soft_budget,
+    )
+    call_info = CallInfo(
+        token=valid_token.token,
+        spend=spend,
+        max_budget=valid_token.max_budget,
+        soft_budget=valid_token.soft_budget,
+        user_id=valid_token.user_id,
+        team_id=valid_token.team_id,
+        team_alias=valid_token.team_alias,
+        organization_id=valid_token.org_id,
+        user_email=user_obj.user_email if user_obj else None,
+        key_alias=valid_token.key_alias,
+        event_group=Litellm_EntityType.KEY,
+    )
+
+    asyncio.create_task(
+        proxy_logging_obj.budget_alerts(
+            type="soft_budget",
+            user_info=call_info,
         )
+    )
 
 
 def _parse_email_list(raw: Any) -> List[str]:

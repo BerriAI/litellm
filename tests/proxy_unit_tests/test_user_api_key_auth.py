@@ -698,6 +698,12 @@ async def test_soft_budget_alert():
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm.proxy.proxy_server, "prisma_client", AsyncMock())
 
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    spend_counter_cache.in_memory_cache.set_cache(
+        key=f"spend:key:{hash_token(user_key)}", value=float(current_spend)
+    )
+
     # Create request
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")

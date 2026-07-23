@@ -2276,6 +2276,8 @@ async def test_virtual_key_soft_budget_check_without_user_obj():
         (50.0, 50.0, True),  # At soft budget
         (25.0, 50.0, False),  # Under soft budget
         (100.0, None, False),  # No soft budget set
+        (0.0, 0.0, True),  # Zero soft budget is enforced, not treated as disabled
+        (100.0, 0.0, True),  # Any spend crosses a zero soft budget
     ],
 )
 @pytest.mark.asyncio
@@ -2283,6 +2285,10 @@ async def test_virtual_key_soft_budget_check_scenarios(
     spend, soft_budget, expect_alert
 ):
     """Test _virtual_key_soft_budget_check with various spend and soft_budget scenarios"""
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    spend_counter_cache.in_memory_cache.flush_cache()
+
     alert_triggered = False
 
     class MockProxyLogging:
@@ -2313,6 +2319,49 @@ async def test_virtual_key_soft_budget_check_scenarios(
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_soft_budget_check_uses_fresh_cross_pod_spend():
+    """Regression: the soft budget check must read the live cross-pod spend
+    counter, not the stale ``valid_token.spend`` snapshot loaded at auth time.
+
+    The cached token spend (10.0) is below the soft budget, so relying on it
+    would suppress the alert; the fresh counter (100.0) is over it and must
+    trigger the alert with the fresh value.
+    """
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal captured_call_info
+            captured_call_info = user_info
+
+    valid_token = UserAPIKeyAuth(
+        token="stale-spend-token",
+        spend=10.0,
+        soft_budget=50.0,
+        user_id="test-user",
+        key_alias="test-key",
+    )
+
+    spend_counter_cache.in_memory_cache.flush_cache()
+    spend_counter_cache.in_memory_cache.set_cache(
+        key=f"spend:key:{valid_token.token}", value=100.0
+    )
+
+    await _virtual_key_soft_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=MockProxyLogging(),
+        user_obj=None,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert captured_call_info is not None
+    assert captured_call_info.spend == 100.0
 
 
 @pytest.mark.asyncio
