@@ -8776,6 +8776,140 @@ async def test_update_team_rejects_unauthorized_caller():
         assert exc_info.value.code == "403"
 
 
+@pytest.mark.asyncio
+async def test_update_team_org_admin_succeeds_with_team_id_only():
+    """
+    Org admin of the team's org may call /team/update with only team_id in the
+    body once the route gate allows the request (self_managed_routes). Handler
+    grants access when _is_user_org_admin_for_team is true.
+    """
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+
+    mock_request = Mock(spec=Request)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-team-id-only",
+    )
+    update_request = UpdateTeamRequest(team_id="tid-org-admin-only", max_budget=10.0)
+
+    mock_existing_team = MagicMock()
+    mock_existing_team.model_dump.return_value = {
+        "team_id": "tid-org-admin-only",
+        "team_alias": "t",
+        "members_with_roles": [{"user_id": "other_user", "role": "admin"}],
+        "organization_id": "org-scope-1",
+        "max_budget": 5.0,
+        "soft_budget": None,
+        "model_id": None,
+        "object_permission_id": None,
+    }
+
+    mock_updated = MagicMock()
+    mock_updated.team_id = "tid-org-admin-only"
+    mock_updated.organization_id = "org-scope-1"
+    mock_updated.max_budget = 10.0
+    mock_updated.litellm_model_table = None
+    mock_updated.model_dump.return_value = {
+        "team_id": "tid-org-admin-only",
+        "organization_id": "org-scope-1",
+        "max_budget": 10.0,
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.llm_router"),
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks._cache_team_object",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.create_audit_log_for_update", new_callable=AsyncMock
+        ),
+    ):
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated)
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
+
+        result = await update_team(
+            data=update_request,
+            http_request=mock_request,
+            user_api_key_dict=caller,
+        )
+
+    assert result is not None
+    assert result["data"].max_budget == 10.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_org_admin_wrong_org_still_forbidden():
+    """Org admin path in handler still rejects teams outside the admin's org."""
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+
+    mock_request = Mock(spec=Request)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-wrong-org",
+    )
+    update_request = UpdateTeamRequest(team_id="tid-other-org", max_budget=10.0)
+
+    mock_existing_team = MagicMock()
+    mock_existing_team.model_dump.return_value = {
+        "team_id": "tid-other-org",
+        "team_alias": "other",
+        "members_with_roles": [{"user_id": "other_user", "role": "admin"}],
+        "organization_id": "org-b",
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.llm_router"),
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=mock_request,
+                user_api_key_dict=caller,
+            )
+        assert exc_info.value.code == "403"
+
+
 # ----- /team/{team_id}/members/me -----
 
 
