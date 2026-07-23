@@ -15,9 +15,15 @@ import sys
 import litellm
 from litellm._logging import (
     ALL_LOGGERS,
+    CorrelationContextFilter,
+    CorrelationPlainFormatter,
     JsonFormatter,
     _initialize_loggers_with_handler,
     _turn_on_json,
+    session_id_var,
+    set_session_id,
+    set_trace_id,
+    trace_id_var,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -328,3 +334,349 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+class _JsonCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.formatter = JsonFormatter()
+        self.records: list[dict] = []
+        self.addFilter(CorrelationContextFilter())
+
+    def emit(self, record):
+        self.records.append(json.loads(self.formatter.format(record)))
+
+
+def _make_capture_logger(name: str) -> tuple[logging.Logger, _JsonCapture]:
+    lg = logging.getLogger(name)
+    cap = _JsonCapture()
+    lg.addHandler(cap)
+    lg.setLevel(logging.DEBUG)
+    return lg, cap
+
+
+def test_trace_id_injected_into_json_record(monkeypatch):
+    """trace_id set via set_trace_id() appears in every JSON record in that context."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.trace_inject")
+    set_trace_id("trace-abc-123")
+    try:
+        lg.info("test message")
+        assert len(cap.records) == 1
+        assert cap.records[0]["trace_id"] == "trace-abc-123"
+    finally:
+        trace_id_var.set("")
+
+
+def test_session_id_injected_when_set(monkeypatch):
+    """session_id set via set_session_id() appears in JSON record."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_capture_logger("test.session_inject")
+    set_session_id("sess-xyz-456")
+    try:
+        lg.info("another message")
+        assert cap.records[0]["session_id"] == "sess-xyz-456"
+    finally:
+        session_id_var.set("")
+
+
+def test_session_id_absent_when_not_set():
+    """session_id must NOT appear in JSON record when not set for this context."""
+    lg, cap = _make_capture_logger("test.no_session")
+    session_id_var.set("")
+    lg.info("no session message")
+    assert "session_id" not in cap.records[0]
+
+
+def test_trace_id_absent_when_not_set():
+    """trace_id must NOT appear when not set."""
+    lg, cap = _make_capture_logger("test.no_trace")
+    trace_id_var.set("")
+    lg.info("no trace message")
+    assert "trace_id" not in cap.records[0]
+
+
+@pytest.mark.asyncio
+async def test_contextvar_isolation_between_tasks():
+    """Two concurrent async tasks each see only their own trace_id."""
+    results: dict[str, str] = {}
+
+    async def task(task_id: str, trace_id: str) -> None:
+        set_trace_id(trace_id)
+        await asyncio.sleep(0)
+        results[task_id] = trace_id_var.get()
+
+    await asyncio.gather(
+        task("A", "trace-for-A"),
+        task("B", "trace-for-B"),
+    )
+
+    assert results["A"] == "trace-for-A"
+    assert results["B"] == "trace-for-B"
+
+
+def test_logging_init_sets_trace_id():
+    """Logging.__init__() must call set_trace_id with self.litellm_trace_id."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("")
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-001",
+        function_id="fn-001",
+        kwargs={},
+    )
+    assert trace_id_var.get() == log_obj.litellm_trace_id
+
+
+def test_logging_init_sets_session_id_when_provided():
+    """Logging.__init__() must call set_session_id when litellm_session_id is in kwargs."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    session_id_var.set("")
+
+    Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-002",
+        function_id="fn-002",
+        kwargs={"litellm_session_id": "my-session-99"},
+    )
+    assert session_id_var.get() == "my-session-99"
+
+
+def test_logging_init_resets_session_id_to_empty_when_absent():
+    """When no session_id is in kwargs, Logging.__init__() must reset session_id_var to ""
+    so a prior request's session_id does not leak into subsequent log records."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    session_id_var.set("preexisting-sid")
+
+    Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-003",
+        function_id="fn-003",
+        kwargs={},
+    )
+    assert session_id_var.get() == ""
+
+
+def test_trace_id_not_in_log_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False (default), trace_id must not appear in JSON records even when set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_capture_logger("test.no_trace_gated")
+    set_trace_id("trace-should-not-appear")
+    try:
+        lg.info("message")
+        assert "trace_id" not in cap.records[0]
+    finally:
+        trace_id_var.set("")
+
+
+def test_session_id_not_in_log_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False (default), session_id must not appear in JSON records even when set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_capture_logger("test.no_session_gated")
+    set_session_id("sess-should-not-appear")
+    try:
+        lg.info("message")
+        assert "session_id" not in cap.records[0]
+    finally:
+        session_id_var.set("")
+
+
+class _PlainCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.formatter = CorrelationPlainFormatter("%(message)s")
+        self.records: list[str] = []
+        self.addFilter(CorrelationContextFilter())
+
+    def emit(self, record):
+        self.records.append(self.formatter.format(record))
+
+
+def _make_plain_capture_logger(name: str) -> tuple[logging.Logger, _PlainCapture]:
+    lg = logging.getLogger(name)
+    cap = _PlainCapture()
+    lg.addHandler(cap)
+    lg.setLevel(logging.DEBUG)
+    return lg, cap
+
+
+def test_plain_formatter_appends_trace_id_and_session_id(monkeypatch):
+    """CorrelationPlainFormatter must append trace_id/session_id to non-JSON log lines too."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_plain_capture_logger("test.plain_trace_session")
+    set_trace_id("plain-trace-1")
+    set_session_id("plain-session-1")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message [trace_id=plain-trace-1 session_id=plain-session-1]"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_plain_formatter_appends_only_trace_id_when_session_id_absent(monkeypatch):
+    """Only trace_id is appended when session_id was never set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_plain_capture_logger("test.plain_trace_only")
+    set_trace_id("plain-trace-2")
+    session_id_var.set("")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message [trace_id=plain-trace-2]"
+    finally:
+        trace_id_var.set("")
+
+
+def test_plain_formatter_unchanged_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False, plain log lines are unmodified even if the contextvars are set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_plain_capture_logger("test.plain_flag_off")
+    set_trace_id("should-not-appear")
+    set_session_id("should-not-appear")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_restore_correlation_context_resets_to_pre_call_value():
+    """_restore_correlation_context() must put trace_id_var/session_id_var back to
+    whatever they were immediately before this Logging instance was constructed.
+    This is the mechanism that prevents a nested call (e.g. a guardrail's own
+    LLM-as-judge call sharing the same asyncio Task) from leaking its trace_id/
+    session_id into the outer call's subsequent log lines."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        inner = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="inner-call",
+            function_id="fn-inner",
+            kwargs={"litellm_session_id": "inner-session"},
+        )
+        assert trace_id_var.get() == inner.litellm_trace_id
+        assert session_id_var.get() == "inner-session"
+
+        inner._restore_correlation_context()
+
+        assert trace_id_var.get() == "outer-trace"
+        assert session_id_var.get() == "outer-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_restore_correlation_context_is_idempotent():
+    """Calling _restore_correlation_context() more than once must not raise,
+    since success_handler/failure_handler could both end up calling it for the
+    same instance in edge cases."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-idempotent",
+        function_id="fn-idempotent",
+        kwargs={},
+    )
+    log_obj._restore_correlation_context()
+    log_obj._restore_correlation_context()  # must not raise
+
+
+def test_set_trace_id_strips_control_characters():
+    """set_trace_id() must strip \\r/\\n/escape sequences so a caller-controlled
+    trace id can't forge fake log entries when interpolated into plain-text logs."""
+    token = set_trace_id('evil\r\n{"level": "CRITICAL", "message": "forged"}')
+    try:
+        value = trace_id_var.get()
+        assert "\r" not in value
+        assert "\n" not in value
+    finally:
+        trace_id_var.reset(token)
+
+
+def test_set_session_id_bounds_length():
+    """set_session_id() must bound length so an oversized caller-supplied value
+    isn't repeated across every log line for the request."""
+    token = set_session_id("a" * 1000)
+    try:
+        assert len(session_id_var.get()) == 256
+    finally:
+        session_id_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_restore_correlation_context_works_across_asyncio_task_boundary():
+    """_restore_correlation_context() must succeed even when it's called from a
+    different asyncio Task than the one Logging.__init__() ran in - exactly what
+    happens on litellm's real async success path, where async_success_handler is
+    dispatched via asyncio.create_task / the global logging worker rather than
+    awaited directly in the request's own task.
+
+    A contextvars.Token can only be reset in the exact Context it was created in
+    and raises ValueError otherwise (verified separately against raw contextvars,
+    not just this codebase). The fix uses a plain set() of the captured pre-call
+    value instead, which works regardless of which Task calls it. This test
+    fails with a token-based implementation - the child task's reset() would
+    raise, get silently swallowed, and leave the child's view unrestored - and
+    passes with the value-based one.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-cross-task")
+    session_id_var.set("outer-session-cross-task")
+    try:
+        # __init__ runs in THIS (outer) task's context.
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=None,
+            litellm_call_id="cross-task-call",
+            function_id="fn-cross-task",
+            kwargs={"litellm_session_id": "cross-task-session"},
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "cross-task-session"
+
+        async def restore_in_new_task():
+            # Simulates async_success_handler running in a task spawned after
+            # __init__ already ran elsewhere - a different Context object.
+            log_obj._restore_correlation_context()
+            return trace_id_var.get(), session_id_var.get()
+
+        trace_in_child, session_in_child = await asyncio.create_task(restore_in_new_task())
+
+        assert trace_in_child == "outer-trace-cross-task"
+        assert session_in_child == "outer-session-cross-task"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")

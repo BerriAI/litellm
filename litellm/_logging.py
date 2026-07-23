@@ -1,4 +1,5 @@
 import ast
+import contextvars
 import logging
 import os
 import sys
@@ -11,6 +12,33 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 set_verbose = False
+
+session_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("session_id", default="")
+trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
+
+_MAX_CORRELATION_ID_LENGTH = 256
+
+
+def _sanitize_correlation_id(value: str) -> str:
+    """Strip control characters and bound length before a caller-controlled
+    trace_id/session_id (e.g. litellm_session_id, x-litellm-trace-id) is
+    stamped into log lines.
+
+    Without this, a caller could embed \\r/\\n or terminal escape sequences to
+    forge fake log entries, or submit an oversized value repeated across every
+    log line for the request.
+    """
+    stripped = "".join(ch for ch in value if ch.isprintable())
+    return stripped[:_MAX_CORRELATION_ID_LENGTH]
+
+
+def set_session_id(session_id: str) -> "contextvars.Token[str]":
+    return session_id_var.set(_sanitize_correlation_id(session_id))
+
+
+def set_trace_id(trace_id: str) -> "contextvars.Token[str]":
+    return trace_id_var.set(_sanitize_correlation_id(trace_id))
+
 
 if set_verbose is True:
     logging.warning(
@@ -77,6 +105,30 @@ class SecretRedactionFilter(logging.Filter):
 _secret_filter = SecretRedactionFilter()
 
 
+class CorrelationContextFilter(logging.Filter):
+    """Stamps each log record with the current request's trace_id and session_id from contextvars.
+
+    Works in tandem with JsonFormatter: the formatter's record.__dict__ loop picks up these
+    attributes as first-class JSON fields without any formatter-level code.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        import litellm
+
+        if not litellm.request_correlation_in_logs:
+            return True
+        trace_id = trace_id_var.get()
+        if trace_id:
+            record.trace_id = trace_id
+        session_id = session_id_var.get()
+        if session_id:
+            record.session_id = session_id
+        return True
+
+
+_correlation_filter = CorrelationContextFilter()
+
+
 json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level = os.getenv("LITELLM_LOG", "DEBUG")
@@ -84,6 +136,7 @@ numeric_level: str = getattr(logging, log_level.upper())
 handler = logging.StreamHandler()
 handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
+handler.addFilter(_correlation_filter)
 
 
 def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
@@ -190,12 +243,30 @@ class JsonFormatter(Formatter):
         return safe_dumps(json_record)
 
 
+class CorrelationPlainFormatter(logging.Formatter):
+    """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
+
+    Mirrors JsonFormatter's handling of these two fields so request_correlation_in_logs
+    behaves the same whether or not json_logs is enabled.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+        trace_id = getattr(record, "trace_id", None)
+        session_id = getattr(record, "session_id", None)
+        if not trace_id and not session_id:
+            return formatted
+        parts = [f"trace_id={trace_id}" if trace_id else None, f"session_id={session_id}" if session_id else None]
+        return f"{formatted} [{' '.join(p for p in parts if p)}]"
+
+
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler = logging.StreamHandler()
     error_handler.setFormatter(formatter)
     error_handler.addFilter(_secret_filter)
+    error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
     def json_excepthook(exc_type, exc_value, exc_traceback):
@@ -243,7 +314,7 @@ if json_logs:
     handler.setFormatter(JsonFormatter())
     _setup_json_exception_handlers(JsonFormatter())
 else:
-    formatter = logging.Formatter(
+    formatter = CorrelationPlainFormatter(
         "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
         datefmt="%H:%M:%S",
     )
@@ -312,6 +383,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
     handler.addFilter(_secret_filter)
+    handler.addFilter(_correlation_filter)
     for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
