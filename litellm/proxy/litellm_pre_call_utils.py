@@ -1077,6 +1077,19 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
+    def _merge_spend_logs_metadata(source_metadata: dict, data: dict, _metadata_variable_name: str) -> None:
+        spend_logs_metadata = source_metadata.get("spend_logs_metadata")
+        if not isinstance(spend_logs_metadata, dict):
+            return
+        existing_spend_logs_metadata = data[_metadata_variable_name].get("spend_logs_metadata")
+        if isinstance(existing_spend_logs_metadata, dict):
+            for key, value in spend_logs_metadata.items():
+                if key not in existing_spend_logs_metadata:
+                    existing_spend_logs_metadata[key] = value
+        else:
+            data[_metadata_variable_name]["spend_logs_metadata"] = spend_logs_metadata
+
+    @staticmethod
     def add_key_level_controls(key_metadata: Optional[dict], data: dict, _metadata_variable_name: str):
         if key_metadata is None:
             return data
@@ -1095,17 +1108,11 @@ class LiteLLMProxyRequestSetup:
             )
         if "disable_global_guardrails" in key_metadata and isinstance(key_metadata["disable_global_guardrails"], bool):
             data[_metadata_variable_name]["disable_global_guardrails"] = key_metadata["disable_global_guardrails"]
-        if "spend_logs_metadata" in key_metadata and isinstance(key_metadata["spend_logs_metadata"], dict):
-            if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
-                data[_metadata_variable_name]["spend_logs_metadata"], dict
-            ):
-                for key, value in key_metadata["spend_logs_metadata"].items():
-                    if (
-                        key not in data[_metadata_variable_name]["spend_logs_metadata"]
-                    ):  # don't override k-v pair sent by request (user request)
-                        data[_metadata_variable_name]["spend_logs_metadata"][key] = value
-            else:
-                data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata["spend_logs_metadata"]
+        LiteLLMProxyRequestSetup._merge_spend_logs_metadata(
+            source_metadata=key_metadata,
+            data=data,
+            _metadata_variable_name=_metadata_variable_name,
+        )
 
         ## KEY-LEVEL DISABLE FALLBACKS
         if "disable_fallbacks" in key_metadata and isinstance(key_metadata["disable_fallbacks"], bool):
@@ -1602,17 +1609,19 @@ async def add_litellm_data_to_request(
         team_metadata["opted_out_global_guardrails"], list
     ):
         data[_metadata_variable_name]["opted_out_global_guardrails"] = team_metadata["opted_out_global_guardrails"]
-    if "spend_logs_metadata" in team_metadata and isinstance(team_metadata["spend_logs_metadata"], dict):
-        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["spend_logs_metadata"], dict
-        ):
-            for key, value in team_metadata["spend_logs_metadata"].items():
-                if (
-                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
-                ):  # don't override k-v pair sent by request (user request)
-                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
-        else:
-            data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata["spend_logs_metadata"]
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata(
+        source_metadata=team_metadata,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+    )
+
+    ## ORG-LEVEL SPEND LOGS
+    organization_metadata = user_api_key_dict.organization_metadata or {}
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata(
+        source_metadata=organization_metadata,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+    )
 
     ## PROJECT-LEVEL TAGS
     project_metadata = user_api_key_dict.project_metadata or {}
