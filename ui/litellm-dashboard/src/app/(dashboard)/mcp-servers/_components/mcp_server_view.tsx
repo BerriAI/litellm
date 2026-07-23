@@ -211,6 +211,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               auth_type={mcpServer.auth_type}
               oauth2_flow={mcpServer.oauth2_flow}
               delegate_auth_to_upstream={mcpServer.delegate_auth_to_upstream}
+              dcr_bridge={mcpServer.dcr_bridge}
               tokenUrl={mcpServer.token_url}
               userRole={userRole}
               userID={userID}
