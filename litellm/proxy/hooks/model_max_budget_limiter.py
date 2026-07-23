@@ -148,6 +148,42 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
+    async def _get_shared_model_spend(self, cache_key: str) -> Optional[float]:
+        """
+        Read the cross-replica spend for a model budget cache key.
+
+        Spend is tracked in two places: a pod-local in-memory counter (this
+        replica's own increments) and a shared Redis counter (the running total
+        flushed across every replica). Admission must not trust the pod-local
+        value alone, otherwise N replicas each admit off their own partial spend
+        and the combined spend blows past the cap (issue #33325).
+
+        Return the larger of the two so the cap is enforced against the true
+        accumulated spend: Redis dominates once other replicas have flushed,
+        while the local value still guards the window between this pod's own
+        increment and its next Redis flush. Redis failures (including an open
+        circuit breaker) degrade to the local value instead of failing the
+        request.
+        """
+        local_spend = await self.dual_cache.async_get_cache(key=cache_key, local_only=True)
+        local_value = float(local_spend) if local_spend is not None else None
+
+        if self.dual_cache.redis_cache is None:
+            return local_value
+
+        try:
+            redis_spend = await self.dual_cache.redis_cache.async_get_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # redis (incl. open circuit breaker) failures are non-fatal; fall back to in-memory
+            verbose_proxy_logger.warning(
+                "_PROXY_VirtualKeyModelMaxBudgetLimiter: Redis GET failed, falling back to in-memory: %s",
+                str(e),
+            )
+            return local_value
+
+        redis_value = float(redis_spend) if redis_spend is not None else None
+        candidates = tuple(value for value in (local_value, redis_value) if value is not None)
+        return max(candidates) if candidates else None
+
     async def _get_end_user_spend_for_model(
         self,
         end_user_id: str,
@@ -158,16 +194,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         end_user_model_spend_cache_key = (
             f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{key_budget_config.budget_duration}"
         )
-        _current_spend = await self.dual_cache.async_get_cache(
-            key=end_user_model_spend_cache_key,
-        )
+        _current_spend = await self._get_shared_model_spend(cache_key=end_user_model_spend_cache_key)
 
         if _current_spend is None:
             # 2. If 1, does not exist, check if passed as {custom_llm_provider}/model
             end_user_model_spend_cache_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=end_user_model_spend_cache_key,
-            )
+            _current_spend = await self._get_shared_model_spend(cache_key=end_user_model_spend_cache_key)
         return _current_spend
 
     async def _get_virtual_key_spend_for_model(
@@ -188,17 +220,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         virtual_key_model_spend_cache_key = (
             f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.budget_duration}"
         )
-        _current_spend = await self.dual_cache.async_get_cache(
-            key=virtual_key_model_spend_cache_key,
-        )
+        _current_spend = await self._get_shared_model_spend(cache_key=virtual_key_model_spend_cache_key)
 
         if _current_spend is None:
             # 2. If 1, does not exist, check if passed as {custom_llm_provider}/model
             # if "/" in model, remove first part before "/" - eg. openai/o1-preview -> o1-preview
             virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
-            _current_spend = await self.dual_cache.async_get_cache(
-                key=virtual_key_model_spend_cache_key,
-            )
+            _current_spend = await self._get_shared_model_spend(cache_key=virtual_key_model_spend_cache_key)
         return _current_spend
 
     def _get_request_model_budget_config(
