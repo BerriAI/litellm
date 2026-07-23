@@ -513,11 +513,28 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    # Batch jsonl creation now stages the body to a temp file and issues a single
-    # uploadType=media POST against the raw httpx.AsyncClient (client.client) inside
-    # _astage_and_upload_media, not AsyncHTTPHandler.post. Patch that raw POST so the
-    # real staging/upload + response transform run while the GCS object response is
-    # mocked; AsyncHTTPHandler.post still handles the batch-prediction call.
+    # Batch jsonl creation streams the body to a GCS resumable session on the raw
+    # httpx.AsyncClient (client.client): one POST opens the session (URI in the
+    # Location header), then the body is PUT in chunks. Those go through
+    # AsyncClient.send, not AsyncHTTPHandler.post, so patch send to run the real
+    # upload + response transform against a mocked GCS session; AsyncHTTPHandler.post
+    # still handles the batch-prediction call.
+    gcs_session_url = (
+        "https://storage.googleapis.com/upload/storage/v1/b/litellm-local/o?uploadType=resumable&upload_id=SID"
+    )
+
+    async def mock_gcs_send(request, **kwargs):
+        if request.method == "POST":
+            return httpx.Response(200, headers={"location": gcs_session_url}, request=request)
+        # A non-final chunk carries an unknown total ("bytes X-Y/*") and must get a
+        # 308; only the final chunk ("bytes X-Y/TOTAL") returns the object resource.
+        # Returning 200 for every PUT would mask the handler's 308 requirement and
+        # break the moment a payload spans more than one chunk.
+        content_range = request.headers["content-range"]
+        if content_range.rsplit("/", 1)[-1] == "*":
+            return httpx.Response(308, headers={"range": "bytes=0-*"}, request=request)
+        return httpx.Response(200, json=mock_file_response, request=request)
+
     with (
         patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -525,13 +542,9 @@ async def test_avertex_batch_prediction(monkeypatch):
         ),
         patch.object(
             httpx.AsyncClient,
-            "post",
+            "send",
             new_callable=AsyncMock,
-            return_value=httpx.Response(
-                200,
-                json=mock_file_response,
-                request=httpx.Request("POST", "https://storage.googleapis.com/upload"),
-            ),
+            side_effect=mock_gcs_send,
         ) as mock_gcs_upload,
     ):
         litellm.set_verbose = True
@@ -553,14 +566,16 @@ async def test_avertex_batch_prediction(monkeypatch):
             == "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
         )
 
-        mock_gcs_upload.assert_awaited_once()
-        upload_url = str(mock_gcs_upload.call_args.args[0])
-        assert "uploadType=media" in upload_url
-        assert "/b/litellm-local/o" in upload_url
-        assert (
-            mock_gcs_upload.call_args.kwargs["headers"]["Content-Type"]
-            == "application/json"
-        )
+        # Session-open POST then at least one chunk PUT.
+        assert mock_gcs_upload.await_count >= 2
+        init_request = mock_gcs_upload.call_args_list[0].args[0]
+        assert init_request.method == "POST"
+        assert "uploadType=resumable" in str(init_request.url)
+        assert "/b/litellm-local/o" in str(init_request.url)
+        assert init_request.headers["X-Upload-Content-Type"] == "application/json"
+        chunk_request = mock_gcs_upload.call_args_list[1].args[0]
+        assert chunk_request.method == "PUT"
+        assert str(chunk_request.url) == gcs_session_url
 
         # Create batch
         create_batch_response = await litellm.acreate_batch(
