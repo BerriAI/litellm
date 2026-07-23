@@ -4391,3 +4391,57 @@ def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
         assert cold_logger.requested_object_keys == ["k/cold.json"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_global_spend_refresh_disconnects_client_on_success(monkeypatch):
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        global_spend_refresh,
+    )
+
+    fake_singleton = MagicMock()
+    fake_singleton.db = MagicMock()
+    fake_singleton.db.query_raw = AsyncMock(
+        return_value=[{"relname": "MonthlyGlobalSpend", "relkind": "m"}]
+    )
+    monkeypatch.setattr(ps, "prisma_client", fake_singleton)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost:5432/db")
+
+    fake_client = MagicMock()
+    fake_client.db = MagicMock()
+    fake_client.db.connect = AsyncMock()
+    fake_client.db.query_raw = AsyncMock(return_value=None)
+    fake_client.db.disconnect = AsyncMock()
+
+    with patch("litellm.proxy.utils.PrismaClient", return_value=fake_client):
+        result = await global_spend_refresh()
+
+    assert result["status"] == "success"
+    fake_client.db.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_global_spend_refresh_disconnects_client_on_failure(monkeypatch):
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        global_spend_refresh,
+    )
+
+    fake_singleton = MagicMock()
+    fake_singleton.db = MagicMock()
+    fake_singleton.db.query_raw = AsyncMock(
+        return_value=[{"relname": "MonthlyGlobalSpend", "relkind": "m"}]
+    )
+    monkeypatch.setattr(ps, "prisma_client", fake_singleton)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost:5432/db")
+
+    fake_client = MagicMock()
+    fake_client.db = MagicMock()
+    fake_client.db.connect = AsyncMock()
+    fake_client.db.query_raw = AsyncMock(side_effect=Exception("refresh timed out"))
+    fake_client.db.disconnect = AsyncMock()
+
+    with patch("litellm.proxy.utils.PrismaClient", return_value=fake_client):
+        result = await global_spend_refresh()
+
+    assert result["status"] == "failure"
+    fake_client.db.disconnect.assert_awaited_once()
