@@ -161,6 +161,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: Optional[bool]
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
+    default_reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh"]]
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
