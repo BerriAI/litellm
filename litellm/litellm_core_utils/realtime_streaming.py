@@ -735,10 +735,26 @@ class RealTimeStreaming:
             if not any(callback.should_run_guardrail(data=_check_data, event_type=et) for et in _realtime_event_types):
                 continue
             _already_run.add(id(callback))
+            # Alias request_data["metadata"] to the read-path metadata dict on
+            # logging_obj.model_call_details so that the guardrail's
+            # standard_logging_guardrail_information stamp (start_time/end_time/
+            # duration) lands where get_standard_logging_object_payload reads
+            # from. Without this aliasing the stamp goes into a throwaway dict
+            # and StandardLoggingPayload.guardrail_information stays empty.
+            litellm_params = self.logging_obj.model_call_details.setdefault(
+                "litellm_params", {}
+            )
+            log_metadata = litellm_params.get("metadata")
+            if not isinstance(log_metadata, dict):
+                log_metadata = {}
+                litellm_params["metadata"] = log_metadata
             try:
                 await callback.apply_guardrail(
                     inputs={"texts": [transcript], "images": []},
-                    request_data={"user_api_key_dict": self.user_api_key_dict},
+                    request_data={
+                        "user_api_key_dict": self.user_api_key_dict,
+                        "metadata": log_metadata,
+                    },
                     input_type="request",
                 )
             except Exception as e:
