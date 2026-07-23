@@ -41,4 +41,6 @@ class TestCompletionsEndpoint:
         )
         require_successful_call(result)
         parsed = CompletionsResult.model_validate_json(result.body)
-        assert parsed.text.strip(), f"/v1/completions returned no text: {result.body[:300]}"
+        assert parsed.choices, f"/v1/completions returned no choices: {result.body[:300]}"
+        completion = (parsed.choices[0].text or "").strip()
+        assert completion, f"/v1/completions returned an empty completion: {result.body[:300]}"

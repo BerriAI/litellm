@@ -204,13 +204,7 @@ class CompletionChoice(BaseModel):
 
 
 class CompletionsResult(BaseModel):
-    id: str | None = None
-    model: str | None = None
     choices: list[CompletionChoice] = []
-
-    @property
-    def text(self) -> str:
-        return "".join(choice.text or "" for choice in self.choices)
 
 
 class EmbeddingItem(BaseModel):
