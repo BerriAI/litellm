@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import type { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
-import { buildDailyToolSeries, computeCacheLeakage, topToolsBySpend } from "./costOptimizationUtils";
+import { buildDailyToolSeries, computeCacheLeakage, isAnthropicModel, topToolsBySpend } from "./costOptimizationUtils";
 
 const metrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
   spend: 0,
@@ -35,6 +35,21 @@ const day = (
         { metrics: metrics(v.metrics), metadata: { key_alias: v.alias, team_id: null } },
       ]),
     ),
+  },
+});
+
+const modelDay = (date: string, models: Record<string, Partial<SpendMetrics>>): DailyData => ({
+  date,
+  metrics: metrics({}),
+  breakdown: {
+    models: Object.fromEntries(
+      Object.entries(models).map(([name, m]) => [name, { metrics: metrics(m), metadata: {}, api_key_breakdown: {} }]),
+    ),
+    model_groups: {},
+    mcp_servers: {},
+    providers: {},
+    entities: {},
+    api_keys: {},
   },
 });
 
@@ -76,8 +91,8 @@ describe("computeCacheLeakage", () => {
     ];
     const { rows, discountPerToken } = computeCacheLeakage(results);
     expect(discountPerToken).toBeCloseTo(0.002, 6);
-    expect(rows.map((r) => r.keyAlias)).toEqual(["leaker"]);
-    expect(rows[0].estSavingsLeft).toBeCloseTo(1.0, 6);
+    expect(rows.map((r) => r.label)).toEqual(["leaker"]);
+    expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
   });
 
   it("returns null estimate and ranks by uncached tokens when nobody used caching", () => {
@@ -89,8 +104,8 @@ describe("computeCacheLeakage", () => {
     ];
     const { rows, discountPerToken } = computeCacheLeakage(results);
     expect(discountPerToken).toBeNull();
-    expect(rows.map((r) => r.keyAlias)).toEqual(["big", "small"]);
-    expect(rows.every((r) => r.estSavingsLeft === null)).toBe(true);
+    expect(rows.map((r) => r.label)).toEqual(["big", "small"]);
+    expect(rows.every((r) => r.potentialSavings === null)).toBe(true);
   });
 
   it("computes cache hit ratio against total prompt tokens and clamps inconsistent data at zero", () => {
@@ -101,7 +116,7 @@ describe("computeCacheLeakage", () => {
       }),
     ];
     const { rows } = computeCacheLeakage(results);
-    expect(rows.map((r) => r.keyAlias)).toEqual(["mixed"]);
+    expect(rows.map((r) => r.label)).toEqual(["mixed"]);
     expect(rows[0].cacheHitRatio).toBeCloseTo(0.75, 6);
     expect(rows[0].uncachedPromptTokens).toBe(250);
   });
@@ -110,8 +125,60 @@ describe("computeCacheLeakage", () => {
     const keys = Object.fromEntries(
       Array.from({ length: 15 }, (_, i) => [`h${i}`, { alias: `k${i}`, metrics: { prompt_tokens: i + 1 } }]),
     );
-    const { rows } = computeCacheLeakage([day("2026-07-01", keys)], 5);
+    const { rows } = computeCacheLeakage([day("2026-07-01", keys)], "key", 5);
     expect(rows).toHaveLength(5);
+  });
+});
+
+describe("computeCacheLeakage by model", () => {
+  it("aggregates only Anthropic models and ignores other providers", () => {
+    const models: Record<string, Partial<SpendMetrics>> = {
+      "claude-sonnet-5": { prompt_tokens: 10000, cache_read_input_tokens: 0 },
+      "anthropic/claude-haiku-4-5": { prompt_tokens: 4000, cache_read_input_tokens: 0 },
+      "bedrock/anthropic.claude-3-5-sonnet": { prompt_tokens: 2000, cache_read_input_tokens: 0 },
+      "gpt-4o": { prompt_tokens: 9000, cache_read_input_tokens: 0 },
+      "deepseek-chat": { prompt_tokens: 8000, cache_read_input_tokens: 0 },
+    };
+    const { rows } = computeCacheLeakage([modelDay("2026-07-01", models)], "model");
+    expect(rows.map((r) => r.id)).toEqual([
+      "claude-sonnet-5",
+      "anthropic/claude-haiku-4-5",
+      "bedrock/anthropic.claude-3-5-sonnet",
+    ]);
+  });
+
+  it("labels model rows by model name with no sublabel", () => {
+    const results = [modelDay("2026-07-01", { "claude-sonnet-5": { prompt_tokens: 1000 } })];
+    const { rows } = computeCacheLeakage(results, "model");
+    expect(rows[0].label).toBe("claude-sonnet-5");
+    expect(rows[0].sublabel).toBeNull();
+  });
+
+  it("prices model leakage at the Anthropic realized cache-read discount", () => {
+    const results = [
+      modelDay("2026-07-01", {
+        "claude-sonnet-5": { prompt_tokens: 1000, cache_read_input_tokens: 1000, prompt_caching_savings_spend: 2.0 },
+        "claude-haiku-4-5": { prompt_tokens: 500 },
+      }),
+    ];
+    const { rows, discountPerToken } = computeCacheLeakage(results, "model");
+    expect(discountPerToken).toBeCloseTo(0.002, 6);
+    expect(rows.map((r) => r.id)).toEqual(["claude-haiku-4-5"]);
+    expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
+  });
+});
+
+describe("isAnthropicModel", () => {
+  it("matches Claude-family models across providers and rejects others", () => {
+    const anthropic = [
+      "claude-sonnet-5",
+      "anthropic/claude-haiku-4-5",
+      "bedrock/anthropic.claude-3-5-sonnet",
+      "vertex_ai/claude-opus-4-8",
+    ];
+    const others = ["gpt-4o", "deepseek-chat", "gemini-2.5-pro", "mistral-large"];
+    expect(anthropic.every(isAnthropicModel)).toBe(true);
+    expect(others.some(isAnthropicModel)).toBe(false);
   });
 });
 
