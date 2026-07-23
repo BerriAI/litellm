@@ -4863,3 +4863,35 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
         is False
     )
+
+
+def test_print_verbose_redacts_api_key_on_stdout(capsys, monkeypatch):
+    """Regression for #34274: the stdout path of litellm.utils.print_verbose must
+    redact secrets, matching litellm._logging.print_verbose. Callers pass dicts
+    like model_call_details that carry api_key, so the raw print leaked the key
+    verbatim to stdout when set_verbose=True."""
+    from litellm.utils import print_verbose
+
+    secret = "sk-secret-DO-NOT-LEAK-1234567890abcdef"
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+
+    print_verbose({"model": "gpt-4o", "api_key": secret, "messages": [{"role": "user", "content": "hi"}]})
+
+    out = capsys.readouterr().out
+    assert secret not in out
+    assert "REDACTED" in out
+
+
+def test_print_verbose_honors_redaction_opt_out(capsys, monkeypatch):
+    """When LITELLM_DISABLE_REDACT_SECRETS=true (redaction disabled), the stdout
+    path passes the payload through unchanged, preserving the documented opt-out."""
+    from litellm.utils import print_verbose
+
+    secret = "sk-secret-DO-NOT-LEAK-1234567890abcdef"
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", False)
+
+    print_verbose({"api_key": secret})
+
+    assert secret in capsys.readouterr().out
