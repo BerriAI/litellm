@@ -1072,9 +1072,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     @staticmethod
     def _finish_reason_for_incomplete_response(
-        incomplete_details: Optional[object],
+        incomplete_details: object | None,
     ) -> str:
-        reason: Optional[str] = None
+        reason: str | None = None
         if isinstance(incomplete_details, dict):
             raw_reason = incomplete_details.get("reason")
             if isinstance(raw_reason, str):
