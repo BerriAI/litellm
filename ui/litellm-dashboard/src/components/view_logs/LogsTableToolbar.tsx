@@ -43,6 +43,19 @@ export function LogsTableToolbar({
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
 
+  const applyQuickSelect = (option: { label: string; value: number; unit: string }) => {
+    onResetToFirstPage();
+    onEndTimeChange(moment().format("YYYY-MM-DDTHH:mm"));
+    onStartTimeChange(
+      moment()
+        .subtract(option.value, option.unit as moment.unitOfTime.DurationConstructor)
+        .format("YYYY-MM-DDTHH:mm"),
+    );
+    onSelectedTimeIntervalChange({ value: option.value, unit: option.unit });
+    onIsCustomDateChange(false);
+    setQuickSelectOpen(false);
+  };
+
   const selectedOption = QUICK_SELECT_OPTIONS.find(
     (option) => option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit,
   );
@@ -66,18 +79,7 @@ export function LogsTableToolbar({
                 key={option.label}
                 variant="ghost"
                 className="w-full justify-start font-normal"
-                onClick={() => {
-                  onResetToFirstPage();
-                  onEndTimeChange(moment().format("YYYY-MM-DDTHH:mm"));
-                  onStartTimeChange(
-                    moment()
-                      .subtract(option.value, option.unit as moment.unitOfTime.DurationConstructor)
-                      .format("YYYY-MM-DDTHH:mm"),
-                  );
-                  onSelectedTimeIntervalChange({ value: option.value, unit: option.unit });
-                  onIsCustomDateChange(false);
-                  setQuickSelectOpen(false);
-                }}
+                onClick={() => applyQuickSelect(option)}
               >
                 {option.label}
               </Button>

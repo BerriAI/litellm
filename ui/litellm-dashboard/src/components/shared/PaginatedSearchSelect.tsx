@@ -18,6 +18,8 @@ import type { SearchSelectOption } from "./SearchSelect";
 
 const SCROLL_THRESHOLD = 0.8;
 
+const SEARCH_REASONS: ReadonlySet<string> = new Set(["input-change", "input-clear", "clear-press"]);
+
 interface PaginatedSearchSelectProps {
   options: SearchSelectOption[];
   value?: string;
@@ -62,8 +64,8 @@ export function PaginatedSearchSelect({
 
   const debouncedSearch = useDebouncedCallback(onSearchChange, { wait: DEBOUNCE_WAIT_MS });
 
-  const handleInputValueChange = (next: string) => {
-    if (next === selected?.label) return;
+  const handleInputValueChange = (next: string, reason: string) => {
+    if (!SEARCH_REASONS.has(reason)) return;
     debouncedSearch(next);
   };
 
@@ -81,7 +83,7 @@ export function PaginatedSearchSelect({
       items={items}
       value={selected}
       onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
-      onInputValueChange={handleInputValueChange}
+      onInputValueChange={(next, eventDetails) => handleInputValueChange(next, eventDetails.reason)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={null}

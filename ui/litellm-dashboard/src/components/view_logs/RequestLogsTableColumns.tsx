@@ -1,10 +1,9 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { Tooltip } from "antd";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
+import { CellTooltip, DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
 import { getSpendString } from "@/utils/dataUtils";
 
 import { getProviderLogoAndName } from "../provider_info_helpers";
@@ -34,11 +33,7 @@ const getLogoUrl = (row: LogEntry, provider: string): string =>
 
 function TruncatedText({ value }: { value: string | undefined }) {
   const display = value ?? "-";
-  return (
-    <Tooltip title={display}>
-      <span className="max-w-[15ch] truncate block">{display}</span>
-    </Tooltip>
-  );
+  return <CellTooltip content={display} trigger={<span className="max-w-[15ch] truncate block">{display}</span>} />;
 }
 
 export const getRequestLogsTableColumns = ({
@@ -96,7 +91,7 @@ export const getRequestLogsTableColumns = ({
         sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
         sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
       ].filter(Boolean);
-      return <Tooltip title={tooltipParts.join(" • ")}>{sessionTypeBadge}</Tooltip>;
+      return <CellTooltip content={tooltipParts.join(" • ")} trigger={sessionTypeBadge} />;
     },
   },
   {
@@ -139,14 +134,15 @@ export const getRequestLogsTableColumns = ({
       const mcpSpend = log.mcp_tool_call_spend || 0;
       const isMultiCallSession = (log.session_total_count || 1) > 1;
       const spend = isMultiCallSession && log.session_total_spend != null ? log.session_total_spend : log.spend;
+      const money = (
+        <span>
+          <MoneyCell value={spend} decimals={6} />
+        </span>
+      );
 
       return (
         <div className="flex flex-col items-end">
-          <Tooltip title={spend ? `$${String(spend)}` : undefined}>
-            <span>
-              <MoneyCell value={spend} decimals={6} />
-            </span>
-          </Tooltip>
+          {spend ? <CellTooltip content={`$${String(spend)}`} trigger={money} /> : money}
           {isMultiCallSession && <span className="text-[10px] text-gray-400">session total</span>}
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-amber-600">
@@ -167,9 +163,10 @@ export const getRequestLogsTableColumns = ({
       const ms = row.original.request_duration_ms;
       if (ms == null) return <span>-</span>;
       return (
-        <Tooltip title={`${ms}ms`}>
-          <span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>
-        </Tooltip>
+        <CellTooltip
+          content={`${ms}ms`}
+          trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
+        />
       );
     },
   },
@@ -187,9 +184,10 @@ export const getRequestLogsTableColumns = ({
       const ttftMs = new Date(completionStartTime).getTime() - new Date(log.startTime).getTime();
       if (ttftMs <= 0) return <span>-</span>;
       return (
-        <Tooltip title={`${ttftMs}ms`}>
-          <span className="max-w-[15ch] truncate inline-block">{(ttftMs / 1000).toFixed(2)}</span>
-        </Tooltip>
+        <CellTooltip
+          content={`${ttftMs}ms`}
+          trigger={<span className="max-w-[15ch] truncate inline-block">{(ttftMs / 1000).toFixed(2)}</span>}
+        />
       );
     },
   },
@@ -238,9 +236,7 @@ export const getRequestLogsTableColumns = ({
               }}
             />
           )}
-          <Tooltip title={modelName}>
-            <span className="max-w-[15ch] truncate block">{modelName}</span>
-          </Tooltip>
+          <CellTooltip content={modelName} trigger={<span className="max-w-[15ch] truncate block">{modelName}</span>} />
         </div>
       );
     },
@@ -297,8 +293,8 @@ export const getRequestLogsTableColumns = ({
 
       return (
         <div className="flex flex-wrap gap-1">
-          <Tooltip
-            title={
+          <CellTooltip
+            content={
               <div className="flex flex-col gap-1">
                 {tagEntries.map(([key, value]) => (
                   <span key={key}>
@@ -307,12 +303,13 @@ export const getRequestLogsTableColumns = ({
                 ))}
               </div>
             }
-          >
-            <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">
-              {firstTagKey}: {String(firstTagValue)}
-              {remainingCount > 0 && ` +${remainingCount}`}
-            </span>
-          </Tooltip>
+            trigger={
+              <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">
+                {firstTagKey}: {String(firstTagValue)}
+                {remainingCount > 0 && ` +${remainingCount}`}
+              </span>
+            }
+          />
         </div>
       );
     },

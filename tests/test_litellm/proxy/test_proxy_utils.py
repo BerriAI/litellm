@@ -709,6 +709,39 @@ def test_create_model_info_response_reads_real_cost_map():
     assert response["max_output_tokens"] > 0
 
 
+def test_create_model_info_response_includes_mode_from_lookup():
+    response = create_model_info_response(
+        model_id="text-embedding-3-small",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(mode="embedding"),
+    )
+
+    assert response["mode"] == "embedding"
+
+
+def test_create_model_info_response_omits_mode_when_lookup_raises():
+    response = create_model_info_response(
+        model_id="my-custom-deployment",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert "mode" not in response
+
+
+def test_create_model_info_response_omits_non_string_mode():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(mode=None),
+    )
+
+    assert "mode" not in response
+
+
 class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized

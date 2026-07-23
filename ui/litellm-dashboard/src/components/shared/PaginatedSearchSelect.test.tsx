@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PaginatedSearchSelect } from "./PaginatedSearchSelect";
@@ -42,6 +43,42 @@ describe("PaginatedSearchSelect", () => {
     await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("gamma"));
 
     expect(await screen.findByText("alias-alpha")).toBeInTheDocument();
+  });
+
+  it("does not re-query the server when an item is selected", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+
+    function Controlled() {
+      const [value, setValue] = useState("");
+      return (
+        <PaginatedSearchSelect
+          options={OPTIONS}
+          value={value}
+          onValueChange={setValue}
+          onSearchChange={onSearchChange}
+          onLoadMore={vi.fn()}
+        />
+      );
+    }
+    render(<Controlled />);
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByText("alias-beta"));
+
+    expect(screen.getByRole("combobox")).toHaveValue("alias-beta");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(onSearchChange).not.toHaveBeenCalled();
+  });
+
+  it("still reports a cleared input so the unfiltered page comes back", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    await user.click(document.querySelector('[data-slot="combobox-clear"]') as HTMLElement);
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith(""));
   });
 
   it("requests the next page once the list is scrolled near the bottom", async () => {
