@@ -115,6 +115,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
+    def is_model_gpt_5_5_plus_model(cls, model: str) -> bool:
+        """Check if the model is gpt-5.5 or newer (5.5, 5.6, etc., including pro)."""
+        model_name = model.split("/")[-1]
+        if not model_name.startswith("gpt-5."):
+            return False
+        try:
+            version_str = model_name.replace("gpt-5.", "").split("-")[0]
+            major = version_str.split(".")[0]
+            return int(major) >= 5
+        except (ValueError, IndexError):
+            return False
+
+    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 
@@ -122,6 +135,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         the shared ``_supports_factory`` helper.
         Returns False for unknown models (safe fallback).
         """
+        if level == "none" and cls.is_model_gpt_5_5_plus_model(model):
+            return False
         return _supports_factory(
             model=model,
             custom_llm_provider=None,
