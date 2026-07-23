@@ -1,6 +1,8 @@
 from abc import ABC
 from typing import TYPE_CHECKING, Any, Dict, Union
 
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
@@ -17,12 +19,19 @@ class BaseLLMObsOTELAttributes(ABC):
 
 def cast_as_primitive_value_type(value) -> Union[str, bool, int, float]:
     """
-    Converts a value to an OTEL-supported primitive for Arize/Phoenix observability.
+    Converts a value to an OTEL-supported primitive (str / bool / int / float).
+
+    dict / list values are JSON-serialized so structured span attributes stay
+    machine-parseable; ``str()`` on them emits a single-quoted Python repr that
+    is not valid JSON and breaks downstream consumers. Any other non-primitive
+    type falls back to ``str()``.
     """
     if value is None:
         return ""
     if isinstance(value, (str, bool, int, float)):
         return value
+    if isinstance(value, (dict, list)):
+        return safe_dumps(value)
     try:
         return str(value)
     except Exception:

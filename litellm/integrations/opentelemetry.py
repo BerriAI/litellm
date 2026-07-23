@@ -21,6 +21,9 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
+    cast_as_primitive_value_type as cast_primitive_value_type,
+)
 from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
     OTELGenAISemconvMixin,
@@ -2101,23 +2104,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             verbose_logger.error("OpenTelemetry: Error setting tools attributes: %s", str(e))
             pass
 
-    def cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
-        """
-        Casts the value to a primitive OTEL type if it is not already a primitive type.
-
-        OTEL supports - str, bool, int, float
-
-        If it's not a primitive type, then it's converted to a string
-        """
-        if value is None:
-            return ""
-        if isinstance(value, (str, bool, int, float)):
-            return value
-        try:
-            return str(value)
-        except Exception:
-            return ""
-
     @staticmethod
     def _tool_calls_kv_pair(
         tool_calls: List[ChatCompletionMessageToolCall],
@@ -2493,28 +2479,22 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self.handle_callback_failure(callback_name=self.callback_name or "opentelemetry")
             verbose_logger.exception("OpenTelemetry logging error in set_attributes %s", str(e))
 
-    def _cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
+    def cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
         """
-        Casts the value to a primitive OTEL type if it is not already a primitive type.
+        Casts the value to a primitive OTEL type (str / bool / int / float).
 
-        OTEL supports - str, bool, int, float
-
-        If it's not a primitive type, then it's converted to a string
+        Delegates to the shared cast in ``base_otel_llm_obs_attributes`` so the
+        OTEL, Arize, Weave and Langfuse paths serialize dict/list span
+        attributes identically (JSON via ``safe_dumps``, not a non-parseable
+        Python repr).
         """
-        if value is None:
-            return ""
-        if isinstance(value, (str, bool, int, float)):
-            return value
-        try:
-            return str(value)
-        except Exception:
-            return ""
+        return cast_primitive_value_type(value)
 
     def safe_set_attribute(self, span: Span, key: str, value: Any):
         """
         Safely sets an attribute on the span, ensuring the value is a primitive type.
         """
-        primitive_value = self._cast_as_primitive_value_type(value)
+        primitive_value = self.cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
     def _transform_messages_to_otel_semantic_conventions(self, messages: Union[List[dict], str]) -> List[dict]:
