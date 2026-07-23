@@ -44,6 +44,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import GuardrailMode
 dc = DualCache()
 
 
@@ -857,6 +858,26 @@ class CustomGuardrail(CustomLogger):
             return False
         return True
 
+    def _resolve_logged_guardrail_mode(
+        self,
+        event_type: Optional[GuardrailEventHooks],
+    ) -> Union[GuardrailEventHooks, "GuardrailMode", List[GuardrailEventHooks]]:
+        """
+        Resolve the value logged as `guardrail_mode`.
+
+        Use the resolved event_type (the concrete hook that actually fired
+        for *this* invocation) when available. Fall back to self.event_hook
+        as a last resort, preserving its configured shape verbatim so the
+        logged value stays backward compatible with pre-existing consumers.
+        """
+        from litellm.types.utils import GuardrailMode
+
+        if event_type is not None:
+            return event_type
+        if isinstance(self.event_hook, Mode):
+            return GuardrailMode(**dict(self.event_hook.model_dump()))  # type: ignore[typeddict-item]
+        return self.event_hook  # type: ignore[return-value]
+
     def add_standard_logging_guardrail_information_to_request_data(
         self,
         guardrail_json_response: Union[Exception, str, dict, List[dict]],
@@ -880,16 +901,8 @@ class CustomGuardrail(CustomLogger):
         """
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
-        from litellm.types.utils import GuardrailMode
 
-        # Use event_type if provided, otherwise fall back to self.event_hook
-        guardrail_mode: Union[GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks]]
-        if event_type is not None:
-            guardrail_mode = event_type
-        elif isinstance(self.event_hook, Mode):
-            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))  # type: ignore[typeddict-item]
-        else:
-            guardrail_mode = self.event_hook  # type: ignore[assignment]
+        guardrail_mode = self._resolve_logged_guardrail_mode(event_type)
 
         from litellm.litellm_core_utils.core_helpers import (
             filter_exceptions_from_params,
@@ -1246,8 +1259,17 @@ def log_guardrail_information(func):
 
     def _infer_event_type_from_function_name(
         func_name: str,
+        kwargs: Optional[dict] = None,
     ) -> Optional[GuardrailEventHooks]:
-        """Infer the actual event type from the function name"""
+        """Infer the actual event type from the function name.
+
+        For ``apply_guardrail`` the concrete hook is derived from the
+        ``input_type`` kwarg: ``"request"`` → ``pre_call``,
+        ``"response"`` → ``post_call``. This avoids logging the raw
+        ``self.event_hook`` config (which may be a ``List`` or ``Mode``
+        dict) instead of the concrete hook that was resolved for this
+        invocation.
+        """
         if func_name == "async_pre_call_hook":
             return GuardrailEventHooks.pre_call
         elif func_name == "async_moderation_hook":
@@ -1257,6 +1279,13 @@ def log_guardrail_information(func):
             "async_post_call_streaming_hook",
         ):
             return GuardrailEventHooks.post_call
+        elif func_name == "apply_guardrail" and kwargs and "input_type" in kwargs:
+            input_type = kwargs.get("input_type")
+            if input_type == "request":
+                return GuardrailEventHooks.pre_call
+            elif input_type == "response":
+                return GuardrailEventHooks.post_call
+            return GuardrailEventHooks.during_call
         return None
 
     def _count_recorded_guardrail_entries(request_data: dict) -> int:
@@ -1269,12 +1298,50 @@ def log_guardrail_information(func):
                     total += len(entries)
         return total
 
+    def _backfill_event_type_on_recorded_entries(
+        guardrail: "CustomGuardrail",
+        request_data: dict,
+        entries_before: int,
+        event_type: Optional[GuardrailEventHooks],
+    ) -> None:
+        """Overwrite the raw-config fallback mode on entries the wrapped
+        function recorded itself.
+
+        Guardrails like Presidio call
+        ``add_standard_logging_guardrail_information_to_request_data``
+        internally (without ``event_type``), so those entries fall back to
+        the configured ``event_hook``. The wrapper is the only place that
+        knows the concrete hook that fired, so patch it onto the entries
+        added during this invocation. Entries whose mode differs from the
+        fallback were set deliberately and are left untouched.
+        """
+        if event_type is None:
+            return
+        fallback_mode = guardrail._resolve_logged_guardrail_mode(None)
+        seen = 0
+        for container_key in ("metadata", "litellm_metadata"):
+            container = request_data.get(container_key)
+            if not isinstance(container, dict):
+                continue
+            entries = container.get("standard_logging_guardrail_information")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                seen += 1
+                if seen <= entries_before or not isinstance(entry, dict):
+                    continue
+                if (
+                    entry.get("guardrail_name") == guardrail.guardrail_name
+                    and entry.get("guardrail_mode") == fallback_mode
+                ):
+                    entry["guardrail_mode"] = event_type
+
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
-        event_type = _infer_event_type_from_function_name(func.__name__)
+        event_type = _infer_event_type_from_function_name(func.__name__, kwargs)
 
         # Store original inputs for comparison (for apply_guardrail functions)
         original_inputs = None
@@ -1286,6 +1353,7 @@ def log_guardrail_information(func):
         try:
             response = await func(*args, **kwargs)
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _backfill_event_type_on_recorded_entries(self, request_data, entries_before, event_type)
                 return response
             return self._process_response(
                 response=response,
@@ -1298,6 +1366,7 @@ def log_guardrail_information(func):
             )
         except Exception as e:
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _backfill_event_type_on_recorded_entries(self, request_data, entries_before, event_type)
                 raise
             return self._process_error(
                 e=e,
@@ -1315,7 +1384,7 @@ def log_guardrail_information(func):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
-        event_type = _infer_event_type_from_function_name(func.__name__)
+        event_type = _infer_event_type_from_function_name(func.__name__, kwargs)
 
         # Store original inputs for comparison (for apply_guardrail functions)
         original_inputs = None
@@ -1327,6 +1396,7 @@ def log_guardrail_information(func):
         try:
             response = func(*args, **kwargs)
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _backfill_event_type_on_recorded_entries(self, request_data, entries_before, event_type)
                 return response
             return self._process_response(
                 response=response,
@@ -1337,6 +1407,7 @@ def log_guardrail_information(func):
             )
         except Exception as e:
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _backfill_event_type_on_recorded_entries(self, request_data, entries_before, event_type)
                 raise
             return self._process_error(
                 e=e,
