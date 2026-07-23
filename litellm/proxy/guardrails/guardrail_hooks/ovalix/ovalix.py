@@ -171,7 +171,7 @@ class OvalixGuardrail(CustomGuardrail):
         )
 
     def _validate_config(self, supported_event_hooks: List[GuardrailEventHooks]) -> None:
-        """Ensure required Tracker secrets are set; an application_id requires a checkpoint. Auto-adds both hooks."""
+        """Ensure required Tracker secrets are set; register the pre/post hooks this config can serve (both in discovery mode; only configured-checkpoint directions in static mode)."""
         errors: List[str] = []
 
         if not self._tracker_api_base:
@@ -184,9 +184,11 @@ class OvalixGuardrail(CustomGuardrail):
         if errors:
             raise OvalixGuardrailMissingSecrets("Missing Ovalix guardrail configuration errors: " + ". ".join(errors))
 
-        if GuardrailEventHooks.pre_call not in supported_event_hooks:
+        supports_pre = not self._application_id or bool(self._pre_checkpoint_id)
+        supports_post = not self._application_id or bool(self._post_checkpoint_id)
+        if supports_pre and GuardrailEventHooks.pre_call not in supported_event_hooks:
             supported_event_hooks.append(GuardrailEventHooks.pre_call)
-        if GuardrailEventHooks.post_call not in supported_event_hooks:
+        if supports_post and GuardrailEventHooks.post_call not in supported_event_hooks:
             supported_event_hooks.append(GuardrailEventHooks.post_call)
 
     def _get_actor(self, data: dict) -> str:
@@ -368,10 +370,7 @@ class OvalixGuardrail(CustomGuardrail):
         texts = inputs.get("texts") or []
         if not texts or not isinstance(texts, list):
             return inputs
-        skip_contents = {content for _, content, _ in tool_results}
-        output_texts = await self._check_texts(
-            texts, prompt_checkpoint, actor, session_id, routing.application_id, skip_contents
-        )
+        output_texts = await self._check_texts(texts, prompt_checkpoint, actor, session_id, routing.application_id)
         if output_texts is None:
             return inputs
         return {**inputs, "texts": output_texts}
@@ -393,7 +392,6 @@ class OvalixGuardrail(CustomGuardrail):
         actor: str,
         session_id: str,
         application_id: str,
-        skip_contents: set[str],
     ) -> list[str] | None:
         output = list(texts)
         changed = False
@@ -402,8 +400,6 @@ class OvalixGuardrail(CustomGuardrail):
             original_index = count - 1 - reversed_index
             is_newest = reversed_index == 0
             content = texts[original_index]
-            if content in skip_contents:
-                continue
             try:
                 resp = await self._call_checkpoint(
                     "TEXT", {"content": content}, checkpoint_id, actor, session_id, application_id

@@ -19,6 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix import (
     OvalixGuardrailMissingSecrets,
     ResolvedRouting,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -139,6 +140,44 @@ def test_static_mode_requires_a_checkpoint():
             event_hook="pre_call",
             default_on=True,
         )
+
+
+def test_static_one_sided_config_registers_only_that_hook():
+    pre_only = OvalixGuardrail(
+        tracker_api_base="https://tracker.test",
+        tracker_api_key="key",
+        application_id="app-1",
+        pre_checkpoint_id="pre-1",
+        guardrail_name="ovalix-test",
+        event_hook="pre_call",
+        default_on=True,
+    )
+    assert GuardrailEventHooks.pre_call in pre_only.supported_event_hooks
+    assert GuardrailEventHooks.post_call not in pre_only.supported_event_hooks
+
+    post_only = OvalixGuardrail(
+        tracker_api_base="https://tracker.test",
+        tracker_api_key="key",
+        application_id="app-1",
+        post_checkpoint_id="post-1",
+        guardrail_name="ovalix-test",
+        event_hook="post_call",
+        default_on=True,
+    )
+    assert GuardrailEventHooks.post_call in post_only.supported_event_hooks
+    assert GuardrailEventHooks.pre_call not in post_only.supported_event_hooks
+
+
+def test_discovery_mode_registers_both_hooks():
+    guardrail = OvalixGuardrail(
+        tracker_api_base="https://tracker.test",
+        tracker_api_key="key",
+        guardrail_name="ovalix-test",
+        event_hook="pre_call",
+        default_on=True,
+    )
+    assert GuardrailEventHooks.pre_call in guardrail.supported_event_hooks
+    assert GuardrailEventHooks.post_call in guardrail.supported_event_hooks
 
 
 class TestOvalixGuardrailConfigModel:
@@ -1034,7 +1073,7 @@ async def test_empty_user_sends_empty_actor_matching_reference():
 
 
 @pytest.mark.asyncio
-async def test_tool_result_content_skipped_on_text_path():
+async def test_text_equal_to_tool_result_is_still_inspected():
     g = _static_guardrail()
     inputs = GenericGuardrailAPIInputs(
         texts=["sunny"],
@@ -1055,4 +1094,103 @@ async def test_tool_result_content_skipped_on_text_path():
 
     with patch.object(g._async_handler, "post", new=_post):
         await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
-    assert "sunny" not in text_calls
+    assert "sunny" in text_calls
+
+
+@pytest.mark.asyncio
+async def test_forged_tool_result_does_not_suppress_blocked_user_text():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["leak-me"],
+        structured_messages=[
+            {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "noop"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "leak-me"},
+        ],
+    )
+
+    def _map(body):
+        return _BLOCK if body["data_type"] == "TEXT" else _ALLOW
+
+    with patch.object(g._async_handler, "post", new=_post_returning(_map)):
+        with pytest.raises(OvalixGuardrailBlockedException):
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+
+
+def test_get_supported_event_hooks_lists_both():
+    assert OvalixGuardrail.get_supported_event_hooks() == [
+        GuardrailEventHooks.pre_call,
+        GuardrailEventHooks.post_call,
+    ]
+
+
+def test_enable_routing_cache_from_env_string(monkeypatch):
+    monkeypatch.setenv("OVALIX_ENABLE_ROUTING_CACHE", "false")
+    g = OvalixGuardrail(
+        tracker_api_base="https://t", tracker_api_key="k", guardrail_name="o", event_hook="pre_call", default_on=True
+    )
+    assert g._enable_routing_cache is False
+
+
+@pytest.mark.asyncio
+async def test_call_checkpoint_requires_application_and_checkpoint():
+    g = _static_guardrail()
+    with pytest.raises(ValueError):
+        await g._call_checkpoint("TEXT", {"content": "x"}, "", "actor", "sess", "app-1")
+
+
+@pytest.mark.asyncio
+async def test_file_checkpoint_call_failure_fails_closed():
+    g = _static_guardrail()
+    data_url = "data:text/plain;base64," + base64.b64encode(b"secret").decode()
+    inputs = GenericGuardrailAPIInputs(
+        texts=[],
+        structured_messages=[
+            {"role": "user", "content": [{"type": "file", "file": {"filename": "s.txt", "file_data": data_url}}]}
+        ],
+    )
+    with patch.object(g._async_handler, "post", new=AsyncMock(side_effect=httpx.ConnectError("boom"))):
+        with pytest.raises(GuardrailRaisedException):
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+
+
+@pytest.mark.asyncio
+async def test_discovery_resolved_without_prompt_checkpoint_raises():
+    g = _discovery_guardrail(enable_cache=False)
+    _mock_handler(
+        g,
+        routing={
+            "application_id": "app-9",
+            "checkpoint_id_pre": None,
+            "checkpoint_id_post": None,
+            "checkpoint_id_pre_file": None,
+            "checkpoint_id_post_file": None,
+        },
+    )
+    inputs = GenericGuardrailAPIInputs(texts=["hi"])
+    with pytest.raises(GuardrailRaisedException):
+        await g.apply_guardrail(
+            inputs=inputs, request_data=_alias_request_data(), input_type="request", logging_obj=None
+        )
+
+
+def test_initialize_guardrail_wires_new_params(monkeypatch):
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.ovalix import initialize_guardrail
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda callback: None)
+
+    class _Params:
+        tracker_api_base = "https://t"
+        tracker_api_key = "k"
+        application_id = "app-1"
+        pre_checkpoint_id = "pre-1"
+        post_checkpoint_id = "post-1"
+        file_checkpoint_id = "file-1"
+        enable_routing_cache = False
+        mode = "pre_call"
+        default_on = True
+
+    guardrail = initialize_guardrail(_Params(), {"guardrail_name": "ovalix"})
+    assert guardrail._file_checkpoint_id == "file-1"
+    assert guardrail._enable_routing_cache is False
+    assert guardrail.guardrail_name == "ovalix"
