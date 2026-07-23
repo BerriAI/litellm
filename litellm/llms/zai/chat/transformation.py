@@ -7,6 +7,8 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 ZAI_API_BASE = "https://api.z.ai/api/paas/v4"
 
+_REASONING_PARAMS = ("thinking", "reasoning_effort")
+
 
 class ZAIChatConfig(OpenAIGPTConfig):
     @property
@@ -49,8 +51,25 @@ class ZAIChatConfig(OpenAIGPTConfig):
 
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_params.append("thinking")
+                base_params.extend(_REASONING_PARAMS)
         except Exception:
             pass
 
         return base_params
+
+    def _map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        supported = self.get_supported_openai_params(model)
+        for param, value in non_default_params.items():
+            if param not in supported:
+                continue
+            if param in _REASONING_PARAMS:
+                optional_params.setdefault("extra_body", {})[param] = value
+            else:
+                optional_params[param] = value
+        return optional_params
