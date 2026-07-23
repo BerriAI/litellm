@@ -5064,7 +5064,10 @@ def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockT
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
-    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _LEGACY_DEFS_MAX_INLINED_BYTES,
+        unpack_defs,
+    )
 
     _valid_json_schema_root_types = frozenset(("array", "boolean", "integer", "null", "number", "object", "string"))
     # Only Claude on Bedrock honours strict tool schemas; other families
@@ -5114,7 +5117,11 @@ def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockT
         # Note: We don't pre-flatten defs as that causes exponential memory growth
         # with circular references (see issue #19098). unpack_defs handles nested
         # refs recursively and correctly detects/skips circular references.
-        unpack_defs(parameters, defs_copy)
+        unpack_defs(
+            parameters,
+            defs_copy,
+            max_inlined_bytes=_LEGACY_DEFS_MAX_INLINED_BYTES,
+        )
         normalize_json_schema_custom_types_to_object(parameters)
         if parameters.get("type") not in _valid_json_schema_root_types:
             parameters["type"] = "object"

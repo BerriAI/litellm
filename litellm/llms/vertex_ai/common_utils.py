@@ -8,7 +8,10 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _LEGACY_DEFS_MAX_INLINED_BYTES,
+    unpack_defs,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -598,7 +601,11 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
-    unpack_defs(parameters, defs)
+    unpack_defs(
+        parameters,
+        defs,
+        max_inlined_bytes=_LEGACY_DEFS_MAX_INLINED_BYTES,
+    )
 
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
