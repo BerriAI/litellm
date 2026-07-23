@@ -15,11 +15,7 @@ export default function ResetPasswordPage() {
   const [success, setSuccess] = useState<ChangePasswordResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = async (values: {
-    current_password: string;
-    new_password: string;
-    confirm_password: string;
-  }) => {
+  const handleSubmit = async (values: { current_password: string; new_password: string; confirm_password: string }) => {
     setError(null);
     setSuccess(null);
 

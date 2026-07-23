@@ -319,10 +319,7 @@ export default function UserInfoView({
     }
   };
 
-  const handleAdminResetPassword = async (values: {
-    new_password?: string;
-    require_reset: boolean;
-  }) => {
+  const handleAdminResetPassword = async (values: { new_password?: string; require_reset: boolean }) => {
     if (!accessToken || !userData) return;
     setIsResettingPassword(true);
     setResetPasswordError(null);
@@ -413,7 +410,12 @@ export default function UserInfoView({
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex items-center space-x-2">
-            <Button icon={RefreshIcon} variant="secondary" onClick={handleGenerateResetLink} className="flex items-center">
+            <Button
+              icon={RefreshIcon}
+              variant="secondary"
+              onClick={handleGenerateResetLink}
+              className="flex items-center"
+            >
               Reset Password
             </Button>
             <Button
@@ -566,9 +568,7 @@ export default function UserInfoView({
                   {userRole && isAdminRole(userRole) && (
                     <>
                       <div className="flex justify-end">
-                        <AntdButton onClick={() => setIsResetPasswordModalOpen(true)}>
-                          Reset Password
-                        </AntdButton>
+                        <AntdButton onClick={() => setIsResetPasswordModalOpen(true)}>Reset Password</AntdButton>
                       </div>
                       <Modal
                         title="Reset Password"
@@ -581,12 +581,8 @@ export default function UserInfoView({
                         }}
                         footer={null}
                       >
-                        {resetPasswordError && (
-                          <div className="mb-4 text-red-600">{resetPasswordError}</div>
-                        )}
-                        {resetPasswordSuccess && (
-                          <div className="mb-4 text-green-600">{resetPasswordSuccess}</div>
-                        )}
+                        {resetPasswordError && <div className="mb-4 text-red-600">{resetPasswordError}</div>}
+                        {resetPasswordSuccess && <div className="mb-4 text-green-600">{resetPasswordSuccess}</div>}
                         <Form
                           form={resetPasswordForm}
                           onFinish={handleAdminResetPassword}
@@ -677,7 +673,9 @@ export default function UserInfoView({
 
                   <div>
                     <Text className="font-medium">Password Updated</Text>
-                    <Text>{userData.password_updated_at ? new Date(userData.password_updated_at).toLocaleString() : "Never"}</Text>
+                    <Text>
+                      {userData.password_updated_at ? new Date(userData.password_updated_at).toLocaleString() : "Never"}
+                    </Text>
                   </div>
 
                   <div>

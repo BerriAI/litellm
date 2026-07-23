@@ -8,21 +8,13 @@ interface ChangePasswordModalProps {
   onClose: () => void;
 }
 
-const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
-  accessToken,
-  open,
-  onClose,
-}) => {
+const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ accessToken, open, onClose }) => {
   const [form] = Form.useForm();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<ChangePasswordResponse | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = async (values: {
-    current_password: string;
-    new_password: string;
-    confirm_password: string;
-  }) => {
+  const handleSubmit = async (values: { current_password: string; new_password: string; confirm_password: string }) => {
     setError(null);
     setSuccess(null);
 
@@ -54,36 +46,14 @@ const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   };
 
   return (
-    <Modal
-      title="Change Password"
-      open={open}
-      onCancel={handleClose}
-      footer={null}
-      destroyOnClose
-    >
-      {error && (
-        <Alert message={error} type="error" showIcon className="mb-4" />
-      )}
-      {success && (
-        <Alert
-          message={success.message}
-          type="success"
-          showIcon
-          className="mb-4"
-        />
-      )}
-      <Form
-        form={form}
-        onFinish={handleSubmit}
-        layout="vertical"
-        requiredMark={false}
-      >
+    <Modal title="Change Password" open={open} onCancel={handleClose} footer={null} destroyOnClose>
+      {error && <Alert message={error} type="error" showIcon className="mb-4" />}
+      {success && <Alert message={success.message} type="success" showIcon className="mb-4" />}
+      <Form form={form} onFinish={handleSubmit} layout="vertical" requiredMark={false}>
         <Form.Item
           label="Current Password"
           name="current_password"
-          rules={[
-            { required: true, message: "Please enter your current password" },
-          ]}
+          rules={[{ required: true, message: "Please enter your current password" }]}
         >
           <Input.Password autoComplete="current-password" />
         </Form.Item>
@@ -122,12 +92,7 @@ const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
             {success ? "Close" : "Cancel"}
           </Button>
           {!success && (
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={isSubmitting}
-              disabled={isSubmitting}
-            >
+            <Button type="primary" htmlType="submit" loading={isSubmitting} disabled={isSubmitting}>
               Update Password
             </Button>
           )}

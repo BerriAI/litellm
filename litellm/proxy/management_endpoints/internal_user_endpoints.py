@@ -16,7 +16,7 @@ import asyncio
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Annotated, Any, Dict, List, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -87,9 +87,9 @@ class ChangePasswordRequest(LiteLLMPydanticObjectBase):
 class ResetPasswordRequest(LiteLLMPydanticObjectBase):
     """Admin-triggered password reset request."""
 
-    user_id: Optional[str] = None
-    user_email: Optional[str] = None
-    new_password: Optional[str] = None
+    user_id: str | None = None
+    user_email: str | None = None
+    new_password: str | None = None
     require_reset: bool = True
 
 
@@ -1464,7 +1464,7 @@ async def user_update(
 @management_endpoint_wrapper
 async def change_password(
     data: ChangePasswordRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Self-service password change for the authenticated user.
@@ -1534,7 +1534,7 @@ async def change_password(
             success=True,
             message="Password updated successfully",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # convert unexpected errors to proxy exception
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.change_password(): Exception occured - {}".format(str(e))
         )
@@ -1550,7 +1550,7 @@ async def change_password(
 @management_endpoint_wrapper
 async def reset_password(
     data: ResetPasswordRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
     Admin-triggered password reset.
@@ -1632,7 +1632,7 @@ async def reset_password(
             success=True,
             message="Password reset triggered successfully",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # convert unexpected errors to proxy exception
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.reset_password(): Exception occured - {}".format(str(e))
         )
