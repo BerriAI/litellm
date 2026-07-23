@@ -10592,7 +10592,7 @@ class Router:
         _target_order = (request_kwargs or {}).pop("_target_order", None)
         if _target_order is not None:
             healthy_deployments = litellm.utils._get_order_filtered_deployments(
-                cast(list[dict], healthy_deployments), target_order=_target_order
+                healthy_deployments, target_order=_target_order
             )
 
         healthy_deployments = await self.async_callback_filter_deployments(
