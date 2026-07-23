@@ -242,6 +242,8 @@ LLM_CONFIG_NAMES = (
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
+    "OpenAISkillsConfig",
+    "AzureOpenAISkillsConfig",
     "BaseSkillsAPIConfig",
     "GradientAIConfig",
     # Alias for backwards compatibility
@@ -982,6 +984,14 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AnthropicSkillsConfig": (
         ".llms.anthropic.skills.transformation",
         "AnthropicSkillsConfig",
+    ),
+    "OpenAISkillsConfig": (
+        ".llms.openai.skills.transformation",
+        "OpenAISkillsConfig",
+    ),
+    "AzureOpenAISkillsConfig": (
+        ".llms.azure.skills.transformation",
+        "AzureOpenAISkillsConfig",
     ),
     "BaseSkillsAPIConfig": (
         ".llms.base_llm.skills.transformation",

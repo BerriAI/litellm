@@ -72,6 +72,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         api_base: Optional[str],
         endpoint: str,
         skill_id: Optional[str] = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> str:
         """Get complete URL for Anthropic Skills API"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
