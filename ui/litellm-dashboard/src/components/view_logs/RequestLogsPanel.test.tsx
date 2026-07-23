@@ -121,23 +121,21 @@ describe("RequestLogsPanel", () => {
     });
   });
 
-  describe("client-side search", () => {
-    it("narrows the visible rows without refetching", async () => {
+  describe("search by request id (LIT-3981)", () => {
+    it("sends the typed request id to the server on the first page instead of filtering the loaded rows", async () => {
       const user = userEvent.setup();
-      respondWith([
-        logEntry({ request_id: "req-alpha", model: "gpt-4o" }),
-        logEntry({ request_id: "req-beta", model: "claude-opus" }),
-      ]);
       renderWithProviders(<RequestLogsPanel {...defaultProps} />);
 
-      await waitFor(() => expect(row("req-alpha")).not.toBeNull());
-      const callsBefore = vi.mocked(uiSpendLogsCall).mock.calls.length;
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
 
-      await user.type(screen.getByTestId("datatable-search"), "alpha");
+      await user.type(screen.getByTestId("datatable-search"), "req-on-another-page");
 
-      await waitFor(() => expect(row("req-beta")).toBeNull());
-      expect(row("req-alpha")).not.toBeNull();
-      expect(vi.mocked(uiSpendLogsCall).mock.calls.length).toBe(callsBefore);
+      await waitFor(() => {
+        const call = lastCall();
+        if (!call) throw new Error("uiSpendLogsCall was not called");
+        expect(call.params?.request_id).toBe("req-on-another-page");
+        expect(call.page).toBe(1);
+      });
     });
   });
 
