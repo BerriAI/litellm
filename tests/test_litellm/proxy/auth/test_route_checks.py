@@ -2963,6 +2963,52 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
             InitPassThroughEndpointHelpers.remove_endpoint_routes(k.split(":")[0])
 
 
+# ── Regression: internal-user roles can view their own spend-log detail ──────
+#
+# `/spend/logs/ui/<request_id>` (the detail-drawer endpoint behind row clicks
+# on the dashboard Logs page) was previously missing from
+# `spend_tracking_routes`, which feeds both `internal_user_routes` and
+# `internal_user_view_only_routes`. That meant every non-admin click on a log
+# row produced a 401, wrapped by `_raise_admin_only_route_exception` into the
+# misleading "Only proxy admin can be used to..." message.
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/spend/logs/ui",
+        "/spend/logs/ui/2fb2085b-6703-4ed4-81aa-0a586d0affeb",
+        "/spend/logs/session/ui",
+    ],
+)
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    ],
+)
+def test_internal_user_roles_can_view_own_log_detail(route, role):
+    """Internal users (read-write and view-only) must reach the per-user log
+    handlers; the handlers themselves enforce per-user filtering."""
+    user_obj = LiteLLM_UserTable(
+        user_id="some-user-id",
+        user_email="user@example.com",
+        user_role=role.value,
+    )
+    valid_token = UserAPIKeyAuth(user_id="some-user-id", user_role=role.value)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=role.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(f"{role.value} should access {route}; got: {e}")
 @pytest.mark.parametrize(
     "route",
     [

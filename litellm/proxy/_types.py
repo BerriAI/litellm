@@ -628,6 +628,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs",
         "/spend/logs/v2",
         "/spend/logs/ui",
+        "/spend/logs/ui/{request_id}",
         "/spend/logs/session/ui",
         "/cost/estimate",
     ]
@@ -819,9 +820,7 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session). The list endpoint
-            # `/spend/logs/ui` is covered via spend_tracking_routes below.
-            "/spend/logs/ui/{logId}",
+            # UI Logs page session-detail drawer.
             "/spend/logs/session/ui",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
