@@ -241,6 +241,8 @@ async def new_tag(
             "message": f"Tag {tag.name} created successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error creating tag: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -371,6 +373,8 @@ async def update_tag(
             "message": f"Tag {tag.name} updated successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating tag: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -437,6 +441,8 @@ async def info_tag(
             requested_tags[tag_record.tag_name] = tag_dict
 
         return requested_tags
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -606,6 +612,8 @@ async def delete_tag(
         await TagRepository(prisma_client).table.delete(where={"tag_name": data.name})
 
         return {"message": f"Tag {data.name} deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -16,7 +16,12 @@ from unittest.mock import patch
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
-from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
+from litellm.types.tag_management import (
+    TagDeleteRequest,
+    TagInfoRequest,
+    TagNewRequest,
+    TagUpdateRequest,
+)
 
 client = TestClient(app)
 
@@ -248,6 +253,117 @@ async def test_delete_tag():
     finally:
         # Clean up dependency overrides
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_new_tag_duplicate_returns_400_not_500():
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.llm_router", Mock()),
+    ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=Mock())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await new_tag(
+                tag=TagNewRequest(name="existing-tag"),
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "already exists" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_update_tag_missing_returns_404_not_500():
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        update_tag,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await update_tag(
+                tag=TagUpdateRequest(name="missing-tag"),
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert "not found" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_info_tag_missing_returns_404_not_500():
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import info_tag
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await info_tag(
+                data=TagInfoRequest(names=["missing-tag"]),
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert "not found" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_delete_tag_missing_returns_404_not_500():
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        delete_tag,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_tag(
+                data=TagDeleteRequest(name="missing-tag"),
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert "not found" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
