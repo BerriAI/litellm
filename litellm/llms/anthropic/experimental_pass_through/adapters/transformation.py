@@ -1390,8 +1390,6 @@ class LiteLLMAnthropicMessagesAdapter:
                         "signature": thought_sig,
                     }
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
-            elif choice.delta.content is not None and len(choice.delta.content) > 0:
-                return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
@@ -1403,9 +1401,10 @@ class LiteLLMAnthropicMessagesAdapter:
                         assert isinstance(thinking, str)
                         assert isinstance(signature, str)
 
-                        return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking, signature=signature
-                        )
+                        if thinking or signature:
+                            return "thinking", ChatCompletionThinkingBlock(
+                                type="thinking", thinking=thinking, signature=signature
+                            )
             # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
             # parsers) populate ``reasoning_content`` without ``thinking_blocks``.
             # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
@@ -1413,6 +1412,8 @@ class LiteLLMAnthropicMessagesAdapter:
             # matching ``thinking_delta`` stream is not emitted into a text block.
             elif isinstance(choice, StreamingChoices) and getattr(choice.delta, "reasoning_content", None):
                 return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
+            elif choice.delta.content is not None and len(choice.delta.content) > 0:
+                return "text", TextBlock(type="text", text="")
 
         return "text", TextBlock(type="text", text="")
 
