@@ -41,7 +41,18 @@ def simple_shuffle(
 
     ############## Check if 'weight' or 'rpm' or 'tpm' param set for a weighted pick #################
     for weight_by in ["weight", "rpm", "tpm"]:
-        weight = healthy_deployments[0].get("litellm_params").get(weight_by, None)
+        # Check if ANY deployment has this metric set, not just the first one.
+        # Deployment order can change after cooldown/filtering, so checking only
+        # index 0 caused weighted routing to be silently skipped whenever the
+        # first healthy deployment omitted the metric but a later one set it.
+        weight = next(
+            (
+                m["litellm_params"].get(weight_by)
+                for m in healthy_deployments
+                if m["litellm_params"].get(weight_by) is not None
+            ),
+            None,
+        )
         if weight is not None:
             weights = [m["litellm_params"].get(weight_by, 0) for m in healthy_deployments]
             verbose_router_logger.debug(f"\nweight {weights}")

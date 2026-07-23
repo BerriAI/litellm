@@ -3953,8 +3953,43 @@ class PrometheusLogger(CustomLogger):
         else:
             metrics_app = make_asgi_app()
 
-        # Mount the metrics app to the app
-        app.mount("/metrics", metrics_app)
+        # Mount the metrics app to the app.
+        # app.mount("/metrics", ...) in Starlette only serves at the trailing-slash
+        # path /metrics/, causing a 307 redirect on GET /metrics.
+        # Mounting at /metrics/ and adding an explicit route for /metrics via
+        # add_route avoids the redirect so Prometheus gets a direct 200.
+        from starlette.requests import Request
+        from starlette.responses import Response
+
+        async def _metrics_no_slash_view(request: Request) -> Response:
+            status_code = 200
+            headers: list = []
+            body = b""
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message) -> None:
+                nonlocal status_code, body
+                if message["type"] == "http.response.start":
+                    status_code = message["status"]
+                    headers.extend(message.get("headers", []))
+                elif message["type"] == "http.response.body":
+                    body += message.get("body", b"")
+
+            await metrics_app(request.scope, receive, send)
+            return Response(
+                content=body,
+                status_code=status_code,
+                headers={
+                    k.decode(): v.decode()
+                    for k, v in headers
+                    if k.lower() != b"content-length"
+                },
+            )
+
+        app.mount("/metrics/", metrics_app)
+        app.add_route("/metrics", _metrics_no_slash_view)
         verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
 
 
