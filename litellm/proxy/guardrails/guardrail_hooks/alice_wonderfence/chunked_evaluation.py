@@ -14,12 +14,13 @@ from typing import Any
 
 MAX_PROMPT_CHARS = 10000  # WonderFence server-side prompt limit
 DEFAULT_MAX_CONCURRENCY = 10  # used when the client connection_pool_limit is unset
-# Detection-only overlap: when a segment is split into multiple chunks, content
-# straddling a chunk boundary would be seen whole by neither chunk. We also
-# evaluate a window spanning each boundary (last N chars of one chunk + first N
-# of the next) so a blocked phrase up to ~2N chars long can't slip through the
-# split. These windows feed BLOCK/DETECT only; masking still uses the disjoint
-# chunks so the lossless rejoin invariant holds. Confirm sizing with the
+# Overlap: a segment longer than the prompt limit is split into disjoint "owned"
+# regions, but each chunk is scanned with the last N chars of the previous owned
+# region prepended as a read-only prefix. A phrase straddling an owned-region
+# seam (up to N chars into the left region) is therefore seen whole by one scan,
+# so it can BLOCK/DETECT and, when the service masks it, the prefix bytes change
+# and we fail closed (see ``_aggregate``) rather than stitch a half-masked seam.
+# This replaces the old separate boundary-window calls. Confirm sizing with the
 # WonderFence team alongside MAX_PROMPT_CHARS.
 CHUNK_OVERLAP_CHARS = 512
 
@@ -30,21 +31,31 @@ class SegmentVerdict:
     masked_text: str | None
     detections: list
     correlation_ids: list[str]
+    # Per owned-region ``(original, masked)`` pairs, set only on MASK. Lets the
+    # caller align masking back to sub-structure (e.g. joined message parts) one
+    # chunk at a time instead of over the whole document, so the alignment cost
+    # is bounded by the chunk size rather than quadratic in the segment length.
+    masked_chunks: list[tuple[str, str]] | None = None
 
 
 @dataclass(frozen=True)
 class WindowConfig:
-    """Tuning for the detection-only overlap windows.
+    """Tuning for the chunk-seam overlap.
 
-    ``overlap`` sizes the per-segment chunk-boundary windows (see
-    ``_boundary_windows``). There are no cross-segment windows: on the request
-    side message parts are concatenated into one joined document before
-    scanning (so their junctions are interior chunk seams, covered by
-    ``_boundary_windows``); on the response side each segment is an independent
-    choice or tool-call arg that the model never concatenates.
+    ``overlap`` sizes the read-only prefix each chunk carries from the previous
+    owned region (see ``_overlap_chunks``). There are no cross-segment windows:
+    on the request side message parts are concatenated into one joined document
+    before scanning (so their junctions are interior chunk seams); on the
+    response side each segment is an independent choice or tool-call arg that the
+    model never concatenates.
     """
 
     overlap: int = CHUNK_OVERLAP_CHARS
+
+
+# Shared default so the ``evaluate_segments`` signature has a plain-name default
+# (no call in the argument default); safe to share since ``WindowConfig`` is frozen.
+_DEFAULT_WINDOW_CONFIG = WindowConfig()
 
 
 def _split_text(text: str, max_chars: int) -> list[str]:
@@ -81,45 +92,59 @@ def _action_str(result: object) -> str:
     return action.value if hasattr(action, "value") else (action or "")
 
 
-def _boundary_windows(chunks: list[str], overlap: int) -> list[str]:
-    """Windows spanning each adjacent chunk boundary, for detection only.
+def _overlap_chunks(text: str, max_chars: int, overlap: int) -> list[tuple[str, str]]:
+    """Split ``text`` into overlapping scan chunks as ``(prefix, owned)`` pairs.
 
-    Each window is the last ``overlap`` chars of one chunk joined to the first
-    ``overlap`` chars of the next, so a phrase split across the boundary is seen
-    whole by the window (up to ~2*overlap long). Empty when there is one chunk.
+    ``owned`` regions are disjoint and concatenate back to ``text`` (lossless);
+    ``prefix`` is the last ``overlap`` chars of the previous owned region (empty
+    for the first). The scan input for a chunk is ``prefix + owned``, giving
+    ``overlap`` chars of left-context so a phrase straddling the owned-region
+    seam is seen whole. Reassembly strips the verbatim prefix back off, so the
+    owned regions still rejoin losslessly.
     """
-    if overlap <= 0:
-        return []
-    return [chunks[i][-overlap:] + chunks[i + 1][:overlap] for i in range(len(chunks) - 1)]
+    owned = _split_text(text, max(1, max_chars - overlap))
+    return [(owned[i - 1][-overlap:] if i and overlap > 0 else "", region) for i, region in enumerate(owned)]
 
 
-def _aggregate(
-    chunks: list[str],
-    chunk_results: list[Any],
-    boundary_results: list[Any],
-) -> SegmentVerdict:
-    chunk_actions = [_action_str(r) for r in chunk_results]
-    boundary_actions = [_action_str(r) for r in boundary_results]
+def _aggregate(chunks: list[tuple[str, str]], results: list[Any]) -> SegmentVerdict:
+    """Fold per-chunk results (scans of ``prefix + owned``) into one verdict.
+
+    Precedence BLOCK > MASK > DETECT > NO_ACTION. A MASK whose masked text no
+    longer starts with its verbatim ``prefix`` means the redaction reached into
+    the prefix bytes -- i.e. content straddling (or sitting within ``overlap`` of)
+    the owned-region seam. That cannot be stitched back without double-counting
+    the overlap, so it fails closed (BLOCK) rather than leak the un-redacted half.
+    Otherwise the prefix is stripped by its known length (no alignment needed)
+    and the owned regions rejoin into the masked segment; the per-chunk
+    ``(original, masked)`` pairs are carried on the verdict for bounded caller-side
+    alignment.
+    """
+    actions = [_action_str(r) for r in results]
     detections: list = []
     correlation_ids: list[str] = []
-    for r in (*chunk_results, *boundary_results):
+    for r in results:
         detections.extend(getattr(r, "detections", None) or [])
         cid = getattr(r, "correlation_id", None)
         if cid:
             correlation_ids.append(cid)
 
-    if "BLOCK" in chunk_actions or "BLOCK" in boundary_actions:
+    if "BLOCK" in actions:
         return SegmentVerdict("BLOCK", None, detections, correlation_ids)
-    if "MASK" in chunk_actions:
-        masked = "".join(
-            (r.action_text or "[MASKED]") if _action_str(r) == "MASK" else chunk
-            for chunk, r in zip(chunks, chunk_results)
-        )
-        return SegmentVerdict("MASK", masked, detections, correlation_ids)
-    # A boundary window can only flag content that straddles a chunk split; we
-    # cannot redact it across disjoint chunks, so surface it as DETECT rather
-    # than dropping it. Per-chunk DETECT is folded in here too.
-    if "DETECT" in chunk_actions or {"MASK", "DETECT"} & set(boundary_actions):
+
+    if "MASK" in actions:
+        masked_chunks: list[tuple[str, str]] = []
+        for (prefix, owned), r in zip(chunks, results):
+            if _action_str(r) != "MASK":
+                masked_chunks.append((owned, owned))
+                continue
+            masked = r.action_text if getattr(r, "action_text", None) is not None else prefix + "[MASKED]"
+            if not masked.startswith(prefix):
+                return SegmentVerdict("BLOCK", None, detections, correlation_ids)
+            masked_chunks.append((owned, masked[len(prefix) :]))
+        masked_text = "".join(m for _, m in masked_chunks)
+        return SegmentVerdict("MASK", masked_text, detections, correlation_ids, masked_chunks)
+
+    if "DETECT" in actions:
         return SegmentVerdict("DETECT", None, detections, correlation_ids)
     return SegmentVerdict("", None, detections, correlation_ids)
 
@@ -129,18 +154,18 @@ async def evaluate_segments(
     evaluate: Callable[[str], Awaitable[Any]],
     max_chars: int = MAX_PROMPT_CHARS,
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
-    windows: WindowConfig = WindowConfig(),
+    windows: WindowConfig = _DEFAULT_WINDOW_CONFIG,
 ) -> list[SegmentVerdict]:
     """Evaluate every segment (chunked) in parallel; return one verdict per segment.
 
-    Each segment is split into <= ``max_chars`` disjoint chunks; multi-chunk
-    segments also get a detection-only window spanning each chunk boundary (see
-    ``_boundary_windows``) so a phrase split across a chunk seam is still seen
-    whole. Every chunk and window across every segment is evaluated through a
-    single ``asyncio.gather`` behind one shared ``Semaphore(max_concurrency)``.
-    Results are grouped back per segment with action precedence
-    BLOCK > MASK > DETECT > NO_ACTION; masking uses the disjoint chunks only so
-    the lossless rejoin holds.
+    Each segment is split into <= ``max_chars`` overlapping chunks (disjoint
+    ``owned`` regions each carrying an ``overlap``-char read-only prefix from the
+    previous region, see ``_overlap_chunks``) so a phrase straddling an
+    owned-region seam is seen whole by one scan without a separate boundary call.
+    Every chunk across every segment is evaluated through a single
+    ``asyncio.gather`` behind one shared ``Semaphore(max_concurrency)``. Results
+    are folded per segment (see ``_aggregate``) with precedence
+    BLOCK > MASK > DETECT > NO_ACTION.
 
     The request side passes a single joined document here (one segment) so the
     common case is one call; the response side passes one segment per choice /
@@ -152,28 +177,20 @@ async def evaluate_segments(
         async with semaphore:
             return await evaluate(text)
 
-    # Keep boundary windows within the prompt limit (<= 2*ov <= max_chars).
+    # Keep each chunk's scan input (prefix + owned) within the prompt limit.
     ov = min(windows.overlap, max_chars // 2)
-    seg_chunks = [_split_text(s, max_chars) for s in segments]
-    seg_boundaries = [_boundary_windows(chunks, ov) for chunks in seg_chunks]
+    seg_chunks = [_overlap_chunks(s, max_chars, ov) for s in segments]
 
-    index: list[tuple[str, int, int]] = []
+    index: list[tuple[int, int]] = []
     tasks = []
-    for si in range(len(segments)):
-        for ci, chunk in enumerate(seg_chunks[si]):
-            index.append(("chunk", si, ci))
-            tasks.append(run(chunk))
-        for bi, window in enumerate(seg_boundaries[si]):
-            index.append(("bound", si, bi))
-            tasks.append(run(window))
+    for si, chunks in enumerate(seg_chunks):
+        for ci, (prefix, owned) in enumerate(chunks):
+            index.append((si, ci))
+            tasks.append(run(prefix + owned))
     results = await asyncio.gather(*tasks)
 
     chunk_res: list[list[Any]] = [[None] * len(c) for c in seg_chunks]
-    bound_res: list[list[Any]] = [[None] * len(b) for b in seg_boundaries]
-    for (kind, si, idx), res in zip(index, results):
-        if kind == "chunk":
-            chunk_res[si][idx] = res
-        elif kind == "bound":
-            bound_res[si][idx] = res
+    for (si, ci), res in zip(index, results):
+        chunk_res[si][ci] = res
 
-    return [_aggregate(seg_chunks[si], chunk_res[si], bound_res[si]) for si in range(len(segments))]
+    return [_aggregate(seg_chunks[si], chunk_res[si]) for si in range(len(segments))]

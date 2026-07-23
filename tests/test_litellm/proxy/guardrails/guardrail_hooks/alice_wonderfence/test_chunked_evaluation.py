@@ -87,31 +87,37 @@ async def test_block_in_non_first_chunk_blocks_whole_segment():
 
 
 @pytest.mark.asyncio
-async def test_mask_rejoins_per_chunk_action_text_into_full_segment():
-    segment = ("ab " * 60).strip()
-    chunks = _split_text(segment, 50)
-    assert len(chunks) > 1
+async def test_mask_rejoins_masked_owned_regions_into_full_segment():
+    """A multi-chunk segment where the service redacts a token in one chunk (a
+    real span substitution that preserves surrounding bytes) rejoins into the
+    fully masked segment. overlap=0 keeps the chunks disjoint for a clean check;
+    the per-chunk (original, masked) pairs are carried on the verdict."""
+    segment = " ".join(f"w{i}" for i in range(40)) + " SECRET " + " ".join(f"v{i}" for i in range(40))
 
     async def evaluate(text):
-        return _result("MASK", action_text=f"<{text}>")
+        return _result("MASK", action_text=text.replace("SECRET", "[X]")) if "SECRET" in text else _result("")
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=50)
+    chunks = _split_text(segment, 20)
+    assert len(chunks) > 1
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=20, windows=WindowConfig(overlap=0))
     assert verdicts[0].action == "MASK"
-    assert verdicts[0].masked_text == "".join(f"<{c}>" for c in chunks)
+    assert verdicts[0].masked_text == segment.replace("SECRET", "[X]")
+    assert verdicts[0].masked_chunks is not None
+    assert "".join(o for o, _ in verdicts[0].masked_chunks) == segment
 
 
 @pytest.mark.asyncio
-async def test_unmasked_chunks_fall_back_to_original_text_on_rejoin():
+async def test_unmasked_chunks_keep_original_text_on_rejoin():
+    """Chunks the service did not mask contribute their original owned text
+    verbatim; only the masked chunk changes."""
     segment = " ".join(f"w{i}" for i in range(40))
-    chunks = _split_text(segment, 20)
-    assert len(chunks) > 1
 
     async def evaluate(text):
-        return _result("MASK" if text == chunks[0] else "", action_text="[X]")
+        return _result("MASK", action_text=text.replace("w0", "[X]")) if "w0 " in text else _result("")
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=20)
-    expected = "[X]" + "".join(chunks[1:])
-    assert verdicts[0].masked_text == expected
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=20, windows=WindowConfig(overlap=0))
+    assert verdicts[0].action == "MASK"
+    assert verdicts[0].masked_text == segment.replace("w0", "[X]", 1)
 
 
 @pytest.mark.asyncio
@@ -169,14 +175,14 @@ def test_max_prompt_chars_is_positive():
     assert isinstance(MAX_PROMPT_CHARS, int) and MAX_PROMPT_CHARS > 0
 
 
-# ----------------------------- boundary overlap (detection across chunk splits) -----------------------------
+# ----------------------------- seam overlap (detection / masking across chunk splits) -----------------------------
 
 
 @pytest.mark.asyncio
-async def test_block_phrase_split_across_chunk_boundary_is_detected():
-    """A blocked phrase straddling the chunk boundary is caught by the overlap
-    window even though neither disjoint chunk contains it whole. Fails on the
-    pre-overlap implementation (no boundary windows -> phrase evades)."""
+async def test_block_phrase_split_across_chunk_seam_is_detected():
+    """A blocked phrase straddling an owned-region seam is caught because the
+    next chunk carries an overlap prefix from the previous owned region, so one
+    scan sees the phrase whole even though neither disjoint owned region does."""
     segment = "aaaaa BLOCK ME zzzzz"
     chunks = _split_text(segment, 12)
     assert len(chunks) > 1
@@ -190,9 +196,9 @@ async def test_block_phrase_split_across_chunk_boundary_is_detected():
 
 
 @pytest.mark.asyncio
-async def test_no_overlap_window_lets_boundary_phrase_evade():
-    """Control: with overlap disabled the same straddling phrase is not seen by
-    any disjoint chunk, demonstrating what the overlap window closes."""
+async def test_no_overlap_lets_seam_phrase_evade():
+    """Control: with overlap disabled there is no prefix, so the same straddling
+    phrase is seen by neither owned region -- demonstrating what the overlap closes."""
     segment = "aaaaa BLOCK ME zzzzz"
 
     async def evaluate(text):
@@ -203,7 +209,7 @@ async def test_no_overlap_window_lets_boundary_phrase_evade():
 
 
 @pytest.mark.asyncio
-async def test_single_chunk_segment_evaluates_once_no_boundary_window():
+async def test_single_chunk_segment_evaluates_once():
     calls = []
 
     async def evaluate(text):
@@ -215,19 +221,22 @@ async def test_single_chunk_segment_evaluates_once_no_boundary_window():
 
 
 @pytest.mark.asyncio
-async def test_boundary_window_mask_is_surfaced_as_detect_not_dropped():
-    """A boundary window can flag content we cannot redact across disjoint
-    chunks; it must surface as DETECT rather than pass silently."""
+async def test_mask_straddling_a_seam_fails_closed_as_block():
+    """A MASK whose redaction reaches into a chunk's overlap prefix (content
+    straddling, or within `overlap` of, an owned-region seam) cannot be stitched
+    without double-counting the overlap, so it fails closed as BLOCK rather than
+    leak the un-redacted half. This is the preempt for the seam-mask leak."""
     segment = "aaaaa SECRET HERE zzzzz"
     chunks = _split_text(segment, 12)
     assert len(chunks) > 1
 
     async def evaluate(text):
-        # Only the boundary window sees the full "SECRET HERE".
-        return _result("MASK", action_text="[X]") if "SECRET HERE" in text else _result("")
+        # The chunk that sees "SECRET HERE" whole (via its overlap prefix) masks
+        # it; the redaction lands in the prefix bytes -> fail closed.
+        return _result("MASK", action_text=text.replace("SECRET HERE", "[X]")) if "SECRET HERE" in text else _result("")
 
     verdicts = await evaluate_segments([segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6))
-    assert verdicts[0].action == "DETECT"
+    assert verdicts[0].action == "BLOCK"
 
 
 @pytest.mark.asyncio

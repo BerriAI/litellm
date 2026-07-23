@@ -18,13 +18,14 @@ logger = verbose_proxy_logger.getChild("alice_wonderfence")
 
 JOINER = "\n"
 
-# Upper bound on the document ``reconstruct`` will align. ``SequenceMatcher`` is
-# O(n*m) worst case and runs synchronously on the event loop, so a large
-# repetitive MASK-triggering prompt could otherwise wedge it. MASK on a document
-# larger than this fails closed (block) rather than run the quadratic alignment;
-# non-MASK requests of any size are unaffected. Two chunks' worth keeps the
-# worst case sub-second while still covering ordinary multi-message chats.
-RECONSTRUCT_MAX_CHARS = 2 * MAX_PROMPT_CHARS
+# Upper bound on the document ``reconstruct`` will align. Alignment now runs
+# per chunk (each <= MAX_PROMPT_CHARS) rather than over the whole document, so
+# the cost is O(document / chunk * chunk^2) = O(document * chunk) -- linear in
+# document size with the chunk size as the constant, instead of quadratic in the
+# document. This bound is a coarse backstop on total alignment work; a MASK on a
+# document larger than it fails closed (block). Non-MASK requests of any size are
+# unaffected.
+RECONSTRUCT_MAX_CHARS = 10 * MAX_PROMPT_CHARS
 
 
 def build_analysis_context(
@@ -195,46 +196,106 @@ def _map_index(x: int, ops: Sequence[tuple[str, int, int, int, int]], masked_len
     return masked_len
 
 
-def reconstruct(parts: list[str], masked: str) -> list[str] | None:
-    """Recover per-part masked text from the masked joined document.
+_ChunkEntry = tuple[int, int, int, str, Sequence[tuple[str, int, int, int, int]] | None]
+
+
+def _chunk_entries(masked_chunks: list[tuple[str, str]]) -> tuple[list[_ChunkEntry], str]:
+    """Build the per-chunk position map.
+
+    One entry per owned region: ``(orig_start, orig_end, masked_start,
+    masked_owned, opcodes|None)`` with cumulative offsets in both original and
+    masked space. Opcodes are computed only for chunks the service actually
+    changed (each aligned over <= one chunk, so the alignment cost is bounded by
+    the chunk size); unchanged chunks map by a fixed offset with no alignment.
+    Returns the entries and the reassembled masked document.
+    """
+    entries: list[_ChunkEntry] = []
+    o_off = 0
+    m_off = 0
+    for original_owned, masked_owned in masked_chunks:
+        ops = (
+            None
+            if original_owned == masked_owned
+            else SequenceMatcher(None, original_owned, masked_owned, autojunk=False).get_opcodes()
+        )
+        entries.append((o_off, o_off + len(original_owned), m_off, masked_owned, ops))
+        o_off += len(original_owned)
+        m_off += len(masked_owned)
+    return entries, "".join(m for _, m in masked_chunks)
+
+
+def _map_pos(x: int, entries: list[_ChunkEntry], masked_len: int) -> int | None:
+    """Map original index ``x`` to its masked index via the owning chunk."""
+    for o_start, o_end, m_start, masked_owned, ops in entries:
+        if o_start <= x < o_end:
+            local = x - o_start
+            if ops is None:
+                return m_start + local
+            r = _map_index(local, ops, len(masked_owned))
+            return None if r is None else m_start + r
+    return masked_len
+
+
+def _joiner_survives(j: int, entries: list[_ChunkEntry]) -> bool:
+    """Whether the ``JOINER`` at original index ``j`` survives the mask as an
+    unmodified ``\\n`` (so parts cannot merge)."""
+    for o_start, o_end, _m_start, masked_owned, ops in entries:
+        if o_start <= j < o_end:
+            if ops is None:
+                return True
+            local = j - o_start
+            return any(
+                tag == "equal" and i1 <= local < i2 and masked_owned[j1 + (local - i1)] == JOINER
+                for tag, i1, i2, j1, _j2 in ops
+            )
+    return False
+
+
+def reconstruct(parts: list[str], masked_chunks: list[tuple[str, str]] | None) -> list[str] | None:
+    """Recover per-part masked text from the per-chunk masked owned regions.
 
     ``parts`` were joined with ``JOINER`` (a plain ``"\\n"``) into the document
-    that was scanned; ``masked`` is the service's masked version of that same
-    document. We align original-vs-masked with ``difflib.SequenceMatcher`` (no
-    sentinel injected) and map each part's char range through the alignment.
+    that was scanned; ``masked_chunks`` is the list of ``(owned_original,
+    owned_masked)`` regions that concatenate back to that document and its masked
+    form. Alignment is done per chunk (see ``_chunk_entries``), so the cost is
+    bounded by the chunk size rather than quadratic in the whole document; each
+    part's char range is mapped through the owning chunk's alignment.
 
-    Fails closed (returns ``None``) when the structure is not recoverable: the
-    document exceeds ``RECONSTRUCT_MAX_CHARS`` (bounds the quadratic alignment
-    cost); any ``JOINER`` between parts does not survive the mask as an
-    unmodified ``\\n`` (a mask spanning a joiner would merge parts); or a part
-    boundary lands inside a changed block. Returns one masked string per input
-    part, in order; ``[]`` for no parts. Assumes masking is span substitution
-    that preserves the non-masked characters; if the service reflows whitespace
-    the joiner-survival check trips and we fail closed rather than misassign.
+    Fails closed (returns ``None``) when the structure is not recoverable:
+    ``masked_chunks`` is missing; the document exceeds ``RECONSTRUCT_MAX_CHARS``;
+    the owned regions do not concatenate back to the join (invariant guard); any
+    ``JOINER`` between parts does not survive as an unmodified ``\\n`` (a mask
+    spanning a joiner would merge parts); or a part boundary lands inside a
+    changed block. Returns one masked string per input part, in order; ``[]`` for
+    no parts. Assumes masking is span substitution that preserves the non-masked
+    characters; if the service reflows whitespace the joiner-survival check trips
+    and we fail closed rather than misassign.
     """
     if not parts:
         return []
+    if masked_chunks is None:
+        return None
 
     original = JOINER.join(parts)
-    if len(original) > RECONSTRUCT_MAX_CHARS or len(masked) > RECONSTRUCT_MAX_CHARS:
+    if len(original) > RECONSTRUCT_MAX_CHARS:
         return None
+    if "".join(o for o, _ in masked_chunks) != original:
+        return None
+
+    entries, masked_doc = _chunk_entries(masked_chunks)
+    masked_len = len(masked_doc)
+
     starts = [0, *accumulate(len(p) + len(JOINER) for p in parts)][: len(parts)]
     ranges = [(s, s + len(p)) for s, p in zip(starts, parts)]
     joiners = [end for (_s, end) in ranges[:-1]]
 
-    ops = SequenceMatcher(None, original, masked, autojunk=False).get_opcodes()
-
-    joiner_survives = all(
-        any(tag == "equal" and i1 <= j < i2 and masked[j1 + (j - i1)] == JOINER for tag, i1, i2, j1, _j2 in ops)
-        for j in joiners
-    )
-    if not joiner_survives:
+    if not all(_joiner_survives(j, entries) for j in joiners):
         return None
 
-    mapped = [(_map_index(s, ops, len(masked)), _map_index(e, ops, len(masked))) for s, e in ranges]
+    mapped = [(_map_pos(s, entries, masked_len), _map_pos(e, entries, masked_len)) for s, e in ranges]
     if any(ms is None or me is None or ms > me for ms, me in mapped):
         return None
-    return [masked[ms:me] for ms, me in mapped]
+    return [masked_doc[ms:me] for ms, me in mapped]
 
 
 def block_detail(blocked: list[SegmentVerdict], guardrail_name: str, block_message: str) -> dict:

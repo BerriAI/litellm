@@ -24,24 +24,33 @@ def _block(detections=None, correlation_ids=None):
     return SegmentVerdict("BLOCK", None, detections or [], correlation_ids or [])
 
 
-# --------------- reconstruct (masked-join alignment) ---------------
+# --------------- reconstruct (per-chunk masked alignment) ---------------
+#
+# ``masked_chunks`` is the list of (owned_original, owned_masked) regions that
+# concatenate to the joined document; for a single-chunk (<= prompt limit)
+# document that is just ``[(join, masked_join)]``.
+
+
+def _one_chunk(parts, masked):
+    original = JOINER.join(parts)
+    return [(original, masked)]
 
 
 def test_reconstruct_no_change_round_trips():
     parts = ["alpha", "beta", "gamma"]
-    assert reconstruct(parts, JOINER.join(parts)) == parts
+    assert reconstruct(parts, _one_chunk(parts, JOINER.join(parts))) == parts
 
 
 def test_reconstruct_masks_a_middle_part():
     parts = ["alpha", "sensitive", "gamma"]
     masked = JOINER.join(["alpha", "[REDACTED]", "gamma"])
-    assert reconstruct(parts, masked) == ["alpha", "[REDACTED]", "gamma"]
+    assert reconstruct(parts, _one_chunk(parts, masked)) == ["alpha", "[REDACTED]", "gamma"]
 
 
 def test_reconstruct_mask_at_part_start():
     parts = ["alpha", "beta", "gamma"]
     masked = JOINER.join(["[X]lpha", "beta", "gamma"])
-    assert reconstruct(parts, masked) == ["[X]lpha", "beta", "gamma"]
+    assert reconstruct(parts, _one_chunk(parts, masked)) == ["[X]lpha", "beta", "gamma"]
 
 
 def test_reconstruct_handles_a_part_that_itself_contains_newline():
@@ -49,7 +58,7 @@ def test_reconstruct_handles_a_part_that_itself_contains_newline():
     structural, not a naive split on '\\n', so this still reconstructs."""
     parts = ["line1\nline1b", "second"]
     masked = JOINER.join(["line1\n[REDACTED]", "second"])
-    assert reconstruct(parts, masked) == ["line1\n[REDACTED]", "second"]
+    assert reconstruct(parts, _one_chunk(parts, masked)) == ["line1\n[REDACTED]", "second"]
 
 
 def test_reconstruct_fails_closed_when_mask_spans_a_joiner():
@@ -57,19 +66,37 @@ def test_reconstruct_fails_closed_when_mask_spans_a_joiner():
     closed (None) rather than misassign redacted text to the wrong message."""
     parts = ["alpha", "beta", "gamma"]
     merged = "alphaXXXbeta\ngamma"  # joiner between alpha|beta is gone
-    assert reconstruct(parts, merged) is None
+    assert reconstruct(parts, _one_chunk(parts, merged)) is None
+
+
+def test_reconstruct_maps_across_multiple_chunks():
+    """The document is aligned per owned-region chunk; a part living in a later
+    chunk is recovered through that chunk's own alignment, not a global diff."""
+    parts = ["aaaa", "bbbb"]
+    # Two owned regions that concatenate to "aaaa\nbbbb"; the second is masked.
+    masked_chunks = [("aaaa\n", "aaaa\n"), ("bbbb", "XXXX")]
+    assert reconstruct(parts, masked_chunks) == ["aaaa", "XXXX"]
+
+
+def test_reconstruct_fails_closed_when_chunks_do_not_match_join():
+    """Invariant guard: the owned regions must concatenate back to the join."""
+    parts = ["alpha", "beta"]
+    assert reconstruct(parts, [("alpha\nDIFFERENT", "alpha\nDIFFERENT")]) is None
+
+
+def test_reconstruct_none_chunks_fails_closed():
+    assert reconstruct(["a", "b"], None) is None
 
 
 def test_reconstruct_empty_parts_is_empty_list():
-    assert reconstruct([], "") == []
+    assert reconstruct([], None) == []
 
 
 def test_reconstruct_fails_closed_when_document_exceeds_bound():
-    """Reconstruction is bounded to avoid the quadratic SequenceMatcher cost
-    blocking the event loop; an over-bound document fails closed (None) instead
-    of running the alignment."""
+    """Reconstruction is bounded as a coarse backstop on total alignment work;
+    an over-bound document fails closed (None) instead of aligning."""
     big = "a" * (RECONSTRUCT_MAX_CHARS + 1)
-    assert reconstruct([big], big) is None
+    assert reconstruct([big], [(big, big)]) is None
 
 
 # --------------- check_scan_budget (total-work cap) ---------------

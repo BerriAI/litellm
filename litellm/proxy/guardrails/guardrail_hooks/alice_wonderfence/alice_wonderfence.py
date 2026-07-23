@@ -355,7 +355,7 @@ class WonderFenceGuardrail(CustomGuardrail):
 
         correlation_id = verdict.correlation_ids[0] if verdict.correlation_ids else None
         if verdict.action == "MASK":
-            recovered = reconstruct(pieces, verdict.masked_text or "")
+            recovered = reconstruct(pieces, verdict.masked_chunks)
             if recovered is None:
                 logger.warning(
                     "Alice WonderFence (apply_guardrail request): MASK reconstruction unavailable "
