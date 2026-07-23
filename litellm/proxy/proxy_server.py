@@ -4697,6 +4697,25 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+        from litellm.proxy.opencode_endpoints.skills_endpoints import (
+            initialize_agent_skills_endpoint,
+            initialize_opencode_remote_config_endpoint,
+            initialize_opencode_skills_endpoint,
+        )
+
+        initialize_opencode_skills_endpoint(
+            app=app,
+            skills_gateway_config=config.get("skills_gateway"),
+        )
+        initialize_opencode_remote_config_endpoint(
+            app=app,
+            skills_gateway_config=config.get("skills_gateway"),
+        )
+        initialize_agent_skills_endpoint(
+            app=app,
+            skills_gateway_config=config.get("skills_gateway"),
+        )
+
         _enable_hc_routing = False
         _hc_staleness = None
         _hc_ignore_transient = False

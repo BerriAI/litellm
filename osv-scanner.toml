@@ -2,3 +2,8 @@
 id = "GHSA-w8v5-vhqr-4h9v"
 ignoreUntil = 2026-09-09
 reason = "diskcache has no fixed release published; remove this entry once one exists"
+
+[[IgnoredVulns]]
+id = "GHSA-fjqc-hq36-qh5p"
+ignoreUntil = 2026-07-09
+reason = "Fork PRs cannot update uv.lock; remove after canonical lockfile bumps langgraph-checkpoint to 4.1.1 or newer"
